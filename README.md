@@ -1,20 +1,23 @@
-# OITVOIP MCP Server
+# NetSapiens MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![NetSapiens API v2](https://img.shields.io/badge/NetSapiens-API%20v2-blue)](https://docs.ns-api.com/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-green)](https://modelcontextprotocol.io/)
 
-> **🎯 Production-Ready NetSapiens Integration**  
+> **🎯 Production-Ready NetSapiens Integration**
 > Comprehensive MCP server providing AI agents with full access to NetSapiens VoIP platform
 
 A Model Context Protocol (MCP) server that provides AI agents with seamless access to the NetSapiens VoIP platform. This server enables AI applications to interact with NetSapiens functionality including user management, call detail records, and system information.
 
 ## ⚡ Features
 
+- **🔐 Dual Authentication**: Support for both API tokens and OAuth 2.0
+- **🔄 Auto Token Refresh**: Automatic OAuth token refresh for seamless operation
+- **👤 User-Specific Access**: OAuth enables per-user authentication and permissions
 - **👥 User Management**: Search users, get details, devices, answer rules, greetings, and voicemails
 - **📞 Phone Number Management**: List and manage phone numbers across domains
-- **🎯 Call Center Operations**: Manage call queues, agents, login/logout, and statistics  
+- **🎯 Call Center Operations**: Manage call queues, agents, login/logout, and statistics
 - **📊 Call Analytics**: Access CDR records, agent statistics, and call patterns
 - **🏢 Domain Administration**: Complete domain management and configuration
 - **🤖 Auto Attendant**: Configure and manage automated attendants
@@ -28,7 +31,7 @@ A Model Context Protocol (MCP) server that provides AI agents with seamless acce
 ## 🏗️ Architecture
 
 ```
-oitvoip-mcp-server/
+netsapiens-mcp/
 ├── src/
 │   ├── index.ts              # Main MCP server implementation
 │   └── netsapiens-client.ts  # NetSapiens API client
@@ -54,15 +57,15 @@ oitvoip-mcp-server/
 #### Option 1: From npm (Recommended)
 
 ```bash
-npm install -g oitvoip-mcp-server
+npm install -g netsapiens-mcp
 ```
 
 #### Option 2: From Source
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/OITApps/oitvoip-mcp-server.git
-   cd oitvoip-mcp-server
+   git clone https://github.com/phoneware/netsapiens-mcp.git
+   cd netsapiens-mcp
    ```
 
 2. **Install dependencies**
@@ -87,17 +90,101 @@ For development with hot reloading:
 npm run dev
 ```
 
+### Docker Deployment
+
+#### Option 1: Using Docker Compose (Recommended)
+
+1. **Create a `.env` file** with your configuration:
+   ```env
+   NETSAPIENS_API_URL=https://edge.phoneware.cloud
+   NETSAPIENS_API_TOKEN=your_api_token_here
+   DEBUG=false
+   ```
+
+2. **Run with Docker Compose**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **View logs**:
+   ```bash
+   docker-compose logs -f
+   ```
+
+4. **Stop the server**:
+   ```bash
+   docker-compose down
+   ```
+
+#### Option 2: Using Docker CLI
+
+1. **Build the image**:
+   ```bash
+   docker build -t netsapiens-mcp .
+   ```
+
+2. **Run the container**:
+   ```bash
+   docker run -i \
+     -e NETSAPIENS_API_URL=https://edge.phoneware.cloud \
+     -e NETSAPIENS_API_TOKEN=your_api_token_here \
+     netsapiens-mcp
+   ```
+
+#### Using with MCP Clients (Docker)
+
+To use the Docker container with MCP clients, you'll need to configure your MCP client to use the Docker container. Add to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "netsapiens": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e", "NETSAPIENS_API_URL=https://edge.phoneware.cloud",
+        "-e", "NETSAPIENS_API_TOKEN=your_api_token_here",
+        "netsapiens-mcp"
+      ]
+    }
+  }
+}
+```
+
 ## 🔧 Configuration
 
 This MCP server is configured entirely through your MCP client's configuration file. **No separate `.env` file is needed** - all configuration is passed through environment variables in the MCP client config.
 
-### Required Configuration
+> **💡 Multi-User Deployments:** For centralized server deployments serving multiple users, see [DEPLOYMENT.md](DEPLOYMENT.md) for architecture patterns and best practices.
 
-- `NETSAPIENS_API_URL`: Your NetSapiens API endpoint (usually `https://api.ucaasnetwork.com`)
+### Authentication Methods
+
+The server supports two authentication methods:
+
+#### Method 1: API Token (Simple)
+
+Use a static API token for server-to-server authentication.
+
+**Required:**
 - `NETSAPIENS_API_TOKEN`: Your NetSapiens API token
 
-### Optional Configuration
+#### Method 2: OAuth 2.0 (User-Specific)
 
+Use OAuth 2.0 for user-specific authentication with automatic token refresh. **Recommended for multi-user environments.**
+
+**Required:**
+- `NETSAPIENS_OAUTH_CLIENT_ID`: Your OAuth client ID
+- `NETSAPIENS_OAUTH_CLIENT_SECRET`: Your OAuth client secret
+- `NETSAPIENS_OAUTH_USERNAME`: NetSapiens username (e.g., `user@domain.com`)
+- `NETSAPIENS_OAUTH_PASSWORD`: NetSapiens password
+
+**Note:** OAuth credentials take precedence if both OAuth and API token are provided.
+
+### Common Configuration
+
+- `NETSAPIENS_API_URL`: Your NetSapiens API endpoint (default: `https://edge.phoneware.cloud`)
 - `DEBUG`: Set to `true` to enable debug logging (default: `false`)
 - `NETSAPIENS_TIMEOUT`: API request timeout in milliseconds (default: `30000`)
 
@@ -107,15 +194,33 @@ This MCP server is configured entirely through your MCP client's configuration f
 
 For OpenCode, add the MCP server to your configuration file at `~/.opencode/mcp.json`:
 
-**If installed via npm:**
+**Using API Token:**
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
-      "command": "oitvoip-mcp-server",
+    "netsapiens": {
+      "command": "netsapiens-mcp",
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
+      }
+    }
+  }
+}
+```
+
+**Using OAuth 2.0:**
+```json
+{
+  "mcpServers": {
+    "netsapiens": {
+      "command": "netsapiens-mcp",
+      "env": {
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
+        "NETSAPIENS_OAUTH_CLIENT_ID": "your_client_id",
+        "NETSAPIENS_OAUTH_CLIENT_SECRET": "your_client_secret",
+        "NETSAPIENS_OAUTH_USERNAME": "user@domain.com",
+        "NETSAPIENS_OAUTH_PASSWORD": "your_password"
       }
     }
   }
@@ -126,11 +231,11 @@ For OpenCode, add the MCP server to your configuration file at `~/.opencode/mcp.
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
+    "netsapiens": {
       "command": "node",
-      "args": ["/path/to/oitvoip-mcp-server/build/index.js"],
+      "args": ["/path/to/netsapiens-mcp/build/index.js"],
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
       }
     }
@@ -149,10 +254,10 @@ For Claude Desktop, add the server to your configuration file:
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
-      "command": "oitvoip-mcp-server",
+    "netsapiens": {
+      "command": "netsapiens-mcp",
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
       }
     }
@@ -164,11 +269,11 @@ For Claude Desktop, add the server to your configuration file:
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
+    "netsapiens": {
       "command": "node",
-      "args": ["/path/to/oitvoip-mcp-server/build/index.js"],
+      "args": ["/path/to/netsapiens-mcp/build/index.js"],
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
       }
     }
@@ -184,10 +289,10 @@ For Cursor, add the server to your MCP configuration file at `~/.cursor/mcp.json
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
-      "command": "oitvoip-mcp-server",
+    "netsapiens": {
+      "command": "netsapiens-mcp",
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
       }
     }
@@ -199,11 +304,11 @@ For Cursor, add the server to your MCP configuration file at `~/.cursor/mcp.json
 ```json
 {
   "mcpServers": {
-    "oitvoip": {
+    "netsapiens": {
       "command": "node",
-      "args": ["/path/to/oitvoip-mcp-server/build/index.js"],
+      "args": ["/path/to/netsapiens-mcp/build/index.js"],
       "env": {
-        "NETSAPIENS_API_URL": "https://api.ucaasnetwork.com",
+        "NETSAPIENS_API_URL": "https://edge.phoneware.cloud",
         "NETSAPIENS_API_TOKEN": "your_api_token_here"
       }
     }
@@ -213,7 +318,7 @@ For Cursor, add the server to your MCP configuration file at `~/.cursor/mcp.json
 
 ### Configuration Notes
 
-- Replace `/path/to/oitvoip-mcp-server` with the actual path to your installation
+- Replace `/path/to/netsapiens-mcp` with the actual path to your installation
 - Replace `your_api_token_here` with your actual NetSapiens API token
 - All configuration is handled through the MCP client - no separate `.env` file is needed
 - After configuration, restart your MCP client to load the server

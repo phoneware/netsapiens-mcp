@@ -1,10 +1,10 @@
 {
-  "name": "oitvoip-mcp-server",
-  "version": "1.0.0",
-  "description": "OITVOIP MCP Server for NetSapiens Platform Integration",
+  "name": "netsapiens-mcp",
+  "version": "1.1.1",
+  "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
   "bin": {
-    "oitvoip-mcp-server": "build/index.js"
+    "netsapiens-mcp": "build/index.js"
   },
   "type": "module",
   "scripts": {
@@ -14,7 +14,9 @@
     "watch": "tsx watch src/index.ts",
     "clean": "rimraf build",
     "prebuild": "npm run clean",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "mcp",
@@ -28,7 +30,7 @@
   "author": "OITVOIP",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
+    "@modelcontextprotocol/sdk": "^1.27.0",
     "axios": "^1.6.0",
     "zod": "^3.22.0"
   },
@@ -36,17 +38,23 @@
     "@types/node": "^20.0.0",
     "rimraf": "^5.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=18.0.0"
   },
+  "files": [
+    "build/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OITApps/oitvoip-mcp-server.git"
+    "url": "git+https://github.com/phoneware/netsapiens-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/OITApps/oitvoip-mcp-server/issues"
+    "url": "https://github.com/phoneware/netsapiens-mcp/issues"
   },
-  "homepage": "https://github.com/OITApps/oitvoip-mcp-server#readme"
+  "homepage": "https://github.com/phoneware/netsapiens-mcp#readme"
 }

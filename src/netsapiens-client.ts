@@ -1,15 +1,15 @@
 /**
- * NetSapiens API Client for OITVOIP MCP Server
+ * NetSapiens API Client for NetSapiens MCP Server
  * Handles all interactions with the NetSapiens platform
  */
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { 
-  NetSapiensConfig, 
-  NetSapiensApiResponse, 
-  NetSapiensUser, 
-  NetSapiensDomain, 
-  NetSapiensCDR, 
+import {
+  NetSapiensConfig,
+  NetSapiensApiResponse,
+  NetSapiensUser,
+  NetSapiensDomain,
+  NetSapiensCDR,
   NetSapiensDevice,
   NetSapiensPhoneNumber,
   NetSapiensCallQueue,
@@ -21,24 +21,52 @@ import {
   NetSapiensMusicOnHold,
   NetSapiensBilling
 } from './types/config.js';
+import { OAuthManager } from './oauth-manager.js';
 
 export class NetSapiensClient {
   private client: AxiosInstance;
   private config: NetSapiensConfig;
+  private oauthManager?: OAuthManager;
 
   constructor(config: NetSapiensConfig) {
     this.config = config;
-    
+
+    // Initialize OAuth manager if OAuth config is provided
+    if (config.oauth) {
+      this.oauthManager = new OAuthManager({
+        apiUrl: config.apiUrl,
+        clientId: config.oauth.clientId,
+        clientSecret: config.oauth.clientSecret,
+        username: config.oauth.username,
+        password: config.oauth.password
+      });
+    }
+
     this.client = axios.create({
       baseURL: `${config.apiUrl}/ns-api/v2`,
       timeout: config.timeout || 30000,
       headers: {
-        'Authorization': `Bearer ${config.apiToken}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'OITVOIP-MCP-Server/1.0.0'
+        'User-Agent': 'NetSapiens-MCP/1.1.1'
       }
     });
+
+    // Add request interceptor to handle OAuth tokens
+    this.client.interceptors.request.use(
+      async (config) => {
+        if (this.oauthManager) {
+          // Get fresh OAuth token
+          const token = await this.oauthManager.getAccessToken();
+          config.headers.Authorization = `Bearer ${token}`;
+        } else if (this.config.apiToken) {
+          // Use static API token
+          config.headers.Authorization = `Bearer ${this.config.apiToken}`;
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(

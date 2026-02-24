@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  netsapiens-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: netsapiens-mcp:latest
+    container_name: netsapiens-mcp
+    ports:
+      - "${MCP_PORT:-3000}:3000"
+    environment:
+      # Required: NetSapiens API Configuration
+      - NETSAPIENS_API_URL=${NETSAPIENS_API_URL:-https://edge.phoneware.cloud}
+
+      # Authentication Method 1: API Token (simple)
+      - NETSAPIENS_API_TOKEN=${NETSAPIENS_API_TOKEN}
+
+      # Authentication Method 2: OAuth 2.0 (user-specific, recommended)
+      # Uncomment to use OAuth instead of API token
+      # - NETSAPIENS_OAUTH_CLIENT_ID=${NETSAPIENS_OAUTH_CLIENT_ID}
+      # - NETSAPIENS_OAUTH_CLIENT_SECRET=${NETSAPIENS_OAUTH_CLIENT_SECRET}
+      # - NETSAPIENS_OAUTH_USERNAME=${NETSAPIENS_OAUTH_USERNAME}
+      # - NETSAPIENS_OAUTH_PASSWORD=${NETSAPIENS_OAUTH_PASSWORD}
+
+      # Transport configuration
+      - MCP_TRANSPORT=http
+      - MCP_PORT=3000
+
+      # Optional: Server Configuration
+      - DEBUG=${DEBUG:-false}
+      - NETSAPIENS_TIMEOUT=${NETSAPIENS_TIMEOUT:-30000}
+      - NODE_ENV=production
+
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
