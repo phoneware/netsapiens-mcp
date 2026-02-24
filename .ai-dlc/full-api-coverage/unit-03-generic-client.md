@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: completed
 depends_on: []
 branch: ai-dlc/full-api-coverage/03-generic-client
 discipline: backend
@@ -111,4 +111,5 @@ This unit does NOT handle:
 ## Notes
 - The `createApiClient` factory function should accept the `OAuthManager` instance (or token provider function) as a dependency, not import it directly. This keeps the client testable.
 - Consider accepting a token provider function `() => Promise<string>` instead of the full OAuthManager, for cleaner separation.
+
 
