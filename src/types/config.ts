@@ -2,11 +2,20 @@
  * Configuration types for OITVOIP MCP Server
  */
 
+export interface NetSapiensOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+  username?: string;
+  password?: string;
+}
+
 export interface NetSapiensConfig {
   /** NetSapiens API server base URL */
   apiUrl: string;
-  /** API authentication token */
-  apiToken: string;
+  /** API authentication token (static token auth) */
+  apiToken?: string;
+  /** OAuth configuration (OAuth auth) */
+  oauth?: NetSapiensOAuthConfig;
   /** Optional timeout for API requests (milliseconds) */
   timeout?: number;
   /** Optional rate limiting configuration */
