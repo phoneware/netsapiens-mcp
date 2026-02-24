@@ -1,5 +1,5 @@
 ---
-status: pending
+status: in_progress
 depends_on: []
 branch: ai-dlc/full-api-coverage/01-openapi-codegen
 discipline: backend
@@ -102,3 +102,4 @@ This unit does NOT handle:
 - The generator should be idempotent — running it twice produces the same output
 - Consider generating a `tool-manifest.json` alongside the TypeScript files for debugging/inspection
 - The `spec/netsapiens-api-v2.json` file should be fetched once and committed; do not fetch on every build
+

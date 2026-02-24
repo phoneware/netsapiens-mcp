@@ -1,5 +1,5 @@
 ---
-status: pending
+status: in_progress
 depends_on: []
 branch: ai-dlc/full-api-coverage/04-oauth-authcode
 discipline: backend
@@ -182,3 +182,4 @@ This unit does NOT handle:
 - All console output during the OAuth flow MUST go to stderr (`console.error`), not stdout. MCP protocol uses stdout for JSON-RPC communication — any non-JSON output on stdout will break the protocol.
 - The callback server should bind to `127.0.0.1` only (not `0.0.0.0`) for security.
 - Consider adding a `--no-browser` flag or env var for environments where auto-opening the browser is undesirable.
+
