@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { NetSapiensClient } from './netsapiens-client.js';
+import { createApiClient, GenericApiClient } from './netsapiens-client.js';
 import { MCPServerConfig } from './types/config.js';
 
 // Configuration - these would typically come from environment variables
@@ -46,7 +46,7 @@ const config: MCPServerConfig = getConfig();
 
 class OITVOIPMCPServer {
   private server: Server;
-  private netsapiensClient: NetSapiensClient;
+  private apiClient: GenericApiClient;
 
   constructor() {
     this.server = new Server(
@@ -61,7 +61,7 @@ class OITVOIPMCPServer {
       }
     );
 
-    this.netsapiensClient = new NetSapiensClient(config.netsapiens);
+    this.apiClient = createApiClient(config.netsapiens, async () => config.netsapiens.apiToken);
     this.setupToolHandlers();
     this.setupErrorHandling();
   }
@@ -544,593 +544,227 @@ class OITVOIPMCPServer {
     });
   }
 
-  private async handleSearchUsers(args: any) {
-    const { query, domain, limit = 20 } = args;
-    
-    if (!query) {
-      throw new McpError(ErrorCode.InvalidParams, 'Query parameter is required');
-    }
-
-    const result = await this.netsapiensClient.searchUsers(query, domain, limit);
-    
+  private formatResult(result: any) {
     return {
       content: [
         {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Found ${result.data?.length || 0} users matching "${query}"${domain ? ` in domain ${domain}` : ''}`
-              : `Search failed: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
+          type: 'text' as const,
+          text: JSON.stringify(result, null, 2),
         },
       ],
     };
+  }
+
+  private async handleSearchUsers(args: any) {
+    const { query, domain, limit = 20 } = args;
+    if (!query) {
+      throw new McpError(ErrorCode.InvalidParams, 'Query parameter is required');
+    }
+    const endpoint = domain ? `/domains/${domain}/users` : '/domains/~/users/~';
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: endpoint, queryParams: { user: query, limit } });
+    return this.formatResult(result);
   }
 
   private async handleGetUser(args: any) {
     const { userId, domain } = args;
-    
     if (!userId || !domain) {
       throw new McpError(ErrorCode.InvalidParams, 'userId and domain parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUser(userId, domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved user details for ${userId}`
-              : `Failed to get user: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}', pathParams: { domain, userId } });
+    return this.formatResult(result);
   }
 
   private async handleGetCDRRecords(args: any) {
     const { startDate, endDate, user, domain, limit = 100 } = args;
-    
-    const result = await this.netsapiensClient.getCDRRecords({
-      startDate,
-      endDate,
-      user,
-      domain,
-      limit
-    });
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} CDR records`
-              : `Failed to get CDR records: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    let pathTemplate = '/cdrs';
+    const pathParams: Record<string, string> = {};
+    if (user && domain) {
+      pathTemplate = '/domains/{domain}/users/{user}/cdrs';
+      pathParams.domain = domain;
+      pathParams.user = user;
+    } else if (domain) {
+      pathTemplate = '/domains/{domain}/cdrs';
+      pathParams.domain = domain;
+    }
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate, pathParams, queryParams: { start_time: startDate, end_time: endDate, limit } });
+    return this.formatResult(result);
   }
 
-  private async handleGetDomains(args: any) {
-    const result = await this.netsapiensClient.getDomains();
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} domains`
-              : `Failed to get domains: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+  private async handleGetDomains(_args: any) {
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains' });
+    return this.formatResult(result);
   }
 
   private async handleGetDomain(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getDomain(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved domain information for ${domain}`
-              : `Failed to get domain: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleGetUserDevices(args: any) {
     const { userId, domain } = args;
-    
     if (!userId || !domain) {
       throw new McpError(ErrorCode.InvalidParams, 'userId and domain parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUserDevices(userId, domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} devices for user ${userId}@${domain}`
-              : `Failed to get user devices: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}/devices', pathParams: { domain, userId } });
+    return this.formatResult(result);
   }
 
-  // ==================== PHONE NUMBER HANDLERS ====================
-  
   private async handleGetPhoneNumbers(args: any) {
     const { domain, limit } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getPhoneNumbers(domain, limit);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} phone numbers for domain ${domain}`
-              : `Failed to get phone numbers: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/phonenumbers', pathParams: { domain }, queryParams: { limit } });
+    return this.formatResult(result);
   }
 
   private async handleGetPhoneNumber(args: any) {
     const { domain, phoneNumber } = args;
-    
     if (!domain || !phoneNumber) {
       throw new McpError(ErrorCode.InvalidParams, 'domain and phoneNumber parameters are required');
     }
-
-    const result = await this.netsapiensClient.getPhoneNumber(domain, phoneNumber);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved phone number details for ${phoneNumber}`
-              : `Failed to get phone number: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/phonenumbers/{phoneNumber}', pathParams: { domain, phoneNumber } });
+    return this.formatResult(result);
   }
 
-  // ==================== CALL QUEUE HANDLERS ====================
-  
   private async handleGetCallQueues(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getCallQueues(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} call queues for domain ${domain}`
-              : `Failed to get call queues: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/callqueues', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleGetCallQueue(args: any) {
     const { domain, queueId } = args;
-    
     if (!domain || !queueId) {
       throw new McpError(ErrorCode.InvalidParams, 'domain and queueId parameters are required');
     }
-
-    const result = await this.netsapiensClient.getCallQueue(domain, queueId);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved call queue details for ${queueId}`
-              : `Failed to get call queue: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/callqueues/{queueId}', pathParams: { domain, queueId } });
+    return this.formatResult(result);
   }
 
   private async handleGetCallQueueAgents(args: any) {
     const { domain, queueId } = args;
-    
     if (!domain || !queueId) {
       throw new McpError(ErrorCode.InvalidParams, 'domain and queueId parameters are required');
     }
-
-    const result = await this.netsapiensClient.getCallQueueAgents(domain, queueId);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} agents for call queue ${queueId}`
-              : `Failed to get call queue agents: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/callqueues/{queueId}/agents', pathParams: { domain, queueId } });
+    return this.formatResult(result);
   }
 
-  // ==================== AGENT HANDLERS ====================
-  
   private async handleGetAgents(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getAgents(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} agents for domain ${domain}`
-              : `Failed to get agents: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/agents', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleLoginAgent(args: any) {
     const { domain, queueId, agentId } = args;
-    
     if (!domain || !queueId || !agentId) {
       throw new McpError(ErrorCode.InvalidParams, 'domain, queueId, and agentId parameters are required');
     }
-
-    const result = await this.netsapiensClient.loginAgent(domain, queueId, agentId);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.message || (result.success ? 'Agent logged in successfully' : 'Failed to login agent'),
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'POST', pathTemplate: '/domains/{domain}/callqueues/{queueId}/agents/{agentId}/login', pathParams: { domain, queueId, agentId } });
+    return this.formatResult(result);
   }
 
   private async handleLogoutAgent(args: any) {
     const { domain, queueId, agentId } = args;
-    
     if (!domain || !queueId || !agentId) {
       throw new McpError(ErrorCode.InvalidParams, 'domain, queueId, and agentId parameters are required');
     }
-
-    const result = await this.netsapiensClient.logoutAgent(domain, queueId, agentId);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.message || (result.success ? 'Agent logged out successfully' : 'Failed to logout agent'),
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'POST', pathTemplate: '/domains/{domain}/callqueues/{queueId}/agents/{agentId}/logout', pathParams: { domain, queueId, agentId } });
+    return this.formatResult(result);
   }
 
-  // ==================== OTHER HANDLERS ====================
-  
   private async handleGetAutoAttendants(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getAutoAttendants(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} auto attendants for domain ${domain}`
-              : `Failed to get auto attendants: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/autoattendants', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleGetUserAnswerRules(args: any) {
     const { userId, domain } = args;
-    
     if (!userId || !domain) {
       throw new McpError(ErrorCode.InvalidParams, 'userId and domain parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUserAnswerRules(userId, domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} answer rules for user ${userId}@${domain}`
-              : `Failed to get answer rules: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}/answerrules', pathParams: { domain, userId } });
+    return this.formatResult(result);
   }
 
   private async handleGetUserAnswerRule(args: any) {
     const { userId, domain, timeframe } = args;
-    
     if (!userId || !domain || !timeframe) {
       throw new McpError(ErrorCode.InvalidParams, 'userId, domain, and timeframe parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUserAnswerRule(userId, domain, timeframe);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved answer rule for ${userId}@${domain} timeframe ${timeframe}`
-              : `Failed to get answer rule: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}/answerrules/{timeframe}', pathParams: { domain, userId, timeframe } });
+    return this.formatResult(result);
   }
 
   private async handleGetUserGreetings(args: any) {
     const { userId, domain } = args;
-    
     if (!userId || !domain) {
       throw new McpError(ErrorCode.InvalidParams, 'userId and domain parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUserGreetings(userId, domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} greetings for user ${userId}@${domain}`
-              : `Failed to get user greetings: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}/greetings', pathParams: { domain, userId } });
+    return this.formatResult(result);
   }
 
   private async handleGetUserVoicemails(args: any) {
     const { userId, domain } = args;
-    
     if (!userId || !domain) {
       throw new McpError(ErrorCode.InvalidParams, 'userId and domain parameters are required');
     }
-
-    const result = await this.netsapiensClient.getUserVoicemails(userId, domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} voicemails for user ${userId}@${domain}`
-              : `Failed to get user voicemails: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{userId}/voicemail', pathParams: { domain, userId } });
+    return this.formatResult(result);
   }
 
   private async handleGetMusicOnHold(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getMusicOnHold(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved ${result.data?.length || 0} music on hold files for domain ${domain}`
-              : `Failed to get music on hold: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/moh', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleGetBilling(args: any) {
     const { domain } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getBilling(domain);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved billing information for domain ${domain}`
-              : `Failed to get billing information: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains/{domain}/billing', pathParams: { domain } });
+    return this.formatResult(result);
   }
 
   private async handleGetAgentStatistics(args: any) {
     const { domain, agentId } = args;
-    
     if (!domain) {
       throw new McpError(ErrorCode.InvalidParams, 'domain parameter is required');
     }
-
-    const result = await this.netsapiensClient.getAgentStatistics(domain, agentId);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.success 
-              ? `Retrieved agent statistics for domain ${domain}${agentId ? ` (agent: ${agentId})` : ''}`
-              : `Failed to get agent statistics: ${result.error}`,
-            data: result.data,
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+    const pathTemplate = agentId
+      ? '/domains/{domain}/statistics/agent/{agentId}'
+      : '/domains/{domain}/statistics/agent';
+    const pathParams: Record<string, string> = { domain };
+    if (agentId) pathParams.agentId = agentId;
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate, pathParams });
+    return this.formatResult(result);
   }
 
-  private async handleTestConnection(args: any) {
-    const result = await this.netsapiensClient.testConnection();
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: result.success,
-            message: result.message || (result.success ? 'Connection successful' : 'Connection failed'),
-            error: result.error
-          }, null, 2),
-        },
-      ],
-    };
+  private async handleTestConnection(_args: any) {
+    const result = await this.apiClient.request({ method: 'GET', pathTemplate: '/domains', queryParams: { limit: 1 } });
+    return this.formatResult(result);
   }
 
   private setupErrorHandling(): void {
