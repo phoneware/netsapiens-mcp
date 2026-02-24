@@ -12,8 +12,9 @@
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",
+    "generate": "tsx scripts/generate-tools.ts",
     "clean": "rimraf build",
-    "prebuild": "npm run clean",
+    "prebuild": "npm run clean && npm run generate",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
