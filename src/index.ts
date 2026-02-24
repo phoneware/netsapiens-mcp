@@ -21,23 +21,45 @@ import { MCPServerConfig } from './types/config.js';
 
 // Configuration - these would typically come from environment variables
 const getConfig = (): MCPServerConfig => {
+  const apiUrl = process.env.NETSAPIENS_API_URL || 'https://api.ucaasnetwork.com';
   const apiToken = process.env.NETSAPIENS_API_TOKEN;
-  if (!apiToken) {
-    throw new Error('NETSAPIENS_API_TOKEN environment variable is required');
+  const clientId = process.env.NETSAPIENS_CLIENT_ID;
+  const clientSecret = process.env.NETSAPIENS_CLIENT_SECRET;
+  const username = process.env.NETSAPIENS_USERNAME;
+  const password = process.env.NETSAPIENS_PASSWORD;
+
+  // Require at least one auth method
+  if (!apiToken && !(clientId && clientSecret)) {
+    throw new Error(
+      'Authentication required. Set NETSAPIENS_API_TOKEN for static token auth, ' +
+      'or NETSAPIENS_CLIENT_ID + NETSAPIENS_CLIENT_SECRET for OAuth.'
+    );
   }
-  
+
+  const netsapiens: MCPServerConfig['netsapiens'] = {
+    apiUrl,
+    timeout: 30000,
+    rateLimit: {
+      requests: 100,
+      perMilliseconds: 60000 // 100 requests per minute
+    }
+  };
+
+  if (clientId && clientSecret) {
+    netsapiens.oauth = {
+      clientId,
+      clientSecret,
+      username: username || undefined,
+      password: password || undefined,
+    };
+  } else if (apiToken) {
+    netsapiens.apiToken = apiToken;
+  }
+
   return {
     name: 'oitvoip-mcp-server',
     version: '1.0.0',
-    netsapiens: {
-      apiUrl: process.env.NETSAPIENS_API_URL || 'https://api.ucaasnetwork.com',
-      apiToken: apiToken,
-      timeout: 30000,
-      rateLimit: {
-        requests: 100,
-        perMilliseconds: 60000 // 100 requests per minute
-      }
-    },
+    netsapiens,
     debug: process.env.DEBUG === 'true'
   };
 };
@@ -1145,9 +1167,12 @@ class OITVOIPMCPServer {
   }
 
   async run(): Promise<void> {
+    // Perform OAuth authentication before starting MCP transport
+    await this.netsapiensClient.initAuth();
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    
+
     if (config.debug) {
       console.error('OITVOIP MCP Server started successfully');
       console.error(`NetSapiens API URL: ${config.netsapiens.apiUrl}`);
