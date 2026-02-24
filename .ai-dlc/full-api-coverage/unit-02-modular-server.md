@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: completed
 depends_on:
   - unit-01-openapi-codegen
 branch: ai-dlc/full-api-coverage/02-modular-server
@@ -108,4 +108,5 @@ This unit does NOT handle:
 ## Notes
 - The current `index.ts` has a `NetSapiensMCPServer` class. The refactored version can keep the class pattern or switch to functional — whichever is simpler.
 - The `test_connection` tool from the current implementation should be preserved as a generated tool (it maps to `GET /domains` with limit=1 in the spec, or can be a special non-generated tool).
+
 
