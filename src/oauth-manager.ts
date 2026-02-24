@@ -120,6 +120,7 @@ export class OAuthManager {
     return new Promise((resolve, reject) => {
       const server = http.createServer();
       let settled = false;
+      let capturedRedirectUri = '';
 
       const cleanup = () => {
         if (!settled) {
@@ -169,16 +170,15 @@ export class OAuthManager {
         clearTimeout(timeout);
         cleanup();
 
-        const address = server.address();
-        const port = typeof address === 'object' && address ? address.port : 0;
-        resolve({ code, redirectUri: `http://localhost:${port}/callback` });
+        resolve({ code, redirectUri: capturedRedirectUri });
       });
 
       // Listen on random port, bound to localhost only
       server.listen(0, '127.0.0.1', () => {
         const address = server.address();
         const port = typeof address === 'object' && address ? address.port : 0;
-        const redirectUri = `http://localhost:${port}/callback`;
+        capturedRedirectUri = `http://localhost:${port}/callback`;
+        const redirectUri = capturedRedirectUri;
 
         const authorizeUrl = new URL(`${this.apiUrl}/ns-api/oauth2/authorize`);
         authorizeUrl.searchParams.set('client_id', this.oauthConfig.clientId);
