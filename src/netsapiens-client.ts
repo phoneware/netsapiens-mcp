@@ -4,12 +4,12 @@
  */
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { 
-  NetSapiensConfig, 
-  NetSapiensApiResponse, 
-  NetSapiensUser, 
-  NetSapiensDomain, 
-  NetSapiensCDR, 
+import {
+  NetSapiensConfig,
+  NetSapiensApiResponse,
+  NetSapiensUser,
+  NetSapiensDomain,
+  NetSapiensCDR,
   NetSapiensDevice,
   NetSapiensPhoneNumber,
   NetSapiensCallQueue,
@@ -21,24 +21,40 @@ import {
   NetSapiensMusicOnHold,
   NetSapiensBilling
 } from './types/config.js';
+import { OAuthManager } from './oauth-manager.js';
 
 export class NetSapiensClient {
   private client: AxiosInstance;
   private config: NetSapiensConfig;
+  private oauthManager: OAuthManager | null = null;
 
   constructor(config: NetSapiensConfig) {
     this.config = config;
-    
+
     this.client = axios.create({
       baseURL: `${config.apiUrl}/ns-api/v2`,
       timeout: config.timeout || 30000,
       headers: {
-        'Authorization': `Bearer ${config.apiToken}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent': 'OITVOIP-MCP-Server/1.0.0'
       }
     });
+
+    // Static token: set auth header directly
+    if (config.apiToken) {
+      this.client.defaults.headers.common['Authorization'] = `Bearer ${config.apiToken}`;
+    }
+
+    // OAuth: set up manager and request interceptor for dynamic tokens
+    if (config.oauth) {
+      this.oauthManager = new OAuthManager(config.apiUrl, config.oauth);
+      this.client.interceptors.request.use(async (reqConfig) => {
+        const token = await this.oauthManager!.getAccessToken();
+        reqConfig.headers['Authorization'] = `Bearer ${token}`;
+        return reqConfig;
+      });
+    }
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
@@ -53,6 +69,12 @@ export class NetSapiensClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  async initAuth(): Promise<void> {
+    if (this.oauthManager) {
+      await this.oauthManager.authenticate();
+    }
   }
 
   /**
