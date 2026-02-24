@@ -1,0 +1,44 @@
+# Source files
+src/
+*.ts
+!*.d.ts
+tsconfig.json
+
+# Tests
+test/
+tests/
+*.test.js
+*.spec.js
+
+# Development files
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Docker files (include these separately if users want to build)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation and examples (keep README)
+docs/
+examples/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+
+# Build artifacts we don't need
+*.tsbuildinfo
+.eslintcache
+
+# Environment files
+.env*
+
+# OS files
+.DS_Store
+Thumbs.db
