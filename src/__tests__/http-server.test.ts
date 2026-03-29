@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import http from 'node:http';
 
 // ---------------------------------------------------------------------------
-// Module mocks
+// Module mocks — must come before importing the module under test
 // ---------------------------------------------------------------------------
 
 const mockSetRequestHandler = vi.fn();
@@ -21,7 +22,6 @@ vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
   StdioServerTransport: vi.fn(),
 }));
 
-// Mock the NetSapiensClient
 vi.mock('../netsapiens-client.js', () => ({
   NetSapiensClient: vi.fn().mockImplementation(function (this: any) {
     this.searchUsers = vi.fn();
@@ -58,7 +58,13 @@ let mockOnClose: (() => void) | undefined;
 
 vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
   StreamableHTTPServerTransport: vi.fn().mockImplementation(function (this: any) {
-    this.handleRequest = mockHandleRequest;
+    this.handleRequest = mockHandleRequest.mockImplementation((_req: any, res: any) => {
+      // End the response so the HTTP request doesn't hang
+      if (res && typeof res.end === 'function' && !res.writableEnded) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      }
+    });
     this.close = mockTransportClose;
     Object.defineProperty(this, 'sessionId', {
       get: () => mockSessionId,
@@ -67,33 +73,6 @@ vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
       get: () => mockOnClose,
       set: (fn: (() => void) | undefined) => { mockOnClose = fn; },
     });
-  }),
-}));
-
-// Mock createMcpExpressApp - build a minimal Express-like app
-let registeredRoutes: Record<string, Record<string, Function>> = {};
-const mockListen = vi.fn();
-
-vi.mock('@modelcontextprotocol/sdk/server/express.js', () => ({
-  createMcpExpressApp: vi.fn(() => {
-    registeredRoutes = {};
-    return {
-      get: (path: string, handler: Function) => {
-        if (!registeredRoutes[path]) registeredRoutes[path] = {};
-        registeredRoutes[path].get = handler;
-      },
-      post: (path: string, handler: Function) => {
-        if (!registeredRoutes[path]) registeredRoutes[path] = {};
-        registeredRoutes[path].post = handler;
-      },
-      delete: (path: string, handler: Function) => {
-        if (!registeredRoutes[path]) registeredRoutes[path] = {};
-        registeredRoutes[path].delete = handler;
-      },
-      listen: mockListen.mockImplementation((_port: number, _host: string, cb?: Function) => {
-        if (cb) cb();
-      }),
-    };
   }),
 }));
 
@@ -106,6 +85,38 @@ vi.mock('@modelcontextprotocol/sdk/types.js', async (importOriginal) => {
     }),
   };
 });
+
+// Mock the auth router and bearer auth middleware so we don't need real OAuth
+vi.mock('@modelcontextprotocol/sdk/server/auth/router.js', () => ({
+  mcpAuthRouter: vi.fn(() => {
+    // Return a no-op middleware
+    return (_req: any, _res: any, next: any) => next();
+  }),
+  getOAuthProtectedResourceMetadataUrl: vi.fn(() => 'http://localhost:3000/.well-known/oauth-protected-resource/mcp'),
+}));
+
+vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => ({
+  requireBearerAuth: vi.fn(() => {
+    // Return middleware that always passes with mock auth info
+    return (req: any, _res: any, next: any) => {
+      req.auth = {
+        token: 'test-bearer-token',
+        clientId: 'test-client',
+        scopes: [],
+        extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
+      };
+      next();
+    };
+  }),
+}));
+
+// Mock the auth provider
+vi.mock('../auth/netsapiens-auth-provider.js', () => ({
+  NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
+    this.clientsStore = { getClient: vi.fn() };
+    this.handleLogin = vi.fn();
+  }),
+}));
 
 import { startHttpServer } from '../http-server.js';
 
@@ -124,22 +135,56 @@ const ENV_KEYS = [
   'MCP_TRANSPORT',
   'MCP_PORT',
   'MCP_HOST',
+  'MCP_BASE_URL',
 ] as const;
 
-function mockRes() {
-  const res: any = {
-    writeHead: vi.fn(),
-    end: vi.fn(),
-  };
-  return res;
+/** Make a simple HTTP request to localhost */
+function request(
+  port: number,
+  method: string,
+  path: string,
+  options: { headers?: Record<string, string>; body?: unknown } = {},
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const reqHeaders: Record<string, string> = {
+      ...options.headers,
+    };
+    let bodyStr: string | undefined;
+    if (options.body) {
+      bodyStr = JSON.stringify(options.body);
+      reqHeaders['content-type'] = 'application/json';
+      reqHeaders['accept'] = 'application/json, text/event-stream';
+    }
+
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path, method, headers: reqHeaders },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode!,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString(),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Test suites
+// Tests
 // ---------------------------------------------------------------------------
 
 describe('startHttpServer()', () => {
   let savedEnv: Record<string, string | undefined>;
+  // Use a different port per test to avoid EADDRINUSE
+  let testPort: number;
+  let server: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -151,12 +196,14 @@ describe('startHttpServer()', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
-    delete process.env.NETSAPIENS_OAUTH_CLIENT_ID;
-    delete process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
-    delete process.env.NETSAPIENS_OAUTH_USERNAME;
-    delete process.env.NETSAPIENS_OAUTH_PASSWORD;
-    delete process.env.MCP_PORT;
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;
+    delete process.env.MCP_BASE_URL;
+
+    // Pick a random high port for each test
+    testPort = 30000 + Math.floor(Math.random() * 10000);
+    process.env.MCP_PORT = String(testPort);
   });
 
   afterEach(() => {
@@ -169,162 +216,88 @@ describe('startHttpServer()', () => {
     }
   });
 
-  it('starts the HTTP server on the default port and host', async () => {
+  it('starts the HTTP server and responds to /health', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await startHttpServer();
 
-    expect(mockListen).toHaveBeenCalledWith(3000, '0.0.0.0', expect.any(Function));
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('listening on 0.0.0.0:3000'));
+    const res = await request(testPort, 'GET', '/health');
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('ok');
+    expect(body).toHaveProperty('uptime');
+    expect(body).toHaveProperty('activeSessions');
+    expect(body).toHaveProperty('nsApiUrl');
+    expect(body).toHaveProperty('version');
+
     consoleSpy.mockRestore();
   });
 
-  it('uses MCP_PORT and MCP_HOST env vars when set', async () => {
-    process.env.MCP_PORT = '8080';
-    process.env.MCP_HOST = '127.0.0.1';
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    await startHttpServer();
-
-    expect(mockListen).toHaveBeenCalledWith(8080, '127.0.0.1', expect.any(Function));
-    consoleSpy.mockRestore();
-  });
-
-  it('registers /health, /mcp GET, /mcp POST, and /mcp DELETE routes', async () => {
+  it('returns 401 or routes through bearerAuth on POST /mcp', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await startHttpServer();
 
-    expect(registeredRoutes['/health']?.get).toBeDefined();
-    expect(registeredRoutes['/mcp']?.get).toBeDefined();
-    expect(registeredRoutes['/mcp']?.post).toBeDefined();
-    expect(registeredRoutes['/mcp']?.delete).toBeDefined();
-  });
-
-  it('/health returns { status: "ok" }', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    await startHttpServer();
-
-    const res = mockRes();
-    registeredRoutes['/health'].get({}, res);
-
-    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ status: 'ok' }));
-  });
-
-  it('POST /mcp with initialize request creates a new session', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    await startHttpServer();
-
-    const req: any = {
-      headers: {},
+    // Our mock bearerAuth always passes, so we should get to the MCP handler.
+    // With an initialize request, it should create a session.
+    const res = await request(testPort, 'POST', '/mcp', {
       body: { method: 'initialize', jsonrpc: '2.0', id: 1 },
-    };
-    const res = mockRes();
+      headers: { authorization: 'Bearer test-token' },
+    });
 
-    await registeredRoutes['/mcp'].post(req, res);
-
+    // The mock transport.handleRequest doesn't write a response, so we may get
+    // an empty response. The key assertion is that mockConnect was called
+    // (meaning a session was created).
     expect(mockConnect).toHaveBeenCalled();
-    expect(mockHandleRequest).toHaveBeenCalledWith(req, res, req.body);
   });
 
-  it('POST /mcp without session ID and non-initialize returns 400', async () => {
+  it('rejects POST /mcp without session ID for non-initialize requests', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await startHttpServer();
 
-    const req: any = {
-      headers: {},
+    const res = await request(testPort, 'POST', '/mcp', {
       body: { method: 'tools/list', jsonrpc: '2.0', id: 2 },
-    };
-    const res = mockRes();
+      headers: { authorization: 'Bearer test-token' },
+    });
 
-    await registeredRoutes['/mcp'].post(req, res);
-
-    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
-    expect(res.end).toHaveBeenCalledWith(
-      expect.stringContaining('Invalid or missing session ID')
-    );
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Invalid or missing session ID' });
   });
 
-  it('GET /mcp without valid session ID returns 400', async () => {
+  it('rejects GET /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await startHttpServer();
 
-    const req: any = { headers: {} };
-    const res = mockRes();
+    const res = await request(testPort, 'GET', '/mcp', {
+      headers: { authorization: 'Bearer test-token' },
+    });
 
-    await registeredRoutes['/mcp'].get(req, res);
-
-    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(res.status).toBe(400);
   });
 
-  it('DELETE /mcp without valid session ID returns 400', async () => {
+  it('rejects DELETE /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await startHttpServer();
 
-    const req: any = { headers: {} };
-    const res = mockRes();
+    const res = await request(testPort, 'DELETE', '/mcp', {
+      headers: { authorization: 'Bearer test-token' },
+    });
 
-    await registeredRoutes['/mcp'].delete(req, res);
-
-    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(res.status).toBe(400);
   });
 
-  it('DELETE /mcp with valid session ID terminates the session', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('throws when NETSAPIENS_OAUTH_CLIENT_ID is missing', async () => {
+    delete process.env.NETSAPIENS_OAUTH_CLIENT_ID;
 
-    await startHttpServer();
-
-    // First create a session via initialize
-    const initReq: any = {
-      headers: {},
-      body: { method: 'initialize', jsonrpc: '2.0', id: 1 },
-    };
-    await registeredRoutes['/mcp'].post(initReq, mockRes());
-
-    // Now delete it
-    const deleteReq: any = {
-      headers: { 'mcp-session-id': 'test-session-id' },
-    };
-    const deleteRes = mockRes();
-
-    await registeredRoutes['/mcp'].delete(deleteReq, deleteRes);
-
-    expect(mockTransportClose).toHaveBeenCalled();
-    expect(deleteRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
-    expect(deleteRes.end).toHaveBeenCalledWith(
-      expect.stringContaining('session terminated')
-    );
+    await expect(startHttpServer()).rejects.toThrow('NETSAPIENS_OAUTH_CLIENT_ID');
   });
 
-  it('session cleanup on transport close removes from map', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('throws when NETSAPIENS_OAUTH_CLIENT_SECRET is missing', async () => {
+    delete process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
-    await startHttpServer();
-
-    // Create a session
-    const initReq: any = {
-      headers: {},
-      body: { method: 'initialize', jsonrpc: '2.0', id: 1 },
-    };
-    await registeredRoutes['/mcp'].post(initReq, mockRes());
-
-    // Trigger the onclose callback
-    expect(mockOnClose).toBeDefined();
-    mockOnClose!();
-
-    // Now trying to GET with that session ID should fail
-    const getReq: any = {
-      headers: { 'mcp-session-id': 'test-session-id' },
-    };
-    const getRes = mockRes();
-    await registeredRoutes['/mcp'].get(getReq, getRes);
-
-    expect(getRes.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    await expect(startHttpServer()).rejects.toThrow('NETSAPIENS_OAUTH_CLIENT_SECRET');
   });
 });

@@ -1,26 +1,34 @@
 version: '3.8'
 
-# Example: Multi-user deployment with separate MCP instances per user
-# Each user gets their own containerized MCP server with their OAuth credentials
+# Multi-instance deployment example.
+#
+# In the new OAuth model, each container uses the SAME operator-level NS
+# OAuth credentials (NETSAPIENS_OAUTH_CLIENT_ID / SECRET). Individual users
+# authenticate via the browser login page served by the MCP server — their
+# credentials never touch the MCP transport or LLM.
+#
+# Multiple containers are useful for:
+# - Isolating tenants to separate NS API URLs
+# - Scaling horizontally behind a load balancer
+# - Running different NS environments (staging vs production)
 
 services:
-  # User 1 MCP Instance
-  netsapiens-mcp-user1:
+  # Instance 1 — e.g. production
+  netsapiens-mcp-prod:
     build:
       context: .
       dockerfile: Dockerfile
     image: netsapiens-mcp:latest
-    container_name: netsapiens-mcp-user1
+    container_name: netsapiens-mcp-prod
     ports:
       - "3001:3000"
     environment:
-      - NETSAPIENS_API_URL=https://edge.phoneware.cloud
-      - NETSAPIENS_OAUTH_CLIENT_ID=${USER1_CLIENT_ID}
-      - NETSAPIENS_OAUTH_CLIENT_SECRET=${USER1_CLIENT_SECRET}
-      - NETSAPIENS_OAUTH_USERNAME=${USER1_USERNAME}
-      - NETSAPIENS_OAUTH_PASSWORD=${USER1_PASSWORD}
+      - NETSAPIENS_API_URL=${PROD_NETSAPIENS_API_URL:-https://edge.phoneware.cloud}
+      - NETSAPIENS_OAUTH_CLIENT_ID=${PROD_OAUTH_CLIENT_ID}
+      - NETSAPIENS_OAUTH_CLIENT_SECRET=${PROD_OAUTH_CLIENT_SECRET}
       - MCP_TRANSPORT=http
       - MCP_PORT=3000
+      - MCP_BASE_URL=${PROD_MCP_BASE_URL:-http://localhost:3001}
       - DEBUG=false
     restart: unless-stopped
     healthcheck:
@@ -30,50 +38,23 @@ services:
       retries: 3
       start_period: 10s
 
-  # User 2 MCP Instance
-  netsapiens-mcp-user2:
+  # Instance 2 — e.g. staging
+  netsapiens-mcp-staging:
     build:
       context: .
       dockerfile: Dockerfile
     image: netsapiens-mcp:latest
-    container_name: netsapiens-mcp-user2
+    container_name: netsapiens-mcp-staging
     ports:
       - "3002:3000"
     environment:
-      - NETSAPIENS_API_URL=https://edge.phoneware.cloud
-      - NETSAPIENS_OAUTH_CLIENT_ID=${USER2_CLIENT_ID}
-      - NETSAPIENS_OAUTH_CLIENT_SECRET=${USER2_CLIENT_SECRET}
-      - NETSAPIENS_OAUTH_USERNAME=${USER2_USERNAME}
-      - NETSAPIENS_OAUTH_PASSWORD=${USER2_PASSWORD}
+      - NETSAPIENS_API_URL=${STAGING_NETSAPIENS_API_URL}
+      - NETSAPIENS_OAUTH_CLIENT_ID=${STAGING_OAUTH_CLIENT_ID}
+      - NETSAPIENS_OAUTH_CLIENT_SECRET=${STAGING_OAUTH_CLIENT_SECRET}
       - MCP_TRANSPORT=http
       - MCP_PORT=3000
-      - DEBUG=false
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # User 3 MCP Instance
-  netsapiens-mcp-user3:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: netsapiens-mcp:latest
-    container_name: netsapiens-mcp-user3
-    ports:
-      - "3003:3000"
-    environment:
-      - NETSAPIENS_API_URL=https://edge.phoneware.cloud
-      - NETSAPIENS_OAUTH_CLIENT_ID=${USER3_CLIENT_ID}
-      - NETSAPIENS_OAUTH_CLIENT_SECRET=${USER3_CLIENT_SECRET}
-      - NETSAPIENS_OAUTH_USERNAME=${USER3_USERNAME}
-      - NETSAPIENS_OAUTH_PASSWORD=${USER3_PASSWORD}
-      - MCP_TRANSPORT=http
-      - MCP_PORT=3000
-      - DEBUG=false
+      - MCP_BASE_URL=${STAGING_MCP_BASE_URL:-http://localhost:3002}
+      - DEBUG=true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
@@ -83,16 +64,18 @@ services:
       start_period: 10s
 
 # To use:
-# 1. Create a .env file with user credentials:
-#    USER1_CLIENT_ID=...
-#    USER1_CLIENT_SECRET=...
-#    USER1_USERNAME=user1@domain.com
-#    USER1_PASSWORD=...
-#    (repeat for USER2, USER3, etc.)
+# 1. Create a .env file with operator credentials:
+#    PROD_NETSAPIENS_API_URL=https://edge.phoneware.cloud
+#    PROD_OAUTH_CLIENT_ID=...
+#    PROD_OAUTH_CLIENT_SECRET=...
+#    PROD_MCP_BASE_URL=https://mcp.yourdomain.com
+#    STAGING_NETSAPIENS_API_URL=https://staging.ns.example.com
+#    STAGING_OAUTH_CLIENT_ID=...
+#    STAGING_OAUTH_CLIENT_SECRET=...
 #
-# 2. Run: docker-compose -f docker-compose.multi-user.yml up -d
+# 2. Run: docker compose -f docker-compose.multi-user.yml up -d
 #
-# 3. Each user connects to their specific container:
-#    User 1: http://localhost:3001/mcp
-#    User 2: http://localhost:3002/mcp
-#    User 3: http://localhost:3003/mcp
+# 3. Users connect their MCP client to the appropriate instance:
+#    Production: http://localhost:3001/mcp
+#    Staging:    http://localhost:3002/mcp
+#    The client handles OAuth discovery + browser login automatically.

@@ -249,9 +249,9 @@ describe('loadConfig()', () => {
 // ---------------------------------------------------------------------------
 
 describe('getToolDefinitions()', () => {
-  it('returns 23 tool definitions', () => {
+  it('returns 208 tool definitions', () => {
     const tools = getToolDefinitions();
-    expect(tools).toHaveLength(23);
+    expect(tools).toHaveLength(208);
   });
 
   it('each tool has name, description, and inputSchema', () => {
@@ -407,15 +407,14 @@ describe('NetSapiensMCPServer', () => {
     expect(mockConnect).toHaveBeenCalledWith(transportInstance);
   });
 
-  it('run() in debug mode logs startup messages to stderr', async () => {
+  it('run() in debug mode does not throw', async () => {
     process.env.DEBUG = 'true';
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const server = createServer();
     await server.run();
 
-    expect(consoleSpy).toHaveBeenCalledWith('NetSapiens MCP Server started successfully');
-    consoleSpy.mockRestore();
+    // Verify server connected successfully (debug logging uses structured logger)
+    expect(mockConnect).toHaveBeenCalled();
   });
 });
 
@@ -455,14 +454,14 @@ describe('Handler integration tests', () => {
 
   // ----- ListTools -----
 
-  it('ListTools handler returns an array of 23 tool definitions', async () => {
+  it('ListTools handler returns an array of 208 tool definitions', async () => {
     const listToolsHandler = handlers.get(ListToolsRequestSchema)!;
     expect(listToolsHandler).toBeDefined();
 
     const result = await listToolsHandler();
 
     expect(result.tools).toBeInstanceOf(Array);
-    expect(result.tools).toHaveLength(23);
+    expect(result.tools).toHaveLength(208);
   });
 
   it('ListTools handler returns tools that each have name, description, and inputSchema', async () => {
