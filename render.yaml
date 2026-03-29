@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: netsapiens-mcp
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NETSAPIENS_API_URL
+        sync: false
+      - key: NETSAPIENS_OAUTH_CLIENT_ID
+        sync: false
+      - key: NETSAPIENS_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: MCP_BASE_URL
+        sync: false
+      - key: MCP_TRANSPORT
+        value: http
+      - key: MCP_PORT
+        value: "3000"
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: token-data
+      mountPath: /home/nodejs/.netsapiens-mcp
+      sizeGB: 1
