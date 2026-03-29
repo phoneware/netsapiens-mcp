@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: netsapiens-mcp
+  namespace: netsapiens-mcp
+spec:
+  selector:
+    app: netsapiens-mcp
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  type: ClusterIP
