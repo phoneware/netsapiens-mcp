@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Multi-instance deployment example.
 #
 # In the new OAuth model, each container uses the SAME operator-level NS
