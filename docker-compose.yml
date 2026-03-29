@@ -10,26 +10,24 @@ services:
     ports:
       - "${MCP_PORT:-3000}:3000"
     environment:
-      # Required: NetSapiens API Configuration
+      # Required: NetSapiens API URL (set by the server operator)
       - NETSAPIENS_API_URL=${NETSAPIENS_API_URL:-https://edge.phoneware.cloud}
 
-      # Authentication Method 1: API Token (simple)
-      - NETSAPIENS_API_TOKEN=${NETSAPIENS_API_TOKEN}
-
-      # Authentication Method 2: OAuth 2.0 (user-specific, recommended)
-      # Uncomment to use OAuth instead of API token
-      # - NETSAPIENS_OAUTH_CLIENT_ID=${NETSAPIENS_OAUTH_CLIENT_ID}
-      # - NETSAPIENS_OAUTH_CLIENT_SECRET=${NETSAPIENS_OAUTH_CLIENT_SECRET}
-      # - NETSAPIENS_OAUTH_USERNAME=${NETSAPIENS_OAUTH_USERNAME}
-      # - NETSAPIENS_OAUTH_PASSWORD=${NETSAPIENS_OAUTH_PASSWORD}
+      # Required for HTTP transport: operator-level NS OAuth credentials
+      # These are used server-side to run password grants on behalf of users.
+      # Users authenticate via the browser login page — their credentials
+      # never pass through the MCP transport or LLM.
+      - NETSAPIENS_OAUTH_CLIENT_ID=${NETSAPIENS_OAUTH_CLIENT_ID}
+      - NETSAPIENS_OAUTH_CLIENT_SECRET=${NETSAPIENS_OAUTH_CLIENT_SECRET}
 
       # Transport configuration
       - MCP_TRANSPORT=http
       - MCP_PORT=3000
+      # Public base URL for OAuth metadata discovery (set to your external URL)
+      - MCP_BASE_URL=${MCP_BASE_URL:-http://localhost:3000}
 
       # Optional: Server Configuration
       - DEBUG=${DEBUG:-false}
-      - NETSAPIENS_TIMEOUT=${NETSAPIENS_TIMEOUT:-30000}
       - NODE_ENV=production
 
     # Resource limits (adjust as needed)
