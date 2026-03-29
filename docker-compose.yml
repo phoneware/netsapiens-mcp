@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   netsapiens-mcp:
     build:
@@ -30,6 +28,10 @@ services:
       - DEBUG=${DEBUG:-false}
       - NODE_ENV=production
 
+    # Persist OAuth tokens across container restarts
+    volumes:
+      - token-data:/home/nodejs/.netsapiens-mcp
+
     # Resource limits (adjust as needed)
     deploy:
       resources:
@@ -50,3 +52,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+volumes:
+  token-data:
