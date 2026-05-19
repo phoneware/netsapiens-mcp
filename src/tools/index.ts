@@ -18,6 +18,7 @@ import { NetSapiensClient } from '../netsapiens-client.js';
 import { toolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
+import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 
 // Merge v1 RPC-style tools into the same registry. v1 names are all
 // prefixed `v1_`, so they sort and disable cleanly: `MCP_DISABLED_TOOLS=v1_*`.
@@ -94,6 +95,72 @@ export function isActionDisabled(action: unknown): boolean {
   const set = getDisabledActions();
   if (set.size === 0) return false;
   return set.has(action);
+}
+
+// ---------------------------------------------------------------------------
+// Coarse role-tier filtering
+//
+// NetSapiens has no per-endpoint capability introspection — authorization is
+// scope-tier + ownership, enforced server-side (403). We hide the clearly-
+// privileged resource families from lower tiers as a UX nicety; NS remains the
+// real gatekeeper for everything else. The map is intentionally small and
+// conservative: only families we are confident require a given tier are listed,
+// so we never hide a tool a user could legitimately call. Anything unmatched
+// defaults to 'user' (visible to all).
+//
+// Patterns match the tool name (which encodes the resource). Disable the whole
+// behavior with MCP_DISABLE_ROLE_FILTER=true.
+// ---------------------------------------------------------------------------
+
+const TIER_RULES: Array<{ role: UserRole; patterns: RegExp[] }> = [
+  {
+    role: 'system_admin',
+    patterns: [
+      /certificate/i,
+      /(^|_)template(s)?(_|$)/i,
+      /(^|_)image(s)?(_|$)/i,
+      /(^|_)route(s)?(_|$)/i,
+      /connection/i,
+      /firebase/i,
+      /backup/i,
+      /restore/i,
+      /accesslog|access_log/i,
+      /auditlog|audit_log/i,
+      /(^|_)sfu(_|$)/i,
+      /(^|_)insight(_|$)/i,
+      /configuration|config_definition|configdef/i,
+      // system-wide dial policy (domain-scoped variants contain "domain")
+      /^(get|post|put|delete|read|create|update)_dialpolicy/i,
+      /v1_(configuration|template|image|route|connection|firebase|backup|restore|accesslog|auditlog|sfu|insight|uiconfigdef)/i,
+    ],
+  },
+  {
+    role: 'reseller',
+    patterns: [
+      /reseller/i,
+      /^create_domain$|^delete_domain$|^domain_billing$|^count_domains$/i,
+      /v1_reseller/i,
+    ],
+  },
+];
+
+/** Minimum role required to see a tool. Defaults to 'user' if unmatched. */
+export function toolMinRole(name: string): UserRole {
+  for (const rule of TIER_RULES) {
+    if (rule.patterns.some((p) => p.test(name))) return rule.role;
+  }
+  return 'user';
+}
+
+function roleFilterEnabled(): boolean {
+  return process.env.MCP_DISABLE_ROLE_FILTER !== 'true';
+}
+
+/** True if a user of `userRole` is allowed to see/use a tool requiring `minRole`. */
+function roleAllows(userRole: UserRole | undefined, name: string): boolean {
+  if (!userRole || !roleFilterEnabled()) return true;
+  const required = toolMinRole(name);
+  return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[required];
 }
 
 // ---------------------------------------------------------------------------
@@ -182,10 +249,11 @@ function buildNameMapping(): NameMapping {
 
 /**
  * Returns the full list of tool definitions exposed to MCP clients.
- * Wraps each generated tool with our read/write annotations and skips
- * tools matched by MCP_DISABLED_TOOLS.
+ * Wraps each generated tool with our read/write annotations, skips tools
+ * matched by MCP_DISABLED_TOOLS, and (when a userRole is given) hides tools
+ * that require a higher tier than the user has.
  */
-export function getAllToolDefinitions(): Array<{
+export function getAllToolDefinitions(userRole?: UserRole): Array<{
   name: string;
   description: string;
   inputSchema: object;
@@ -201,6 +269,7 @@ export function getAllToolDefinitions(): Array<{
   for (const [registryKey, def] of toolRegistry) {
     const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
     if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
+    if (!roleAllows(userRole, registryKey)) continue;
     tools.push({
       name: exposed,
       description: def.schema.description,
@@ -214,11 +283,15 @@ export function getAllToolDefinitions(): Array<{
 /**
  * Dispatches a tool call to the generated registry's handler.
  * Returns the tool result or null if the tool isn't registered.
+ *
+ * When userRole is provided, a call to a tool above the user's tier is
+ * rejected here too (defense-in-depth alongside the ListTools filter).
  */
 export async function handleToolCall(
   client: NetSapiensClient,
   toolName: string,
   args: Record<string, unknown>,
+  userRole?: UserRole,
 ): Promise<unknown> {
   if (isToolDisabled(toolName)) {
     throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
@@ -232,6 +305,12 @@ export async function handleToolCall(
   // Translate the exposed (possibly-shortened) name back to the registry key.
   const mapping = buildNameMapping();
   const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+  if (!roleAllows(userRole, registryKey)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Tool '${toolName}' requires a higher access tier than your account has`,
+    );
+  }
   const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
   if (!def) return null;
   return def.handler(args ?? {}, client as unknown as GenericApiClient);
@@ -239,17 +318,18 @@ export async function handleToolCall(
 
 /**
  * Wires ListTools and CallTool handlers onto an MCP Server.
+ * Pass the authenticated user's role to enable coarse tier filtering.
  */
-export function registerAllTools(server: Server, client: NetSapiensClient): void {
+export function registerAllTools(server: Server, client: NetSapiensClient, userRole?: UserRole): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: getAllToolDefinitions() };
+    return { tools: getAllToolDefinitions(userRole) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     try {
-      const result = await handleToolCall(client, name, (args ?? {}) as Record<string, unknown>);
+      const result = await handleToolCall(client, name, (args ?? {}) as Record<string, unknown>, userRole);
       if (result === null || result === undefined) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }

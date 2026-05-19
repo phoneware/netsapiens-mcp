@@ -143,6 +143,18 @@ delete_*,remove_*,*token*,*jwt*,*apikey*,*auth_code*,*sso_enroll*,*firebase*
 
 `v1_*` names are RPC-style (`?object=X&action=Y`) v2 names are REST. Many v2 endpoints have a v1 counterpart. If the v2 coverage is sufficient for your deployment, hide all of v1 with `MCP_DISABLED_TOOLS=...,v1_*`.
 
+### Role-tier filtering
+
+NetSapiens authorization is scope-tier (Super User > Reseller > Office Manager > Basic User) plus domain/territory ownership, enforced server-side with a 403 — there is no per-endpoint capability introspection endpoint to query up front. The user's scope is the only access signal available at connection time, and we read it at login.
+
+On top of NS's own enforcement, the server hides clearly-privileged resource families from lower tiers as a UX nicety so the AI doesn't see tools it can't use:
+
+- **system_admin only**: certificates, templates, images, routes, connections, firebase, backup/restore, access/audit logs, system configuration, system-wide dial policy, SFU, insight.
+- **reseller minimum**: reseller management, domain create/delete/billing.
+- **everything else**: visible to all authenticated users; NS enforces ownership.
+
+The map is intentionally small and conservative — only families we're confident require a tier are gated, so a tool a user could legitimately call is never hidden. NS remains the real gatekeeper for the long tail. Disable the behavior entirely with `MCP_DISABLE_ROLE_FILTER=true` (then everything is visible and NS does all enforcement via 403).
+
 ## Customizing the login page
 
 Set `MCP_LOGIN_HEADER` for the heading text and `MCP_ICON_URL` for the logo:
