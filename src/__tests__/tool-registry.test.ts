@@ -123,6 +123,75 @@ describe('name shortening', () => {
   });
 });
 
+describe('role-tier filtering', () => {
+  beforeEach(() => {
+    clearDisableEnv();
+    delete process.env.MCP_DISABLE_ROLE_FILTER;
+  });
+
+  it('classifies privileged resource families correctly', async () => {
+    const { toolMinRole } = await importTools();
+    expect(toolMinRole('get_certificates')).toBe('system_admin');
+    expect(toolMinRole('get_dialpolicy')).toBe('system_admin');
+    expect(toolMinRole('create_domain')).toBe('reseller');
+    expect(toolMinRole('get_resellers')).toBe('reseller');
+    expect(toolMinRole('v1_reseller_read')).toBe('reseller');
+    // Ordinary resources default to user-visible
+    expect(toolMinRole('get_domains')).toBe('user');
+    expect(toolMinRole('get_domains_by_domain_users_by_user_voicemail')).toBe('user');
+  });
+
+  it('hides higher-tier tools from lower-tier users', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const all = getAllToolDefinitions();
+    const sysAdmin = getAllToolDefinitions('system_admin');
+    const reseller = getAllToolDefinitions('reseller');
+    const user = getAllToolDefinitions('user');
+
+    // system_admin sees everything; lower tiers see strictly fewer
+    expect(sysAdmin.length).toBe(all.length);
+    expect(reseller.length).toBeLessThan(sysAdmin.length);
+    expect(user.length).toBeLessThan(reseller.length);
+
+    // A user must not see any system_admin or reseller tool
+    const userNames = new Set(user.map((t) => t.name));
+    expect(userNames.has('get_certificates')).toBe(false);
+    expect(userNames.has('create_domain')).toBe(false);
+    // …but still sees ordinary tools
+    expect(userNames.has('get_domains')).toBe(true);
+  });
+
+  it('shows all tools when no role is supplied (optimistic default)', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const all = getAllToolDefinitions();
+    expect(all.find((t) => t.name === 'get_certificates')).toBeDefined();
+  });
+
+  it('disables filtering entirely with MCP_DISABLE_ROLE_FILTER=true', async () => {
+    process.env.MCP_DISABLE_ROLE_FILTER = 'true';
+    const { getAllToolDefinitions } = await importTools();
+    const user = getAllToolDefinitions('user');
+    expect(user.find((t) => t.name === 'get_certificates')).toBeDefined();
+  });
+
+  it('rejects a call to a tool above the user tier (defense in depth)', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    await expect(
+      handleToolCall(fakeClient as never, 'get_certificates', {}, 'user'),
+    ).rejects.toThrow(/higher access tier/i);
+  });
+
+  it('allows a sufficiently-privileged user to call a privileged tool', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: unknown[] = [];
+    const fakeClient = { request: async (o: unknown) => { calls.push(o); return { success: true }; } };
+    const result = await handleToolCall(fakeClient as never, 'get_certificates', {}, 'system_admin');
+    expect(result).toBeTruthy();
+    expect(calls.length).toBe(1);
+  });
+});
+
 describe('dispatch via exposed → registry mapping', () => {
   beforeEach(clearDisableEnv);
 

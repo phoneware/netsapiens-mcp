@@ -360,7 +360,7 @@ function createAuthenticatedMcpServer(
     : config.netsapiens;
 
   const client = new NetSapiensClient(clientConfig);
-  registerTools(server, client);
+  registerTools(server, client, userRole);
 
   server.onerror = (error) => {
     logger.error('[MCP Error]', { error: String(error) });
