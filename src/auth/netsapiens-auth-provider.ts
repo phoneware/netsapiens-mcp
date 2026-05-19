@@ -12,8 +12,8 @@
  *   NETSAPIENS_OAUTH_CLIENT_SECRET – NS OAuth client secret
  */
 
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
-import type { Response } from 'express';
+import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import type { Request, Response } from 'express';
 import axios from 'axios';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
@@ -40,6 +40,83 @@ interface PendingAuthorization {
   scopes?: string[];
   resource?: URL;
   createdAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Signed cookie helpers — used to keep OAuth-flow state stateless across
+// container restarts and Cloud Run instance switches.
+// ---------------------------------------------------------------------------
+
+let sessionSecret: string | null = null;
+function getSessionSecret(): string {
+  if (sessionSecret) return sessionSecret;
+  const fromEnv = process.env.MCP_SESSION_SECRET;
+  if (fromEnv && fromEnv.length >= 16) {
+    sessionSecret = fromEnv;
+  } else {
+    sessionSecret = randomBytes(32).toString('hex');
+    logger.warn('MCP_SESSION_SECRET not set; generated ephemeral signing key. Set this env var (>=16 chars) to keep login sessions valid across restarts and instances.');
+  }
+  return sessionSecret;
+}
+
+const PENDING_AUTH_COOKIE = 'mcp_pending_auth';
+const MFA_CHALLENGE_COOKIE = 'mcp_mfa_challenge';
+
+function signValue<T>(payload: T, ttlSec: number): string {
+  const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
+  const json = Buffer.from(JSON.stringify(data));
+  const b64 = json.toString('base64url');
+  const sig = createHmac('sha256', getSessionSecret()).update(b64).digest('base64url');
+  return `${b64}.${sig}`;
+}
+
+function verifySigned<T>(token: string): T | null {
+  try {
+    const dot = token.indexOf('.');
+    if (dot <= 0) return null;
+    const b64 = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expected = createHmac('sha256', getSessionSecret()).update(b64).digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    const data = JSON.parse(Buffer.from(b64, 'base64url').toString());
+    if (typeof data.exp === 'number' && data.exp < Math.floor(Date.now() / 1000)) return null;
+    delete data.exp;
+    return data as T;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+function setSignedCookie(res: Response, name: string, value: string, maxAgeSec: number): void {
+  const attrs = [
+    `${name}=${encodeURIComponent(value)}`,
+    'Path=/',
+    `Max-Age=${maxAgeSec}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Secure',
+  ];
+  res.append('Set-Cookie', attrs.join('; '));
+}
+
+function clearCookie(res: Response, name: string): void {
+  res.append('Set-Cookie', `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,13 +283,10 @@ interface MfaChallenge {
   mfaType: string;
   mfaVendor: string;
   nsIdType: string;
-  createdAt: number;
 }
 
 export class NetSapiensAuthProvider implements OAuthServerProvider {
   private _clientsStore = new InMemoryClientsStore();
-  private pendingAuths = new Map<string, PendingAuthorization>();
-  private mfaChallenges = new Map<string, MfaChallenge>();
   private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse }>();
   private tokenStore: TokenStore;
 
@@ -247,10 +321,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
-    // Store the pending authorization so we can pick it up on form POST
-    const authId = randomUUID();
-
-    this.pendingAuths.set(authId, {
+    // Pack the pending authorization into a signed cookie so it survives
+    // container restarts, scaling events, and Cloud Run instance switches.
+    const pending: PendingAuthorization = {
       clientId: client.client_id,
       codeChallenge: params.codeChallenge,
       redirectUri: params.redirectUri,
@@ -258,11 +331,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       scopes: params.scopes,
       resource: params.resource,
       createdAt: Date.now(),
-    });
+    };
+    const cookie = signValue(pending, 15 * 60); // 15 min TTL
+    setSignedCookie(res, PENDING_AUTH_COOKIE, cookie, 15 * 60);
 
-    // The form POSTs to /login with the authId, which our Express route handles
-    const loginUrl = `/login?auth_id=${authId}`;
-    const html = loginPageHtml(loginUrl);
+    const html = loginPageHtml('/login');
     res.status(200).type('html').send(html);
   }
 
@@ -271,10 +344,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    * Runs the password grant against NetSapiens, generates an authorization code,
    * and redirects back to the MCP client.
    */
-  async handleLogin(authId: string, username: string, password: string, res: Response): Promise<void> {
-    const pending = this.pendingAuths.get(authId);
+  async handleLogin(req: Request, res: Response, username: string, password: string): Promise<void> {
+    const cookies = parseCookies(req.headers.cookie);
+    const pending = cookies[PENDING_AUTH_COOKIE]
+      ? verifySigned<PendingAuthorization>(cookies[PENDING_AUTH_COOKIE])
+      : null;
     if (!pending) {
-      res.status(400).type('html').send(loginPageHtml(`/login?auth_id=${authId}`, 'Session expired. Please try again.'));
+      // No valid pending-auth cookie. The cookie expired (>15 min) or the user
+      // landed on /login without going through /authorize. Show a generic
+      // sign-in failure page — the OAuth client will retry from the start.
+      res.status(440).type('html').send(loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.'));
       return;
     }
 
@@ -286,13 +365,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       const msg = err.message?.includes('401')
         ? 'Invalid username or password.'
         : `Authentication failed: ${err.message}`;
-      res.status(200).type('html').send(loginPageHtml(`/login?auth_id=${authId}`, msg));
+      res.status(200).type('html').send(loginPageHtml('/login', msg));
       return;
     }
 
     if (grantResult.kind === 'mfa_required') {
-      const challengeId = randomUUID();
-      this.mfaChallenges.set(challengeId, {
+      const challenge: MfaChallenge = {
         pending,
         username,
         password,
@@ -300,28 +378,31 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         mfaType: grantResult.mfaType,
         mfaVendor: grantResult.mfaVendor,
         nsIdType: grantResult.nsIdType,
-        createdAt: Date.now(),
-      });
-      // Expire challenge after 5 minutes
-      setTimeout(() => this.mfaChallenges.delete(challengeId), 5 * 60 * 1000);
-      this.pendingAuths.delete(authId);
+      };
+      const cookie = signValue(challenge, 5 * 60); // 5 min TTL
+      setSignedCookie(res, MFA_CHALLENGE_COOKIE, cookie, 5 * 60);
+      clearCookie(res, PENDING_AUTH_COOKIE);
 
-      const mfaUrl = `/mfa?challenge_id=${challengeId}`;
-      res.status(200).type('html').send(mfaPageHtml(mfaUrl, grantResult.mfaVendor));
+      res.status(200).type('html').send(mfaPageHtml('/mfa', grantResult.mfaVendor));
       return;
     }
 
+    clearCookie(res, PENDING_AUTH_COOKIE);
     await this.completeLogin(pending, grantResult.tokens, username, res);
-    this.pendingAuths.delete(authId);
   }
 
   /**
    * Called by our custom POST /mfa route after the user submits the passcode.
    */
-  async handleMfa(challengeId: string, passcode: string, res: Response): Promise<void> {
-    const challenge = this.mfaChallenges.get(challengeId);
+  async handleMfa(req: Request, res: Response, passcode: string): Promise<void> {
+    const cookies = parseCookies(req.headers.cookie);
+    const challenge = cookies[MFA_CHALLENGE_COOKIE]
+      ? verifySigned<MfaChallenge>(cookies[MFA_CHALLENGE_COOKIE])
+      : null;
     if (!challenge) {
-      res.status(400).type('html').send(loginPageHtml(`/authorize`, 'MFA session expired. Please sign in again.'));
+      // Stale or missing MFA cookie — show a sign-in failure page; the OAuth
+      // client will retry from the start.
+      res.status(440).type('html').send(loginPageHtml('/login', 'MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.'));
       return;
     }
 
@@ -329,16 +410,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     try {
       nsTokens = await this.nsMfaGrant(challenge, passcode);
     } catch (err: any) {
-      const mfaUrl = `/mfa?challenge_id=${challengeId}`;
       const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
         ? 'Invalid or expired passcode. Try again.'
         : `MFA failed: ${err.message}`;
-      res.status(200).type('html').send(mfaPageHtml(mfaUrl, challenge.mfaVendor, msg));
+      res.status(200).type('html').send(mfaPageHtml('/mfa', challenge.mfaVendor, msg));
       return;
     }
 
+    clearCookie(res, MFA_CHALLENGE_COOKIE);
     await this.completeLogin(challenge.pending, nsTokens, challenge.username, res);
-    this.mfaChallenges.delete(challengeId);
   }
 
   /**
