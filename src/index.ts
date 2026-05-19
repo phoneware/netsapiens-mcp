@@ -16,8 +16,13 @@ import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
 // Configuration - these would typically come from environment variables
 export const loadConfig = (): MCPServerConfig => {
   const apiUrl = process.env.NETSAPIENS_API_URL || 'https://edge.phoneware.cloud';
+  const transport = process.env.MCP_TRANSPORT || 'stdio';
 
-  // Check if OAuth credentials are provided
+  // In HTTP mode, per-user auth is handled by the browser login flow.
+  // We only need the API URL and operator-level client credentials (validated in http-server.ts).
+  const isHttp = transport === 'http';
+
+  // Check if OAuth credentials are provided (full set for stdio mode)
   const hasOAuth = !!(
     process.env.NETSAPIENS_OAUTH_CLIENT_ID &&
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET &&
@@ -28,8 +33,8 @@ export const loadConfig = (): MCPServerConfig => {
   // Check if API token is provided
   const hasApiToken = !!process.env.NETSAPIENS_API_TOKEN;
 
-  // Require at least one authentication method
-  if (!hasOAuth && !hasApiToken) {
+  // Stdio mode requires authentication credentials upfront
+  if (!isHttp && !hasOAuth && !hasApiToken) {
     throw new Error(
       'Authentication required: Either provide NETSAPIENS_API_TOKEN or OAuth credentials ' +
       '(NETSAPIENS_OAUTH_CLIENT_ID, NETSAPIENS_OAUTH_CLIENT_SECRET, ' +
@@ -55,8 +60,7 @@ export const loadConfig = (): MCPServerConfig => {
       username: process.env.NETSAPIENS_OAUTH_USERNAME!,
       password: process.env.NETSAPIENS_OAUTH_PASSWORD!
     };
-  } else {
-    // Use API token
+  } else if (hasApiToken) {
     netsapiensConfig.apiToken = process.env.NETSAPIENS_API_TOKEN!;
   }
 
@@ -163,3 +167,8 @@ export async function main(): Promise<void> {
     await server.run();
   }
 }
+
+main().catch((error) => {
+  logger.error('Fatal error starting MCP server', { error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
+  process.exit(1);
+});

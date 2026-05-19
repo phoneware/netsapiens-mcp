@@ -78,12 +78,15 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
     ? `<div class="error">${escapeHtml(error)}</div>`
     : '';
 
+  const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
+  const safeHeading = escapeHtml(heading);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NetSapiens MCP — Sign In</title>
+  <title>${safeHeading}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -106,7 +109,7 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
 </head>
 <body>
   <div class="card">
-    <h1>NetSapiens MCP — Sign In</h1>
+    <h1>${safeHeading}</h1>
     ${errorHtml}
     <form method="POST" action="${escapeHtml(authorizeUrl)}">
       <label for="username">Username</label>
@@ -123,6 +126,59 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function mfaPageHtml(mfaUrl: string, mfaVendor: string | undefined, error?: string): string {
+  const errorHtml = error
+    ? `<div class="error">${escapeHtml(error)}</div>`
+    : '';
+
+  const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
+  const safeHeading = escapeHtml(heading);
+  const vendorHint = mfaVendor
+    ? `<div class="hint">Enter the 6-digit code from your ${escapeHtml(mfaVendor)} authenticator.</div>`
+    : `<div class="hint">Enter the 6-digit code from your authenticator app.</div>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeHeading} — MFA</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: #f5f5f5; display: flex; justify-content: center; align-items: center;
+           min-height: 100vh; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
+            padding: 2rem; width: 100%; max-width: 400px; }
+    h1 { font-size: 1.25rem; margin-bottom: 1rem; text-align: center; }
+    .hint { font-size: 0.85rem; color: #555; text-align: center; margin-bottom: 1.25rem; }
+    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
+    input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 1.1rem; margin-bottom: 1rem; text-align: center; letter-spacing: 0.2em; }
+    input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+    button { width: 100%; padding: 0.6rem; background: #2563eb; color: #fff; border: none;
+             border-radius: 4px; font-size: 0.95rem; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
+             border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${safeHeading}</h1>
+    ${vendorHint}
+    ${errorHtml}
+    <form method="POST" action="${escapeHtml(mfaUrl)}">
+      <label for="passcode">Authentication Code</label>
+      <input type="text" id="passcode" name="passcode" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" required autocomplete="one-time-code" autofocus>
+      <button type="submit">Verify</button>
+    </form>
+  </div>
+</body>
+</html>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,9 +198,21 @@ export interface NetSapiensAuthProviderOptions {
   tokenStorePath?: string;
 }
 
+interface MfaChallenge {
+  pending: PendingAuthorization;
+  username: string;
+  password: string;
+  partialAccessToken: string;
+  mfaType: string;
+  mfaVendor: string;
+  nsIdType: string;
+  createdAt: number;
+}
+
 export class NetSapiensAuthProvider implements OAuthServerProvider {
   private _clientsStore = new InMemoryClientsStore();
   private pendingAuths = new Map<string, PendingAuthorization>();
+  private mfaChallenges = new Map<string, MfaChallenge>();
   private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse }>();
   private tokenStore: TokenStore;
 
@@ -210,10 +278,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    // Run NS password grant
-    let nsTokens: NsTokenResponse;
+    // Run NS password grant — may return final tokens OR an MFA challenge
+    let grantResult: NsGrantResult;
     try {
-      nsTokens = await this.nsPasswordGrant(username, password);
+      grantResult = await this.nsPasswordGrant(username, password);
     } catch (err: any) {
       const msg = err.message?.includes('401')
         ? 'Invalid username or password.'
@@ -222,7 +290,66 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    // Detect user role from the NS API
+    if (grantResult.kind === 'mfa_required') {
+      const challengeId = randomUUID();
+      this.mfaChallenges.set(challengeId, {
+        pending,
+        username,
+        password,
+        partialAccessToken: grantResult.partialAccessToken,
+        mfaType: grantResult.mfaType,
+        mfaVendor: grantResult.mfaVendor,
+        nsIdType: grantResult.nsIdType,
+        createdAt: Date.now(),
+      });
+      // Expire challenge after 5 minutes
+      setTimeout(() => this.mfaChallenges.delete(challengeId), 5 * 60 * 1000);
+      this.pendingAuths.delete(authId);
+
+      const mfaUrl = `/mfa?challenge_id=${challengeId}`;
+      res.status(200).type('html').send(mfaPageHtml(mfaUrl, grantResult.mfaVendor));
+      return;
+    }
+
+    await this.completeLogin(pending, grantResult.tokens, username, res);
+    this.pendingAuths.delete(authId);
+  }
+
+  /**
+   * Called by our custom POST /mfa route after the user submits the passcode.
+   */
+  async handleMfa(challengeId: string, passcode: string, res: Response): Promise<void> {
+    const challenge = this.mfaChallenges.get(challengeId);
+    if (!challenge) {
+      res.status(400).type('html').send(loginPageHtml(`/authorize`, 'MFA session expired. Please sign in again.'));
+      return;
+    }
+
+    let nsTokens: NsTokenResponse;
+    try {
+      nsTokens = await this.nsMfaGrant(challenge, passcode);
+    } catch (err: any) {
+      const mfaUrl = `/mfa?challenge_id=${challengeId}`;
+      const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
+        ? 'Invalid or expired passcode. Try again.'
+        : `MFA failed: ${err.message}`;
+      res.status(200).type('html').send(mfaPageHtml(mfaUrl, challenge.mfaVendor, msg));
+      return;
+    }
+
+    await this.completeLogin(challenge.pending, nsTokens, challenge.username, res);
+    this.mfaChallenges.delete(challengeId);
+  }
+
+  /**
+   * Shared finalization: detect role, issue auth code, redirect back to MCP client.
+   */
+  private async completeLogin(
+    pending: PendingAuthorization,
+    nsTokens: NsTokenResponse,
+    username: string,
+    res: Response,
+  ): Promise<void> {
     let nsUserRole: string | undefined;
     try {
       nsUserRole = await this.detectNsUserRole(nsTokens.access_token);
@@ -230,15 +357,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
     }
 
-    // Generate authorization code
     const code = randomBytes(32).toString('hex');
     this.authCodes.set(code, { pending, nsTokens: { ...nsTokens, username, nsUserRole } });
-    this.pendingAuths.delete(authId);
-
-    // Expire the code after 5 minutes
     setTimeout(() => this.authCodes.delete(code), 5 * 60 * 1000);
 
-    // Redirect back to the MCP client
     const redirectUrl = new URL(pending.redirectUri);
     redirectUrl.searchParams.set('code', code);
     if (pending.state) {
@@ -309,7 +431,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   // -----------------------------------------------------------------------
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const stored = this.tokenStore.get(token);
+    let stored = this.tokenStore.get(token);
     if (!stored) {
       throw new Error('Invalid access token');
     }
@@ -317,6 +439,30 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (Date.now() > stored.expiresAt) {
       this.tokenStore.delete(token);
       throw new Error('Access token expired');
+    }
+
+    // Transparently refresh the upstream NS token if it has expired or is within 60s of expiry.
+    // The MCP client never sees this — it just keeps using the same MCP bearer token.
+    const NS_REFRESH_SKEW_MS = 60_000;
+    const nsExpired = stored.nsExpiresAt && Date.now() > stored.nsExpiresAt - NS_REFRESH_SKEW_MS;
+    if (nsExpired && stored.nsRefreshToken) {
+      try {
+        const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken);
+        const updated = this.tokenStore.update(token, {
+          nsAccessToken: refreshed.access_token,
+          nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+          nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
+        });
+        if (updated) stored = updated;
+        logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
+      } catch (err) {
+        logger.warn('Upstream NS token refresh failed during verify; client will need to re-auth', {
+          error: String(err),
+          username: stored.nsUsername,
+        });
+        // Fall through and let the API call fail with a 401, which will trigger
+        // the MCP client to use its refresh token (which in turn re-tries the NS refresh).
+      }
     }
 
     return {
@@ -372,6 +518,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const accessToken = randomBytes(32).toString('hex');
     const refreshToken = randomBytes(32).toString('hex');
     const expiresAt = Date.now() + this.tokenLifetimeSec * 1000;
+    const nsExpiresAt = nsTokens.expires_in
+      ? Date.now() + nsTokens.expires_in * 1000
+      : undefined;
 
     const stored: StoredToken = {
       accessToken,
@@ -380,6 +529,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       expiresAt,
       nsAccessToken: nsTokens.access_token,
       nsRefreshToken: nsTokens.refresh_token,
+      nsExpiresAt,
       nsUsername: nsTokens.username,
       nsUserRole: nsTokens.nsUserRole,
     };
@@ -394,25 +544,102 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     };
   }
 
-  private async nsPasswordGrant(username: string, password: string): Promise<NsTokenResponse> {
-    const response = await axios.post(
-      `${this.nsApiUrl}/ns-api/oauth2/token/`,
-      new URLSearchParams({
-        client_id: this.nsClientId,
-        client_secret: this.nsClientSecret,
-        username,
-        password,
-        grant_type: 'password',
-      }).toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
-    );
+  private async nsPasswordGrant(username: string, password: string): Promise<NsGrantResult> {
+    const tokenUrl = `${this.nsApiUrl}/ns-api/v2/tokens`;
+    try {
+      const response = await axios.post(
+        tokenUrl,
+        {
+          grant_type: 'password',
+          client_id: this.nsClientId,
+          client_secret: this.nsClientSecret,
+          username,
+          password,
+        },
+        { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+      );
 
-    return {
-      access_token: response.data.access_token,
-      refresh_token: response.data.refresh_token,
-      expires_in: response.data.expires_in,
-      username,
-    };
+      const data = response.data || {};
+
+      // MFA challenge: NS returns mfa_type/mfa_vendor when a second factor is required.
+      // The access_token in this response is only valid for the subsequent mfa grant call.
+      if (data.mfa_type || data.mfa_vendor) {
+        return {
+          kind: 'mfa_required',
+          partialAccessToken: data.access_token,
+          mfaType: String(data.mfa_type || 'authenticator'),
+          mfaVendor: String(data.mfa_vendor || 'google'),
+          nsIdType: String(data.ns_id_type || 'subscriber'),
+        };
+      }
+
+      return {
+        kind: 'tokens',
+        tokens: {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          expires_in: data.expires_in,
+          username,
+        },
+      };
+    } catch (err: any) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      logger.warn('NS password grant failed', {
+        tokenUrl,
+        username,
+        status,
+        nsResponse: data,
+      });
+      const nsMessage = (typeof data === 'object' && data)
+        ? (data.error_description || data.error || data.message)
+        : (typeof data === 'string' ? data : undefined);
+      const detail = nsMessage ? `${status} — ${nsMessage}` : err.message;
+      throw new Error(detail);
+    }
+  }
+
+  private async nsMfaGrant(challenge: MfaChallenge, passcode: string): Promise<NsTokenResponse> {
+    const tokenUrl = `${this.nsApiUrl}/ns-api/v2/tokens`;
+    try {
+      const response = await axios.post(
+        tokenUrl,
+        {
+          grant_type: 'mfa',
+          client_id: this.nsClientId,
+          client_secret: this.nsClientSecret,
+          username: challenge.username,
+          password: challenge.password,
+          mfa_type: challenge.mfaType,
+          mfa_vendor: challenge.mfaVendor,
+          ns_id_type: challenge.nsIdType,
+          passcode,
+          access_token: challenge.partialAccessToken,
+        },
+        { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+      );
+
+      return {
+        access_token: response.data.access_token,
+        refresh_token: response.data.refresh_token,
+        expires_in: response.data.expires_in,
+        username: challenge.username,
+      };
+    } catch (err: any) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      logger.warn('NS MFA grant failed', {
+        tokenUrl,
+        username: challenge.username,
+        status,
+        nsResponse: data,
+      });
+      const nsMessage = (typeof data === 'object' && data)
+        ? (data.error_description || data.error || data.message)
+        : (typeof data === 'string' ? data : undefined);
+      const detail = nsMessage ? `${status} — ${nsMessage}` : err.message;
+      throw new Error(detail);
+    }
   }
 
   private async detectNsUserRole(nsAccessToken: string): Promise<string | undefined> {
@@ -434,14 +661,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   private async nsRefreshGrant(nsRefreshToken: string): Promise<NsTokenResponse> {
     const response = await axios.post(
-      `${this.nsApiUrl}/ns-api/oauth2/token/`,
-      new URLSearchParams({
+      `${this.nsApiUrl}/ns-api/v2/tokens`,
+      {
+        grant_type: 'refresh_token',
         client_id: this.nsClientId,
         client_secret: this.nsClientSecret,
         refresh_token: nsRefreshToken,
-        grant_type: 'refresh_token',
-      }).toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+      },
+      { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
     );
 
     return {
@@ -460,3 +687,13 @@ interface NsTokenResponse {
   username: string;
   nsUserRole?: string;
 }
+
+type NsGrantResult =
+  | { kind: 'tokens'; tokens: NsTokenResponse }
+  | {
+      kind: 'mfa_required';
+      partialAccessToken: string;
+      mfaType: string;
+      mfaVendor: string;
+      nsIdType: string;
+    };

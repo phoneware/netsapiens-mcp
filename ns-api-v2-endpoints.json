@@ -1,0 +1,1119 @@
+{
+  "/version": {
+    "get": "Read API Version "
+  },
+  "/authCode": {
+    "post": "Get Access Token From Auth Code"
+  },
+  "/tokens#1": {
+    "post": "Get Access Token From Refresh"
+  },
+  "/tokens": {
+    "post": "Get Access Token after MFA include Passcode"
+  },
+  "/tokens#2": {
+    "post": "Get Access Token after MFA request"
+  },
+  "/ssoEnroll": {
+    "post": "SSO Enroll"
+  },
+  "/apikeys/~": {
+    "get": "Read API Key info on your API Key"
+  },
+  "/apikeys#1": {
+    "get": "Read API Keys under your account"
+  },
+  "/apikeys/{key_id}": {
+    "get": "Read Info on specific APIKey via Key ID",
+    "put": "Update API Key",
+    "delete": "Revoke API Key"
+  },
+  "/apikeys": {
+    "post": "Create API Key"
+  },
+  "/jwt": {
+    "post": "Create JWT token From User/Pass",
+    "delete": "Revoke current JWT ",
+    "get": "Read Current JWT"
+  },
+  "/jwt#1": {
+    "post": "Create JWT token from Refresh JWT"
+  },
+  "/jwt#2": {
+    "post": "Create JWT token after MFA request"
+  },
+  "/jwt#3": {
+    "post": "Create JWT token For Delegated  Access"
+  },
+  "/jwt/{uid}": {
+    "delete": "Revoke JWT(s) by UID (user@domain)"
+  },
+  "/jwt/{jti}#1": {
+    "delete": "Revoke JWT by JTI (JWT ID)"
+  },
+  "/subscriptions": {
+    "get": "Read Event Subscriptions",
+    "post": "Create a Event Subscription"
+  },
+  "/domains/{domain}/subscriptions": {
+    "get": "Read Event Subscriptions for Domain",
+    "post": "Create a Event Subscription for Domain"
+  },
+  "/subscriptions/{id}": {
+    "get": "Read Event Subscription By Id",
+    "put": "Update an Event Subscription",
+    "delete": "Delete a subscription"
+  },
+  "/domains/{domain}/subscriptions/{id}": {
+    "put": "Update an Event Subscription for Domain",
+    "delete": "Delete a subscription For Domain"
+  },
+  "/resellers": {
+    "get": "Get Resellers",
+    "post": "Create Reseller"
+  },
+  "/resellers/count": {
+    "get": "Count Resellers"
+  },
+  "/resellers/{reseller}": {
+    "put": "Update Reseller",
+    "delete": "Delete Reseller",
+    "get": "Get Specific Reseller"
+  },
+  "/domains": {
+    "get": "Get Domains ",
+    "post": "Create a Domain"
+  },
+  "/domains/count": {
+    "get": "Count Domains"
+  },
+  "/domains/{domain}": {
+    "get": "Get Specific Domain",
+    "put": "Update a Domain",
+    "delete": "Delete a Domain"
+  },
+  "/domains/{domain}/billing": {
+    "get": "Get Specific Domain With Billing Summary"
+  },
+  "/domains/~": {
+    "get": "Get My Domain Info"
+  },
+  "/domains/{domain}/count": {
+    "get": "Check if Domain Exists"
+  },
+  "/domains/{domain}/phonenumbers": {
+    "put": "Send Phonenumber to Call Queue",
+    "get": "Get All Phone Numbers for Domain",
+    "post": "Add Phone Number in Domain"
+  },
+  "/domains/{domain}/phonenumbers#1": {
+    "put": "Send Phonenumber to a User "
+  },
+  "/domains/{domain}/phonenumbers#2": {
+    "put": "Send Phonenumber to Offnet Number"
+  },
+  "/domains/{domain}/phonenumbers#3": {
+    "put": "Move phonenumber back to Available in Inventory"
+  },
+  "/domains/{domain}/phonenumbers/count": {
+    "get": "Count Phone Numbers for Domain"
+  },
+  "/phonenumbers": {
+    "get": "Get All Phone Numbers for System or Reseller"
+  },
+  "/phonenumbers/count": {
+    "get": "Count All Phone Numbers for System or Reseller"
+  },
+  "/domains/{domain}/phonenumbers/{phonenumber}": {
+    "delete": "Remove Phone Number from Domain",
+    "put": "Update Phone Number in Domain",
+    "get": "Get Specific Phone Number in Domain"
+  },
+  "/domains/{domain}/users": {
+    "get": "Get Users in Domain",
+    "post": "Create User in Domain"
+  },
+  "/domains/{domain}/users/count": {
+    "get": "Count users in Domain"
+  },
+  "/domains/{domain}/users#1": {
+    "get": "Search for Users in Domain"
+  },
+  "/domains/{domain}/users/{user}": {
+    "delete": "Delete User in Domain",
+    "put": "Update a User in Domain",
+    "get": "Get Specific User in Domain"
+  },
+  "/domains/~/users/~": {
+    "get": "Get My User "
+  },
+  "/domains/{domain}/users/list": {
+    "get": "List Basic Info on Users in Domain"
+  },
+  "/domains/{domain}/users/{user}/devices": {
+    "get": "Get Devices for User",
+    "post": "Create Device for User"
+  },
+  "/domains/{domain}/devices/count": {
+    "get": "Count Devices for Domain"
+  },
+  "/resellers/{reseller}/devices/count": {
+    "get": "Count Devices for Reseller"
+  },
+  "/domains/{domain}/users/{user}/devices/count": {
+    "get": "Count Devices for User"
+  },
+  "/domains/{domain}/devices/{device}/count": {
+    "get": "Count Devices by Device"
+  },
+  "/domains/{domain}/users/{user}/devices/{device}": {
+    "put": "Update Device for User",
+    "delete": "Delete Device for User",
+    "get": "Get Specifc Device"
+  },
+  "/domains/{domain}/devices": {
+    "get": "Get Devices in Domain"
+  },
+  "/phones/models": {
+    "get": "Get list of Supported/Provisionable Models"
+  },
+  "/phones/models#1": {
+    "get": "Get list of Supported/Provisionable by Vendor"
+  },
+  "/phones/models#2": {
+    "get": "Get details of Specific Model"
+  },
+  "/phones/servers": {
+    "get": "Get list of Provisionable Server Profiles"
+  },
+  "/phones/servers/{server}": {
+    "get": "Read Provisionable Server Details"
+  },
+  "/phones": {
+    "get": "Read Mac Addresses",
+    "post": "Add MAC address",
+    "put": "Update MAC address",
+    "delete": "Remove MAC address"
+  },
+  "/phones/count": {
+    "get": "Count Mac Addresses"
+  },
+  "/domains/{domain}/phones": {
+    "get": "Read Mac Addresses in Domain",
+    "post": "Add MAC address for Domain",
+    "put": "Update MAC address in Domain",
+    "delete": "Remove MAC address in Domain"
+  },
+  "/phones/{mac}": {
+    "get": "Read Specific Mac Address"
+  },
+  "/domains/{domain}/phones/{mac}": {
+    "get": "Read Specific Mac Addresses in Domain"
+  },
+  "/domains/{domain}/sites/list": {
+    "get": "List Sites in Domain"
+  },
+  "/domains/{domain}/sites": {
+    "get": "Read Sites in Domain",
+    "post": "Create Site in Domain"
+  },
+  "/domains/{domain}/sites/count": {
+    "get": "Count Sites in Domain"
+  },
+  "/domains/{domain}/sites/{site}": {
+    "put": "Update Site in Domain",
+    "get": "Read Specific Site in Domain"
+  },
+  "/domains/{domain}/callqueues": {
+    "get": "Read Call Queues in Domain",
+    "post": "Create Call Queue in Domain"
+  },
+  "/domains/{domain}/callqueues/{callqueue}": {
+    "put": "Update Call Queue in Domain",
+    "delete": "Delete Call Queue",
+    "get": "Read Specific Call Queue"
+  },
+  "/domains/{domain}/callqueues/list": {
+    "get": "Read Basic info on Call Queues in Domain"
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents": {
+    "get": "Read Agents in Call Queue",
+    "post": "Add Agent to Call Queue"
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents/count": {
+    "get": "Count Agents in Call Queue"
+  },
+  "/domains/{domain}/agents": {
+    "get": "Read Agents in Domain"
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}": {
+    "get": "Read Specific Agent in Call Queue",
+    "put": "Update Agent in Call Queue",
+    "delete": "Remove Agent from Call Queue"
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/login": {
+    "patch": "Agent Login "
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/logout": {
+    "patch": "Agent Logout"
+  },
+  "/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/onecall": {
+    "patch": "Agent Single Call"
+  },
+  "/domains/{domain}/callqueues/all/agents/{callqueue-agent-id}/{status}": {
+    "patch": "Agent Set Offline Status"
+  },
+  "/domains/{domain}/queuedcall/{queue}": {
+    "get": "Read Queued Calls"
+  },
+  "/domains/{domain}/queuedcall/{callqueue}": {
+    "post": "Add a Queued Call"
+  },
+  "/domains/{domain}/statistics/callqueues/{callqueue}": {
+    "get": "Get Callqueue Statistics for a Specific Queue"
+  },
+  "/domains/{domain}/statistics/callqueues/aggregate": {
+    "get": "Get Callqueue Statistics for all Queues Aggregated"
+  },
+  "/domains/{domain}/statistics/callqueues/per-queue": {
+    "get": "Get Callqueue Statistics for all Queues by Queue"
+  },
+  "/domains/{domain}/statistics/agent": {
+    "get": "Get Agent Statistics for all Queues by Agent"
+  },
+  "/domains/{domain}/statistics/agent/callqueues/{callqueue}": {
+    "get": "Get Agent Statistics for Single Queues by Agent"
+  },
+  "/domains/{domain}/statistics/agent/{agent}": {
+    "get": "Get Agent Statistics for Single Agent"
+  },
+  "/domains/{domain}/statistics/DNIS": {
+    "get": "Get DNIS Statistics for all Queues"
+  },
+  "/domains/{domain}/statistics/DNIS/callqueues/{callqueue}": {
+    "get": "Get DNIS Statistics for Single Queue"
+  },
+  "/domains/{domain}/statistics/agentLog": {
+    "get": "Get Agent Log"
+  },
+  "/domains/{domain}/users/{user}/email": {
+    "post": "Send Email using Template"
+  },
+  "/domains/{domain}/callqueuereport/abandoned": {
+    "get": "Get Abandoned Calls for all Queues"
+  },
+  "/domains/{domain}/callqueuereport/abandoned/{callqueue}": {
+    "get": "Get Abandoned Calls for a Specific Queue"
+  },
+  "/domains/{domain}/users/{user}/answerrules": {
+    "get": "Read Answerrules for a User",
+    "post": "Add a Answerrule for a User"
+  },
+  "/domains/{domain}/users/{user}/answerrules/count": {
+    "get": "Count Answerrules for a User"
+  },
+  "/domains/~/users/~/answerrules": {
+    "get": "Read Answerrules for my  User"
+  },
+  "/domains/{domain}/users/{user}/answerrules/{timeframe}": {
+    "get": "Read Specifc Timeframe Answerrule for User",
+    "delete": "Delete a Answerrule for a User ",
+    "put": "Update a Answerrule for a User"
+  },
+  "/domains/{domain}/users/{user}/answerrules/reorder": {
+    "put": "Reorder Answerrules for my User"
+  },
+  "/domains/{domain}/number-filters": {
+    "get": "Read blocked numbers for a Domain",
+    "post": "Add blocked numbers for a Domain",
+    "delete": "Delete blocked numbers for a Domain"
+  },
+  "/domains/{domain}/users/{user}number-filters": {
+    "get": "Read blocked numbers for a User"
+  },
+  "/domains/{domain}/users/{user}/number-filters": {
+    "post": "Add blocked numbers for a User",
+    "delete": "Delete blocked numbers for a User"
+  },
+  "/domains/{domain}/autoattendants": {
+    "post": "Create Auto Attendant",
+    "get": "Read Auto Attendants"
+  },
+  "/domains/{domain}/users/{user}/autoattendants/{prompt}": {
+    "get": "Read Specific Auto Attendant",
+    "put": "Update Specific Auto Attendant",
+    "delete": "Delete Specific Auto Attendant"
+  },
+  "/domains/{domain}/users/{user}/voicemails/{folder}": {
+    "get": "Read Voicemail for User by Folder"
+  },
+  "/domains/{domain}/users/{user}/voicemails/{folder}/count": {
+    "get": "Count Voicemail for User by Folder"
+  },
+  "/domains/{domain}/users/{user}/voicemails/{folder}/{filename}": {
+    "get": "Read Specific Voicemail for User ",
+    "delete": "Delete Voicemail "
+  },
+  "/domains/{domain}/users/{user}/voicemails/{folder}/{filename}/save": {
+    "patch": "Move Voicemail to save folder"
+  },
+  "/domains/{domain}/users/{user}/voicemails/{folder}/{filename}/forward": {
+    "patch": "Forward Voicemail to another user"
+  },
+  "/domains/{domain}/users/{user}/greetings": {
+    "get": "Read Greetings for User",
+    "post": "Create a new Greeting from TTS"
+  },
+  "/domains/{domain}/users/{user}/greetings/count": {
+    "get": "Count Greetings for User"
+  },
+  "/domains/{domain}/users/{user}/greetings/{index}": {
+    "get": "Read Specific Greeting for User",
+    "delete": "Delete Specific Greeting for User",
+    "put": "Update Greeting with TTS script"
+  },
+  "/domains/{domain}/users/{user}/greetings#2": {
+    "post": "Create a new Greeting from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/users/{user}/greetings/{index}#2": {
+    "put": "Update Greeting from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/users/{user}/greetings#3": {
+    "post": "Create a new Greeting from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/users/{user}/greetings/{index}#3": {
+    "put": "Update Greeting from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/moh": {
+    "get": "Read MOH for Domain",
+    "post": "Create a new MOH for Domain from TTS"
+  },
+  "/domains/{domain}/moh/count": {
+    "get": "Count MOH for Domain"
+  },
+  "/domains/{domain}/moh/{index}": {
+    "put": "Update MOH for Domain from TTS",
+    "delete": "Delete MOH for Domain"
+  },
+  "/domains/{domain}/moh#2": {
+    "post": "Create a new MOH for Domain from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/moh/{index}#2": {
+    "put": "Update MOH for Domain from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/moh#1": {
+    "post": "Create a new MOH for Domain from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/moh/{index}#1": {
+    "put": "Update MOH for Domain from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/users/{user}/moh": {
+    "get": "Read MOH for User",
+    "post": "Create a new MOH for Domain from TTS"
+  },
+  "/domains/{domain}/users/{user}/moh/count": {
+    "get": "Count MOH for User"
+  },
+  "/domains/{domain}/users/{user}/moh#2": {
+    "post": "Create a new MOH for User from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/users/{user}/moh/{index}/#2": {
+    "put": "Update MOH for User from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/users/{user}/moh/{index}": {
+    "put": "Update MOH for Domain from TTS",
+    "delete": "Delete MOH for User "
+  },
+  "/domains/{domain}/users/{user}/moh#1": {
+    "post": "Create a new MOH for User from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/users/{user}/moh/{index}#1": {
+    "put": "Update a MOH for User from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/msg": {
+    "get": "Read Hold Messages for Domain",
+    "post": "Create a new Hold Messge for Domain from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/msg/count": {
+    "get": "Count Hold Messages for Domain"
+  },
+  "/domains/{domain}/msg/{index}": {
+    "put": "Update Hold Messge for Domain from Upload (Multipart/Mixed Post)",
+    "delete": "Delete Hold Messge for Domain"
+  },
+  "/domains/{domain}/users/{user}/msg": {
+    "get": "Read Hold Messages for User",
+    "post": "Create a new Hold Messge for User from Upload (Multipart/Mixed Post)"
+  },
+  "/domains/{domain}/users/{user}/msg/count": {
+    "get": "Count Hold Messages for User"
+  },
+  "/domains/{domain}/users/{user}/msg/{index}": {
+    "put": "Update Hold Messge for User from Upload (Multipart/Mixed Post)",
+    "delete": "Delete Hold Messge for User "
+  },
+  "/domains/{domain}/users/{user}/voices/{language}": {
+    "get": "Get Available Voices"
+  },
+  "/domains/{domain}/users/{user}/voices": {
+    "post": "Synthesize Voice (Text to Speech) ",
+    "get": "Synthesize Voice (Text to Speech)  via GET"
+  },
+  "/cdrs": {
+    "get": "Read CDRs"
+  },
+  "/domains/{domain}/cdrs": {
+    "get": "Read CDRs for Domain"
+  },
+  "/domains/{domain}/users/{user}/cdrs": {
+    "get": " Read CDRs for Specific User"
+  },
+  "/domains/{domain}/cdrs#2": {
+    "get": "Search CDRs for Domain"
+  },
+  "/domains/{domain}/cdrs#1": {
+    "get": "Read CDRs for Site in Domain"
+  },
+  "/cdrs/count": {
+    "get": "Count CDRs and SUM minutes"
+  },
+  "/domains/{domain}/cdrs/count": {
+    "get": "Count CDRs and SUM minutes for Domain"
+  },
+  "/domains/{domain}/users/{user}/cdrs/count": {
+    "get": "Count CDRs and SUM minutes for Specifc User"
+  },
+  "/domains/{domain}/schedule/count": {
+    "get": "Count CDR Schedules for Domain"
+  },
+  "/resellers/{reseller}/schedule/count": {
+    "get": "Count CDR Schedules for Reseller"
+  },
+  "/domains/{domain}/schedule/{schedule_name}/count": {
+    "get": "Count CDR Schedules by Name"
+  },
+  "/sipflow": {
+    "get": "Get Call Trace (SIPFlow) For Call"
+  },
+  "/sipflow#1": {
+    "get": "Get Cradle to Grave Info For Call"
+  },
+  "/sipflow#2": {
+    "get": "Get CSV of call trace For Call"
+  },
+  "/domains/{domain}/transcriptions": {
+    "get": "Read Transcription for Specific Call"
+  },
+  "/domains/{domain}/calls": {
+    "get": "Read Active Calls In Domain"
+  },
+  "/domains/{domain}/calls/count": {
+    "get": "Count Active Calls In Domain"
+  },
+  "/domains/{domain}/users/{user}/calls": {
+    "get": "Read Active Calls for User",
+    "post": "Make a new Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{callid}": {
+    "get": "Read Specific Active Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}": {
+    "delete": "Disconnect Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/transferPeer": {
+    "patch": "Transfer Peer Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/transfer": {
+    "patch": "Transfer Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/answer": {
+    "patch": "Answer Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/hold": {
+    "patch": "Hold Active Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/unhold": {
+    "patch": "Un-Hold Active Call"
+  },
+  "/domains/{domain}/users/{user}/calls/{call_id}/reject": {
+    "delete": "Reject Call"
+  },
+  "/calls/report": {
+    "post": "Report Active Calls"
+  },
+  "/domains/{domain}/contacts": {
+    "get": "Get Domain Contacts",
+    "post": "Create Shared Contact"
+  },
+  "/domains/{domain}/contacts/{contact_id}": {
+    "get": "Get Specific Domain Contact",
+    "put": "Update Shared Contact",
+    "delete": "Delete Shared Contact"
+  },
+  "/domains/{domain}/users/{user}/contacts": {
+    "get": "Get Contacts for User",
+    "post": "Create Contact"
+  },
+  "/domains/{domain}/users/{user}/contacts/{contact_id}": {
+    "get": "Get Specific Contact for User",
+    "put": "Update Contact",
+    "delete": "Delete Contact"
+  },
+  "/domains/{domain}/users/{user}/contacts/count": {
+    "get": "Count Contacts for User"
+  },
+  "/domains/~/users/~/contacts": {
+    "get": "Get My Contacts"
+  },
+  "/domains/{domain}/addresses": {
+    "get": "Get Addresses for Domain",
+    "post": "Create Address for Domain"
+  },
+  "/domains/{domain}/addresses/validate": {
+    "post": "Validate Address"
+  },
+  "/domains/{domain}/addresses/{emergency-address-id}": {
+    "put": "Update Address for Domain",
+    "delete": "Delete Address For Domain"
+  },
+  "/domains/{domain}/users/{user}/addresses/{emergency-address-id}": {
+    "put": "Update Address for User",
+    "get": "Get Address Using Address ID"
+  },
+  "/domains/{domain}/addresses/endpoints/{endpoint}": {
+    "put": "Update Address Endpoint",
+    "delete": "Delete Address Endpoint"
+  },
+  "/domains/{domain}/users/{user}/addresses": {
+    "post": "Create Address for User",
+    "get": "Get Addresses for User"
+  },
+  "/domains/{domain}/users/{user}/addresses/{address_id}": {
+    "delete": "Delete Address For User"
+  },
+  "/domains/{domain}/addresses/endpoints": {
+    "post": "Create Address Endpoint",
+    "get": "Get Address Endpoints for a Domain"
+  },
+  "/domains/{domain}/addresses/count": {
+    "get": "Get Addresses Count for Domain"
+  },
+  "/domains/{domain}/users/{user}/vmailnag": {
+    "get": "Get Voicemail Reminders for Specific User",
+    "delete": "Delete Voicemail Reminders for Specific User",
+    "post": "Create Voicemail Reminder",
+    "put": "Update Voicemail Reminders for Specific User"
+  },
+  "/domains/{domain}/users/{user}/vmailnag/count": {
+    "get": "Count Voicemail Reminders for Specific User"
+  },
+  "/domains/{domain}/dialplans/{dialplan}/dialrules": {
+    "get": "Read Dialrules in a Dialplan",
+    "post": "Add a new dial rule into a dial plan"
+  },
+  "/domains/{domain}/dialplans/{dialplan}/dialrules/count": {
+    "get": "Count Dialrules in a Dialplan"
+  },
+  "/domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}": {
+    "get": "Read Specific Dialrule in a Dialplan",
+    "put": "Update a dial rule by ID in a dial plan",
+    "delete": "Delete a dial rule by ID in a dial plan"
+  },
+  "/dialplans": {
+    "get": "Read Dialplans",
+    "post": "Create Dialplan Global"
+  },
+  "/domains/{domain}/dialplans": {
+    "post": "Create Dialplan for Domain"
+  },
+  "/domains/{domain}/dialplans/{dialplan}": {
+    "put": "Update Dialplan for Domain",
+    "delete": "Delete Dialplan for Domain"
+  },
+  "/dialpolicy": {
+    "get": "Read Policies",
+    "post": "Create Dialpolicy Table"
+  },
+  "/dialpolicy/{policy}": {
+    "get": "Read Specific Policy",
+    "put": "Update Dialpolicy ",
+    "delete": "Delete Dialpolicy "
+  },
+  "/domains/{domain}/dialpolicy/{policy}": {
+    "get": "Read Specific Policy in Domain",
+    "put": "Update Dialpolicy  in Domain",
+    "delete": "Delete Dialpolicy  in Domain"
+  },
+  "/dialpolicy/{policy}/permission": {
+    "get": "Read Permissions in a DialPolicy",
+    "post": "Add a new permission to a dialpolicy table"
+  },
+  "/domains/{domain}/dialpolicy/{policy}/permission": {
+    "get": "Read Permissions in a DialPolicy in Domain",
+    "post": "Add a new permission to a dialpolicy table in Domain"
+  },
+  "/dialpolicy/{policy}/permission/{id}": {
+    "get": "Read Specific Permission in a Dialpolicy",
+    "put": "Update a permission in a dialpolicy table",
+    "delete": "Delete a permission by ID in a dialpolicy"
+  },
+  "/domains/{domain}/dialpolicy/{policy}/permission/{id}": {
+    "get": "Read Specific Permission in a Dialpolicy in Domain",
+    "put": "Update a permission in a dialpolicy table in Domain",
+    "delete": "Delete a permission by ID in a dialpolicy in Domain"
+  },
+  "/domains/{domain}/smsblocks": {
+    "get": "Read SMS Blocks for Domain",
+    "post": "Add SMS Blocks for Domain"
+  },
+  "/smsblocks": {
+    "get": "Read SMS Blocks for all Domains"
+  },
+  "/domains/{domain}/smsblocks/{id}": {
+    "put": "Update SMS Block for Domain",
+    "delete": "Delete/Deactivate SMS Block for Domain"
+  },
+  "/domains/{domain}/messagesessions": {
+    "get": "Get Messagesessions for Domain"
+  },
+  "/domains/{domain}/users/{user}/messages": {
+    "post": "Start a new Message Session"
+  },
+  "/domains/{domain}/users/{user}/messagesessions": {
+    "get": "Get Messagesessions for User"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}": {
+    "get": "Get Messagesession for User",
+    "put": "Update Messagesession (Participants)",
+    "delete": "Delete Messagesession"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages": {
+    "get": "Get Messages for Messagesession",
+    "post": "Send a message (Chat)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages#1": {
+    "post": "Send a message (Group Chat)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages#2": {
+    "post": "Send a message (Media Chat)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages#3": {
+    "post": "Send a message (SMS)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages#4": {
+    "post": "Send a message (Group SMS)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages#5": {
+    "post": "Send a message (MMS)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}#1": {
+    "put": "Update Messagesession (Session Name)"
+  },
+  "/domains/{domain}/users/{user}/messagesessions/{messagesession}/leave": {
+    "put": "Update Messagesession (Leave)"
+  },
+  "/domains/{domain}/smsnumbers": {
+    "get": "Get SMS Numbers for Domain",
+    "post": "Create SMS Number"
+  },
+  "/smsnumbers": {
+    "get": "Get All SMS Numbers for System"
+  },
+  "/domains/{domain}/smsnumbers/{smsnumber}": {
+    "put": "Update SMS Number",
+    "delete": "Delete an SMS Number"
+  },
+  "/domains/{domain}/users/{user}/smsnumbers": {
+    "get": "Get SMS Numbers for User"
+  },
+  "/domains/{domain}/users/{user}/smsnumbers/count": {
+    "get": "Count SMS Numbers for User"
+  },
+  "/domains/{domain}/users/{user}/recordings/{callid}": {
+    "get": "Get Specific Recording by Callid for User"
+  },
+  "/domains/{domain}/recordings/{callid}": {
+    "get": "Get Specific Recording by Callid for Domain"
+  },
+  "/domains/{domain}/users/{user}/email/verify/{token}": {
+    "post": "Verify Email"
+  },
+  "/connections": {
+    "get": "Get All Connections",
+    "post": "Create a Connection"
+  },
+  "/connections/count": {
+    "get": "Count All Conections"
+  },
+  "/domains/{domain}/connections": {
+    "get": "Get All Connections for a Domain"
+  },
+  "/domains/{domain}/connections/{connection-id}": {
+    "get": "Get Specific Connection for a Domain",
+    "delete": "Delete a Specific Connection for a Domain"
+  },
+  "/domains/{domain}/connections/{connection-orig-match-pattern}": {
+    "put": "Update a Connection"
+  },
+  "/routes": {
+    "get": "Read Routes",
+    "post": "Create a Route"
+  },
+  "/routes/count": {
+    "get": "Count All Routes"
+  },
+  "/routes/{route-id}/routecon": {
+    "get": "Read Route Connections for Route",
+    "post": "Create a Route Connection"
+  },
+  "/routecon/count": {
+    "get": "Count All Route Connections"
+  },
+  "/routes/{route-id}": {
+    "put": "Update A Specific Route",
+    "delete": "Delete A Specific Route"
+  },
+  "/routes/{route-id}/routecon/{index}": {
+    "put": "Update A Specific Route Connection",
+    "delete": "Delete A Specific Route connection"
+  },
+  "/domains/{domain}/users/{user}/meetings/{id}/instance/{instance}/log": {
+    "post": "Create a Meeting Log Event",
+    "get": "Read Meeting Events"
+  },
+  "/video/resellers": {
+    "get": "Read Iotum Video Domain Resellers"
+  },
+  "/domains/{domain}/users/{user}/video": {
+    "get": "Read Iotum Video Host"
+  },
+  "/domains/{domain}/video/hosts": {
+    "get": "Read All Iotum Video Hosts in a Domain"
+  },
+  "/domains/{domain}/users/{user}/video/conference": {
+    "get": "Read Iotum Video Host Conferences",
+    "post": "Create a Ad-hoc Conference"
+  },
+  "/domains/{domain}/users/{user}/video/contacts": {
+    "get": "Read Iotum Video Host Contacts"
+  },
+  "/domains/{domain}/video": {
+    "get": "Read Iotum Video Company",
+    "put": "Update Domain's Iotum Company",
+    "post": "Create Iotum Video Company",
+    "delete": "Delete a Video Company"
+  },
+  "/domains/{domain}/video/products": {
+    "get": "Read Iotum Video Company Products"
+  },
+  "/domains/{domain}/video/availableproducts": {
+    "get": "Read Iotum Video Available Products"
+  },
+  "/domains/{domain}/users/{user}/host": {
+    "post": "Create a Host",
+    "put": "Update User's Iotum Host",
+    "delete": "Delete a Host"
+  },
+  "/domains/{domain}/users/{user}/host/contacts": {
+    "post": "Create Host Contacts"
+  },
+  "/domains/{domain}/video/subscription/{slug}": {
+    "post": "Create Iotum Video Subscription",
+    "delete": "Delete Iotum Video Subscription"
+  },
+  "/domains/{domain}/video/subscriptions": {
+    "put": "Update Domain's Iotum Subscriptions"
+  },
+  "/domains/{domain}/users/{user}/meetings/{id}": {
+    "post": "Create a Meeting with Id",
+    "get": "Read Meeting"
+  },
+  "/domains/{domain}/users/{user}/meetings": {
+    "post": "Create a Meeting",
+    "get": "Read Meetings for User"
+  },
+  "/domains/{domain}/users/{user}/meetings/count": {
+    "get": "Count Domains Meetings"
+  },
+  "/domains/{domain}/users/{user}/meetings/{meeting_id}/count": {
+    "get": "Count Meeting"
+  },
+  "/meetings/register/{meeting_registration_id}": {
+    "post": "Register Meeting"
+  },
+  "/domains/{domain}/users/{user}/meetings/{meeting}": {
+    "put": "Update a Meeting",
+    "delete": "Delete a Meeting"
+  },
+  "/domains/{domain}/users/{user}/meetings/getId": {
+    "post": "Request a Meeting ID"
+  },
+  "/domains/{domain}/backup": {
+    "post": "Manually Backup a Domain"
+  },
+  "/backup": {
+    "post": "Request a Full System backup"
+  },
+  "/restore": {
+    "get": "Read Available Restore Points",
+    "put": "Restore a Specifc Domain Backup"
+  },
+  "/configurations/{config-name}": {
+    "get": "Read a Specific Configuration",
+    "delete": "Delete a Configuration"
+  },
+  "/configurations": {
+    "get": "Read all Configurations",
+    "post": "Create a Configuration",
+    "put": "Update a Configuration"
+  },
+  "/configurations/count": {
+    "get": "Count Configurations"
+  },
+  "/config-definitions": {
+    "get": "Read all Configuration Definitions",
+    "post": "Create a Configuration Definition"
+  },
+  "/config-definitions/{config-name}": {
+    "get": "Read a Specific Configuration Definition",
+    "put": "Update a Configuration Definition",
+    "delete": "Delete Configuration Definition"
+  },
+  "/images/{filename}": {
+    "get": "Read Image",
+    "post": "Create Image from Upload (JSON + Base64 File)",
+    "delete": "Delete an Image",
+    "put": "Update Image from Upload (Multipart/Mixed Post)"
+  },
+  "/images/{filename}#1": {
+    "post": "Create Image from Upload (Multipart/Mixed Post)",
+    "put": "Update Image from Upload (JSON + Base64 File)"
+  },
+  "/templates/{filename}": {
+    "get": "Read Template",
+    "post": "Create Template from Upload (JSON + Base64 File)",
+    "delete": "Delete a Template",
+    "put": "Update Template from Upload (JSON + Base64 File)"
+  },
+  "/domains/{domain}/timeframes": {
+    "post": "Create Always Timeframe",
+    "get": "Read All Timeframes for Domain (Shared)"
+  },
+  "/domains/{domain}/timeframes#1": {
+    "post": "Create Specific Dates Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}": {
+    "post": "Create Additional Date Ranges within Specific Dates Timeframe",
+    "put": "Replace All Date Ranges in Specific Dates Timeframe",
+    "delete": "Delete Date Range within Specific Dates Timeframe",
+    "get": "Read Specific Timeframe for Domain (Shared)"
+  },
+  "/domains/{domain}/timeframes/{id}#1": {
+    "put": "Update Date Ranges within Specific Dates Timeframe",
+    "post": "Create Additional Holidays within Holiday Timeframe",
+    "delete": "Delete Holiday within Holiday Timeframe"
+  },
+  "/domains/{domain}/timeframes#2": {
+    "post": "Create Days of Week Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}#2": {
+    "put": "Update Days of Week Timeframe",
+    "post": "Create Additional Entries within Custom Timeframe",
+    "delete": "Delete Entry within Custom Timeframe"
+  },
+  "/domains/{domain}/timeframes#3": {
+    "post": "Create Holidays Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}#3": {
+    "put": "Replace All Holidays in Holiday Timeframe",
+    "delete": "Delete Specific Timeframe for Domain (Shared)"
+  },
+  "/domains/{domain}/timeframes/{id}#4": {
+    "put": "Update Holidays within Holiday Timeframe"
+  },
+  "/domains/{domain}/timeframes#4": {
+    "post": "Create Custom Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}#5": {
+    "put": "Replace All Entries in Custom Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}#6": {
+    "put": "Update Entries within Custom Timeframe"
+  },
+  "/domains/{domain}/timeframes/{id}#7": {
+    "put": "Convert Timeframe to Another Type"
+  },
+  "/domains/{domain}/users/{user}/timeframes": {
+    "post": "Create Always Timeframe",
+    "get": "Read All Timeframes for User"
+  },
+  "/domains/{domain}/users/{user}/timeframes#1": {
+    "post": "Create Specific Dates Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}": {
+    "post": "Create Additional Date Ranges within Specific Dates Timeframe",
+    "put": "Replace All Date Ranges in Specific Dates Timeframe",
+    "delete": "Delete Date Range within Specific Dates Timeframe",
+    "get": "Read Specific Timeframe for User"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#1": {
+    "put": "Update Date Ranges within Specific Dates Timeframe",
+    "post": "Create Additional Holidays within Holiday Timeframe",
+    "delete": "Delete Holiday within Holiday Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes#2": {
+    "post": "Create Days of Week Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#2": {
+    "put": "Update Days of Week Timeframe",
+    "post": "Create Additional Entries within Custom Timeframe",
+    "delete": "Delete Entry within Custom Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes#3": {
+    "post": "Create Holidays Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#3": {
+    "put": "Update Holidays within Holiday Timeframe",
+    "delete": "Delete Specific Timeframe for User"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#4": {
+    "put": "Replace All Holidays in Holiday Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes#4": {
+    "post": "Create Custom Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#5": {
+    "put": "Update Entries within Custom Timeframe"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#6": {
+    "put": "Replace All Entries in Custom Timeframe"
+  },
+  "/": {
+    "delete": "Delete All Timeframes for User"
+  },
+  "/domains/{domain}/users/{user}/timeframes/{id}#7": {
+    "put": "Convert Timeframe to Another Type"
+  },
+  "/holidays/countries": {
+    "get": "Read List of Supported Countries"
+  },
+  "/holidays/regions": {
+    "get": "Read List of Supported Regions"
+  },
+  "/holidays/{country}/{year}": {
+    "get": "Read Holiday Information by Country"
+  },
+  "/holidays/{country}/{region}/{year}": {
+    "get": "Read Holiday Information by Country and Region"
+  },
+  "/firebase": {
+    "get": "Read firebase service accounts",
+    "post": "Add firebase service account"
+  },
+  "/certificates": {
+    "get": "Read SSL certificates for CertManager",
+    "post": "Create SSL certificate for CertManager"
+  },
+  "/certificates/{name}": {
+    "get": "Read SSL certificate by Common Name",
+    "put": "Update SSL certificate for CertManager",
+    "delete": "Delete SSL certificate for CertManager"
+  },
+  "/insight/{label}": {
+    "get": "Query Data from iNSight"
+  },
+  "/domains/{domain}/conferences": {
+    "get": "Get Conferences in Domain",
+    "post": "Create Conference for Domain"
+  },
+  "/domains/{domain}/conferences/{conference}": {
+    "get": "Get Conference in Domain",
+    "put": "Update Conference in Domain",
+    "delete": "Delete Conference in Domain"
+  },
+  "/domains/{domain}/conferences/count": {
+    "get": "Count Conferences in Domain"
+  },
+  "/domains/{domain}/conferences/{conference}/cdr": {
+    "get": "Get Conference CDR from Domain"
+  },
+  "/domains/{domain}/conferences/{conference}/participants": {
+    "get": "Get Participants from Conference",
+    "post": "Create Participant for Conference"
+  },
+  "/domains/{domain}/conferences/{conference}/participants/{participant}": {
+    "put": "Update Participant for Conference",
+    "delete": "Delete Participant from Conference"
+  },
+  "/domains/{domain}/phonetemplates": {
+    "get": "Read Phone Templates available to a Domain",
+    "post": "Create Phone Template  in domain"
+  },
+  "/domains/{domain}/phonetemplates/{name}": {
+    "get": "Read Specific Phone Templates by name ",
+    "put": "Update Phone Template  in domain",
+    "delete": "Delete Phone Template  in domain"
+  },
+  "/domains/{domain}/phonetemplates/count": {
+    "get": "Count Phone Templates for a Domain"
+  },
+  "/deviceprofiles": {
+    "get": "Read Device Profiles"
+  },
+  "/deviceprofiles/count": {
+    "get": "Count Device Profiles"
+  },
+  "/deviceprofiles/{make}/{model}": {
+    "get": "Get specific Device Profile for Model of Phone"
+  },
+  "/domains/{domain}/phoneconfiguration/count": {
+    "get": "Count Phone Configurations in a Domain"
+  },
+  "/domains/{domain}/phoneconfiguration/{mac}": {
+    "get": "Get Phone Configuration for specific Mac",
+    "put": "Update Phone Configuration for Specific Mac Address",
+    "delete": "Delete Phone Configuration for Specific Mac Address"
+  },
+  "/domains/{domain}/phoneconfiguration": {
+    "post": "Create Phone Configuration for Specific Mac Address"
+  },
+  "/domains/{domain}/charts/{dashboard_id}/count": {
+    "get": "Count Charts"
+  },
+  "/domains/{domain}/charts/{dashboard_id}/list": {
+    "get": "Get Chart List"
+  },
+  "/domains/{domain}/users/{user}/dashboards/count": {
+    "get": "Count Dashboards for a User"
+  },
+  "/domains/{domain}/users/{user}/dashboards/list": {
+    "get": "Get Dashboard List for a User"
+  },
+  "/domains/{domain}/quotas": {
+    "get": "Get Quota for Domain"
+  },
+  "/resellers/{reseller}/quotas": {
+    "get": "Get Quota for Domains in Reseller"
+  },
+  "/domains/{domain}/quotas/count": {
+    "get": "Count Quotas for Domain"
+  },
+  "/resellers/{reseller}/quotas/count": {
+    "get": "Count Quotas for Reseller"
+  },
+  "/domains/{domain}/departments/list": {
+    "get": "List Departments in a Domain"
+  },
+  "/domains/{domain}/presence/list": {
+    "get": "List Presence in a Domain"
+  },
+  "/domains/{domain}/departments/{department}/presence/list": {
+    "get": "List Presence in a Department"
+  },
+  "/auditlog": {
+    "get": "Read Audit Log"
+  },
+  "/accesslog": {
+    "get": "Read Accesslog"
+  }
+}

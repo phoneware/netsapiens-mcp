@@ -156,6 +156,16 @@ export async function startHttpServer(): Promise<void> {
     resourceServerUrl: mcpUrl,
   }));
 
+  // Compatibility: also serve protected-resource metadata at the root path.
+  // The SDK mounts it at /.well-known/oauth-protected-resource/mcp (RFC 9728),
+  // but some clients still query the root /.well-known/oauth-protected-resource.
+  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+    res.json({
+      resource: mcpUrl.href,
+      authorization_servers: [baseUrl.href],
+    });
+  });
+
   // Login form submission — the authorize() method shows the page, this handles POST
   app.post('/login', async (req, res) => {
     const authId = req.query.auth_id as string;
@@ -167,6 +177,19 @@ export async function startHttpServer(): Promise<void> {
     }
 
     await authProvider.handleLogin(authId, username, password, res);
+  });
+
+  // MFA passcode submission (second step when NS requires MFA)
+  app.post('/mfa', async (req, res) => {
+    const challengeId = req.query.challenge_id as string;
+    const { passcode } = req.body;
+
+    if (!challengeId || !passcode) {
+      res.status(400).json({ error: 'Missing challenge_id or passcode' });
+      return;
+    }
+
+    await authProvider.handleMfa(challengeId, passcode, res);
   });
 
   // -----------------------------------------------------------------------
@@ -185,15 +208,18 @@ export async function startHttpServer(): Promise<void> {
     const body = (req as any).body;
 
     if (isInitializeRequest(body)) {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
-
       // Create a server + client using the authenticated user's NS token and role
       const extra = req.auth?.extra as Record<string, unknown> | undefined;
       const nsAccessToken = extra?.nsAccessToken as string | undefined;
       const nsUserRole = extra?.nsUserRole as UserRole | undefined;
       const { server } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole);
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid: string) => {
+          sessions.set(sid, { transport, server });
+        },
+      });
 
       transport.onclose = () => {
         const sid = transport.sessionId;
@@ -201,12 +227,6 @@ export async function startHttpServer(): Promise<void> {
       };
 
       await server.connect(transport);
-
-      const sid = transport.sessionId;
-      if (sid) {
-        sessions.set(sid, { transport, server });
-      }
-
       await transport.handleRequest(req, res, body);
       return;
     }

@@ -1,0 +1,30 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/netsapiens-mcp:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/netsapiens-mcp:$COMMIT_SHA']
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'netsapiens-mcp'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/netsapiens-mcp:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--port=3000'
+      - '--allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=10'
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--timeout=3600'
+      - '--session-affinity'
+      - '--set-env-vars=MCP_TRANSPORT=http,MCP_PORT=3000,NODE_ENV=production'
+
+substitutions:
+  _REGION: us-central1
+  _REPO: netsapiens-mcp
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/netsapiens-mcp:$COMMIT_SHA'

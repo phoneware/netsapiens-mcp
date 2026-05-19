@@ -27,6 +27,8 @@ export interface StoredToken {
   nsAccessToken: string;
   /** Upstream NS refresh token */
   nsRefreshToken?: string;
+  /** When the upstream NS access token expires (epoch ms) */
+  nsExpiresAt?: number;
   /** NS username (for identifying the user session) */
   nsUsername: string;
   /** Detected NS user role */
@@ -70,6 +72,20 @@ export class TokenStore {
     this.tokens.set(token.accessToken, token);
     this.refreshIdx.set(token.refreshToken, token);
     this.save();
+  }
+
+  /** Update an existing token in place (e.g. after refreshing the upstream NS token). */
+  update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined {
+    const existing = this.tokens.get(accessToken);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...patch };
+    this.tokens.set(updated.accessToken, updated);
+    if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
+      this.refreshIdx.delete(existing.refreshToken);
+    }
+    this.refreshIdx.set(updated.refreshToken, updated);
+    this.save();
+    return updated;
   }
 
   /** Delete a token by its access token. */
