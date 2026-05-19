@@ -1,3 +1,12 @@
+/**
+ * Tool registry — wraps the auto-generated tool registry in src/generated/
+ * and layers on our own concerns: read/write annotations, disable patterns,
+ * and the dispatch hookup for the MCP Server.
+ *
+ * The generated layer is produced by `npm run generate` from
+ * spec/netsapiens-api-v2.json. Do not edit src/generated/ by hand.
+ */
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
@@ -6,86 +15,22 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
+import { toolRegistry } from '../generated/registry.js';
+import { v1ToolRegistry } from '../generated/v1/registry.js';
+import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 
-import * as system from './system.js';
-import * as resellers from './resellers.js';
-import * as domains from './domains.js';
-import * as sites from './sites.js';
-import * as users from './users.js';
-import * as phoneNumbers from './phone-numbers.js';
-import * as callQueues from './call-queues.js';
-import * as cdrs from './cdrs.js';
-import * as calls from './calls.js';
-import * as conferences from './conferences.js';
-import * as autoAttendants from './auto-attendants.js';
-import * as answerRules from './answer-rules.js';
-import * as timeframes from './timeframes.js';
-import * as greetings from './greetings.js';
-import * as voicemails from './voicemails.js';
-import * as musicOnHold from './music-on-hold.js';
-import * as contacts from './contacts.js';
-import * as phones from './phones.js';
-import * as recordings from './recordings.js';
-import * as messaging from './messaging.js';
-import * as statistics from './statistics.js';
-import * as dialPlans from './dial-plans.js';
-import * as dialPolicy from './dial-policy.js';
-import * as subscriptions from './subscriptions.js';
-import * as routes from './routes.js';
-import * as addresses from './addresses.js';
-import * as numberFilters from './number-filters.js';
-import * as holdMessages from './hold-messages.js';
-import * as videoMeetings from './video-meetings.js';
-import * as misc from './misc.js';
+// Merge v1 RPC-style tools into the same registry. v1 names are all
+// prefixed `v1_`, so they sort and disable cleanly: `MCP_DISABLED_TOOLS=v1_*`.
+for (const [name, def] of v1ToolRegistry) {
+  if (!toolRegistry.has(name)) toolRegistry.set(name, def);
+}
 
-const toolModules = [
-  system,
-  resellers,
-  domains,
-  sites,
-  users,
-  phoneNumbers,
-  callQueues,
-  cdrs,
-  calls,
-  conferences,
-  autoAttendants,
-  answerRules,
-  timeframes,
-  greetings,
-  voicemails,
-  musicOnHold,
-  contacts,
-  phones,
-  recordings,
-  messaging,
-  statistics,
-  dialPlans,
-  dialPolicy,
-  subscriptions,
-  routes,
-  addresses,
-  numberFilters,
-  holdMessages,
-  videoMeetings,
-  misc,
-];
+// ---------------------------------------------------------------------------
+// Read/write classification (annotations only — naming is left to the spec)
+// ---------------------------------------------------------------------------
 
-/**
- * Read-only verbs — these tools do not modify NS state.
- * Anything else is treated as a writer.
- */
 const READ_PREFIXES = ['get_', 'list_', 'count_', 'search_', 'test_', 'export_', 'download_', 'read_', 'find_', 'lookup_'];
-
-/**
- * Tools whose semantics change with an `action` argument (manage_*).
- * These can read OR write, so we classify them as writers for safety.
- */
 const MIXED_PREFIXES = ['manage_'];
-
-/**
- * Verbs that imply potentially destructive operations.
- */
 const DESTRUCTIVE_HINTS = ['delete_', 'revoke_', 'remove_', 'cancel_', 'destroy_', 'reset_', 'restart_', 'reboot_', 'restore_'];
 
 function classifyTool(name: string): { readOnlyHint: boolean; destructiveHint: boolean } {
@@ -95,17 +40,20 @@ function classifyTool(name: string): { readOnlyHint: boolean; destructiveHint: b
   if (MIXED_PREFIXES.some((p) => name.startsWith(p))) {
     return { readOnlyHint: false, destructiveHint: true };
   }
+  // HTTP verbs in the spec map cleanly: GET → read, DELETE → destructive, PUT/PATCH/POST → write.
+  if (name.startsWith('get_')) return { readOnlyHint: true, destructiveHint: false };
+  if (name.startsWith('delete_')) return { readOnlyHint: false, destructiveHint: true };
+  if (name.startsWith('put_') || name.startsWith('patch_') || name.startsWith('post_')) {
+    return { readOnlyHint: false, destructiveHint: false };
+  }
   const destructive = DESTRUCTIVE_HINTS.some((p) => name.startsWith(p));
   return { readOnlyHint: false, destructiveHint: destructive };
 }
 
-/**
- * Compile a comma-separated list of glob patterns into a single RegExp.
- * Supports `*` as a wildcard (matches any characters).
- *
- * Example: "delete_*,remove_*,manage_certificate" disables all delete and remove
- * prefixed tools plus the specific manage_certificate tool.
- */
+// ---------------------------------------------------------------------------
+// Disabled-tool patterns (MCP_DISABLED_TOOLS, MCP_DISABLED_ACTIONS)
+// ---------------------------------------------------------------------------
+
 function compileToolPatterns(patterns: string): RegExp | null {
   const list = patterns.split(',').map((s) => s.trim()).filter(Boolean);
   if (list.length === 0) return null;
@@ -131,11 +79,6 @@ export function isToolDisabled(name: string): boolean {
   return re ? re.test(name) : false;
 }
 
-/**
- * Comma-separated list of action argument values that should be blocked when
- * passed to multi-action tools like `manage_*` (e.g. "delete,revoke,destroy").
- * Matches the `args.action` field on tool calls.
- */
 let disabledActionsCache: { source: string; set: Set<string> } | null = null;
 function getDisabledActions(): Set<string> {
   const env = process.env.MCP_DISABLED_ACTIONS || '';
@@ -153,58 +96,149 @@ export function isActionDisabled(action: unknown): boolean {
   return set.has(action);
 }
 
+// ---------------------------------------------------------------------------
+// Name shortening
+//
+// MCP clients (Claude, ChatGPT) cap tool names at 64 characters. Several
+// OpenAPI-generated names from deep paths blow past that, so we apply a set
+// of deterministic abbreviations that collapse REST verbiage like
+// `domains_by_domain_users_by_user` → `domain_user`. The mapping is built
+// once at module load and cached for dispatch.
+// ---------------------------------------------------------------------------
+
+const SHORTEN_RULES: Array<[RegExp, string]> = [
+  [/domains_by_domain/g, 'domain'],
+  [/users_by_user/g, 'user'],
+  [/conferences_by_conference/g, 'conference'],
+  [/participants_by_participant/g, 'participant'],
+  [/callqueues_by_callqueue/g, 'callqueue'],
+  [/calls_by_call_id/g, 'call'],
+  [/meetings_by_id/g, 'meeting'],
+  [/instance_by_instance/g, 'instance'],
+  [/devices_by_device/g, 'device'],
+  [/dialplans_by_dialplan/g, 'dialplan'],
+  [/dialpolicy_by_policy/g, 'dialpolicy'],
+  [/sites_by_site/g, 'site'],
+  [/resellers_by_reseller/g, 'reseller'],
+  [/schedule_by_schedule_name/g, 'schedule'],
+  [/timeframes_by_timeframe/g, 'timeframe'],
+  [/contacts_by_contact_id/g, 'contact'],
+  [/agents_by_agent/g, 'agent'],
+];
+
+function shortenName(name: string): string {
+  let out = name;
+  for (const [pattern, replacement] of SHORTEN_RULES) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+const MCP_MAX_NAME_LEN = 64;
+
+interface NameMapping {
+  // exposed name (what MCP clients see) → registry key (original generated name)
+  exposedToRegistry: Map<string, string>;
+  // registry key → exposed name (for ListTools rendering)
+  registryToExposed: Map<string, string>;
+}
+
+let nameMappingCache: NameMapping | null = null;
+function buildNameMapping(): NameMapping {
+  if (nameMappingCache) return nameMappingCache;
+  const exposedToRegistry = new Map<string, string>();
+  const registryToExposed = new Map<string, string>();
+  const collisions: string[] = [];
+  for (const [registryKey] of toolRegistry) {
+    let exposed = registryKey;
+    if (registryKey.length > MCP_MAX_NAME_LEN) {
+      exposed = shortenName(registryKey);
+    }
+    if (exposed.length > MCP_MAX_NAME_LEN) {
+      // Still too long — truncate with a deterministic hash suffix.
+      const hash = Buffer.from(registryKey).toString('base64url').slice(0, 6);
+      exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 7)}_${hash}`;
+    }
+    if (exposedToRegistry.has(exposed)) {
+      collisions.push(`${registryKey} → ${exposed}`);
+      // Disambiguate with a short hash suffix.
+      const hash = Buffer.from(registryKey).toString('base64url').slice(0, 4);
+      exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 5)}_${hash}`;
+    }
+    exposedToRegistry.set(exposed, registryKey);
+    registryToExposed.set(registryKey, exposed);
+  }
+  if (collisions.length) {
+    // eslint-disable-next-line no-console
+    console.warn('[tools] shortened-name collisions resolved with hashes:', collisions);
+  }
+  nameMappingCache = { exposedToRegistry, registryToExposed };
+  return nameMappingCache;
+}
+
+// ---------------------------------------------------------------------------
+// Public surface
+// ---------------------------------------------------------------------------
+
 /**
- * Returns all tool definitions from all modules, decorated with
- * read/write annotations per the MCP spec (ToolAnnotations).
- *
- * Tools matched by MCP_DISABLED_TOOLS (comma-separated globs) are omitted.
+ * Returns the full list of tool definitions exposed to MCP clients.
+ * Wraps each generated tool with our read/write annotations and skips
+ * tools matched by MCP_DISABLED_TOOLS.
  */
-export function getAllToolDefinitions(): any[] {
-  return toolModules
-    .flatMap((m) => m.toolDefinitions as any[])
-    .filter((tool) => !isToolDisabled(tool.name))
-    .map((tool) => {
-      const { readOnlyHint, destructiveHint } = classifyTool(tool.name);
-      return {
-        ...tool,
-        annotations: {
-          ...(tool.annotations ?? {}),
-          readOnlyHint,
-          destructiveHint,
-        },
-      };
+export function getAllToolDefinitions(): Array<{
+  name: string;
+  description: string;
+  inputSchema: object;
+  annotations: { readOnlyHint: boolean; destructiveHint: boolean };
+}> {
+  const mapping = buildNameMapping();
+  const tools: Array<{
+    name: string;
+    description: string;
+    inputSchema: object;
+    annotations: { readOnlyHint: boolean; destructiveHint: boolean };
+  }> = [];
+  for (const [registryKey, def] of toolRegistry) {
+    const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
+    if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
+    tools.push({
+      name: exposed,
+      description: def.schema.description,
+      inputSchema: def.schema.inputSchema,
+      annotations: classifyTool(registryKey),
     });
+  }
+  return tools;
 }
 
 /**
- * Dispatches a tool call to the appropriate module handler.
- * Returns the result or null if no module handles the tool.
+ * Dispatches a tool call to the generated registry's handler.
+ * Returns the tool result or null if the tool isn't registered.
  */
 export async function handleToolCall(
   client: NetSapiensClient,
   toolName: string,
-  args: any
-): Promise<any> {
+  args: Record<string, unknown>,
+): Promise<unknown> {
   if (isToolDisabled(toolName)) {
     throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
   }
-  if (args && isActionDisabled(args.action)) {
+  if (args && isActionDisabled((args as { action?: unknown }).action)) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Action '${args.action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
+      `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
     );
   }
-  for (const mod of toolModules) {
-    const result = await mod.handleToolCall(client, toolName, args);
-    if (result !== null) {
-      return result;
-    }
-  }
-  return null;
+  // Translate the exposed (possibly-shortened) name back to the registry key.
+  const mapping = buildNameMapping();
+  const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+  const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
+  if (!def) return null;
+  return def.handler(args ?? {}, client as unknown as GenericApiClient);
 }
 
 /**
- * Registers ListTools and CallTool handlers on an MCP Server.
+ * Wires ListTools and CallTool handlers onto an MCP Server.
  */
 export function registerAllTools(server: Server, client: NetSapiensClient): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -215,18 +249,18 @@ export function registerAllTools(server: Server, client: NetSapiensClient): void
     const { name, arguments: args } = request.params;
 
     try {
-      const result = await handleToolCall(client, name, args);
-      if (result !== null) {
-        return result;
+      const result = await handleToolCall(client, name, (args ?? {}) as Record<string, unknown>);
+      if (result === null || result === undefined) {
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
-      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      return result as { content: Array<{ type: 'text'; text: string }> };
     } catch (error) {
       if (error instanceof McpError) {
         throw error;
       }
       throw new McpError(
         ErrorCode.InternalError,
-        `Error executing tool ${name}: ${error}`
+        `Error executing tool ${name}: ${error}`,
       );
     }
   });
