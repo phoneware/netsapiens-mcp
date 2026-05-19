@@ -68,27 +68,11 @@ describe('RBAC roles', () => {
   // TOOL_ROLE_REQUIREMENTS
   // -----------------------------------------------------------------------
 
-  describe('TOOL_ROLE_REQUIREMENTS', () => {
-    it('maps known user-level tools to user', () => {
-      expect(TOOL_ROLE_REQUIREMENTS.search_users).toBe('user');
-      expect(TOOL_ROLE_REQUIREMENTS.get_user).toBe('user');
-      expect(TOOL_ROLE_REQUIREMENTS.test_connection).toBe('user');
-    });
-
-    it('maps domain admin tools to domain_admin', () => {
-      expect(TOOL_ROLE_REQUIREMENTS.get_phone_numbers).toBe('domain_admin');
-      expect(TOOL_ROLE_REQUIREMENTS.get_call_queues).toBe('domain_admin');
-      expect(TOOL_ROLE_REQUIREMENTS.login_agent).toBe('domain_admin');
-    });
-
-    it('maps reseller tools to reseller', () => {
-      expect(TOOL_ROLE_REQUIREMENTS.create_domain).toBe('reseller');
-      expect(TOOL_ROLE_REQUIREMENTS.list_resellers).toBe('reseller');
-    });
-
-    it('maps system admin tools to system_admin', () => {
-      expect(TOOL_ROLE_REQUIREMENTS.backup_system).toBe('system_admin');
-      expect(TOOL_ROLE_REQUIREMENTS.get_audit_log).toBe('system_admin');
+  describe('TOOL_ROLE_REQUIREMENTS (deprecated)', () => {
+    it('is an empty map — RBAC is enforced by NS server-side', () => {
+      // The hand-written tool-to-role map was replaced by OpenAPI-driven
+      // tool generation; NS enforces authorization via the bearer token.
+      expect(TOOL_ROLE_REQUIREMENTS).toEqual({});
     });
   });
 

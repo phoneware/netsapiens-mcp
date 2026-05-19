@@ -13,7 +13,8 @@
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",
     "clean": "rimraf build",
-    "prebuild": "npm run clean",
+    "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts",
+    "prebuild": "npm run clean && npm run generate",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -30,6 +31,7 @@
   "author": "OITVOIP",
   "license": "MIT",
   "dependencies": {
+    "@google-cloud/firestore": "^8.6.0",
     "@modelcontextprotocol/sdk": "^1.27.0",
     "axios": "^1.6.0",
     "zod": "^3.22.0"
@@ -37,7 +39,9 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^20.0.0",
+    "@types/supertest": "^7.2.0",
     "rimraf": "^5.0.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.0.0",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"

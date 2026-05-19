@@ -7,7 +7,7 @@
  *   - Health check at /health
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -38,20 +38,14 @@ interface AuthenticatedRequest extends IncomingMessage {
 // ---------------------------------------------------------------------------
 
 /**
- * Starts the HTTP-based MCP server with OAuth 2.1 authentication.
+ * Build the Express app + auth provider without binding to a port.
+ * Used by both `startHttpServer()` and the test harness.
  */
-export async function startHttpServer(): Promise<void> {
+export function createApp(): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
   const config = loadConfig();
   const port = parseInt(process.env.MCP_PORT || '3000', 10);
-  const host = process.env.MCP_HOST || '0.0.0.0';
-
-  // The publicly reachable base URL. Needed for OAuth metadata discovery.
   const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
   const mcpUrl = new URL('/mcp', baseUrl);
-
-  // -----------------------------------------------------------------------
-  // Auth provider — wraps NS password grant in an authorization code flow
-  // -----------------------------------------------------------------------
 
   const nsClientId = process.env.NETSAPIENS_OAUTH_CLIENT_ID;
   const nsClientSecret = process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
@@ -59,7 +53,7 @@ export async function startHttpServer(): Promise<void> {
   if (!nsClientId || !nsClientSecret) {
     throw new Error(
       'HTTP transport requires NETSAPIENS_OAUTH_CLIENT_ID and NETSAPIENS_OAUTH_CLIENT_SECRET ' +
-      'to be set (these are the operator-level OAuth credentials for the upstream NS API).'
+      'to be set (these are the operator-level OAuth credentials for the upstream NS API).',
     );
   }
 
@@ -68,6 +62,39 @@ export async function startHttpServer(): Promise<void> {
     nsClientId,
     nsClientSecret,
   });
+
+  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
+  return { app, authProvider, baseUrl, mcpUrl };
+}
+
+/**
+ * Starts the HTTP-based MCP server with OAuth 2.1 authentication.
+ */
+export async function startHttpServer(): Promise<void> {
+  const { app, baseUrl, mcpUrl } = createApp();
+  const config = loadConfig();
+  const port = parseInt(process.env.MCP_PORT || '3000', 10);
+  const host = process.env.MCP_HOST || '0.0.0.0';
+
+  app.listen(port, host, () => {
+    logger.info('NetSapiens MCP HTTP server started', {
+      host,
+      port,
+      authorize: `${baseUrl.origin}/authorize`,
+      mcp: mcpUrl.href,
+    });
+    if (config.debug) {
+      logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
+    }
+  });
+}
+
+function wireApp(
+  config: ReturnType<typeof loadConfig>,
+  authProvider: NetSapiensAuthProvider,
+  baseUrl: URL,
+  mcpUrl: URL,
+): { app: express.Express; sessions: Map<string, { transport: StreamableHTTPServerTransport; server: Server }> } {
 
   // -----------------------------------------------------------------------
   // Express app
@@ -147,6 +174,44 @@ export async function startHttpServer(): Promise<void> {
       nsApiUrl: config.netsapiens.apiUrl,
       version: config.version,
     });
+  });
+
+  // Favicon — fetch MCP_ICON_URL once and cache in memory; serve bytes directly.
+  // We proxy instead of redirecting because some clients (Claude included)
+  // don't follow redirects for favicon fetches.
+  let cachedIcon: { contentType: string; bytes: Buffer; etag: string } | null = null;
+  let cachedIconUrl: string | undefined;
+  const fetchIcon = async (url: string) => {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Icon fetch failed: ${resp.status}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const ct = resp.headers.get('content-type') || 'image/png';
+    const etag = `"${createHash('sha1').update(buf).digest('hex')}"`;
+    return { contentType: ct, bytes: buf, etag };
+  };
+  app.get(['/favicon.ico', '/favicon.png'], async (req, res) => {
+    const iconUrl = process.env.MCP_ICON_URL;
+    if (!iconUrl) {
+      res.status(404).end();
+      return;
+    }
+    try {
+      if (!cachedIcon || cachedIconUrl !== iconUrl) {
+        cachedIcon = await fetchIcon(iconUrl);
+        cachedIconUrl = iconUrl;
+      }
+      if (req.headers['if-none-match'] === cachedIcon.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.setHeader('Content-Type', cachedIcon.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('ETag', cachedIcon.etag);
+      res.send(cachedIcon.bytes);
+    } catch (err) {
+      logger.warn('Failed to fetch icon, serving 404', { iconUrl, error: String(err) });
+      res.status(404).end();
+    }
   });
 
   // OAuth endpoints — discovery, authorize, token, register, revoke
@@ -271,21 +336,7 @@ export async function startHttpServer(): Promise<void> {
     res.end(JSON.stringify({ status: 'session terminated' }));
   });
 
-  // -----------------------------------------------------------------------
-  // Start listening
-  // -----------------------------------------------------------------------
-
-  app.listen(port, host, () => {
-    logger.info('NetSapiens MCP HTTP server started', {
-      host,
-      port,
-      authorize: `${baseUrl.origin}/authorize`,
-      mcp: mcpUrl.href,
-    });
-    if (config.debug) {
-      logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
-    }
-  });
+  return { app, sessions };
 }
 
 // ---------------------------------------------------------------------------
