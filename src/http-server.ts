@@ -168,28 +168,26 @@ export async function startHttpServer(): Promise<void> {
 
   // Login form submission — the authorize() method shows the page, this handles POST
   app.post('/login', async (req, res) => {
-    const authId = req.query.auth_id as string;
     const { username, password } = req.body;
 
-    if (!authId || !username || !password) {
-      res.status(400).json({ error: 'Missing auth_id, username, or password' });
+    if (!username || !password) {
+      res.status(400).json({ error: 'Missing username or password' });
       return;
     }
 
-    await authProvider.handleLogin(authId, username, password, res);
+    await authProvider.handleLogin(req, res, username, password);
   });
 
   // MFA passcode submission (second step when NS requires MFA)
   app.post('/mfa', async (req, res) => {
-    const challengeId = req.query.challenge_id as string;
     const { passcode } = req.body;
 
-    if (!challengeId || !passcode) {
-      res.status(400).json({ error: 'Missing challenge_id or passcode' });
+    if (!passcode) {
+      res.status(400).json({ error: 'Missing passcode' });
       return;
     }
 
-    await authProvider.handleMfa(challengeId, passcode, res);
+    await authProvider.handleMfa(req, res, passcode);
   });
 
   // -----------------------------------------------------------------------
