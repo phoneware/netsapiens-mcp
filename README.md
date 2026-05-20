@@ -127,17 +127,24 @@ Optional:
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
 - `annotations.destructiveHint` — `true` for delete-style operations.
 
+### Infra/security endpoints are stripped at generation
+
+Auth and credential endpoints are **excluded at generation time** — they never enter the registry — because exposing them as AI tools is a security risk (the server handles auth itself; these would let the model mint/read/revoke tokens, keys, certs, or service-account creds). The generators drop:
+
+- **v2 tags**: `Authentication/Access Token (Oauth)`, `Authentication/API Key`, `Authentication/JWT`, `Firebase`, `SSL Certificates`, plus the `/email/verify/{token}` flow.
+- **v1 objects**: `sfu` (mints media-server access tokens); `oauth2/token` endpoints are inherently skipped (no `object=` param).
+
+This removes 27 v2 + 1 v1 operations (755 → 727). To change the exclusion list, edit `EXCLUDED_TAGS`/`EXCLUDED_PATH_RE` in `scripts/generate-tools.ts` and `EXCLUDED_OBJECTS` in `scripts/generate-v1-tools.ts`, then `npm run generate`.
+
 ### Recommended disable patterns
 
-Some auto-generated tools don't make sense to expose to an AI because they're infrastructure that this server itself handles. Recommended `MCP_DISABLED_TOOLS`:
+For operational (non-security) trimming per deployment, `MCP_DISABLED_TOOLS` still applies on top. Common choice:
 
 ```
-delete_*,remove_*,*token*,*jwt*,*apikey*,*auth_code*,*sso_enroll*,*firebase*
+delete_*,remove_*
 ```
 
-- `delete_*`, `remove_*` — destructive operations
-- `*token*`, `*jwt*`, `*apikey*`, `*auth_code*`, `*sso_enroll*` — auth endpoints; the server handles auth, the AI shouldn't be issuing or revoking tokens
-- `*firebase*` — service-account configuration
+- `delete_*`, `remove_*` — destructive operations you may not want an AI performing
 
 ### v1 vs v2
 
