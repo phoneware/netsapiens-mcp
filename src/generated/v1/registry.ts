@@ -49,7 +49,6 @@ import { v1_reseller_count, v1_reseller_create, v1_reseller_delete, v1_reseller_
 import { v1_route_countroute, v1_routecon_countrouteconn, v1_route_createroute, v1_route_deleteroute, v1_routecon_deleterouteconn, v1_route_readroute, v1_routecon_readroutecon, v1_route_updateroute, v1_routecon_updaterouteconn, v1_routecon_createroutecon } from './tools/route.js';
 import { v1_smsnumber_count, v1_smsnumber_create, v1_smsnumber_read, v1_smsnumber_update } from './tools/sms_number.js';
 import { v1_elementdomain_read } from './tools/server_info.js';
-import { v1_sfu_create } from './tools/sfu.js';
 import { v1_site_list } from './tools/site.js';
 import { v1_site_countsites, v1_site_read, v1_site_readbilling } from './tools/sites.js';
 import { v1_subscriber_count, v1_subscriber_create_2, v1_subscriber_delete, v1_subscriber_list, v1_subscriber_read, v1_subscriber_update } from './tools/subscriber.js';
@@ -301,7 +300,6 @@ v1ToolRegistry.set("v1_smsnumber_create", v1_smsnumber_create);
 v1ToolRegistry.set("v1_smsnumber_read", v1_smsnumber_read);
 v1ToolRegistry.set("v1_smsnumber_update", v1_smsnumber_update);
 v1ToolRegistry.set("v1_elementdomain_read", v1_elementdomain_read);
-v1ToolRegistry.set("v1_sfu_create", v1_sfu_create);
 v1ToolRegistry.set("v1_site_list", v1_site_list);
 v1ToolRegistry.set("v1_site_countsites", v1_site_countsites);
 v1ToolRegistry.set("v1_site_read", v1_site_read);

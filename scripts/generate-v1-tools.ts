@@ -41,6 +41,9 @@ const ROOT = join(__dirname, '..');
 const SPEC = join(ROOT, 'spec', 'netsapiens-api-v1.json');
 const OUT_DIR = join(ROOT, 'src', 'generated', 'v1');
 
+/** v1 objects that are infra/credential endpoints — dropped at generation. */
+const EXCLUDED_OBJECTS = new Set(['sfu']);
+
 function stripHtml(s?: string): string {
   if (!s) return '';
   return s.replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
@@ -83,6 +86,11 @@ function main(): void {
   for (const ep of endpoints) {
     const parsed = parseObjectAction(ep.url);
     if (!parsed) continue;
+
+    // Hard exclusions: infra/credential objects that are a security risk if
+    // exposed as AI tools. (oauth2/token endpoints already lack object= and
+    // are skipped above.) `sfu` mints media-server access tokens.
+    if (EXCLUDED_OBJECTS.has(parsed.object.toLowerCase())) continue;
 
     const group = ep.group ?? parsed.object;
     const action = ep.name ? safeIdent(ep.name) : safeIdent(parsed.action);

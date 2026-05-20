@@ -102,6 +102,23 @@ interface ParsedParam {
 
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
 
+/**
+ * Tags whose operations are infra/auth/credential endpoints — a security risk
+ * if exposed as AI tools (the server handles auth itself; these would let the
+ * model mint/read/revoke tokens, keys, certs, or service-account creds).
+ * Operations in these tags are dropped at generation time.
+ */
+const EXCLUDED_TAGS = new Set([
+  'Authentication/Access Token (Oauth - Username/Password)',
+  'Authentication/API Key (Machine 2 Machine)',
+  'Authentication/JWT (JSON Web Token)',
+  'Firebase',
+  'SSL Certificates',
+]);
+
+/** Specific paths to drop regardless of tag (token-bearing flows). */
+const EXCLUDED_PATH_RE = /\/email\/verify\//i;
+
 /** JS/TS reserved words that cannot be used as identifiers. */
 const RESERVED_WORDS = new Set([
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
@@ -248,6 +265,11 @@ function parseOperations(spec: OpenApiSpec): ParsedOperation[] {
 
       const tag = op.tags?.[0] || 'Uncategorized';
       const pathTemplate = stripHashSuffix(rawPath);
+
+      // --- Hard exclusions: infra / auth / credential endpoints that are a
+      // security risk if exposed as AI tools. These never enter the registry.
+      if (EXCLUDED_TAGS.has(tag)) continue;
+      if (EXCLUDED_PATH_RE.test(pathTemplate)) continue;
 
       // --- Derive tool name ---
       let toolName: string;
