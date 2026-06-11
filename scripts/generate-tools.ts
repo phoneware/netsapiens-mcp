@@ -451,7 +451,10 @@ function generateInputSchema(op: ParsedOperation): string {
     properties,
   };
   if (required.length > 0) {
-    schema.required = required;
+    // JSON Schema draft 2020-12 requires unique items in `required` arrays.
+    // OpenAPI specs sometimes declare a path/query param AND repeat it in the
+    // request body — dedupe so Claude/the Anthropic API accept the tool list.
+    schema.required = [...new Set(required)];
   }
 
   return JSON.stringify(schema, null, 6);

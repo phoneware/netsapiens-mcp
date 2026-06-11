@@ -220,8 +220,7 @@ export const create_callqueue: ToolDefinition = {
           "required": [
                 "domain",
                 "synchronous",
-                "callqueue",
-                "domain"
+                "callqueue"
           ]
     },
   },

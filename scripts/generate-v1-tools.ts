@@ -143,7 +143,7 @@ function main(): void {
       const inputSchema = {
         type: 'object',
         properties: props,
-        ...(required.length ? { required } : {}),
+        ...(required.length ? { required: [...new Set(required)] } : {}),
       };
 
       exportLines.push(

@@ -15,13 +15,20 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
-import { toolRegistry } from '../generated/registry.js';
+import { toolRegistry as v2ToolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 
-// Merge v1 RPC-style tools into the same registry. v1 names are all
-// prefixed `v1_`, so they sort and disable cleanly: `MCP_DISABLED_TOOLS=v1_*`.
+/**
+ * Combined registry: v2 first (canonical), then v1 entries that don't collide.
+ * Built locally without mutating the imported v2 map, so tests and tooling
+ * that introspect the generated registries see them in their original shape.
+ * v1 names are all `v1_*` so they sort and disable cleanly with
+ * `MCP_DISABLED_TOOLS=v1_*`.
+ */
+const toolRegistry = new Map<string, ToolDefinition>();
+for (const [name, def] of v2ToolRegistry) toolRegistry.set(name, def);
 for (const [name, def] of v1ToolRegistry) {
   if (!toolRegistry.has(name)) toolRegistry.set(name, def);
 }

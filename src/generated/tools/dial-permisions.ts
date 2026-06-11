@@ -289,7 +289,6 @@ export const put_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
                 "domain",
                 "policy",
                 "dialpolicy",
-                "domain",
                 "description"
           ]
     },

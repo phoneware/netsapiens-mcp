@@ -1579,8 +1579,6 @@ export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefini
                 "user",
                 "meeting",
                 "id",
-                "domain",
-                "user",
                 "meeting-status",
                 "meeting-schedule-start-datetime",
                 "timezone",
