@@ -122,7 +122,18 @@ Optional:
 
 ## Tools
 
-755 tools total (481 v2 + 274 v1) auto-generated from the specs. Every tool carries:
+The server exposes **a curated catalog of ~30 task-shaped tools by default** — `find_user`, `recent_calls`, `my_voicemails`, `place_call`, `queue_status`, `agent_login`, etc. — plus two escape-hatch tools that reach into the full 727-operation generated registry on demand:
+
+- `search_api(query, limit?)` — keyword search across all generated tools, returns the top-K matches with descriptions.
+- `call_api(tool_name, args)` — invokes any generated tool by name. The same role-tier, disable-pattern, and action-filter rules that govern the curated set apply here.
+
+This is the answer to "too many tools to pick from" without sacrificing reach. The model has a small, intentional default surface and can drop into the long tail only when it actually needs to.
+
+Set `MCP_TOOL_MODE=full` to expose the entire 727-tool generated registry instead (legacy behavior).
+
+The curated catalog is scope-aware: a basic NS user sees ~17 self-service tools (`find_user`, `my_voicemails`, `place_call`, `send_message`, `agent_login`, etc.); a domain admin or above sees the full ~30 including admin operations (`active_calls`, `queue_status`, `transfer_call`, `call_statistics`). The catalog lives in `src/tools/curated/catalog.ts`; edit there and rebuild.
+
+Every tool (curated or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
 - `annotations.destructiveHint` — `true` for delete-style operations.

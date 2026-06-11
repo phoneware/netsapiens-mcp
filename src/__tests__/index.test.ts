@@ -249,12 +249,19 @@ describe('loadConfig()', () => {
 // ---------------------------------------------------------------------------
 
 describe('getToolDefinitions()', () => {
-  it('returns the full auto-generated tool catalog', () => {
-    const tools = getToolDefinitions();
-    // The catalog is produced by the OpenAPI v2 generator plus the v1 apidoc
-    // generator. The exact count will drift as upstream specs change — assert
-    // a healthy floor instead of a brittle fixed number.
-    expect(tools.length).toBeGreaterThan(400);
+  it('returns the full auto-generated tool catalog when MCP_TOOL_MODE=full', () => {
+    const prev = process.env.MCP_TOOL_MODE;
+    process.env.MCP_TOOL_MODE = 'full';
+    try {
+      const tools = getToolDefinitions();
+      // The catalog is produced by the OpenAPI v2 generator plus the v1 apidoc
+      // generator. The exact count will drift as upstream specs change — assert
+      // a healthy floor instead of a brittle fixed number.
+      expect(tools.length).toBeGreaterThan(400);
+    } finally {
+      if (prev === undefined) delete process.env.MCP_TOOL_MODE;
+      else process.env.MCP_TOOL_MODE = prev;
+    }
   });
 
   it('each tool has name, description, and inputSchema', () => {
