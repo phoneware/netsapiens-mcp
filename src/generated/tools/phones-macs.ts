@@ -1218,7 +1218,6 @@ export const post_domains_by_domain_phones: ToolDefinition = {
           "required": [
                 "domain",
                 "device-provisioning-mac-address",
-                "domain",
                 "reseller",
                 "device-models-brand-and-model",
                 "device-provisioning-registration-core-server",
@@ -1517,7 +1516,6 @@ export const put_domains_by_domain_phones: ToolDefinition = {
           "required": [
                 "domain",
                 "device-provisioning-mac-address",
-                "domain",
                 "reseller",
                 "device-models-brand-and-model",
                 "device-provisioning-registration-core-server",

@@ -53,6 +53,27 @@ describe('generated v1 registry', () => {
   });
 });
 
+describe('input schemas are valid JSON Schema draft 2020-12', () => {
+  it('every generated tool schema compiles under ajv 2020', async () => {
+    // Lazy-load both ajv and the merged registry so this test mirrors what
+    // the Anthropic API checks when ListTools is sent over the wire.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Ajv2020 = (await import('ajv/dist/2020.js')).default;
+    const { getAllToolDefinitions } = await import('../tools/index.js');
+    const ajv = new (Ajv2020 as never as { new (opts: object): { compile: (s: object) => unknown } })({ strict: false });
+    const tools = getAllToolDefinitions();
+    const failures: string[] = [];
+    for (const t of tools) {
+      try {
+        ajv.compile(t.inputSchema);
+      } catch (err) {
+        failures.push(`${t.name}: ${(err as Error).message.slice(0, 200)}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});
+
 describe('cross-registry invariants', () => {
   it('v1 names do not collide with v2 names', () => {
     for (const v1Name of v1ToolRegistry.keys()) {

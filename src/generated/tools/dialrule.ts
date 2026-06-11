@@ -441,7 +441,6 @@ export const update_dialrule: ToolDefinition = {
                 "domain",
                 "dialplan",
                 "dialrule",
-                "dialrule",
                 "dial-rule-translation-destination-user"
           ]
     },
