@@ -19,6 +19,8 @@ import { toolRegistry as v2ToolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
+import { CURATED_CATALOG } from './curated/catalog.js';
+import { buildMetaTools } from './curated/meta.js';
 
 /**
  * Combined registry: v2 first (canonical), then v1 entries that don't collide.
@@ -254,11 +256,73 @@ function buildNameMapping(): NameMapping {
 // Public surface
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tool mode (curated vs full)
+//
+// `MCP_TOOL_MODE=curated` (the default) exposes the small task-shaped
+// catalog in src/tools/curated/ plus search_api/call_api. This is what AI
+// clients actually want: a focused surface they can choose from quickly,
+// with an escape hatch to the long tail when needed.
+// `MCP_TOOL_MODE=full` exposes all 700+ generated tools (legacy behavior).
+// ---------------------------------------------------------------------------
+
+type ToolMode = 'curated' | 'full';
+
+function getToolMode(): ToolMode {
+  const v = (process.env.MCP_TOOL_MODE || '').toLowerCase();
+  return v === 'full' ? 'full' : 'curated';
+}
+
+/**
+ * The curated tools, plus search_api / call_api, filtered by scope.
+ * The meta-tools dispatch into the full generated registry, so the model can
+ * still reach anything via call_api.
+ */
+function curatedExposedTools(userRole?: UserRole): Array<{
+  name: string;
+  description: string;
+  inputSchema: object;
+  annotations: { readOnlyHint: boolean; destructiveHint: boolean };
+}> {
+  const meta = buildMetaTools(toolRegistry, async (name, args, client) => {
+    // Reuse handleToolCall so every filter (disable, action, role, name
+    // mapping) applies to call_api invocations too.
+    return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
+  });
+  const all = [...CURATED_CATALOG, ...meta];
+  const tools: Array<{
+    name: string;
+    description: string;
+    inputSchema: object;
+    annotations: { readOnlyHint: boolean; destructiveHint: boolean };
+  }> = [];
+  for (const t of all) {
+    if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
+    if (isToolDisabled(t.schema.name)) continue;
+    tools.push({
+      name: t.schema.name,
+      description: t.schema.description,
+      inputSchema: t.schema.inputSchema,
+      annotations: classifyTool(t.schema.name),
+    });
+  }
+  return tools;
+}
+
+/** Lookup a curated or meta tool by exposed name (per-call construction to bind userRole). */
+function findCuratedTool(name: string, userRole?: UserRole) {
+  const meta = buildMetaTools(toolRegistry, async (innerName, innerArgs, client) =>
+    handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
+  );
+  return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
+}
+
 /**
  * Returns the full list of tool definitions exposed to MCP clients.
- * Wraps each generated tool with our read/write annotations, skips tools
- * matched by MCP_DISABLED_TOOLS, and (when a userRole is given) hides tools
- * that require a higher tier than the user has.
+ *
+ * In curated mode (default), only the curated catalog + meta-tools are
+ * returned. In full mode, every generated tool (subject to disable/role
+ * filters and name shortening) is returned.
  */
 export function getAllToolDefinitions(userRole?: UserRole): Array<{
   name: string;
@@ -266,6 +330,10 @@ export function getAllToolDefinitions(userRole?: UserRole): Array<{
   inputSchema: object;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean };
 }> {
+  if (getToolMode() === 'curated') {
+    return curatedExposedTools(userRole);
+  }
+
   const mapping = buildNameMapping();
   const tools: Array<{
     name: string;
@@ -288,11 +356,12 @@ export function getAllToolDefinitions(userRole?: UserRole): Array<{
 }
 
 /**
- * Dispatches a tool call to the generated registry's handler.
- * Returns the tool result or null if the tool isn't registered.
+ * Dispatches a tool call. In curated mode tries the curated/meta tools first
+ * (so `call_api` is intercepted here too); falls through to the generated
+ * registry for `full` mode or when call_api re-enters with a generated name.
  *
- * When userRole is provided, a call to a tool above the user's tier is
- * rejected here too (defense-in-depth alongside the ListTools filter).
+ * When userRole is provided, calls to tools above the user's tier are
+ * rejected (defense-in-depth alongside the ListTools filter).
  */
 export async function handleToolCall(
   client: NetSapiensClient,
@@ -309,6 +378,24 @@ export async function handleToolCall(
       `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
     );
   }
+
+  // Curated/meta tools take precedence so call_api can re-enter for the
+  // generated registry without infinite recursion through the curated layer.
+  if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
+    const curated = findCuratedTool(toolName, userRole);
+    if (curated) {
+      if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[curated.minRole] && roleFilterEnabled()) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Tool '${toolName}' requires a higher access tier than your account has`,
+        );
+      }
+      return curated.handler(args ?? {}, client as unknown as GenericApiClient);
+    }
+    // Fall through to the generated registry only if explicitly invoked via
+    // call_api (which routes through handleToolCall recursively).
+  }
+
   // Translate the exposed (possibly-shortened) name back to the registry key.
   const mapping = buildNameMapping();
   const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;

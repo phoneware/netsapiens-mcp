@@ -17,6 +17,9 @@ async function importTools() {
 function clearDisableEnv() {
   delete process.env.MCP_DISABLED_TOOLS;
   delete process.env.MCP_DISABLED_ACTIONS;
+  // These tests target the full auto-generated registry, so opt out of the
+  // default curated mode for the whole file.
+  process.env.MCP_TOOL_MODE = 'full';
 }
 
 describe('annotations', () => {
