@@ -122,21 +122,48 @@ Optional:
 
 ## Tools
 
-The server exposes **a curated catalog of ~30 task-shaped tools by default** — `find_user`, `recent_calls`, `my_voicemails`, `place_call`, `queue_status`, `agent_login`, etc. — plus two escape-hatch tools that reach into the full 727-operation generated registry on demand:
+The server exposes **a curated catalog of ~39 task-shaped tools by default** instead of the full 727-operation generated registry. With 700+ tools in the listing, even capable AI models stall on tool selection and burn context on enumeration; a focused default surface fixes that without losing reach.
 
-- `search_api(query, limit?)` — keyword search across all generated tools, returns the top-K matches with descriptions.
-- `call_api(tool_name, args)` — invokes any generated tool by name. The same role-tier, disable-pattern, and action-filter rules that govern the curated set apply here.
+The catalog has three layers:
 
-This is the answer to "too many tools to pick from" without sacrificing reach. The model has a small, intentional default surface and can drop into the long tail only when it actually needs to.
+1. **Thin composites** (~28) — one-or-two-call wrappers over common NS endpoints: `find_user`, `find_contact`, `find_domain`, `find_phone_number`, `find_device`, `recent_calls`, `active_calls`, `call_details`, `call_trace`, `place_call`, `transfer_call`, `end_call`, `my_voicemails`, `read_voicemail`, `forward_voicemail`, `list_message_sessions`, `read_messages`, `send_message`, `list_queues`, `queue_status`, `agent_login`, `agent_logout`, `agent_status`, `my_devices`, `my_answer_rules`, `update_my_answer_rule`, `call_statistics`, `agent_statistics`.
+2. **Workflow tools** (9) — multi-call composites that chain endpoints to deliver a higher-level intent in one shot: `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`.
+3. **API discovery / escape hatch** (2) — `search_api` and `call_api` (see next section).
+
+The catalog is **scope-aware**: a basic NS user sees ~25 self-service tools; a domain admin or above sees the full ~39 including supervisory and diagnostic operations. The catalog lives in `src/tools/curated/catalog.ts` and `src/tools/curated/workflows.ts`; edit there and rebuild.
 
 Set `MCP_TOOL_MODE=full` to expose the entire 727-tool generated registry instead (legacy behavior).
 
-The curated catalog is scope-aware: a basic NS user sees ~17 self-service tools (`find_user`, `my_voicemails`, `place_call`, `send_message`, `agent_login`, etc.); a domain admin or above sees the full ~30 including admin operations (`active_calls`, `queue_status`, `transfer_call`, `call_statistics`). The catalog lives in `src/tools/curated/catalog.ts`; edit there and rebuild.
-
-Every tool (curated or generated) carries:
+Every tool (curated, workflow, or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
 - `annotations.destructiveHint` — `true` for delete-style operations.
+
+### API discovery: how the model reaches the long tail
+
+The curated catalog is intentionally small. When the model needs something not in it — read an audit log, list certificates, configure a specific dial-policy rule — it discovers and calls into the full 727-operation registry via two meta-tools:
+
+- **`search_api(query, limit?)`** — keyword search across every generated tool's name and description. Returns ranked matches (token hits weighted, tool-name hits weighted higher). Use case: "I need to find the right tool." Example:
+  ```json
+  { "query": "auditlog", "limit": 5 }
+  ```
+  returns matches like `get_auditlog`, with short descriptions.
+
+- **`call_api(tool_name, args)`** — invoke any tool the registry knows about by exact name, with arbitrary args:
+  ```json
+  { "tool_name": "get_auditlog", "args": { "limit": 50 } }
+  ```
+
+The discovery flow:
+
+1. Model has a goal not covered by the curated catalog.
+2. Model calls `search_api({ query })` to find candidates.
+3. Model picks the best match (using its name + description).
+4. Model calls `call_api({ tool_name, args })` to execute it.
+
+This means the model browses the API the way a developer browses docs: search, read, call. The curated set handles the everyday work without an enumeration step; the meta-tools handle everything else without flooding the tool list.
+
+All filters apply identically through `call_api`: `MCP_DISABLED_TOOLS`, `MCP_DISABLED_ACTIONS`, role-tier filtering. A user trying to `call_api` into `get_accesslog` (system-admin tier) gets the same "higher access tier required" rejection they'd get from the catalog. Security stripping happens at *generation* time — auth/token/JWT/API-key/cert/firebase endpoints are not in the registry to find, so `search_api` will never surface them and `call_api` will never invoke them. The escape hatch can't reach what isn't there.
 
 ### Infra/security endpoints are stripped at generation
 
