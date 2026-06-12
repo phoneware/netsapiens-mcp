@@ -43,6 +43,20 @@ interface TokenStoreData {
   tokens: Record<string, StoredToken>;
 }
 
+/**
+ * Async-friendly interface implemented by both the in-process file-backed
+ * store and the Firestore-backed one. Auth provider code only sees this.
+ */
+export interface TokenStoreLike {
+  get(accessToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
+  getByRefreshToken(refreshToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
+  set(token: StoredToken): void | Promise<void>;
+  update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined | Promise<StoredToken | undefined>;
+  delete(accessToken: string): void | Promise<void>;
+  deleteByRefreshToken(refreshToken: string): void | Promise<void>;
+  readonly size: number;
+}
+
 // ---------------------------------------------------------------------------
 // TokenStore
 // ---------------------------------------------------------------------------

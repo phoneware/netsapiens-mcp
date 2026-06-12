@@ -141,6 +141,105 @@ export class NetSapiensClient {
   }
 
   /**
+   * v1 RPC-style call — POST /ns-api/?object=X&action=Y with form-urlencoded body.
+   * Used by generated tools under src/generated/v1/.
+   */
+  async v1Call<T = unknown>(
+    object: string,
+    action: string,
+    params: Record<string, unknown> | undefined,
+  ): Promise<NetSapiensApiResponse<T>> {
+    try {
+      const body = new URLSearchParams();
+      body.set('object', object);
+      body.set('action', action);
+      body.set('format', 'json');
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          if (v === undefined || v === null) continue;
+          body.set(k, typeof v === 'string' ? v : JSON.stringify(v));
+        }
+      }
+      // v1 lives under /ns-api/ (not /ns-api/v2). Override the client's baseURL.
+      const v1Url = `${this.config.apiUrl}/ns-api/`;
+      const response: AxiosResponse = await this.client.request({
+        method: 'POST',
+        url: v1Url,
+        data: body.toString(),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+      });
+      return { success: true, data: response.data as T };
+    } catch (error: any) {
+      const status = error.response?.status;
+      const data = error.response?.data;
+      const msg = (typeof data === 'object' && data && (data.error_description || data.error || data.message))
+        || error.message
+        || 'v1 request failed';
+      return {
+        success: false,
+        error: status ? `${status} ${msg}` : String(msg),
+      };
+    }
+  }
+
+  /**
+   * Generic request — satisfies the GenericApiClient contract used by the
+   * OpenAPI-generated tool handlers in src/generated/.
+   *
+   * Resolves path-template placeholders ({domain}, {user}, ...), URL-encodes
+   * path params, strips undefined query params, and returns a uniform
+   * NetSapiensApiResponse shape.
+   */
+  async request<T = unknown>(opts: {
+    method: string;
+    pathTemplate: string;
+    pathParams?: Record<string, string>;
+    queryParams?: Record<string, unknown>;
+    body?: unknown;
+  }): Promise<NetSapiensApiResponse<T>> {
+    try {
+      let url = opts.pathTemplate;
+      if (opts.pathParams) {
+        for (const [key, value] of Object.entries(opts.pathParams)) {
+          if (value === undefined || value === null) continue;
+          url = url.replace(new RegExp(`\\{${key}\\}`, 'g'), encodeURIComponent(String(value)));
+        }
+      }
+
+      const params: Record<string, unknown> = {};
+      if (opts.queryParams) {
+        for (const [key, value] of Object.entries(opts.queryParams)) {
+          if (value !== undefined && value !== null) params[key] = value;
+        }
+      }
+
+      const method = opts.method.toUpperCase();
+      const config: any = { params };
+      let response: AxiosResponse;
+      if (method === 'GET' || method === 'DELETE') {
+        response = await this.client.request({ method, url, ...config });
+      } else {
+        response = await this.client.request({ method, url, data: opts.body, ...config });
+      }
+
+      return { success: true, data: response.data as T };
+    } catch (error: any) {
+      const status = error.response?.status;
+      const data = error.response?.data;
+      const msg = (typeof data === 'object' && data && (data.error_description || data.error || data.message))
+        || error.message
+        || 'Request failed';
+      return {
+        success: false,
+        error: status ? `${status} ${msg}` : String(msg),
+      };
+    }
+  }
+
+  /**
    * Search for users across all domains in NetSapiens
    */
   async searchUsers(query: string, domain?: string, limit: number = 20): Promise<NetSapiensApiResponse<NetSapiensUser[]>> {

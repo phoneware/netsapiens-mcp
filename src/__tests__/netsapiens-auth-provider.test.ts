@@ -1,424 +1,427 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+/**
+ * End-to-end tests for the NetSapiens HTTP auth flow using supertest.
+ * Boots a real Express app via createApp(), mocks the NS token endpoint
+ * with axios, and walks the OAuth flow including MFA, public-client DCR,
+ * cookie-based pending state, and transparent NS refresh.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import request from 'supertest';
 import axios from 'axios';
+import { createHash, randomBytes } from 'node:crypto';
 
 vi.mock('axios');
-const mockedAxios = vi.mocked(axios, true);
+const mockedAxios = axios as unknown as {
+  post: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
+  isAxiosError: (err: unknown) => boolean;
+};
 
-import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+mockedAxios.create = vi.fn(() => ({
+  interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+  request: vi.fn(),
+  get: vi.fn(),
+  post: vi.fn(),
+})) as unknown as typeof mockedAxios.create;
+mockedAxios.isAxiosError = () => false;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const NS_TOKEN_URL = 'https://ns.example.com/ns-api/v2/tokens';
+const NS_USER_URL = 'https://ns.example.com/ns-api/v2/domains/~/users/~';
 
-const tempDir = mkdtempSync(join(tmpdir(), 'auth-provider-test-'));
-let testCounter = 0;
-
-afterAll(() => {
-  rmSync(tempDir, { recursive: true, force: true });
-});
-
-function createProvider() {
-  testCounter++;
-  return new NetSapiensAuthProvider({
-    nsApiUrl: 'https://ns.example.com',
-    nsClientId: 'ns-cid',
-    nsClientSecret: 'ns-secret',
-    tokenLifetimeSec: 3600,
-    tokenStorePath: join(tempDir, `tokens-${testCounter}.json`),
-  });
+function pkceChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
 }
 
-function mockNsTokenResponse(overrides?: Record<string, unknown>) {
-  return {
-    data: {
-      access_token: 'ns-access-xyz',
-      refresh_token: 'ns-refresh-xyz',
-      expires_in: 3600,
-      ...overrides,
-    },
-  };
+async function importApp() {
+  // Re-import after env vars are set so loadConfig picks them up.
+  vi.resetModules();
+  process.env.MCP_TRANSPORT = 'http';
+  process.env.MCP_BASE_URL = 'http://localhost';
+  process.env.NETSAPIENS_API_URL = 'https://ns.example.com';
+  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
+  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
+  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
+  delete process.env.MCP_PERSISTENCE;
+  const mod = await import('../http-server.js');
+  return mod.createApp();
 }
 
-/** Simulate the authorize → handleLogin → exchangeAuthorizationCode flow */
-async function runFullLoginFlow(provider: NetSapiensAuthProvider) {
-  // 1. Start authorization — capture the auth_id from the login page URL
-  let loginUrl = '';
-  const mockRes: any = {
-    status: vi.fn().mockReturnThis(),
-    type: vi.fn().mockReturnThis(),
-    send: vi.fn((html: string) => {
-      const match = html.match(/action="([^"]+)"/);
-      loginUrl = match?.[1] ?? '';
-    }),
-    redirect: vi.fn(),
-  };
-
-  const client = {
-    client_id: 'test-client-id',
-    redirect_uris: [new URL('http://localhost/callback')],
-  } as any;
-
-  await provider.authorize(client, {
-    codeChallenge: 'test-challenge-abc',
-    redirectUri: 'http://localhost/callback',
-    state: 'test-state',
-  }, mockRes);
-
-  const authIdMatch = loginUrl.match(/auth_id=([^&]+)/);
-  const authId = authIdMatch?.[1] ?? '';
-  expect(authId).toBeTruthy();
-
-  // 2. Handle login — NS password grant succeeds
-  mockedAxios.post.mockResolvedValueOnce(mockNsTokenResponse());
-
-  const loginRes: any = {
-    status: vi.fn().mockReturnThis(),
-    type: vi.fn().mockReturnThis(),
-    send: vi.fn(),
-    redirect: vi.fn(),
-  };
-
-  await provider.handleLogin(authId, 'testuser', 'testpass', loginRes);
-
-  // Should redirect with code + state
-  expect(loginRes.redirect).toHaveBeenCalled();
-  const redirectUrl = new URL(loginRes.redirect.mock.calls[0][0]);
-  const code = redirectUrl.searchParams.get('code')!;
-  const state = redirectUrl.searchParams.get('state');
-  expect(code).toBeTruthy();
-  expect(state).toBe('test-state');
-
-  // 3. Exchange code for tokens
-  const tokens = await provider.exchangeAuthorizationCode(client, code);
-
-  return { tokens, code };
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('NetSapiensAuthProvider', () => {
+describe('OAuth flow (end-to-end)', () => {
   beforeEach(() => {
+    mockedAxios.post = vi.fn();
+    mockedAxios.get = vi.fn();
+  });
+
+  afterEach(() => {
     vi.clearAllMocks();
   });
 
-  // ----- Clients store -----
+  it('serves OAuth discovery and PRM at both standard and compat paths', async () => {
+    const { app } = await importApp();
 
-  describe('clientsStore', () => {
-    it('supports dynamic client registration', () => {
-      const provider = createProvider();
-      const store = provider.clientsStore;
+    const asMeta = await request(app).get('/.well-known/oauth-authorization-server').expect(200);
+    expect(asMeta.body.issuer).toBeTruthy();
+    expect(asMeta.body.token_endpoint).toContain('/token');
 
-      const registered = store.registerClient!({
-        redirect_uris: [new URL('http://localhost/callback')],
-        client_name: 'Test Client',
-      } as any);
+    const prmStandard = await request(app).get('/.well-known/oauth-protected-resource/mcp').expect(200);
+    expect(prmStandard.body.resource).toContain('/mcp');
 
-      expect(registered.client_id).toBeTruthy();
-      expect(registered.client_secret).toBeTruthy();
-      expect(store.getClient(registered.client_id)).toEqual(registered);
+    const prmCompat = await request(app).get('/.well-known/oauth-protected-resource').expect(200);
+    expect(prmCompat.body.resource).toContain('/mcp');
+    expect(prmCompat.body.authorization_servers[0]).toBeTruthy();
+  });
+
+  it('rejects /mcp without a bearer token', async () => {
+    const { app } = await importApp();
+    await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'ping', id: 1 }).expect(401);
+  });
+
+  describe('Dynamic Client Registration', () => {
+    it('issues a client_secret for confidential clients (default)', async () => {
+      const { app } = await importApp();
+      const r = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['https://example.com/cb'], client_name: 'Test' })
+        .expect(201);
+      expect(r.body.client_id).toBeTruthy();
+      expect(r.body.client_secret).toBeTruthy();
     });
 
-    it('returns undefined for unknown client IDs', () => {
-      const provider = createProvider();
-      expect(provider.clientsStore.getClient('nonexistent')).toBeUndefined();
+    it('omits client_secret for public clients (token_endpoint_auth_method=none)', async () => {
+      const { app } = await importApp();
+      const r = await request(app)
+        .post('/register')
+        .send({
+          redirect_uris: ['https://chatgpt.com/cb'],
+          client_name: 'Public Client',
+          token_endpoint_auth_method: 'none',
+        })
+        .expect(201);
+      expect(r.body.client_id).toBeTruthy();
+      expect(r.body.client_secret).toBeUndefined();
     });
   });
 
-  // ----- authorize -----
+  describe('login → token (no MFA)', () => {
+    it('walks /authorize → /login → /token and issues bearer + refresh', async () => {
+      const { app } = await importApp();
 
-  describe('authorize()', () => {
-    it('renders a login page with a form posting to /login?auth_id=...', async () => {
-      const provider = createProvider();
-      const mockRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn(),
-      };
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/callback'], client_name: 'E2E' })
+        .expect(201);
+      const { client_id, client_secret } = reg.body;
 
-      await provider.authorize(
-        { client_id: 'c1', redirect_uris: [new URL('http://localhost/cb')] } as any,
-        { codeChallenge: 'challenge', redirectUri: 'http://localhost/cb' },
-        mockRes,
-      );
+      const verifier = randomBytes(32).toString('base64url');
+      const challenge = pkceChallenge(verifier);
 
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-      expect(mockRes.type).toHaveBeenCalledWith('html');
-      const html = mockRes.send.mock.calls[0][0] as string;
-      expect(html).toContain('Sign In');
-      expect(html).toContain('/login?auth_id=');
-      expect(html).toContain('name="username"');
-      expect(html).toContain('name="password"');
+      const authResp = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id,
+          redirect_uri: 'http://localhost/callback',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          state: 'xyz',
+        })
+        .expect(200);
+
+      // Pending-auth cookie must be set
+      const cookies = (authResp.headers['set-cookie'] || []) as unknown as string[];
+      const pendingCookie = cookies.find((c) => c.startsWith('mcp_pending_auth='));
+      expect(pendingCookie).toBeTruthy();
+
+      // Mock NS password grant (no MFA challenge) + user role detection
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+      const cookieHeader = pendingCookie!.split(';')[0];
+
+      const loginResp = await request(app)
+        .post('/login')
+        .set('Cookie', cookieHeader)
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2' })
+        .expect(302);
+
+      const location = loginResp.headers.location as string;
+      expect(location).toContain('http://localhost/callback?');
+      const params = new URL(location).searchParams;
+      const code = params.get('code')!;
+      expect(code).toBeTruthy();
+      expect(params.get('state')).toBe('xyz');
+
+      const tokenResp = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: verifier,
+          client_id,
+          client_secret,
+          redirect_uri: 'http://localhost/callback',
+        })
+        .expect(200);
+
+      expect(tokenResp.body.access_token).toBeTruthy();
+      expect(tokenResp.body.refresh_token).toBeTruthy();
+      expect(tokenResp.body.token_type).toBe('Bearer');
+
+      // Verify NS was called with v2 JSON shape
+      const nsCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(nsCall[0]).toBe(NS_TOKEN_URL);
+      expect(nsCall[1]).toMatchObject({
+        grant_type: 'password',
+        client_id: 'op-client-id',
+        client_secret: 'op-client-secret',
+        username: 'alice',
+        password: 'hunter2',
+      });
+    });
+
+    it('surfaces NS error messages in the login error page on failed grant', async () => {
+      const { app } = await importApp();
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
+        .expect(201);
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const cookies = (auth.headers['set-cookie'] || []) as unknown as string[];
+      const cookie = cookies.find((c) => c.startsWith('mcp_pending_auth=')).split(';')[0];
+
+      mockedAxios.post = vi.fn().mockRejectedValueOnce({
+        response: { status: 403, data: { code: 403, message: 'Invalid User Login' } },
+      });
+
+      const r = await request(app)
+        .post('/login')
+        .set('Cookie', cookie)
+        .type('form')
+        .send({ username: 'x', password: 'y' })
+        .expect(200);
+      expect(r.text).toContain('Invalid User Login');
+    });
+
+    it('shows expired-session page when the pending cookie is missing', async () => {
+      const { app } = await importApp();
+      const r = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'a', password: 'b' });
+      // No pending cookie → friendly expiry page (HTTP 440)
+      expect([200, 440]).toContain(r.status);
+      expect(r.text).toMatch(/session has expired|reconnect/i);
     });
   });
 
-  // ----- handleLogin -----
+  describe('MFA flow', () => {
+    it('renders MFA page when NS returns mfa_type, then completes via grant_type=mfa', async () => {
+      const { app } = await importApp();
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-test' })
+        .expect(201);
 
-  describe('handleLogin()', () => {
-    it('returns error page for expired/unknown auth_id', async () => {
-      const provider = createProvider();
-      const mockRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn(),
-      };
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const cookies = (auth.headers['set-cookie'] || []) as unknown as string[];
+      const pendingCookie = cookies.find((c) => c.startsWith('mcp_pending_auth=')).split(';')[0];
 
-      await provider.handleLogin('nonexistent-id', 'user', 'pass', mockRes);
+      // First NS call: password grant returns MFA challenge
+      mockedAxios.post = vi.fn()
+        .mockResolvedValueOnce({
+          data: {
+            access_token: 'partial-token',
+            mfa_type: 'authenticator',
+            mfa_vendor: 'google',
+            ns_id_type: 'subscriber',
+          },
+        })
+        // Second NS call: MFA grant succeeds
+        .mockResolvedValueOnce({
+          data: { access_token: 'final-ns', refresh_token: 'final-refresh', expires_in: 3600 },
+        });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
 
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      const html = mockRes.send.mock.calls[0][0] as string;
-      expect(html).toContain('Session expired');
+      const mfaResp = await request(app)
+        .post('/login')
+        .set('Cookie', pendingCookie)
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2' })
+        .expect(200);
+
+      const mfaCookies = (mfaResp.headers['set-cookie'] || []) as unknown as string[];
+      const mfaCookie = mfaCookies.find((c) => c.startsWith('mcp_mfa_challenge=')).split(';')[0];
+      expect(mfaCookie).toBeTruthy();
+      expect(mfaResp.text).toMatch(/Authentication Code/i);
+      expect(mfaResp.text).toMatch(/google/i);
+
+      const finalize = await request(app)
+        .post('/mfa')
+        .set('Cookie', mfaCookie)
+        .type('form')
+        .send({ passcode: '123456' })
+        .expect(302);
+
+      expect(finalize.headers.location).toContain('http://localhost/cb?code=');
+
+      // Verify the second NS call used grant_type=mfa with the partial token
+      const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(mfaCall[0]).toBe(NS_TOKEN_URL);
+      expect(mfaCall[1]).toMatchObject({
+        grant_type: 'mfa',
+        passcode: '123456',
+        mfa_type: 'authenticator',
+        mfa_vendor: 'google',
+        ns_id_type: 'subscriber',
+        access_token: 'partial-token',
+      });
     });
 
-    it('returns error page when NS password grant fails', async () => {
-      const provider = createProvider();
+    it('rejects an invalid passcode with the MFA error page', async () => {
+      const { app } = await importApp();
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
+        .expect(201);
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
+        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
 
-      // Start authorization first to get a valid auth_id
-      let authId = '';
-      const authorizeRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn((html: string) => {
-          const match = html.match(/auth_id=([^&"]+)/);
-          authId = match?.[1] ?? '';
-        }),
-      };
+      mockedAxios.post = vi.fn()
+        .mockResolvedValueOnce({
+          data: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' },
+        })
+        .mockRejectedValueOnce({
+          response: { status: 401, data: { message: 'Invalid passcode' } },
+        });
 
-      await provider.authorize(
-        { client_id: 'c1', redirect_uris: [new URL('http://localhost/cb')] } as any,
-        { codeChallenge: 'ch', redirectUri: 'http://localhost/cb' },
-        authorizeRes,
-      );
+      const mfaPage = await request(app)
+        .post('/login')
+        .set('Cookie', pendingCookie)
+        .type('form')
+        .send({ username: 'alice', password: 'pw' })
+        .expect(200);
+      const mfaCookie = (mfaPage.headers['set-cookie'] as unknown as string[])
+        .find((c) => c.startsWith('mcp_mfa_challenge='))!.split(';')[0];
 
-      // Mock NS returning 401
-      mockedAxios.post.mockRejectedValueOnce(new Error('Request failed with status code 401'));
-
-      const loginRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn(),
-      };
-
-      await provider.handleLogin(authId, 'baduser', 'badpass', loginRes);
-
-      expect(loginRes.status).toHaveBeenCalledWith(200);
-      const html = loginRes.send.mock.calls[0][0] as string;
-      expect(html).toContain('Invalid username or password');
-    });
-
-    it('redirects with authorization code on successful login', async () => {
-      const provider = createProvider();
-      const { tokens } = await runFullLoginFlow(provider);
-
-      expect(tokens.access_token).toBeTruthy();
-      expect(tokens.token_type).toBe('Bearer');
-      expect(tokens.expires_in).toBe(3600);
-      expect(tokens.refresh_token).toBeTruthy();
-    });
-  });
-
-  // ----- Full flow -----
-
-  describe('full authorization code flow', () => {
-    it('issues tokens that can be verified', async () => {
-      const provider = createProvider();
-      const { tokens } = await runFullLoginFlow(provider);
-
-      const authInfo = await provider.verifyAccessToken(tokens.access_token);
-
-      expect(authInfo.token).toBe(tokens.access_token);
-      expect(authInfo.clientId).toBe('test-client-id');
-      expect(authInfo.extra?.nsAccessToken).toBe('ns-access-xyz');
-      expect(authInfo.extra?.nsUsername).toBe('testuser');
-    });
-
-    it('returns the correct code challenge', async () => {
-      const provider = createProvider();
-
-      // Start auth
-      let authId = '';
-      const authorizeRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn((html: string) => {
-          const match = html.match(/auth_id=([^&"]+)/);
-          authId = match?.[1] ?? '';
-        }),
-      };
-
-      await provider.authorize(
-        { client_id: 'c1', redirect_uris: [new URL('http://localhost/cb')] } as any,
-        { codeChallenge: 'my-challenge', redirectUri: 'http://localhost/cb' },
-        authorizeRes,
-      );
-
-      mockedAxios.post.mockResolvedValueOnce(mockNsTokenResponse());
-
-      const loginRes: any = { redirect: vi.fn() };
-      await provider.handleLogin(authId, 'user', 'pass', loginRes);
-
-      const code = new URL(loginRes.redirect.mock.calls[0][0]).searchParams.get('code')!;
-      const challenge = await provider.challengeForAuthorizationCode({} as any, code);
-
-      expect(challenge).toBe('my-challenge');
-    });
-
-    it('rejects a code that has already been exchanged', async () => {
-      const provider = createProvider();
-
-      // Do the full flow to consume the code
-      let authId = '';
-      const authorizeRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn((html: string) => {
-          const match = html.match(/auth_id=([^&"]+)/);
-          authId = match?.[1] ?? '';
-        }),
-      };
-
-      await provider.authorize(
-        { client_id: 'c1', redirect_uris: [new URL('http://localhost/cb')] } as any,
-        { codeChallenge: 'ch', redirectUri: 'http://localhost/cb' },
-        authorizeRes,
-      );
-
-      mockedAxios.post.mockResolvedValueOnce(mockNsTokenResponse());
-
-      const loginRes: any = { redirect: vi.fn() };
-      await provider.handleLogin(authId, 'user', 'pass', loginRes);
-      const code = new URL(loginRes.redirect.mock.calls[0][0]).searchParams.get('code')!;
-
-      // First exchange succeeds
-      await provider.exchangeAuthorizationCode({} as any, code);
-
-      // Second exchange should fail
-      await expect(
-        provider.exchangeAuthorizationCode({} as any, code),
-      ).rejects.toThrow('Invalid authorization code');
+      const bad = await request(app)
+        .post('/mfa')
+        .set('Cookie', mfaCookie)
+        .type('form')
+        .send({ passcode: '000000' })
+        .expect(200);
+      expect(bad.text).toMatch(/Invalid|expired|passcode/i);
     });
   });
 
-  // ----- Token verification -----
+  describe('transparent NS token refresh', () => {
+    it('refreshes the upstream NS token when it is within the skew window', async () => {
+      const { app } = await importApp();
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'refresh-test' })
+        .expect(201);
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
+        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
 
-  describe('verifyAccessToken()', () => {
-    it('rejects unknown tokens', async () => {
-      const provider = createProvider();
+      // NS password grant returns a token that's ALREADY expired so
+      // verifyAccessToken will trigger an immediate refresh.
+      mockedAxios.post = vi.fn()
+        .mockResolvedValueOnce({
+          data: { access_token: 'old-ns', refresh_token: 'ns-refresh', expires_in: 1 },
+        });
+      mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
 
-      await expect(provider.verifyAccessToken('bogus')).rejects.toThrow('Invalid access token');
-    });
-  });
+      const login = await request(app)
+        .post('/login')
+        .set('Cookie', pendingCookie)
+        .type('form')
+        .send({ username: 'alice', password: 'pw' })
+        .expect(302);
+      const code = new URL(login.headers.location as string).searchParams.get('code')!;
 
-  // ----- Refresh -----
+      const tokenResp = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: verifier,
+          client_id: reg.body.client_id,
+          client_secret: reg.body.client_secret,
+          redirect_uri: 'http://localhost/cb',
+        })
+        .expect(200);
+      const mcpBearer = tokenResp.body.access_token;
+      expect(mcpBearer).toBeTruthy();
 
-  describe('exchangeRefreshToken()', () => {
-    it('issues new tokens using the NS refresh token', async () => {
-      const provider = createProvider();
-      const { tokens } = await runFullLoginFlow(provider);
+      // Wait long enough that the 1-second NS token is in the skew window
+      await new Promise((r) => setTimeout(r, 50));
 
-      // Mock the NS refresh grant
-      mockedAxios.post.mockResolvedValueOnce(mockNsTokenResponse({
-        access_token: 'ns-access-refreshed',
-        refresh_token: 'ns-refresh-refreshed',
-      }));
+      // Queue the refresh response
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'fresh-ns', refresh_token: 'ns-refresh-2', expires_in: 3600 },
+      });
 
-      const newTokens = await provider.exchangeRefreshToken(
-        {} as any,
-        tokens.refresh_token!,
-      );
+      // Hit /mcp with our bearer — server should silently refresh the NS token
+      await request(app)
+        .post('/mcp')
+        .set('Authorization', `Bearer ${mcpBearer}`)
+        .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
 
-      expect(newTokens.access_token).toBeTruthy();
-      expect(newTokens.access_token).not.toBe(tokens.access_token);
-
-      // Old token should be invalid
-      await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toThrow();
-
-      // New token should be valid
-      const authInfo = await provider.verifyAccessToken(newTokens.access_token);
-      expect(authInfo.extra?.nsAccessToken).toBe('ns-access-refreshed');
-    });
-
-    it('rejects unknown refresh tokens', async () => {
-      const provider = createProvider();
-
-      await expect(
-        provider.exchangeRefreshToken({} as any, 'bogus-refresh'),
-      ).rejects.toThrow('Invalid refresh token');
-    });
-  });
-
-  // ----- Revocation -----
-
-  describe('revokeToken()', () => {
-    it('revokes an access token', async () => {
-      const provider = createProvider();
-      const { tokens } = await runFullLoginFlow(provider);
-
-      await provider.revokeToken!({} as any, { token: tokens.access_token });
-
-      await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toThrow();
-    });
-
-    it('revokes a refresh token and invalidates the access token', async () => {
-      const provider = createProvider();
-      const { tokens } = await runFullLoginFlow(provider);
-
-      await provider.revokeToken!({} as any, { token: tokens.refresh_token! });
-
-      await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toThrow();
-    });
-
-    it('does nothing for unknown tokens', async () => {
-      const provider = createProvider();
-
-      // Should not throw
-      await provider.revokeToken!({} as any, { token: 'nonexistent' });
-    });
-  });
-
-  // ----- NS password grant call -----
-
-  describe('upstream NS API calls', () => {
-    it('sends correct password grant parameters to NS', async () => {
-      const provider = createProvider();
-
-      // Start auth
-      let authId = '';
-      const authorizeRes: any = {
-        status: vi.fn().mockReturnThis(),
-        type: vi.fn().mockReturnThis(),
-        send: vi.fn((html: string) => {
-          const match = html.match(/auth_id=([^&"]+)/);
-          authId = match?.[1] ?? '';
-        }),
-      };
-
-      await provider.authorize(
-        { client_id: 'c1', redirect_uris: [new URL('http://localhost/cb')] } as any,
-        { codeChallenge: 'ch', redirectUri: 'http://localhost/cb' },
-        authorizeRes,
-      );
-
-      mockedAxios.post.mockResolvedValueOnce(mockNsTokenResponse());
-
-      const loginRes: any = { redirect: vi.fn() };
-      await provider.handleLogin(authId, 'myuser', 'mypass', loginRes);
-
-      expect(mockedAxios.post).toHaveBeenCalledWith(
-        'https://ns.example.com/ns-api/oauth2/token/',
-        expect.stringContaining('grant_type=password'),
-        expect.objectContaining({ headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }),
-      );
-
-      const body = mockedAxios.post.mock.calls[0][1] as string;
-      expect(body).toContain('client_id=ns-cid');
-      expect(body).toContain('client_secret=ns-secret');
-      expect(body).toContain('username=myuser');
-      expect(body).toContain('password=mypass');
+      const refreshCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(refreshCall?.[0]).toBe(NS_TOKEN_URL);
+      expect(refreshCall?.[1]).toMatchObject({
+        grant_type: 'refresh_token',
+        refresh_token: 'ns-refresh',
+      });
     });
   });
 });

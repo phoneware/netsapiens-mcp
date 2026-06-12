@@ -24,7 +24,9 @@ import type {
   OAuthTokenRevocationRequest,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { TokenStore } from './token-store.js';
-import type { StoredToken } from './token-store.js';
+import type { StoredToken, TokenStoreLike } from './token-store.js';
+import { FirestoreTokenStore } from './firestore-token-store.js';
+import { FirestoreClientsStore } from './firestore-clients-store.js';
 import { mapNsScope } from './roles.js';
 import { logger } from '../utils/logger.js';
 
@@ -63,7 +65,7 @@ function getSessionSecret(): string {
 const PENDING_AUTH_COOKIE = 'mcp_pending_auth';
 const MFA_CHALLENGE_COOKIE = 'mcp_mfa_challenge';
 
-function signValue<T>(payload: T, ttlSec: number): string {
+export function signValue<T>(payload: T, ttlSec: number): string {
   const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
   const json = Buffer.from(JSON.stringify(data));
   const b64 = json.toString('base64url');
@@ -71,7 +73,7 @@ function signValue<T>(payload: T, ttlSec: number): string {
   return `${b64}.${sig}`;
 }
 
-function verifySigned<T>(token: string): T | null {
+export function verifySigned<T>(token: string): T | null {
   try {
     const dot = token.indexOf('.');
     if (dot <= 0) return null;
@@ -90,7 +92,7 @@ function verifySigned<T>(token: string): T | null {
   }
 }
 
-function parseCookies(header: string | undefined): Record<string, string> {
+export function parseCookies(header: string | undefined): Record<string, string> {
   if (!header) return {};
   const out: Record<string, string> = {};
   for (const part of header.split(';')) {
@@ -134,13 +136,19 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
     client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>,
   ): OAuthClientInformationFull {
     const clientId = randomUUID();
-    const clientSecret = randomBytes(32).toString('hex');
+    // Honor the client's requested authentication method. Public clients
+    // (token_endpoint_auth_method=none) get no secret — they rely on PKCE
+    // alone, which is correct for browser/native apps like ChatGPT.
+    const authMethod = (client as { token_endpoint_auth_method?: string }).token_endpoint_auth_method;
+    const isPublic = authMethod === 'none';
     const full: OAuthClientInformationFull = {
       ...client,
       client_id: clientId,
-      client_secret: clientSecret,
       client_id_issued_at: Math.floor(Date.now() / 1000),
     };
+    if (!isPublic) {
+      full.client_secret = randomBytes(32).toString('hex');
+    }
     this.clients.set(clientId, full);
     return full;
   }
@@ -149,6 +157,12 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
 // ---------------------------------------------------------------------------
 // Login page HTML
 // ---------------------------------------------------------------------------
+
+function logoHtml(): string {
+  const url = process.env.MCP_LOGIN_LOGO_URL || process.env.MCP_ICON_URL;
+  if (!url) return '';
+  return `<div class="logo"><img src="${escapeHtml(url)}" alt=""></div>`;
+}
 
 function loginPageHtml(authorizeUrl: string, error?: string): string {
   const errorHtml = error
@@ -171,6 +185,8 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
            min-height: 100vh; }
     .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
             padding: 2rem; width: 100%; max-width: 400px; }
+    .logo { text-align: center; margin-bottom: 1rem; }
+    .logo img { max-width: 96px; max-height: 96px; height: auto; }
     h1 { font-size: 1.25rem; margin-bottom: 1.5rem; text-align: center; }
     label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
     input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px;
@@ -186,6 +202,7 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
 </head>
 <body>
   <div class="card">
+    ${logoHtml()}
     <h1>${safeHeading}</h1>
     ${errorHtml}
     <form method="POST" action="${escapeHtml(authorizeUrl)}">
@@ -229,6 +246,8 @@ function mfaPageHtml(mfaUrl: string, mfaVendor: string | undefined, error?: stri
            min-height: 100vh; }
     .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
             padding: 2rem; width: 100%; max-width: 400px; }
+    .logo { text-align: center; margin-bottom: 1rem; }
+    .logo img { max-width: 96px; max-height: 96px; height: auto; }
     h1 { font-size: 1.25rem; margin-bottom: 1rem; text-align: center; }
     .hint { font-size: 0.85rem; color: #555; text-align: center; margin-bottom: 1.25rem; }
     label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
@@ -244,6 +263,7 @@ function mfaPageHtml(mfaUrl: string, mfaVendor: string | undefined, error?: stri
 </head>
 <body>
   <div class="card">
+    ${logoHtml()}
     <h1>${safeHeading}</h1>
     ${vendorHint}
     ${errorHtml}
@@ -286,9 +306,9 @@ interface MfaChallenge {
 }
 
 export class NetSapiensAuthProvider implements OAuthServerProvider {
-  private _clientsStore = new InMemoryClientsStore();
+  private _clientsStore: OAuthRegisteredClientsStore;
   private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse }>();
-  private tokenStore: TokenStore;
+  private tokenStore: TokenStoreLike;
 
   private nsApiUrl: string;
   private nsClientId: string;
@@ -300,7 +320,22 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     this.nsClientId = options.nsClientId;
     this.nsClientSecret = options.nsClientSecret;
     this.tokenLifetimeSec = options.tokenLifetimeSec ?? 3600;
-    this.tokenStore = new TokenStore(options.tokenStorePath);
+
+    // Pick persistence backend: Firestore when MCP_PERSISTENCE=firestore
+    // (or when GOOGLE_CLOUD_PROJECT is set, the most common Cloud Run signal),
+    // otherwise the in-process file-backed store.
+    const useFirestore = process.env.MCP_PERSISTENCE === 'firestore'
+      || (process.env.MCP_PERSISTENCE !== 'file' && !!process.env.GOOGLE_CLOUD_PROJECT);
+
+    if (useFirestore) {
+      this.tokenStore = new FirestoreTokenStore({ projectId: process.env.GOOGLE_CLOUD_PROJECT });
+      this._clientsStore = new FirestoreClientsStore({ projectId: process.env.GOOGLE_CLOUD_PROJECT });
+      logger.info('Auth provider using Firestore persistence');
+    } else {
+      this.tokenStore = new TokenStore(options.tokenStorePath);
+      this._clientsStore = new InMemoryClientsStore();
+      logger.info('Auth provider using file-backed token store + in-memory clients store');
+    }
   }
 
   /** Number of active tokens in the store. */
@@ -481,7 +516,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     refreshToken: string,
   ): Promise<OAuthTokens> {
-    const stored = this.tokenStore.getByRefreshToken(refreshToken);
+    const stored = await this.tokenStore.getByRefreshToken(refreshToken);
     if (!stored) {
       throw new Error('Invalid refresh token');
     }
@@ -500,8 +535,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       throw new Error('No upstream refresh token available. Please re-authenticate.');
     }
 
-    // Remove old tokens
-    this.tokenStore.delete(stored.accessToken);
+    await this.tokenStore.delete(stored.accessToken);
 
     return this.issueTokens(stored.clientId, nsTokens);
   }
@@ -511,13 +545,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   // -----------------------------------------------------------------------
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    let stored = this.tokenStore.get(token);
+    let stored = await this.tokenStore.get(token);
     if (!stored) {
       throw new Error('Invalid access token');
     }
 
     if (Date.now() > stored.expiresAt) {
-      this.tokenStore.delete(token);
+      await this.tokenStore.delete(token);
       throw new Error('Access token expired');
     }
 
@@ -528,7 +562,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (nsExpired && stored.nsRefreshToken) {
       try {
         const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken);
-        const updated = this.tokenStore.update(token, {
+        const updated = await this.tokenStore.update(token, {
           nsAccessToken: refreshed.access_token,
           nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
           nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
@@ -568,17 +602,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   ): Promise<void> {
     const { token } = request;
 
-    // Check if it's an access token
-    const stored = this.tokenStore.get(token);
+    const stored = await this.tokenStore.get(token);
     if (stored) {
-      this.tokenStore.delete(token);
+      await this.tokenStore.delete(token);
       return;
     }
 
-    // Check if it's a refresh token
-    const byRefresh = this.tokenStore.getByRefreshToken(token);
+    const byRefresh = await this.tokenStore.getByRefreshToken(token);
     if (byRefresh) {
-      this.tokenStore.deleteByRefreshToken(token);
+      await this.tokenStore.deleteByRefreshToken(token);
     }
   }
 
@@ -586,15 +618,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   // Lookup: get the upstream NS access token for a verified MCP token
   // -----------------------------------------------------------------------
 
-  getNsAccessToken(mcpToken: string): string | undefined {
-    return this.tokenStore.get(mcpToken)?.nsAccessToken;
+  async getNsAccessToken(mcpToken: string): Promise<string | undefined> {
+    const stored = await this.tokenStore.get(mcpToken);
+    return stored?.nsAccessToken;
   }
 
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
 
-  private issueTokens(clientId: string, nsTokens: NsTokenResponse): OAuthTokens {
+  private async issueTokens(clientId: string, nsTokens: NsTokenResponse): Promise<OAuthTokens> {
     const accessToken = randomBytes(32).toString('hex');
     const refreshToken = randomBytes(32).toString('hex');
     const expiresAt = Date.now() + this.tokenLifetimeSec * 1000;
@@ -614,7 +647,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       nsUserRole: nsTokens.nsUserRole,
     };
 
-    this.tokenStore.set(stored);
+    await this.tokenStore.set(stored);
 
     return {
       access_token: accessToken,

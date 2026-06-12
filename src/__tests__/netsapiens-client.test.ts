@@ -29,6 +29,7 @@ function createMockAxios() {
   const mockInstance = {
     get: vi.fn(),
     post: vi.fn(),
+    request: vi.fn(),
     interceptors: {
       request: {
         use: vi.fn((onFulfilled: any) => {
@@ -496,6 +497,118 @@ describe('NetSapiensClient', () => {
       const result = await client.testConnection();
 
       expect(result).toEqual({ success: false, error: 'Connection refused', data: false });
+    });
+  });
+
+  // ────────────────────────────────────────────
+  // Generic request() — used by OpenAPI-generated tools
+  // ────────────────────────────────────────────
+  describe('request()', () => {
+    beforeEach(() => {
+      mockAxios = createMockAxios();
+      client = new NetSapiensClient(STATIC_TOKEN_CONFIG);
+    });
+
+    it('interpolates {param} placeholders and URL-encodes path params', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockResolvedValue({ data: { ok: true } });
+      const result = await client.request({
+        method: 'GET',
+        pathTemplate: '/domains/{domain}/users/{user}',
+        pathParams: { domain: 'acme corp', user: 'alice@acme' },
+      });
+      expect(result.success).toBe(true);
+      const call = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0];
+      expect(call.method).toBe('GET');
+      expect(call.url).toBe('/domains/acme%20corp/users/alice%40acme');
+    });
+
+    it('strips undefined query params and forwards defined ones', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockResolvedValue({ data: [] });
+      await client.request({
+        method: 'GET',
+        pathTemplate: '/domains',
+        queryParams: { limit: 50, start: undefined, filter: null, scope: 'reseller' },
+      });
+      const call = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0];
+      expect(call.params).toEqual({ limit: 50, scope: 'reseller' });
+    });
+
+    it('sends body for POST/PUT/PATCH but omits it for GET/DELETE', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockResolvedValue({ data: {} });
+      await client.request({
+        method: 'POST',
+        pathTemplate: '/domains',
+        body: { domain: 'new.com' },
+      });
+      const post = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0];
+      expect(post.data).toEqual({ domain: 'new.com' });
+
+      vi.mocked(mockAxios.mockInstance.request).mockClear();
+      await client.request({ method: 'GET', pathTemplate: '/domains', body: { ignored: true } });
+      const get = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0];
+      expect(get.data).toBeUndefined();
+    });
+
+    it('returns NS error message in the error wrapper on non-2xx', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockRejectedValue({
+        response: { status: 404, data: { code: 404, message: 'Domain not found' } },
+      });
+      const result = await client.request({ method: 'GET', pathTemplate: '/domains/{d}', pathParams: { d: 'x' } });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Domain not found');
+      expect(result.error).toContain('404');
+    });
+  });
+
+  // ────────────────────────────────────────────
+  // v1Call() — used by v1 apidoc-generated tools
+  // ────────────────────────────────────────────
+  describe('v1Call()', () => {
+    beforeEach(() => {
+      mockAxios = createMockAxios();
+      client = new NetSapiensClient(STATIC_TOKEN_CONFIG);
+    });
+
+    it('POSTs form-urlencoded body to /ns-api/?object=X&action=Y', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockResolvedValue({ data: { total: 5 } });
+
+      const result = await client.v1Call('address', 'count', { domain: 'acme.com' });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ total: 5 });
+
+      const call = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0];
+      expect(call.method).toBe('POST');
+      expect(call.url).toBe(`${STATIC_TOKEN_CONFIG.apiUrl}/ns-api/`);
+      expect(call.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+
+      // Body should be a form-encoded string containing object/action/format/domain
+      const body = call.data as string;
+      const parsed = new URLSearchParams(body);
+      expect(parsed.get('object')).toBe('address');
+      expect(parsed.get('action')).toBe('count');
+      expect(parsed.get('format')).toBe('json');
+      expect(parsed.get('domain')).toBe('acme.com');
+    });
+
+    it('skips undefined params and stringifies non-string values', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockResolvedValue({ data: {} });
+      await client.v1Call('something', 'do', { keep: 'yes', skip: undefined, count: 42 });
+
+      const body = vi.mocked(mockAxios.mockInstance.request).mock.calls[0][0].data as string;
+      const parsed = new URLSearchParams(body);
+      expect(parsed.get('keep')).toBe('yes');
+      expect(parsed.has('skip')).toBe(false);
+      expect(parsed.get('count')).toBe('42');
+    });
+
+    it('returns error wrapper on failure', async () => {
+      vi.mocked(mockAxios.mockInstance.request).mockRejectedValue({
+        response: { status: 500, data: { message: 'Boom' } },
+      });
+      const result = await client.v1Call('x', 'y', {});
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Boom');
     });
   });
 });

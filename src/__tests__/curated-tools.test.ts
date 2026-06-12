@@ -1,0 +1,394 @@
+/**
+ * Tests for the curated tool catalog + escape hatch + MCP_TOOL_MODE selection.
+ *
+ * Covers:
+ *  - default mode is curated (~30 tools, not 700+)
+ *  - MCP_TOOL_MODE=full restores the generated registry
+ *  - scope filtering on curated tools (user vs domain_admin)
+ *  - search_api ranks matches
+ *  - call_api dispatches into the generated registry and honors filters
+ *  - composite handlers translate args into the right client.request shape
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+async function importTools() {
+  vi.resetModules();
+  return import('../tools/index.js');
+}
+
+function clearEnv() {
+  delete process.env.MCP_TOOL_MODE;
+  delete process.env.MCP_DISABLED_TOOLS;
+  delete process.env.MCP_DISABLED_ACTIONS;
+  delete process.env.MCP_DISABLE_ROLE_FILTER;
+}
+
+describe('MCP_TOOL_MODE', () => {
+  beforeEach(clearEnv);
+
+  it('defaults to curated mode — ~30 tools, not the full 700+', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const tools = getAllToolDefinitions();
+    expect(tools.length).toBeLessThan(50);
+    expect(tools.length).toBeGreaterThan(20);
+    // search_api and call_api are always present
+    expect(tools.find((t) => t.name === 'search_api')).toBeDefined();
+    expect(tools.find((t) => t.name === 'call_api')).toBeDefined();
+  });
+
+  it('MCP_TOOL_MODE=full restores the generated registry', async () => {
+    process.env.MCP_TOOL_MODE = 'full';
+    const { getAllToolDefinitions } = await importTools();
+    const tools = getAllToolDefinitions();
+    expect(tools.length).toBeGreaterThan(500);
+    // search_api / call_api are curated-mode only
+    expect(tools.find((t) => t.name === 'search_api')).toBeUndefined();
+  });
+});
+
+describe('curated scope filtering', () => {
+  beforeEach(clearEnv);
+
+  it('a basic user sees self-service + meta tools, no domain-admin ops', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const user = getAllToolDefinitions('user');
+    const names = new Set(user.map((t) => t.name));
+    // self-service basics
+    expect(names.has('find_user')).toBe(true);
+    expect(names.has('my_voicemails')).toBe(true);
+    expect(names.has('place_call')).toBe(true);
+    expect(names.has('search_api')).toBe(true);
+    // admin tools hidden
+    expect(names.has('end_call')).toBe(false);
+    expect(names.has('list_queues')).toBe(false);
+    expect(names.has('call_trace')).toBe(false);
+  });
+
+  it('a domain_admin sees the full curated set', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const admin = getAllToolDefinitions('domain_admin');
+    const names = new Set(admin.map((t) => t.name));
+    expect(names.has('list_queues')).toBe(true);
+    expect(names.has('end_call')).toBe(true);
+    expect(names.has('call_statistics')).toBe(true);
+  });
+
+  it('basic user gets rejected at call time if they try a higher-tier curated tool', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true, data: {} }) };
+    await expect(
+      handleToolCall(fakeClient as never, 'end_call', { call_id: 'x' }, 'user'),
+    ).rejects.toThrow(/higher access tier/i);
+  });
+});
+
+describe('search_api', () => {
+  beforeEach(clearEnv);
+
+  it('returns ranked matches across the full generated registry', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'search_api',
+      { query: 'voicemail' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.total).toBeGreaterThan(0);
+    expect(parsed.matches.length).toBeGreaterThan(0);
+    expect(parsed.matches[0].name.toLowerCase()).toContain('voicemail');
+  });
+
+  it('returns an empty match list for an empty query', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'search_api',
+      { query: '' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.matches).toEqual([]);
+  });
+});
+
+describe('call_api', () => {
+  beforeEach(clearEnv);
+
+  it('dispatches to a generated tool by name', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: unknown[] = [];
+    const fakeClient = {
+      request: async (opts: unknown) => {
+        calls.push(opts);
+        return { success: true, data: { ok: true } };
+      },
+    };
+    await handleToolCall(
+      fakeClient as never,
+      'call_api',
+      { tool_name: 'get_domains', args: { limit: 5 } },
+      'reseller',
+    );
+    expect(calls.length).toBe(1);
+    expect((calls[0] as { method: string }).method).toBe('GET');
+  });
+
+  it('honors MCP_DISABLED_TOOLS when invoked via call_api', async () => {
+    process.env.MCP_DISABLED_TOOLS = 'get_domains';
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    await expect(
+      handleToolCall(fakeClient as never, 'call_api', { tool_name: 'get_domains', args: {} }, 'reseller'),
+    ).rejects.toThrow(/disabled/i);
+  });
+
+  it('honors role-tier filter when invoked via call_api', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    await expect(
+      handleToolCall(fakeClient as never, 'call_api', { tool_name: 'get_accesslog', args: {} }, 'user'),
+    ).rejects.toThrow(/higher access tier/i);
+  });
+
+  it('returns a helpful error for an unknown tool_name', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'call_api',
+      { tool_name: 'does_not_exist', args: {} },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    expect(result.content[0].text).toMatch(/not registered/i);
+  });
+});
+
+describe('workflow tools (multi-call composites)', () => {
+  beforeEach(clearEnv);
+
+  function recorder() {
+    const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string>; body?: unknown; queryParams?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: typeof calls[number]) => {
+        calls.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    return { client, calls };
+  }
+
+  it('diagnose_call fans out to CDR, sipflow, and cradle-to-grave in parallel', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = recorder();
+    await handleToolCall(client as never, 'diagnose_call', { call_id: 'c-1' }, 'domain_admin');
+    const paths = calls.map((c) => c.pathTemplate).sort();
+    expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
+    expect(paths).toContain('/sipflow/{callid}');
+    expect(paths).toContain('/cradle2grave/{callid}');
+  });
+
+  it('user_profile makes five concurrent reads', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = recorder();
+    await handleToolCall(client as never, 'user_profile', { user: 'alice' }, 'user');
+    expect(calls.length).toBe(5);
+    const paths = new Set(calls.map((c) => c.pathTemplate));
+    expect(paths.has('/domains/{domain}/users/{user}')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/devices')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/answerrules')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/cdrs')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/voicemails')).toBe(true);
+  });
+
+  it('queue_health lists queues then fans out per-queue status', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string }) => {
+        calls.push(o);
+        if (o.pathTemplate === '/domains/{domain}/callqueues') {
+          return { success: true, data: [{ callqueue: 'support' }, { callqueue: 'sales' }] };
+        }
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(client as never, 'queue_health', {}, 'domain_admin');
+    // 1 list + 2 stats
+    expect(calls.length).toBe(3);
+    expect(calls[0].pathTemplate).toBe('/domains/{domain}/callqueues');
+    expect(calls.slice(1).every((c) => c.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}')).toBe(true);
+  });
+
+  it('switch_queue does logout then login and reports partial-failure clearly', async () => {
+    const { handleToolCall } = await importTools();
+    const seq: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        seq.push(o.pathTemplate);
+        if (o.pathTemplate.endsWith('/login')) return { success: false, error: 'queue full' };
+        return { success: true };
+      },
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'switch_queue',
+      { from: 'support', to: 'sales' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    expect(seq[0]).toContain('logout');
+    expect(seq[1]).toContain('login');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.step).toBe('login');
+    expect(parsed.note).toMatch(/LOGGED OUT/);
+  });
+
+  it('find_and_call returns candidates without calling when multiple matches and confirm=false', async () => {
+    const { handleToolCall } = await importTools();
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts')) {
+          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+        }
+        return { success: true, data: [] };
+      },
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'find_and_call',
+      { query: 'alice' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.matches.length).toBe(2);
+  });
+
+  it('find_and_call places the call when confirm=true', async () => {
+    const { handleToolCall } = await importTools();
+    const placed: Array<{ method: string; body?: unknown }> = [];
+    const client = {
+      request: async (o: { pathTemplate: string; method: string; body?: unknown }) => {
+        if (o.method === 'POST') placed.push(o);
+        if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts') && o.method === 'GET') {
+          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+        }
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(client as never, 'find_and_call', { query: 'alice', confirm: true }, 'user');
+    expect(placed.length).toBe(1);
+    expect((placed[0].body as { destination: string }).destination).toBe('1001');
+  });
+
+  it('voicemail_inbox_summary shapes the list into a condensed structure', async () => {
+    const { handleToolCall } = await importTools();
+    const client = {
+      request: async () => ({
+        success: true,
+        data: [
+          { 'caller-id-number': '15551112222', 'caller-id-name': 'Alice', datetime: '2026-06-12T10:00', duration: 30, 'transcription-text': 'Hey it is Alice', filename: 'vm1' },
+          { 'caller-id-number': '15553334444', datetime: '2026-06-12T11:00', duration: 12, filename: 'vm2' },
+        ],
+      }),
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'voicemail_inbox_summary',
+      {},
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.count).toBe(2);
+    expect(parsed.voicemails[0].from).toContain('Alice');
+    expect(parsed.voicemails[0].transcript).toBe('Hey it is Alice');
+    expect(parsed.voicemails[1].transcript).toBeUndefined();
+  });
+
+  it('schedule_forwarding PUTs an answer rule for the default time-frame', async () => {
+    const { handleToolCall } = await importTools();
+    const captured: Array<{ method: string; pathTemplate: string; body?: unknown }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; body?: unknown }) => {
+        captured.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(client as never, 'schedule_forwarding', { destination: '4001' }, 'user');
+    expect(captured[0].method).toBe('PUT');
+    expect(captured[0].pathTemplate).toBe('/domains/~/users/~/answerrules/{timeframe}');
+    expect((captured[0].body as { 'forward-destination': string })['forward-destination']).toBe('4001');
+  });
+
+  it('schedule_forwarding with disable=true emits do-not-forward', async () => {
+    const { handleToolCall } = await importTools();
+    const captured: Array<{ body?: unknown }> = [];
+    const client = {
+      request: async (o: { body?: unknown }) => {
+        captured.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(client as never, 'schedule_forwarding', { disable: true }, 'user');
+    expect((captured[0].body as { 'rule-action': string })['rule-action']).toBe('do-not-forward');
+  });
+});
+
+describe('composite handlers translate args correctly', () => {
+  beforeEach(clearEnv);
+
+  it('find_user calls /domains/{domain}/users with user= query', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: unknown[] = [];
+    const fakeClient = {
+      request: async (o: unknown) => {
+        calls.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(fakeClient as never, 'find_user', { query: 'alice' }, 'user');
+    const opts = calls[0] as { pathTemplate: string; pathParams: Record<string, string>; queryParams: Record<string, unknown> };
+    expect(opts.pathTemplate).toBe('/domains/{domain}/users');
+    expect(opts.pathParams.domain).toBe('~');
+    expect(opts.queryParams.user).toBe('alice');
+  });
+
+  it('place_call POSTs the destination to /domains/{domain}/users/{user}/calls', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: unknown[] = [];
+    const fakeClient = {
+      request: async (o: unknown) => {
+        calls.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(fakeClient as never, 'place_call', { to: '15551234567' }, 'user');
+    const opts = calls[0] as { method: string; body: { destination: string }; pathParams: Record<string, string> };
+    expect(opts.method).toBe('POST');
+    expect(opts.body.destination).toBe('15551234567');
+    expect(opts.pathParams.user).toBe('~');
+  });
+
+  it('transfer_call uses the /transfer/peer path for type=peer', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: unknown[] = [];
+    const fakeClient = {
+      request: async (o: unknown) => {
+        calls.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(
+      fakeClient as never,
+      'transfer_call',
+      { call_id: 'c1', to: '4001', type: 'peer' },
+      'domain_admin',
+    );
+    const opts = calls[0] as { pathTemplate: string };
+    expect(opts.pathTemplate).toContain('/transfer/peer');
+  });
+});

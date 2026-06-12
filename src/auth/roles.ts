@@ -1,8 +1,10 @@
 /**
- * Role-Based Access Control (RBAC) for the NetSapiens MCP Server.
+ * Role-Based Access Control (RBAC) helpers for the NetSapiens MCP Server.
  *
- * Maps tool names to the minimum role required to use them, and provides
- * a hierarchy check so that higher-privilege roles inherit lower ones.
+ * NS itself enforces RBAC server-side based on the bearer token's scope.
+ * The client-side tool-to-role map (`TOOL_ROLE_REQUIREMENTS`) was tied to
+ * hand-written tool names that no longer exist after the OpenAPI-driven
+ * regeneration, so it is kept as an empty placeholder for compatibility.
  */
 
 // ---------------------------------------------------------------------------
@@ -22,68 +24,12 @@ export const ROLE_HIERARCHY: Record<UserRole, number> = {
   user: 1,
 };
 
-// ---------------------------------------------------------------------------
-// Tool → minimum role mapping
-// ---------------------------------------------------------------------------
-
-export const TOOL_ROLE_REQUIREMENTS: Record<string, UserRole> = {
-  // User-level tools — accessible to all authenticated users
-  search_users: 'user',
-  get_user: 'user',
-  get_domains: 'user',
-  get_domain: 'user',
-  get_cdr_records: 'user',
-  get_user_devices: 'user',
-  get_user_answer_rules: 'user',
-  get_user_answer_rule: 'user',
-  get_user_greetings: 'user',
-  get_user_voicemails: 'user',
-  test_connection: 'user',
-
-  // Domain admin tools
-  get_phone_numbers: 'domain_admin',
-  get_phone_number: 'domain_admin',
-  get_call_queues: 'domain_admin',
-  get_call_queue: 'domain_admin',
-  get_call_queue_agents: 'domain_admin',
-  get_agents: 'domain_admin',
-  login_agent: 'domain_admin',
-  logout_agent: 'domain_admin',
-  get_auto_attendants: 'domain_admin',
-  get_music_on_hold: 'domain_admin',
-  get_billing: 'domain_admin',
-  get_agent_statistics: 'domain_admin',
-  manage_call_queues: 'domain_admin',
-  manage_auto_attendants: 'domain_admin',
-  manage_phone_numbers: 'domain_admin',
-  manage_dial_plans: 'domain_admin',
-  create_user: 'domain_admin',
-  update_user: 'domain_admin',
-  delete_user: 'domain_admin',
-
-  // Reseller tools
-  list_resellers: 'reseller',
-  get_reseller: 'reseller',
-  create_domain: 'reseller',
-  update_domain: 'reseller',
-  delete_domain: 'reseller',
-
-  // System admin tools
-  create_reseller: 'system_admin',
-  update_reseller: 'system_admin',
-  delete_reseller: 'system_admin',
-  get_api_version: 'system_admin',
-  get_access_log: 'system_admin',
-  get_audit_log: 'system_admin',
-  backup_system: 'system_admin',
-  restore_system: 'system_admin',
-  manage_certificates: 'system_admin',
-  manage_routes: 'system_admin',
-  manage_system_connections: 'system_admin',
-  manage_system_dial_plans: 'system_admin',
-  manage_system_dial_policy: 'system_admin',
-  manage_system_subscriptions: 'system_admin',
-};
+/**
+ * @deprecated NS enforces tool-level authorization server-side via the bearer
+ * token. This map is intentionally empty; kept exported for backwards
+ * compatibility with anyone still importing the symbol.
+ */
+export const TOOL_ROLE_REQUIREMENTS: Record<string, UserRole> = {};
 
 // ---------------------------------------------------------------------------
 // Permission check
