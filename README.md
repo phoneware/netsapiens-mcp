@@ -2,11 +2,32 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![NetSapiens API](https://img.shields.io/badge/NetSapiens-v1%20%2B%20v2-blue)](https://docs.ns-api.com/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-green)](https://modelcontextprotocol.io/)
+[![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Hosted-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/run)
 
-A hosted Model Context Protocol (MCP) server that exposes the full NetSapiens platform (both v1 and v2 APIs) to AI agents like Claude and ChatGPT. It runs as an HTTP service behind OAuth 2.1, performs the browser-based login on behalf of each user, and keeps connections alive across redeploys with Firestore-backed persistence.
+> 🚀 **Hosted, multi-user MCP for NetSapiens**
+> Any AI agent — Claude, ChatGPT, anything that speaks MCP — logs in as a real NetSapiens user, drives the full v1 + v2 API, and stays connected indefinitely. Credentials never touch the model.
 
-## What this server is
+## ⚡ Features
+
+- 🔐 **Hosted OAuth proxy** — The server *is* the OAuth 2.1 authorization server. The user signs in on a browser page hosted here, not in the chat. NetSapiens credentials never enter the model's context.
+- 🛡️ **MFA built into the flow** — Real NetSapiens accounts have a second factor. When the upstream returns an MFA challenge, the user gets a passcode page; the bearer that reaches the AI carries the verified session.
+- 🔁 **Transparent NetSapiens refresh** — Upstream access tokens are refreshed silently before they expire. AI sessions stay alive across long conversations.
+- 🍪 **Stateless login state** — OAuth pending state and MFA challenges ride in HMAC-signed `HttpOnly` cookies. Cloud Run instance switches mid-login don't break anything.
+- 🗄️ **Firestore persistence** — Issued tokens and dynamic client registrations survive deploys, scaling events, and instance churn. No one gets logged out on a release.
+- 🤝 **Claude *and* ChatGPT support** — Public-client dynamic registration (`token_endpoint_auth_method=none`, PKCE only) means ChatGPT connects out of the box alongside confidential clients like Claude.
+- 🧬 **727 auto-generated tools from the specs** — v2 OpenAPI (481) + v1 apidoc (274), regenerated on every build. When NetSapiens ships a new endpoint, drop in the new spec and rebuild.
+- 🎯 **Curated catalog by default (~39 task-shaped tools)** — Find-this, do-that composites scaled to a model's working memory. Set `MCP_TOOL_MODE=full` to restore the full 727-tool listing.
+- 🧵 **Multi-call workflows** — `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`. Each replaces 2–5 round-trips with one shaped response.
+- 🔍 **API discovery escape hatch** — When the catalog doesn't cover it, the model uses `search_api` to find a tool by keyword across the full 727, then invokes it by name with `call_api`. Same filters apply.
+- 🚫 **Security stripped at generation time** — Token, JWT, API-key, certificate, and credential endpoints are excluded from the registry *at build time*. The model can't mint or revoke credentials because there's no tool to do it.
+- 👥 **Scope-aware role filtering** — A Basic User sees ~25 self-service tools; an Office Manager / Reseller / Super User sees the full ~39 plus administrative operations. NetSapiens still enforces server-side.
+- 🪛 **Operator-tunable** — Disable globs (`MCP_DISABLED_TOOLS=delete_*,remove_*`), action blocks (`MCP_DISABLED_ACTIONS`), branded login page (`MCP_LOGIN_HEADER`, `MCP_ICON_URL`). No code change for per-deployment policy.
+- 🧪 **A real test suite** — 230 passing, including a draft-2020-12 JSON Schema guard that compiles every tool's input schema on every test run, so a bad spec can't silently break the connector.
+- 🚀 **Auto-deploy from `main`** — Cloud Build runs the suite, builds the image, pushes it to Artifact Registry, and rolls out a new Cloud Run revision. Env vars carry over; CI ships code, ops sets config.
+
+## 📋 What this server is
 
 - **Two MCP transports.** `stdio` for local CLI integrations and `http` (Streamable HTTP) for hosted deployments. Production uses `http`.
 - **Auto-generated tools.** 481 tools from the NetSapiens v2 OpenAPI spec plus 274 from the v1 apidoc dump, all regenerated on every build from `spec/netsapiens-api-v2.json` and `spec/netsapiens-api-v1.json`.
@@ -17,7 +38,7 @@ A hosted Model Context Protocol (MCP) server that exposes the full NetSapiens pl
 - **Public-client DCR.** Honors `token_endpoint_auth_method=none` for clients like ChatGPT that authenticate via PKCE only.
 - **Tool gating.** Read/write annotations on every tool, plus glob-based disable patterns (`MCP_DISABLED_TOOLS`) and action-level disables (`MCP_DISABLED_ACTIONS`).
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 AI client (Claude/ChatGPT)
@@ -31,7 +52,7 @@ AI client (Claude/ChatGPT)
 
 Per-user upstream NetSapiens tokens are stored alongside our MCP-issued tokens. Every tool call attaches the right upstream bearer; tools never see credentials.
 
-## Running locally (stdio)
+## 💻 Running locally (stdio)
 
 ```bash
 npm install
@@ -54,7 +75,7 @@ Add this entry to your local MCP client config (Claude Desktop, etc.):
 }
 ```
 
-## Running as a hosted server (HTTP)
+## 🌐 Running as a hosted server (HTTP)
 
 ```bash
 export MCP_TRANSPORT=http
@@ -69,7 +90,7 @@ npm start
 
 Connect from Claude / ChatGPT by giving it the URL `https://mcp.example.com/mcp`. The client will DCR-register, redirect the user to `/authorize`, the user signs in, and the bearer flows back to the AI automatically.
 
-## Cloud Run deployment
+## ☁️ Cloud Run deployment
 
 This repo ships with a Cloud Run-friendly Dockerfile and a `cloudbuild.yaml`. The minimum production stack:
 
@@ -110,7 +131,7 @@ Optional:
 | `MCP_DISABLED_ACTIONS` | comma-separated action arg values to block on `manage_*` tools |
 | `MCP_CORS_ORIGIN` | CORS origin for the MCP transport (defaults to `*`) |
 
-## OAuth flow (detailed)
+## 🔐 OAuth flow (detailed)
 
 1. AI client hits `GET /.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server` for discovery.
 2. AI client POSTs `/register` (RFC 7591 DCR). Public clients pass `token_endpoint_auth_method=none` and get back a `client_id` only; confidential clients get `client_id` + `client_secret`. Registrations persist in Firestore.
@@ -120,7 +141,7 @@ Optional:
 6. AI exchanges the code at `/token` for our MCP-issued bearer + refresh token. The upstream NS token is stored alongside.
 7. On every `/mcp` request, the server verifies the bearer, transparently refreshes the upstream NS token if it's within 60s of expiry, and forwards the request through the right NS handler.
 
-## Tools
+## 🧰 Tools
 
 The server exposes **a curated catalog of ~39 task-shaped tools by default** instead of the full 727-operation generated registry. With 700+ tools in the listing, even capable AI models stall on tool selection and burn context on enumeration; a focused default surface fixes that without losing reach.
 
@@ -200,7 +221,7 @@ On top of NS's own enforcement, the server hides clearly-privileged resource fam
 
 The map is intentionally small and conservative — only families we're confident require a tier are gated, so a tool a user could legitimately call is never hidden. NS remains the real gatekeeper for the long tail. Disable the behavior entirely with `MCP_DISABLE_ROLE_FILTER=true` (then everything is visible and NS does all enforcement via 403).
 
-## Customizing the login page
+## 🎨 Customizing the login page
 
 Set `MCP_LOGIN_HEADER` for the heading text and `MCP_ICON_URL` for the logo:
 
@@ -211,7 +232,7 @@ gcloud run services update netsapiens-mcp \
 
 The same icon is served at `/favicon.ico` and `/favicon.png` so AI clients pick it up for their connector list. The favicon route fetches and caches the image bytes — it doesn't redirect, because some MCP clients won't follow redirects for favicons.
 
-## Regenerating tools
+## 🔄 Regenerating tools
 
 The specs are vendored at `spec/netsapiens-api-v2.json` (OpenAPI 3.1) and `spec/netsapiens-api-v1.json` (apidoc dump). To regenerate after a spec update:
 
@@ -222,13 +243,13 @@ npm run build       # tsc compiles the generated code
 
 `prebuild` runs `generate` automatically, so `npm run build` is enough most of the time.
 
-## Health and observability
+## 📊 Health and observability
 
 - `GET /health` — uptime, active sessions, NS API URL, version.
 - Structured JSON logs to stderr (use `LOG_LEVEL=debug` for verbose).
 - Each MCP request logs through Cloud Run's standard `httpRequest` schema; auth events log to `jsonPayload.message`.
 
-## Repo layout
+## 📁 Repo layout
 
 ```
 spec/
@@ -258,6 +279,6 @@ src/
     types.ts                    # ToolDefinition + GenericApiClient
 ```
 
-## License
+## 📜 License
 
 MIT
