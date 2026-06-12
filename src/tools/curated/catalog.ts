@@ -11,6 +11,7 @@
 
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
+import { WORKFLOW_TOOLS } from './workflows.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
@@ -734,4 +735,6 @@ export const CURATED_CATALOG: CuratedTool[] = [
   queue_status,
   call_statistics,
   agent_statistics,
+  // workflow / multi-call composites (~9)
+  ...WORKFLOW_TOOLS,
 ];

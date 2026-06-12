@@ -167,6 +167,177 @@ describe('call_api', () => {
   });
 });
 
+describe('workflow tools (multi-call composites)', () => {
+  beforeEach(clearEnv);
+
+  function recorder() {
+    const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string>; body?: unknown; queryParams?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: typeof calls[number]) => {
+        calls.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    return { client, calls };
+  }
+
+  it('diagnose_call fans out to CDR, sipflow, and cradle-to-grave in parallel', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = recorder();
+    await handleToolCall(client as never, 'diagnose_call', { call_id: 'c-1' }, 'domain_admin');
+    const paths = calls.map((c) => c.pathTemplate).sort();
+    expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
+    expect(paths).toContain('/sipflow/{callid}');
+    expect(paths).toContain('/cradle2grave/{callid}');
+  });
+
+  it('user_profile makes five concurrent reads', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = recorder();
+    await handleToolCall(client as never, 'user_profile', { user: 'alice' }, 'user');
+    expect(calls.length).toBe(5);
+    const paths = new Set(calls.map((c) => c.pathTemplate));
+    expect(paths.has('/domains/{domain}/users/{user}')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/devices')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/answerrules')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/cdrs')).toBe(true);
+    expect(paths.has('/domains/{domain}/users/{user}/voicemails')).toBe(true);
+  });
+
+  it('queue_health lists queues then fans out per-queue status', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string }) => {
+        calls.push(o);
+        if (o.pathTemplate === '/domains/{domain}/callqueues') {
+          return { success: true, data: [{ callqueue: 'support' }, { callqueue: 'sales' }] };
+        }
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(client as never, 'queue_health', {}, 'domain_admin');
+    // 1 list + 2 stats
+    expect(calls.length).toBe(3);
+    expect(calls[0].pathTemplate).toBe('/domains/{domain}/callqueues');
+    expect(calls.slice(1).every((c) => c.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}')).toBe(true);
+  });
+
+  it('switch_queue does logout then login and reports partial-failure clearly', async () => {
+    const { handleToolCall } = await importTools();
+    const seq: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        seq.push(o.pathTemplate);
+        if (o.pathTemplate.endsWith('/login')) return { success: false, error: 'queue full' };
+        return { success: true };
+      },
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'switch_queue',
+      { from: 'support', to: 'sales' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    expect(seq[0]).toContain('logout');
+    expect(seq[1]).toContain('login');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.step).toBe('login');
+    expect(parsed.note).toMatch(/LOGGED OUT/);
+  });
+
+  it('find_and_call returns candidates without calling when multiple matches and confirm=false', async () => {
+    const { handleToolCall } = await importTools();
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts')) {
+          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+        }
+        return { success: true, data: [] };
+      },
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'find_and_call',
+      { query: 'alice' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.matches.length).toBe(2);
+  });
+
+  it('find_and_call places the call when confirm=true', async () => {
+    const { handleToolCall } = await importTools();
+    const placed: Array<{ method: string; body?: unknown }> = [];
+    const client = {
+      request: async (o: { pathTemplate: string; method: string; body?: unknown }) => {
+        if (o.method === 'POST') placed.push(o);
+        if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts') && o.method === 'GET') {
+          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+        }
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(client as never, 'find_and_call', { query: 'alice', confirm: true }, 'user');
+    expect(placed.length).toBe(1);
+    expect((placed[0].body as { destination: string }).destination).toBe('1001');
+  });
+
+  it('voicemail_inbox_summary shapes the list into a condensed structure', async () => {
+    const { handleToolCall } = await importTools();
+    const client = {
+      request: async () => ({
+        success: true,
+        data: [
+          { 'caller-id-number': '15551112222', 'caller-id-name': 'Alice', datetime: '2026-06-12T10:00', duration: 30, 'transcription-text': 'Hey it is Alice', filename: 'vm1' },
+          { 'caller-id-number': '15553334444', datetime: '2026-06-12T11:00', duration: 12, filename: 'vm2' },
+        ],
+      }),
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'voicemail_inbox_summary',
+      {},
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.count).toBe(2);
+    expect(parsed.voicemails[0].from).toContain('Alice');
+    expect(parsed.voicemails[0].transcript).toBe('Hey it is Alice');
+    expect(parsed.voicemails[1].transcript).toBeUndefined();
+  });
+
+  it('schedule_forwarding PUTs an answer rule for the default time-frame', async () => {
+    const { handleToolCall } = await importTools();
+    const captured: Array<{ method: string; pathTemplate: string; body?: unknown }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; body?: unknown }) => {
+        captured.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(client as never, 'schedule_forwarding', { destination: '4001' }, 'user');
+    expect(captured[0].method).toBe('PUT');
+    expect(captured[0].pathTemplate).toBe('/domains/~/users/~/answerrules/{timeframe}');
+    expect((captured[0].body as { 'forward-destination': string })['forward-destination']).toBe('4001');
+  });
+
+  it('schedule_forwarding with disable=true emits do-not-forward', async () => {
+    const { handleToolCall } = await importTools();
+    const captured: Array<{ body?: unknown }> = [];
+    const client = {
+      request: async (o: { body?: unknown }) => {
+        captured.push(o);
+        return { success: true };
+      },
+    };
+    await handleToolCall(client as never, 'schedule_forwarding', { disable: true }, 'user');
+    expect((captured[0].body as { 'rule-action': string })['rule-action']).toBe('do-not-forward');
+  });
+});
+
 describe('composite handlers translate args correctly', () => {
   beforeEach(clearEnv);
 
