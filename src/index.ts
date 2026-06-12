@@ -84,8 +84,8 @@ export function getToolDefinitions() {
  * Registers tool handlers on a Server instance, wired to the given NetSapiensClient.
  * Delegates to the modular tools system in src/tools/.
  */
-export function registerTools(server: Server, netsapiensClient: NetSapiensClient): void {
-  registerAllTools(server, netsapiensClient);
+export function registerTools(server: Server, netsapiensClient: NetSapiensClient, userRole?: import('./auth/roles.js').UserRole): void {
+  registerAllTools(server, netsapiensClient, userRole);
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,26 @@ export async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  logger.error('Fatal error starting MCP server', { error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
-  process.exit(1);
-});
+/**
+ * Only auto-run when this file is the actual entrypoint — not when imported
+ * from tests. Compares the resolved CLI argv path against import.meta.url.
+ */
+function isEntrypoint(): boolean {
+  if (typeof process === 'undefined' || !process.argv?.[1]) return false;
+  try {
+    const argvUrl = new URL(`file://${process.argv[1]}`).href;
+    return import.meta.url === argvUrl;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
+  main().catch((error) => {
+    logger.error('Fatal error starting MCP server', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    process.exit(1);
+  });
+}
