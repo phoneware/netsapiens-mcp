@@ -23,7 +23,7 @@
 - 🔍 **API discovery escape hatch** — When the catalog doesn't cover it, the model uses `search_api` to find a tool by keyword across the full 727, then invokes it by name with `call_api`. Same filters apply.
 - 🚫 **Security stripped at generation time** — Token, JWT, API-key, certificate, and credential endpoints are excluded from the registry *at build time*. The model can't mint or revoke credentials because there's no tool to do it.
 - 👥 **Scope-aware role filtering** — A Basic User sees ~25 self-service tools; an Office Manager / Reseller / Super User sees the full ~39 plus administrative operations. NetSapiens still enforces server-side.
-- 🪛 **Operator-tunable** — Disable globs (`MCP_DISABLED_TOOLS=delete_*,remove_*`), action blocks (`MCP_DISABLED_ACTIONS`), branded login page (`MCP_LOGIN_HEADER`, `MCP_ICON_URL`). No code change for per-deployment policy.
+- 🪛 **Operator-tunable** — Disable globs (`MCP_DISABLED_TOOLS=delete_*,remove_*`), action blocks (`MCP_DISABLED_ACTIONS`), semantic destructive toggle (`MCP_DISABLE_DESTRUCTIVE=true` — blocks any tool that mutates irreversibly, including composites like `end_call`), branded login page (`MCP_LOGIN_HEADER`, `MCP_ICON_URL`). No code change for per-deployment policy.
 - 🧪 **A real test suite** — 230 passing, including a draft-2020-12 JSON Schema guard that compiles every tool's input schema on every test run, so a bad spec can't silently break the connector.
 - 🚀 **Auto-deploy from `main`** — Cloud Build runs the suite, builds the image, pushes it to Artifact Registry, and rolls out a new Cloud Run revision. Env vars carry over; CI ships code, ops sets config.
 
