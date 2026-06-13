@@ -298,6 +298,7 @@ const transfer_call: CuratedTool = {
 
 const end_call: CuratedTool = {
   minRole: 'domain_admin',
+  destructive: true,
   schema: {
     name: 'end_call',
     description: 'Disconnect an active call.',

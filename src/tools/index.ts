@@ -173,6 +173,31 @@ function roleAllows(userRole: UserRole | undefined, name: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Semantic destructive filter (MCP_DISABLE_DESTRUCTIVE)
+//
+// MCP_DISABLED_TOOLS matches *names* — useful for power users, but it won't
+// catch composites like `end_call` that are destructive in effect even though
+// they don't start with `delete_`. This semantic toggle hides everything
+// classified as destructive (composite metadata first, then the prefix
+// inference fallback) from the tool list, dispatch, AND search_api results.
+// ---------------------------------------------------------------------------
+
+function disableDestructiveEnabled(): boolean {
+  return process.env.MCP_DISABLE_DESTRUCTIVE === 'true';
+}
+
+/**
+ * True when the tool is destructive in effect. Looks at explicit composite
+ * metadata first (`CuratedTool.destructive`), then falls back to the
+ * prefix-based heuristic the generated registry uses.
+ */
+export function isToolDestructive(name: string): boolean {
+  const curated = CURATED_CATALOG.find((t) => t.schema.name === name);
+  if (curated && curated.destructive !== undefined) return curated.destructive;
+  return classifyTool(name).destructiveHint;
+}
+
+// ---------------------------------------------------------------------------
 // Name shortening
 //
 // MCP clients (Claude, ChatGPT) cap tool names at 64 characters. Several
@@ -284,11 +309,24 @@ function curatedExposedTools(userRole?: UserRole): Array<{
   inputSchema: object;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean };
 }> {
-  const meta = buildMetaTools(toolRegistry, async (name, args, client) => {
-    // Reuse handleToolCall so every filter (disable, action, role, name
-    // mapping) applies to call_api invocations too.
-    return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
-  });
+  const meta = buildMetaTools(
+    toolRegistry,
+    async (name, args, client) => {
+      // Reuse handleToolCall so every filter (disable, action, role, name
+      // mapping, destructive) applies to call_api invocations too.
+      return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
+    },
+    // search_api visibility: hide anything the operator has disabled, anything
+    // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
+    // anything destructive. Stops the model from finding a tool that call_api
+    // would then reject.
+    (toolName) => {
+      if (isToolDisabled(toolName)) return false;
+      if (!roleAllows(userRole, toolName)) return false;
+      if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+      return true;
+    },
+  );
   const all = [...CURATED_CATALOG, ...meta];
   const tools: Array<{
     name: string;
@@ -299,11 +337,17 @@ function curatedExposedTools(userRole?: UserRole): Array<{
   for (const t of all) {
     if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
     if (isToolDisabled(t.schema.name)) continue;
+    // Respect explicit composite metadata in addition to the prefix-based
+    // inference, then honor the semantic MCP_DISABLE_DESTRUCTIVE toggle.
+    const inferred = classifyTool(t.schema.name);
+    const destructive = t.destructive ?? inferred.destructiveHint;
+    const readOnly = t.readOnly ?? inferred.readOnlyHint;
+    if (disableDestructiveEnabled() && destructive) continue;
     tools.push({
       name: t.schema.name,
       description: t.schema.description,
       inputSchema: t.schema.inputSchema,
-      annotations: classifyTool(t.schema.name),
+      annotations: { readOnlyHint: readOnly, destructiveHint: destructive },
     });
   }
   return tools;
@@ -311,8 +355,16 @@ function curatedExposedTools(userRole?: UserRole): Array<{
 
 /** Lookup a curated or meta tool by exposed name (per-call construction to bind userRole). */
 function findCuratedTool(name: string, userRole?: UserRole) {
-  const meta = buildMetaTools(toolRegistry, async (innerName, innerArgs, client) =>
-    handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
+  const meta = buildMetaTools(
+    toolRegistry,
+    async (innerName, innerArgs, client) =>
+      handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
+    (toolName) => {
+      if (isToolDisabled(toolName)) return false;
+      if (!roleAllows(userRole, toolName)) return false;
+      if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+      return true;
+    },
   );
   return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
 }
@@ -345,11 +397,13 @@ export function getAllToolDefinitions(userRole?: UserRole): Array<{
     const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
     if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
     if (!roleAllows(userRole, registryKey)) continue;
+    const annotations = classifyTool(registryKey);
+    if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
     tools.push({
       name: exposed,
       description: def.schema.description,
       inputSchema: def.schema.inputSchema,
-      annotations: classifyTool(registryKey),
+      annotations,
     });
   }
   return tools;
@@ -376,6 +430,12 @@ export async function handleToolCall(
     throw new McpError(
       ErrorCode.InvalidParams,
       `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
+    );
+  }
+  if (disableDestructiveEnabled() && isToolDestructive(toolName)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Tool '${toolName}' is destructive and MCP_DISABLE_DESTRUCTIVE is set`,
     );
   }
 

@@ -13,6 +13,15 @@ import type { UserRole } from '../../auth/roles.js';
 export interface CuratedTool extends ToolDefinition {
   /** Minimum NetSapiens scope required to see this tool in the catalog. */
   minRole: UserRole;
+  /**
+   * Explicit destructive flag. Composites have names like `end_call` that
+   * don't match the generator's prefix-based destructive heuristic, but they
+   * DO mutate state irreversibly. Set this true so MCP_DISABLE_DESTRUCTIVE
+   * catches them. Defaults to the prefix-based inference if omitted.
+   */
+  destructive?: boolean;
+  /** Explicit read-only flag (overrides prefix-based inference if set). */
+  readOnly?: boolean;
 }
 
 /** Helper for handler responses — every curated tool emits the same shape. */

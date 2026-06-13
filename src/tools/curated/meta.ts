@@ -21,6 +21,14 @@ import type { GenericApiClient, ToolDefinition } from '../../generated/types.js'
 export function buildMetaTools(
   registry: Map<string, ToolDefinition>,
   dispatch: (toolName: string, args: Record<string, unknown>, client: GenericApiClient) => Promise<unknown>,
+  /**
+   * Predicate that returns true if a tool name should be visible in
+   * search_api results. The registry layer threads this through so disabled
+   * tools, over-tier tools, and (when MCP_DISABLE_DESTRUCTIVE=true)
+   * destructive tools don't leak into search results that call_api would
+   * just reject anyway.
+   */
+  isVisible: (toolName: string) => boolean = () => true,
 ): CuratedTool[] {
   const search_api: CuratedTool = {
     minRole: 'user',
@@ -46,6 +54,7 @@ export function buildMetaTools(
 
       const scored: Array<{ name: string; description: string; score: number }> = [];
       for (const [name, def] of registry) {
+        if (!isVisible(name)) continue;
         const haystack = (name + ' ' + def.schema.description).toLowerCase();
         let score = 0;
         for (const t of terms) {

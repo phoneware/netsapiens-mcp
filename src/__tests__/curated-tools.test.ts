@@ -167,6 +167,68 @@ describe('call_api', () => {
   });
 });
 
+describe('semantic filters carry through search_api and call_api', () => {
+  beforeEach(() => {
+    clearEnv();
+    delete process.env.MCP_DISABLE_DESTRUCTIVE;
+  });
+
+  it('MCP_DISABLE_DESTRUCTIVE=true blocks end_call (a composite that DELETEs)', async () => {
+    process.env.MCP_DISABLE_DESTRUCTIVE = 'true';
+    const { handleToolCall, getAllToolDefinitions } = await importTools();
+    const tools = getAllToolDefinitions('domain_admin');
+    expect(tools.find((t) => t.name === 'end_call')).toBeUndefined();
+
+    const fakeClient = { request: async () => ({ success: true }) };
+    await expect(
+      handleToolCall(fakeClient as never, 'end_call', { call_id: 'x' }, 'domain_admin'),
+    ).rejects.toThrow(/destructive/i);
+  });
+
+  it('search_api hides tools matched by MCP_DISABLED_TOOLS so the model does not surface them', async () => {
+    process.env.MCP_DISABLED_TOOLS = 'delete_*';
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'search_api',
+      { query: 'delete' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    const leaks = parsed.matches.filter((mt: { name: string }) => mt.name.startsWith('delete_'));
+    expect(leaks).toEqual([]);
+  });
+
+  it('search_api hides over-tier tools from a basic user', async () => {
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'search_api',
+      { query: 'auditlog' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.matches).toEqual([]);
+  });
+
+  it('search_api hides destructive tools when MCP_DISABLE_DESTRUCTIVE=true', async () => {
+    process.env.MCP_DISABLE_DESTRUCTIVE = 'true';
+    const { handleToolCall } = await importTools();
+    const fakeClient = { request: async () => ({ success: true }) };
+    const result = (await handleToolCall(
+      fakeClient as never,
+      'search_api',
+      { query: 'delete' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+    const leaks = parsed.matches.filter((mt: { name: string }) => /^(delete_|revoke_)/.test(mt.name));
+    expect(leaks).toEqual([]);
+  });
+});
+
 describe('workflow tools (multi-call composites)', () => {
   beforeEach(clearEnv);
 
