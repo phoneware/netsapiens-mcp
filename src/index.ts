@@ -84,8 +84,13 @@ export function getToolDefinitions() {
  * Registers tool handlers on a Server instance, wired to the given NetSapiensClient.
  * Delegates to the modular tools system in src/tools/.
  */
-export function registerTools(server: Server, netsapiensClient: NetSapiensClient, userRole?: import('./auth/roles.js').UserRole): void {
-  registerAllTools(server, netsapiensClient, userRole);
+export function registerTools(
+  server: Server,
+  netsapiensClient: NetSapiensClient,
+  userRole?: import('./auth/roles.js').UserRole,
+  userIdentity?: string,
+): void {
+  registerAllTools(server, netsapiensClient, userRole, userIdentity);
 }
 
 // ---------------------------------------------------------------------------

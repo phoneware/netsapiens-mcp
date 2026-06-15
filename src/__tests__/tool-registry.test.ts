@@ -27,7 +27,7 @@ describe('annotations', () => {
 
   it('marks get_/list_/count_/search_ as read-only and non-destructive', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     const readyExamples = tools.filter((t) =>
       /^(get_|list_|count_|search_|read_)/.test(t.name),
     );
@@ -40,7 +40,7 @@ describe('annotations', () => {
 
   it('marks delete_/revoke_ tools as destructive', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     const destructive = tools.filter((t) => /^(delete_|revoke_)/.test(t.name));
     for (const t of destructive) {
       expect(t.annotations.readOnlyHint).toBe(false);
@@ -50,7 +50,7 @@ describe('annotations', () => {
 
   it('marks put_/patch_/post_ as writers but not necessarily destructive', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     const writers = tools.filter((t) => /^(put_|patch_|post_)/.test(t.name));
     expect(writers.length).toBeGreaterThan(0);
     for (const t of writers) {
@@ -65,7 +65,7 @@ describe('MCP_DISABLED_TOOLS', () => {
   it('hides tools matching a single glob pattern', async () => {
     process.env.MCP_DISABLED_TOOLS = 'delete_*';
     const { getAllToolDefinitions, isToolDisabled } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     expect(tools.every((t) => !t.name.startsWith('delete_'))).toBe(true);
     expect(isToolDisabled('delete_anything')).toBe(true);
     expect(isToolDisabled('get_anything')).toBe(false);
@@ -111,14 +111,14 @@ describe('name shortening', () => {
 
   it('keeps every exposed tool name at or under 64 characters', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     const overflow = tools.filter((t) => t.name.length > 64);
     expect(overflow).toEqual([]);
   });
 
   it('collapses domains_by_domain_users_by_user → domain_user', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     // The transfer-peer tool exceeded 64 chars in its raw form
     const hit = tools.find((t) => t.name === 'patch_domain_user_call_transfer_peer');
     expect(hit).toBeDefined();
@@ -146,10 +146,10 @@ describe('role-tier filtering', () => {
 
   it('hides higher-tier tools from lower-tier users', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const all = getAllToolDefinitions();
-    const sysAdmin = getAllToolDefinitions('system_admin');
-    const reseller = getAllToolDefinitions('reseller');
-    const user = getAllToolDefinitions('user');
+    const all = await getAllToolDefinitions();
+    const sysAdmin = await getAllToolDefinitions('system_admin');
+    const reseller = await getAllToolDefinitions('reseller');
+    const user = await getAllToolDefinitions('user');
 
     // system_admin sees everything; lower tiers see strictly fewer
     expect(sysAdmin.length).toBe(all.length);
@@ -166,14 +166,14 @@ describe('role-tier filtering', () => {
 
   it('shows all tools when no role is supplied (optimistic default)', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const all = getAllToolDefinitions();
+    const all = await getAllToolDefinitions();
     expect(all.find((t) => t.name === 'get_accesslog')).toBeDefined();
   });
 
   it('disables filtering entirely with MCP_DISABLE_ROLE_FILTER=true', async () => {
     process.env.MCP_DISABLE_ROLE_FILTER = 'true';
     const { getAllToolDefinitions } = await importTools();
-    const user = getAllToolDefinitions('user');
+    const user = await getAllToolDefinitions('user');
     expect(user.find((t) => t.name === 'get_accesslog')).toBeDefined();
   });
 

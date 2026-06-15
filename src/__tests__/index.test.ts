@@ -249,11 +249,11 @@ describe('loadConfig()', () => {
 // ---------------------------------------------------------------------------
 
 describe('getToolDefinitions()', () => {
-  it('returns the full auto-generated tool catalog when MCP_TOOL_MODE=full', () => {
+  it('returns the full auto-generated tool catalog when MCP_TOOL_MODE=full', async () => {
     const prev = process.env.MCP_TOOL_MODE;
     process.env.MCP_TOOL_MODE = 'full';
     try {
-      const tools = getToolDefinitions();
+      const tools = await getToolDefinitions();
       // The catalog is produced by the OpenAPI v2 generator plus the v1 apidoc
       // generator. The exact count will drift as upstream specs change — assert
       // a healthy floor instead of a brittle fixed number.
@@ -264,8 +264,8 @@ describe('getToolDefinitions()', () => {
     }
   });
 
-  it('each tool has name, description, and inputSchema', () => {
-    const tools = getToolDefinitions();
+  it('each tool has name, description, and inputSchema', async () => {
+    const tools = await getToolDefinitions();
     for (const tool of tools) {
       expect(tool).toHaveProperty('name');
       expect(tool).toHaveProperty('description');
