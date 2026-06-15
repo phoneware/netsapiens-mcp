@@ -239,7 +239,8 @@ Mechanics:
 - Tracked per **NetSapiens username** (from the authenticated bearer), not per AI client. Use the same NS account across Claude and ChatGPT and your promotions follow you.
 - Stored in the Firestore collection `mcp_tool_usage` when `MCP_PERSISTENCE=firestore` (default on Cloud Run); in-memory otherwise.
 - Promotion fires when count ≥ `MCP_PROMOTE_THRESHOLD` (default `3`) within the last `MCP_PROMOTE_WINDOW_DAYS` (default `14`) days.
-- The server sends `notifications/tools/list_changed` exactly once — on the call that crosses the threshold — so AI clients re-list and see the promoted tool mid-session without reconnecting.
+- **Demotion is automatic.** Once a tool's most recent call falls outside the window it drops back out of the user's catalog without any explicit action. The list is always a reflection of recent activity, not a permanent inheritance.
+- **Dynamic list refresh.** After every successful tool call, the server diffs the user's live promoted set against a per-session snapshot. If anything changed — a fresh promotion crossed the threshold, or a previously-promoted tool just decayed — it fires `notifications/tools/list_changed` once, so AI clients re-list mid-session without reconnecting. When nothing changed, no notification is sent and the model isn't disturbed.
 - Promotion **never bypasses other filters**: a tool hidden by `MCP_DISABLED_TOOLS`, role tier, `MCP_DISABLE_DESTRUCTIVE`, or the generation-time security strip stays hidden, no matter how many times it gets called.
 - Opt out per deployment with `MCP_DISABLE_PROMOTION=true`.
 
