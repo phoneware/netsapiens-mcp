@@ -24,6 +24,13 @@ import { buildMetaTools } from './curated/meta.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
+/** Set-equality helper used to detect promotion / demotion changes. */
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
 /**
  * Combined registry: v2 first (canonical), then v1 entries that don't collide.
  * Built locally without mutating the imported v2 map, so tests and tooling
@@ -526,8 +533,49 @@ export function registerAllTools(
   userRole?: UserRole,
   userIdentity?: string,
 ): void {
+  /**
+   * Per-session snapshot of the user's promoted-tool set, captured the first
+   * time we look at it and re-snapped whenever something changes. Lets us
+   * detect BOTH directions of change between consecutive tool calls:
+   *   - Promotion: new tool entered the set after this call crossed the
+   *     threshold.
+   *   - Demotion: a tool's last-use just slid outside MCP_PROMOTE_WINDOW_DAYS
+   *     during the session.
+   * Either case fires sendToolListChanged exactly once.
+   */
+  let promotedSnapshot: Set<string> | null = null;
+
+  /**
+   * Reconcile the cached snapshot against the live promoted set. Fires a
+   * tools/list_changed notification if they differ (and on first call when
+   * the snapshot is uninitialized but the live set is non-empty).
+   * Best-effort: errors here never bubble into the tool-call result.
+   */
+  async function reconcilePromotedSet(): Promise<void> {
+    if (!userIdentity) return;
+    try {
+      const current = new Set(await getPromotedToolNames(userIdentity));
+      if (promotedSnapshot === null) {
+        promotedSnapshot = current;
+        return;
+      }
+      if (!setsEqual(promotedSnapshot, current)) {
+        promotedSnapshot = current;
+        await server.sendToolListChanged();
+      }
+    } catch {
+      // Promotion is non-critical; never let it disrupt the dispatch.
+    }
+  }
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: await getAllToolDefinitions(userRole, userIdentity) };
+    const tools = await getAllToolDefinitions(userRole, userIdentity);
+    // Seed the snapshot from whatever the AI client just observed so that
+    // subsequent CallTool reconciliations diff against the right baseline.
+    if (userIdentity) {
+      promotedSnapshot = new Set(await getPromotedToolNames(userIdentity));
+    }
+    return { tools };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -550,23 +598,26 @@ export function registerAllTools(
 
       const result = await handleToolCall(client, name, callArgs, userRole);
 
-      // Per-user tool promotion. We only track call_api invocations — that's
-      // the signal that the user is reaching for a tool not in the default
-      // catalog. After recording, if this call just crossed the promotion
-      // threshold, notify the client to re-list so the new tool appears.
+      // Per-user tool promotion: record call_api invocations, then
+      // reconcile the promoted set so EITHER a new promotion OR a decay
+      // since the last call surfaces a tools/list_changed notification.
       if (name === 'call_api' && result) {
         const innerToolName = String(callArgs?.tool_name ?? '');
         if (innerToolName) {
           try {
-            const { promoted } = await recordCallApiInvocation(userIdentity, innerToolName);
-            if (promoted) {
-              await server.sendToolListChanged();
-            }
+            await recordCallApiInvocation(userIdentity, innerToolName);
           } catch {
             // Promotion tracking is best-effort. Already logged inside the store.
           }
         }
       }
+      // Run the reconciliation on every successful tool call (not just
+      // call_api). That way a stale tool that decayed mid-session — say,
+      // the user spent a while in find_user / recent_calls and the
+      // window slid past their last call_api invocation — still surfaces
+      // a list-changed notification at the next opportunity.
+      if (result) await reconcilePromotedSet();
+
       if (result === null || result === undefined) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }

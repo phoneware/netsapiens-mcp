@@ -155,6 +155,91 @@ describe('promotion', () => {
     expect(tools.find((t) => t.name === 'get_phones')).toBeUndefined();
   });
 
+  it('fires sendToolListChanged when a promoted tool decays out of the window', async () => {
+    // Tiny window so the test can move "time" without real waits.
+    process.env.MCP_PROMOTE_WINDOW_DAYS = '0.0001'; // ~8.6 seconds
+    process.env.MCP_PROMOTE_THRESHOLD = '2';
+
+    const { registerAllTools } = await importTools();
+    const { recordCallApiInvocation } = await import('../tools/promotion/index.js');
+    const handlers = new Map<unknown, (req: unknown) => Promise<unknown>>();
+    const sendToolListChanged = vi.fn(async () => {});
+    const server = {
+      setRequestHandler: (s: unknown, h: (req: unknown) => Promise<unknown>) => handlers.set(s, h),
+      sendToolListChanged,
+    } as never;
+    const fakeClient = { request: async () => ({ success: true, data: {} }) };
+
+    registerAllTools(server, fakeClient as never, 'domain_admin', 'hank');
+    const callHandler = handlers.get(CallToolRequestSchema) as (req: unknown) => Promise<unknown>;
+
+    // Promote get_devices: two calls cross the threshold.
+    await callHandler({ params: { name: 'call_api', arguments: { tool_name: 'get_devices', args: {} } } });
+    await callHandler({ params: { name: 'call_api', arguments: { tool_name: 'get_devices', args: {} } } });
+    expect(sendToolListChanged).toHaveBeenCalledTimes(1);
+
+    // Drop the in-memory record's lastUsed so the next reconcile sees the
+    // tool as decayed. This mimics the wall-clock window sliding past.
+    const { _resetUsageStoreForTests, InMemoryUsageStore } = await import('../tools/promotion/usage-store.js');
+    const store = new InMemoryUsageStore();
+    await store.recordCall('hank', 'get_devices');
+    await store.recordCall('hank', 'get_devices');
+    // Manually backdate lastUsed below the window by mutating the store.
+    const usage = await store.getUserUsage('hank');
+    const rec = usage.get('get_devices')!;
+    // Replace store contents via re-record and then mutate via private access.
+    // Easier: swap in a fresh store with pre-dated records.
+    const aged = new InMemoryUsageStore();
+    await aged.recordCall('hank', 'get_devices');
+    await aged.recordCall('hank', 'get_devices');
+    const agedMap = await aged.getUserUsage('hank');
+    const agedRec = agedMap.get('get_devices')!;
+    agedRec.lastUsed = Date.now() - 60_000; // 1 minute ago, well past 8.6s window
+    // Reinstall the aged store. (recordCallApiInvocation reads via singleton.)
+    _resetUsageStoreForTests({
+      async recordCall(user: string, tool: string) { void user; void tool; },
+      async getUserUsage(user: string) {
+        if (user === 'hank') return new Map([['get_devices', agedRec]]);
+        return new Map();
+      },
+    });
+    void rec; // silence unused warning in the unused branch
+    void usage;
+    void recordCallApiInvocation;
+
+    // Make a fresh tool call — reconciler should diff the snapshot and fire.
+    sendToolListChanged.mockClear();
+    await callHandler({ params: { name: 'find_user', arguments: { query: 'a' } } });
+    expect(sendToolListChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire sendToolListChanged when the promoted set is unchanged', async () => {
+    process.env.MCP_PROMOTE_THRESHOLD = '2';
+    const { registerAllTools } = await importTools();
+    const handlers = new Map<unknown, (req: unknown) => Promise<unknown>>();
+    const sendToolListChanged = vi.fn(async () => {});
+    const server = {
+      setRequestHandler: (s: unknown, h: (req: unknown) => Promise<unknown>) => handlers.set(s, h),
+      sendToolListChanged,
+    } as never;
+    const fakeClient = { request: async () => ({ success: true, data: {} }) };
+
+    registerAllTools(server, fakeClient as never, 'domain_admin', 'ivy');
+    const callHandler = handlers.get(CallToolRequestSchema) as (req: unknown) => Promise<unknown>;
+
+    // Cross the threshold once (fires).
+    await callHandler({ params: { name: 'call_api', arguments: { tool_name: 'get_devices', args: {} } } });
+    await callHandler({ params: { name: 'call_api', arguments: { tool_name: 'get_devices', args: {} } } });
+    expect(sendToolListChanged).toHaveBeenCalledTimes(1);
+
+    // Many subsequent non-changing calls should NOT spam list_changed.
+    sendToolListChanged.mockClear();
+    for (let i = 0; i < 5; i++) {
+      await callHandler({ params: { name: 'find_user', arguments: { query: 'x' } } });
+    }
+    expect(sendToolListChanged).not.toHaveBeenCalled();
+  });
+
   it('only records call_api invocations, not direct tool calls', async () => {
     const { registerAllTools } = await importTools();
     const handlers = new Map<unknown, (req: unknown) => Promise<unknown>>();
