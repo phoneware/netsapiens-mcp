@@ -21,6 +21,8 @@ import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { CURATED_CATALOG } from './curated/catalog.js';
 import { buildMetaTools } from './curated/meta.js';
+import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
+import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
 /**
  * Combined registry: v2 first (canonical), then v1 entries that don't collide.
@@ -299,16 +301,30 @@ function getToolMode(): ToolMode {
 }
 
 /**
- * The curated tools, plus search_api / call_api, filtered by scope.
- * The meta-tools dispatch into the full generated registry, so the model can
- * still reach anything via call_api.
+ * Visibility predicate for the generated registry. Returns true when a tool
+ * should appear in search results / promoted into a user's catalog.
  */
-function curatedExposedTools(userRole?: UserRole): Array<{
+function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean {
+  if (isToolDisabled(toolName)) return false;
+  if (!roleAllows(userRole, toolName)) return false;
+  if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+  return true;
+}
+
+/**
+ * The curated tools, plus search_api / call_api, plus any tools promoted into
+ * the user's catalog through repeated call_api invocations. All entries are
+ * filtered by scope, disable patterns, and the destructive toggle.
+ *
+ * `userIdentity` is the NetSapiens username from the bearer token; promotion
+ * is keyed on it so each NS user's catalog reflects their own muscle memory.
+ */
+async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): Promise<Array<{
   name: string;
   description: string;
   inputSchema: object;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-}> {
+}>> {
   const meta = buildMetaTools(
     toolRegistry,
     async (name, args, client) => {
@@ -320,12 +336,7 @@ function curatedExposedTools(userRole?: UserRole): Array<{
     // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
     // anything destructive. Stops the model from finding a tool that call_api
     // would then reject.
-    (toolName) => {
-      if (isToolDisabled(toolName)) return false;
-      if (!roleAllows(userRole, toolName)) return false;
-      if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
-      return true;
-    },
+    (toolName) => isGeneratedToolVisible(toolName, userRole),
   );
   const all = [...CURATED_CATALOG, ...meta];
   const tools: Array<{
@@ -334,6 +345,7 @@ function curatedExposedTools(userRole?: UserRole): Array<{
     inputSchema: object;
     annotations: { readOnlyHint: boolean; destructiveHint: boolean };
   }> = [];
+  const seen = new Set<string>();
   for (const t of all) {
     if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
     if (isToolDisabled(t.schema.name)) continue;
@@ -343,12 +355,36 @@ function curatedExposedTools(userRole?: UserRole): Array<{
     const destructive = t.destructive ?? inferred.destructiveHint;
     const readOnly = t.readOnly ?? inferred.readOnlyHint;
     if (disableDestructiveEnabled() && destructive) continue;
+    seen.add(t.schema.name);
     tools.push({
       name: t.schema.name,
       description: t.schema.description,
       inputSchema: t.schema.inputSchema,
       annotations: { readOnlyHint: readOnly, destructiveHint: destructive },
     });
+  }
+
+  // Per-user promotion: append generated tools the user has called frequently
+  // through call_api, subject to the same filters. Promoted tools appear under
+  // their shortened exposed names.
+  if (userIdentity) {
+    const promoted = await getPromotedToolNames(userIdentity);
+    const mapping = buildNameMapping();
+    for (const registryKey of promoted) {
+      if (!isGeneratedToolVisible(registryKey, userRole)) continue;
+      const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
+      if (seen.has(exposed)) continue;
+      const def = toolRegistry.get(registryKey);
+      if (!def) continue;
+      const annotations = classifyTool(registryKey);
+      seen.add(exposed);
+      tools.push({
+        name: exposed,
+        description: `[promoted] ${def.schema.description}`,
+        inputSchema: def.schema.inputSchema,
+        annotations,
+      });
+    }
   }
   return tools;
 }
@@ -372,18 +408,24 @@ function findCuratedTool(name: string, userRole?: UserRole) {
 /**
  * Returns the full list of tool definitions exposed to MCP clients.
  *
- * In curated mode (default), only the curated catalog + meta-tools are
- * returned. In full mode, every generated tool (subject to disable/role
- * filters and name shortening) is returned.
+ * In curated mode (default), the curated catalog + meta-tools + any
+ * user-specific promoted tools are returned. In full mode, every generated
+ * tool (subject to disable/role filters and name shortening) is returned.
+ *
+ * `userIdentity` is the NetSapiens username from the bearer token; it scopes
+ * the promotion lookup.
  */
-export function getAllToolDefinitions(userRole?: UserRole): Array<{
+export async function getAllToolDefinitions(
+  userRole?: UserRole,
+  userIdentity?: string,
+): Promise<Array<{
   name: string;
   description: string;
   inputSchema: object;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-}> {
+}>> {
   if (getToolMode() === 'curated') {
-    return curatedExposedTools(userRole);
+    return curatedExposedTools(userRole, userIdentity);
   }
 
   const mapping = buildNameMapping();
@@ -472,18 +514,59 @@ export async function handleToolCall(
 
 /**
  * Wires ListTools and CallTool handlers onto an MCP Server.
- * Pass the authenticated user's role to enable coarse tier filtering.
+ *
+ * @param server          MCP server instance.
+ * @param client          NetSapiensClient bound to the authenticated user's bearer.
+ * @param userRole        Scope tier from the NS user record; enables role filtering.
+ * @param userIdentity    NS username (used to scope per-user tool promotion).
  */
-export function registerAllTools(server: Server, client: NetSapiensClient, userRole?: UserRole): void {
+export function registerAllTools(
+  server: Server,
+  client: NetSapiensClient,
+  userRole?: UserRole,
+  userIdentity?: string,
+): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: getAllToolDefinitions(userRole) };
+    return { tools: await getAllToolDefinitions(userRole, userIdentity) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const callArgs = (args ?? {}) as Record<string, unknown>;
 
     try {
-      const result = await handleToolCall(client, name, (args ?? {}) as Record<string, unknown>, userRole);
+      // Optional confirmation gate. Skip elicitation entirely if
+      // MCP_DISABLE_DESTRUCTIVE will block the call anyway — that policy
+      // wins; we don't want to prompt the user for a call we'll reject.
+      if (
+        confirmDestructiveEnabled() &&
+        !disableDestructiveEnabled() &&
+        isToolDestructive(name)
+      ) {
+        await elicitConfirmation(server, name, callArgs);
+        // elicitConfirmation throws on decline/cancel; if we got here the
+        // user accepted, so dispatch normally.
+      }
+
+      const result = await handleToolCall(client, name, callArgs, userRole);
+
+      // Per-user tool promotion. We only track call_api invocations — that's
+      // the signal that the user is reaching for a tool not in the default
+      // catalog. After recording, if this call just crossed the promotion
+      // threshold, notify the client to re-list so the new tool appears.
+      if (name === 'call_api' && result) {
+        const innerToolName = String(callArgs?.tool_name ?? '');
+        if (innerToolName) {
+          try {
+            const { promoted } = await recordCallApiInvocation(userIdentity, innerToolName);
+            if (promoted) {
+              await server.sendToolListChanged();
+            }
+          } catch {
+            // Promotion tracking is best-effort. Already logged inside the store.
+          }
+        }
+      }
       if (result === null || result === undefined) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
