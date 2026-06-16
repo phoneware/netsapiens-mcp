@@ -29,7 +29,7 @@ describe('MCP_TOOL_MODE', () => {
 
   it('defaults to curated mode — ~30 tools, not the full 700+', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     expect(tools.length).toBeLessThan(50);
     expect(tools.length).toBeGreaterThan(20);
     // search_api and call_api are always present
@@ -40,7 +40,7 @@ describe('MCP_TOOL_MODE', () => {
   it('MCP_TOOL_MODE=full restores the generated registry', async () => {
     process.env.MCP_TOOL_MODE = 'full';
     const { getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     expect(tools.length).toBeGreaterThan(500);
     // search_api / call_api are curated-mode only
     expect(tools.find((t) => t.name === 'search_api')).toBeUndefined();
@@ -52,7 +52,7 @@ describe('curated scope filtering', () => {
 
   it('a basic user sees self-service + meta tools, no domain-admin ops', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const user = getAllToolDefinitions('user');
+    const user = await getAllToolDefinitions('user');
     const names = new Set(user.map((t) => t.name));
     // self-service basics
     expect(names.has('find_user')).toBe(true);
@@ -67,7 +67,7 @@ describe('curated scope filtering', () => {
 
   it('a domain_admin sees the full curated set', async () => {
     const { getAllToolDefinitions } = await importTools();
-    const admin = getAllToolDefinitions('domain_admin');
+    const admin = await getAllToolDefinitions('domain_admin');
     const names = new Set(admin.map((t) => t.name));
     expect(names.has('list_queues')).toBe(true);
     expect(names.has('end_call')).toBe(true);
@@ -176,7 +176,7 @@ describe('semantic filters carry through search_api and call_api', () => {
   it('MCP_DISABLE_DESTRUCTIVE=true blocks end_call (a composite that DELETEs)', async () => {
     process.env.MCP_DISABLE_DESTRUCTIVE = 'true';
     const { handleToolCall, getAllToolDefinitions } = await importTools();
-    const tools = getAllToolDefinitions('domain_admin');
+    const tools = await getAllToolDefinitions('domain_admin');
     expect(tools.find((t) => t.name === 'end_call')).toBeUndefined();
 
     const fakeClient = { request: async () => ({ success: true }) };

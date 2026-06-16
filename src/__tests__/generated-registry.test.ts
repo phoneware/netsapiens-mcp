@@ -61,7 +61,7 @@ describe('input schemas are valid JSON Schema draft 2020-12', () => {
     const Ajv2020 = (await import('ajv/dist/2020.js')).default;
     const { getAllToolDefinitions } = await import('../tools/index.js');
     const ajv = new (Ajv2020 as never as { new (opts: object): { compile: (s: object) => unknown } })({ strict: false });
-    const tools = getAllToolDefinitions();
+    const tools = await getAllToolDefinitions();
     const failures: string[] = [];
     for (const t of tools) {
       try {
