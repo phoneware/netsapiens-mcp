@@ -271,11 +271,12 @@ function wireApp(
     const body = (req as any).body;
 
     if (isInitializeRequest(body)) {
-      // Create a server + client using the authenticated user's NS token and role
+      // Create a server + client using the authenticated user's NS token, role, and identity.
       const extra = req.auth?.extra as Record<string, unknown> | undefined;
       const nsAccessToken = extra?.nsAccessToken as string | undefined;
       const nsUserRole = extra?.nsUserRole as UserRole | undefined;
-      const { server } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole);
+      const nsUsername = extra?.nsUsername as string | undefined;
+      const { server } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -347,6 +348,7 @@ function createAuthenticatedMcpServer(
   config: ReturnType<typeof loadConfig>,
   nsAccessToken?: string,
   userRole?: UserRole,
+  userIdentity?: string,
 ) {
   const server = new Server(
     { name: config.name, version: config.version },
@@ -360,7 +362,7 @@ function createAuthenticatedMcpServer(
     : config.netsapiens;
 
   const client = new NetSapiensClient(clientConfig);
-  registerTools(server, client, userRole);
+  registerTools(server, client, userRole, userIdentity);
 
   server.onerror = (error) => {
     logger.error('[MCP Error]', { error: String(error) });
