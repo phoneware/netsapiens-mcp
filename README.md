@@ -222,6 +222,20 @@ On top of NS's own enforcement, the server hides clearly-privileged resource fam
 
 The map is intentionally small and conservative — only families we're confident require a tier are gated, so a tool a user could legitimately call is never hidden. NS remains the real gatekeeper for the long tail. Disable the behavior entirely with `MCP_DISABLE_ROLE_FILTER=true` (then everything is visible and NS does all enforcement via 403).
 
+## ⏱️ Bearer token lifetime
+
+The MCP bearer we issue to the AI client carries `expires_in: 604800` (7 days) by default. Refresh tokens are issued alongside, so well-behaved MCP clients can transparently mint a new bearer when this one expires by POSTing `grant_type=refresh_token` to `/token`.
+
+Why 7 days instead of the more typical 1 hour? Some MCP clients (Claude's web UI and ChatGPT's connector among them) have had bugs that prevent automatic refresh on a 401 — when that happens the user sees a "session expired, reconnect" prompt in the middle of a working conversation. A 7-day bearer means the cliff is hit far less often. Refresh still works for the cases it does fire on, but most sessions never reach that path.
+
+Tunable per deployment via `MCP_TOKEN_LIFETIME_HOURS` (default `168`, min 1, max 2160 = 90 days). NetSapiens upstream tokens are refreshed silently inside `verifyAccessToken` regardless.
+
+Logs help debugging:
+
+- `MCP bearer expired — client should refresh` — fires whenever a request comes in with an expired bearer. If this fires AND a fresh `/token` POST does not follow shortly after, the AI client isn't refreshing.
+- `MCP bearer refreshed via refresh_token` — fires on every successful refresh, so you can confirm clients are using the refresh-token path.
+- `Refresh token presented but unknown — user will be asked to reconnect` — fires if a stored refresh token can't be found (e.g. an old client cached one from before a token-store wipe).
+
 ## 🛡️ Destructive-action confirmation (elicitation gate)
 
 Set `MCP_CONFIRM_DESTRUCTIVE=true` to make the server pause before any destructive tool runs and ask the user to confirm in-band, using the MCP `elicitation/create` capability. The user sees a "Confirm `end_call` on `call_id=XYZ`? Yes/No" prompt directly in their AI client; only on accept does the call execute. Decline or cancel and the model gets a clear "user declined" error to relay back.
