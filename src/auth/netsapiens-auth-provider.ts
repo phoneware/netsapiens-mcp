@@ -518,6 +518,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   ): Promise<OAuthTokens> {
     const stored = await this.tokenStore.getByRefreshToken(refreshToken);
     if (!stored) {
+      logger.warn('Refresh token presented but unknown — user will be asked to reconnect', {
+        // Log a fingerprint, never the token itself
+        refreshFingerprint: refreshToken.slice(0, 8),
+      });
       throw new Error('Invalid refresh token');
     }
 
@@ -528,14 +532,26 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken);
         nsTokens.username = stored.nsUsername;
         nsTokens.nsUserRole = stored.nsUserRole;
-      } catch {
+      } catch (err) {
+        logger.warn('Upstream NS refresh-grant failed during MCP refresh', {
+          username: stored.nsUsername,
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new Error('Upstream token refresh failed. Please re-authenticate.');
       }
     } else {
+      logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
+        username: stored.nsUsername,
+      });
       throw new Error('No upstream refresh token available. Please re-authenticate.');
     }
 
     await this.tokenStore.delete(stored.accessToken);
+
+    logger.info('MCP bearer refreshed via refresh_token', {
+      username: stored.nsUsername,
+      clientId: stored.clientId,
+    });
 
     return this.issueTokens(stored.clientId, nsTokens);
   }
@@ -551,6 +567,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     }
 
     if (Date.now() > stored.expiresAt) {
+      const ageMs = Date.now() - stored.expiresAt;
+      logger.info('MCP bearer expired — client should refresh', {
+        username: stored.nsUsername,
+        clientId: stored.clientId,
+        ageSec: Math.round(ageMs / 1000),
+        hadRefreshToken: !!stored.refreshToken,
+      });
       await this.tokenStore.delete(token);
       throw new Error('Access token expired');
     }
