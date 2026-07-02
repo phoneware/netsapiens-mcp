@@ -57,10 +57,17 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
     );
   }
 
+  // Issued bearer lifetime. MCP clients SHOULD refresh on 401 using the
+  // refresh token we hand back at /token, but real-world client refresh
+  // implementations vary, so a longer-lived bearer keeps far more sessions
+  // alive without ever hitting the cliff. Default 7 days; operator-tunable
+  // via MCP_TOKEN_LIFETIME_HOURS.
+  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
   const authProvider = new NetSapiensAuthProvider({
     nsApiUrl: config.netsapiens.apiUrl,
     nsClientId,
     nsClientSecret,
+    tokenLifetimeSec,
   });
 
   const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
@@ -87,6 +94,17 @@ export async function startHttpServer(): Promise<void> {
       logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
     }
   });
+}
+
+/**
+ * Parse an hours-valued env var to seconds, clamped to a sane range.
+ * Falls back to `defaultHours` when unset or malformed. Min 1 hour, max 90 days.
+ */
+function parseLifetimeHoursToSeconds(raw: string | undefined, defaultHours: number): number {
+  const parsed = raw ? Number.parseFloat(raw) : NaN;
+  const hours = Number.isFinite(parsed) && parsed > 0 ? parsed : defaultHours;
+  const clamped = Math.min(Math.max(hours, 1), 24 * 90);
+  return Math.round(clamped * 3600);
 }
 
 function wireApp(

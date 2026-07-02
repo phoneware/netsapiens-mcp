@@ -78,6 +78,117 @@ describe('OAuth flow (end-to-end)', () => {
     await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'ping', id: 1 }).expect(401);
   });
 
+  describe('bearer token lifetime', () => {
+    it('issues a 7-day bearer by default (no MCP_TOKEN_LIFETIME_HOURS set)', async () => {
+      delete process.env.MCP_TOKEN_LIFETIME_HOURS;
+      const { app } = await importApp();
+
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-default' })
+        .expect(201);
+
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
+        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+      const login = await request(app)
+        .post('/login')
+        .set('Cookie', pendingCookie)
+        .type('form')
+        .send({ username: 'alice', password: 'pw' })
+        .expect(302);
+      const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+      const tokenResp = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: verifier,
+          client_id: reg.body.client_id,
+          client_secret: reg.body.client_secret,
+          redirect_uri: 'http://localhost/cb',
+        })
+        .expect(200);
+
+      // 7 days = 604800 seconds; tolerate ±1s round-trip jitter from the bridge.
+      expect(tokenResp.body.expires_in).toBeGreaterThanOrEqual(604_799);
+      expect(tokenResp.body.expires_in).toBeLessThanOrEqual(604_801);
+      expect(tokenResp.body.refresh_token).toBeTruthy();
+    });
+
+    it('honors MCP_TOKEN_LIFETIME_HOURS', async () => {
+      process.env.MCP_TOKEN_LIFETIME_HOURS = '24'; // 1 day
+      const { app } = await importApp();
+      delete process.env.MCP_TOKEN_LIFETIME_HOURS;
+
+      const reg = await request(app)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-custom' })
+        .expect(201);
+
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+        })
+        .expect(200);
+      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
+        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+      const login = await request(app)
+        .post('/login')
+        .set('Cookie', pendingCookie)
+        .type('form')
+        .send({ username: 'alice', password: 'pw' })
+        .expect(302);
+      const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+      const tokenResp = await request(app)
+        .post('/token')
+        .type('form')
+        .send({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: verifier,
+          client_id: reg.body.client_id,
+          client_secret: reg.body.client_secret,
+          redirect_uri: 'http://localhost/cb',
+        })
+        .expect(200);
+
+      // 24 hours = 86400 seconds
+      expect(tokenResp.body.expires_in).toBe(86_400);
+    });
+  });
+
   describe('Dynamic Client Registration', () => {
     it('issues a client_secret for confidential clients (default)', async () => {
       const { app } = await importApp();
