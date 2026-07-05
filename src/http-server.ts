@@ -33,6 +33,26 @@ interface AuthenticatedRequest extends IncomingMessage {
   body?: unknown;
 }
 
+interface McpSession {
+  transport: StreamableHTTPServerTransport;
+  server: Server;
+  client: NetSapiensClient;
+}
+
+/**
+ * Push the (possibly just-refreshed) NS access token from the verified bearer
+ * into the session's long-lived NetSapiensClient. verifyAccessToken refreshes
+ * the upstream NS token in the token store, but the client instance was built
+ * at session-initialize time — without this sync it keeps using the original
+ * token, which NS invalidates on rotation, and every API call 401s for the
+ * rest of the session.
+ */
+function syncSessionNsToken(session: McpSession, req: AuthenticatedRequest): void {
+  const extra = req.auth?.extra as Record<string, unknown> | undefined;
+  const nsAccessToken = extra?.nsAccessToken as string | undefined;
+  if (nsAccessToken) session.client.setApiToken(nsAccessToken);
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -112,7 +132,7 @@ function wireApp(
   authProvider: NetSapiensAuthProvider,
   baseUrl: URL,
   mcpUrl: URL,
-): { app: express.Express; sessions: Map<string, { transport: StreamableHTTPServerTransport; server: Server }> } {
+): { app: express.Express; sessions: Map<string, McpSession> } {
 
   // -----------------------------------------------------------------------
   // Express app
@@ -182,7 +202,7 @@ function wireApp(
   // -----------------------------------------------------------------------
 
   // Active sessions keyed by session ID (declared early for use in health check)
-  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
+  const sessions = new Map<string, McpSession>();
 
   app.get('/health', (_req, res) => {
     res.json({
@@ -294,12 +314,12 @@ function wireApp(
       const nsAccessToken = extra?.nsAccessToken as string | undefined;
       const nsUserRole = extra?.nsUserRole as UserRole | undefined;
       const nsUsername = extra?.nsUsername as string | undefined;
-      const { server } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
+      const { server, client } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
-          sessions.set(sid, { transport, server });
+          sessions.set(sid, { transport, server, client });
         },
       });
 
@@ -320,6 +340,7 @@ function wireApp(
     }
 
     const session = sessions.get(sessionId)!;
+    syncSessionNsToken(session, req);
     await session.transport.handleRequest(req, res, body);
   });
 
@@ -334,6 +355,7 @@ function wireApp(
     }
 
     const session = sessions.get(sessionId)!;
+    syncSessionNsToken(session, req);
     await session.transport.handleRequest(req, res);
   });
 

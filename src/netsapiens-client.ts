@@ -86,7 +86,9 @@ export class NetSapiensClient {
   private oauthManager?: OAuthManager;
 
   constructor(config: NetSapiensConfig) {
-    this.config = config;
+    // Own copy — setApiToken must never mutate a config object shared with
+    // other clients (e.g. the operator-level config.netsapiens).
+    this.config = { ...config };
 
     // Initialize OAuth manager if OAuth config is provided
     if (config.oauth) {
@@ -138,6 +140,16 @@ export class NetSapiensClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Swap the bearer used for NS API calls. The request interceptor reads
+   * config.apiToken on every request, so the new token takes effect on the
+   * next call. Needed because the upstream NS token is refreshed (and the old
+   * one invalidated) mid-session, long after this client was constructed.
+   */
+  setApiToken(token: string): void {
+    this.config.apiToken = token;
   }
 
   /**

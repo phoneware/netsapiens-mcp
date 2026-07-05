@@ -534,5 +534,114 @@ describe('OAuth flow (end-to-end)', () => {
         refresh_token: 'ns-refresh',
       });
     });
+
+    it('propagates a mid-session NS refresh into the live session client', async () => {
+      // Capture the request interceptor of every NetSapiensClient built while
+      // this test runs, so we can see which bearer the session's client would
+      // put on its next NS API call.
+      const interceptors: Array<(cfg: { headers: Record<string, string> }) => Promise<{ headers: Record<string, string> }>> = [];
+      const origCreate = mockedAxios.create;
+      mockedAxios.create = vi.fn(() => ({
+        interceptors: {
+          request: { use: vi.fn((fn: (cfg: unknown) => unknown) => { interceptors.push(fn as never); }) },
+          response: { use: vi.fn() },
+        },
+        request: vi.fn(),
+        get: vi.fn(),
+        post: vi.fn(),
+      })) as unknown as typeof mockedAxios.create;
+
+      try {
+        const { app } = await importApp();
+        const reg = await request(app)
+          .post('/register')
+          .send({ redirect_uris: ['http://localhost/cb'], client_name: 'propagate-test' })
+          .expect(201);
+        const verifier = randomBytes(32).toString('base64url');
+        const auth = await request(app)
+          .get('/authorize')
+          .query({
+            response_type: 'code',
+            client_id: reg.body.client_id,
+            redirect_uri: 'http://localhost/cb',
+            code_challenge: pkceChallenge(verifier),
+            code_challenge_method: 'S256',
+          })
+          .expect(200);
+        const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
+          .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+
+        // NS token with a 1s lifetime sits inside the 60s refresh-skew window
+        // from the moment it's issued, so EVERY /mcp request triggers a
+        // transparent refresh — no clock manipulation needed.
+        mockedAxios.post = vi.fn().mockResolvedValueOnce({
+          data: { access_token: 'ns-1', refresh_token: 'nsr-1', expires_in: 1 },
+        });
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
+
+        const login = await request(app)
+          .post('/login')
+          .set('Cookie', pendingCookie)
+          .type('form')
+          .send({ username: 'alice', password: 'pw' })
+          .expect(302);
+        const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+        const tokenResp = await request(app)
+          .post('/token')
+          .type('form')
+          .send({
+            grant_type: 'authorization_code',
+            code,
+            code_verifier: verifier,
+            client_id: reg.body.client_id,
+            client_secret: reg.body.client_secret,
+            redirect_uri: 'http://localhost/cb',
+          })
+          .expect(200);
+        const mcpBearer = tokenResp.body.access_token;
+
+        await new Promise((r) => setTimeout(r, 5));
+
+        // Refresh #1 fires while verifying the initialize request; refresh #2
+        // fires on the follow-up request. Both mint tokens that are again
+        // inside the skew window.
+        mockedAxios.post = vi.fn()
+          .mockResolvedValueOnce({
+            data: { access_token: 'ns-2', refresh_token: 'nsr-2', expires_in: 1 },
+          })
+          .mockResolvedValueOnce({
+            data: { access_token: 'ns-3', refresh_token: 'nsr-3', expires_in: 1 },
+          });
+
+        const init = await request(app)
+          .post('/mcp')
+          .set('Authorization', `Bearer ${mcpBearer}`)
+          .set('Accept', 'application/json, text/event-stream')
+          .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+        const sessionId = init.headers['mcp-session-id'] as string;
+        expect(sessionId).toBeTruthy();
+
+        // The session's client was built with ns-2 (refreshed during initialize).
+        const sessionClientInterceptor = interceptors[interceptors.length - 1];
+        let cfg = await sessionClientInterceptor({ headers: {} });
+        expect(cfg.headers.Authorization).toBe('Bearer ns-2');
+
+        // The follow-up request refreshes ns-2 → ns-3 in the token store. The
+        // live session client must pick that up, or every NS API call for the
+        // rest of the session runs with a token NS has already invalidated.
+        await request(app)
+          .post('/mcp')
+          .set('Authorization', `Bearer ${mcpBearer}`)
+          .set('mcp-session-id', sessionId)
+          .set('Accept', 'application/json, text/event-stream')
+          .send({ jsonrpc: '2.0', method: 'tools/list', id: 2 });
+
+        cfg = await sessionClientInterceptor({ headers: {} });
+        expect(cfg.headers.Authorization).toBe('Bearer ns-3');
+      } finally {
+        mockedAxios.create = origCreate;
+      }
+    });
   });
 });
