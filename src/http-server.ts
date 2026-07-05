@@ -53,6 +53,21 @@ function syncSessionNsToken(session: McpSession, req: AuthenticatedRequest): voi
   if (nsAccessToken) session.client.setApiToken(nsAccessToken);
 }
 
+/**
+ * Unknown session ID → 404, per the MCP streamable-HTTP spec. 404 (not 400)
+ * is the signal a client keys on to transparently start a new session with a
+ * fresh InitializeRequest — important here because sessions live in instance
+ * memory and are wiped on every deploy or Cloud Run instance restart.
+ */
+function respondSessionNotFound(res: ServerResponse): void {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    jsonrpc: '2.0',
+    error: { code: -32001, message: 'Session not found' },
+    id: null,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -333,9 +348,13 @@ function wireApp(
       return;
     }
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 
@@ -348,9 +367,13 @@ function wireApp(
   app.get('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 
@@ -363,9 +386,13 @@ function wireApp(
   app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 
