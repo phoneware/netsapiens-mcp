@@ -78,6 +78,42 @@ describe('OAuth flow (end-to-end)', () => {
     await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'ping', id: 1 }).expect(401);
   });
 
+  it('returns 401 with a WWW-Authenticate challenge (not 500) for an unknown bearer', async () => {
+    const { app } = await importApp();
+    const res = await request(app)
+      .post('/mcp')
+      .set('Authorization', 'Bearer not-a-real-token')
+      .send({ jsonrpc: '2.0', method: 'ping', id: 1 });
+
+    // The 401 + challenge is what tells an MCP client to refresh or
+    // re-authenticate. A plain Error from verifyAccessToken becomes a 500
+    // the client can't act on.
+    expect(res.status).toBe(401);
+    expect(res.headers['www-authenticate']).toContain('invalid_token');
+    expect(res.headers['www-authenticate']).toContain('resource_metadata');
+  });
+
+  it('returns invalid_grant (not 500) for an unknown refresh token at /token', async () => {
+    const { app } = await importApp();
+    const reg = await request(app)
+      .post('/register')
+      .send({ redirect_uris: ['http://localhost/cb'], client_name: 'grant-error-test' })
+      .expect(201);
+
+    const res = await request(app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: 'unknown-refresh-token',
+        client_id: reg.body.client_id,
+        client_secret: reg.body.client_secret,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_grant');
+  });
+
   describe('bearer token lifetime', () => {
     it('issues a 7-day bearer by default (no MCP_TOKEN_LIFETIME_HOURS set)', async () => {
       delete process.env.MCP_TOKEN_LIFETIME_HOURS;
