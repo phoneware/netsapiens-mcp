@@ -18,6 +18,7 @@ import axios from 'axios';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { InvalidTokenError, InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type {
   OAuthClientInformationFull,
   OAuthTokens,
@@ -500,7 +501,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   ): Promise<string> {
     const entry = this.authCodes.get(authorizationCode);
     if (!entry) {
-      throw new Error('Invalid authorization code');
+      throw new InvalidGrantError('Invalid authorization code');
     }
     return entry.pending.codeChallenge;
   }
@@ -511,7 +512,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   ): Promise<OAuthTokens> {
     const entry = this.authCodes.get(authorizationCode);
     if (!entry) {
-      throw new Error('Invalid authorization code');
+      throw new InvalidGrantError('Invalid authorization code');
     }
     this.authCodes.delete(authorizationCode);
 
@@ -528,7 +529,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         // Log a fingerprint, never the token itself
         refreshFingerprint: refreshToken.slice(0, 8),
       });
-      throw new Error('Invalid refresh token');
+      throw new InvalidGrantError('Invalid refresh token');
     }
 
     // Try to refresh the upstream NS token if we have a refresh token
@@ -543,13 +544,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
           username: stored.nsUsername,
           error: err instanceof Error ? err.message : String(err),
         });
-        throw new Error('Upstream token refresh failed. Please re-authenticate.');
+        throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
       }
     } else {
       logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
         username: stored.nsUsername,
       });
-      throw new Error('No upstream refresh token available. Please re-authenticate.');
+      throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
     }
 
     await this.tokenStore.delete(stored.accessToken);
@@ -569,7 +570,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     let stored = await this.tokenStore.get(token);
     if (!stored) {
-      throw new Error('Invalid access token');
+      // Must be InvalidTokenError (not a plain Error): requireBearerAuth maps
+      // it to a 401 with a WWW-Authenticate challenge, which is the signal an
+      // MCP client needs to refresh or re-authenticate. Anything else becomes
+      // a 500 the client can't act on.
+      throw new InvalidTokenError('Invalid access token');
     }
 
     if (Date.now() > stored.expiresAt) {
@@ -581,7 +586,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         hadRefreshToken: !!stored.refreshToken,
       });
       await this.tokenStore.delete(token);
-      throw new Error('Access token expired');
+      throw new InvalidTokenError('Access token expired');
     }
 
     // Transparently refresh the upstream NS token if it has expired or is within 60s of expiry.
