@@ -47,6 +47,7 @@ vi.mock('../netsapiens-client.js', () => ({
     this.getBilling = vi.fn();
     this.getAgentStatistics = vi.fn();
     this.testConnection = vi.fn();
+    this.setApiToken = vi.fn();
   }),
 }));
 
@@ -262,7 +263,23 @@ describe('startHttpServer()', () => {
     });
 
     expect(res.status).toBe(400);
-    expect(JSON.parse(res.body)).toEqual({ error: 'Invalid or missing session ID' });
+    expect(JSON.parse(res.body)).toEqual({ error: 'Missing session ID' });
+  });
+
+  it('returns 404 for an unknown session ID so clients re-initialize', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await startHttpServer();
+
+    for (const method of ['POST', 'GET', 'DELETE'] as const) {
+      const res = await request(testPort, method, '/mcp', {
+        body: method === 'POST' ? { method: 'tools/list', jsonrpc: '2.0', id: 2 } : undefined,
+        headers: { authorization: 'Bearer test-token', 'mcp-session-id': 'gone-after-restart' },
+      });
+
+      expect(res.status).toBe(404);
+      expect(JSON.parse(res.body).error.message).toBe('Session not found');
+    }
   });
 
   it('rejects GET /mcp without valid session ID', async () => {

@@ -228,7 +228,7 @@ The MCP bearer we issue to the AI client carries `expires_in: 604800` (7 days) b
 
 Why 7 days instead of the more typical 1 hour? Some MCP clients (Claude's web UI and ChatGPT's connector among them) have had bugs that prevent automatic refresh on a 401 — when that happens the user sees a "session expired, reconnect" prompt in the middle of a working conversation. A 7-day bearer means the cliff is hit far less often. Refresh still works for the cases it does fire on, but most sessions never reach that path.
 
-Tunable per deployment via `MCP_TOKEN_LIFETIME_HOURS` (default `168`, min 1, max 2160 = 90 days). NetSapiens upstream tokens are refreshed silently inside `verifyAccessToken` regardless.
+Tunable per deployment via `MCP_TOKEN_LIFETIME_HOURS` (default `168`, min 1, max 2160 = 90 days). NetSapiens upstream tokens are refreshed silently inside `verifyAccessToken` regardless, and the refreshed token is pushed into the live MCP session's API client on every request — NS rotates (and invalidates) the old token on refresh, so a session that kept its original token would 401 on every NS call for the rest of its life. Concurrent requests share a single in-flight refresh per bearer for the same reason.
 
 Logs help debugging:
 

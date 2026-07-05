@@ -123,6 +123,29 @@ describe('NetSapiensClient', () => {
       expect(result.headers.Authorization).toBe('Bearer test-static-token');
     });
 
+    it('setApiToken swaps the bearer used on subsequent requests', async () => {
+      mockAxios = createMockAxios();
+      client = new NetSapiensClient(STATIC_TOKEN_CONFIG);
+
+      const interceptor = mockAxios.getRequestInterceptor();
+      let result = await interceptor({ headers: {} as Record<string, string> });
+      expect(result.headers.Authorization).toBe('Bearer test-static-token');
+
+      client.setApiToken('rotated-token');
+      result = await interceptor({ headers: {} as Record<string, string> });
+      expect(result.headers.Authorization).toBe('Bearer rotated-token');
+    });
+
+    it('setApiToken does not mutate the config object passed to the constructor', () => {
+      mockAxios = createMockAxios();
+      const shared = { ...STATIC_TOKEN_CONFIG };
+      client = new NetSapiensClient(shared);
+
+      client.setApiToken('rotated-token');
+
+      expect(shared.apiToken).toBe('test-static-token');
+    });
+
     it('should add OAuth Bearer token when oauth is configured', async () => {
       mockAxios = createMockAxios();
       const mockGetAccessToken = vi.fn().mockResolvedValue('oauth-token-abc');
