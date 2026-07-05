@@ -33,6 +33,41 @@ interface AuthenticatedRequest extends IncomingMessage {
   body?: unknown;
 }
 
+interface McpSession {
+  transport: StreamableHTTPServerTransport;
+  server: Server;
+  client: NetSapiensClient;
+}
+
+/**
+ * Push the (possibly just-refreshed) NS access token from the verified bearer
+ * into the session's long-lived NetSapiensClient. verifyAccessToken refreshes
+ * the upstream NS token in the token store, but the client instance was built
+ * at session-initialize time — without this sync it keeps using the original
+ * token, which NS invalidates on rotation, and every API call 401s for the
+ * rest of the session.
+ */
+function syncSessionNsToken(session: McpSession, req: AuthenticatedRequest): void {
+  const extra = req.auth?.extra as Record<string, unknown> | undefined;
+  const nsAccessToken = extra?.nsAccessToken as string | undefined;
+  if (nsAccessToken) session.client.setApiToken(nsAccessToken);
+}
+
+/**
+ * Unknown session ID → 404, per the MCP streamable-HTTP spec. 404 (not 400)
+ * is the signal a client keys on to transparently start a new session with a
+ * fresh InitializeRequest — important here because sessions live in instance
+ * memory and are wiped on every deploy or Cloud Run instance restart.
+ */
+function respondSessionNotFound(res: ServerResponse): void {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    jsonrpc: '2.0',
+    error: { code: -32001, message: 'Session not found' },
+    id: null,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -112,7 +147,7 @@ function wireApp(
   authProvider: NetSapiensAuthProvider,
   baseUrl: URL,
   mcpUrl: URL,
-): { app: express.Express; sessions: Map<string, { transport: StreamableHTTPServerTransport; server: Server }> } {
+): { app: express.Express; sessions: Map<string, McpSession> } {
 
   // -----------------------------------------------------------------------
   // Express app
@@ -182,7 +217,7 @@ function wireApp(
   // -----------------------------------------------------------------------
 
   // Active sessions keyed by session ID (declared early for use in health check)
-  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
+  const sessions = new Map<string, McpSession>();
 
   app.get('/health', (_req, res) => {
     res.json({
@@ -294,12 +329,12 @@ function wireApp(
       const nsAccessToken = extra?.nsAccessToken as string | undefined;
       const nsUserRole = extra?.nsUserRole as UserRole | undefined;
       const nsUsername = extra?.nsUsername as string | undefined;
-      const { server } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
+      const { server, client } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
-          sessions.set(sid, { transport, server });
+          sessions.set(sid, { transport, server, client });
         },
       });
 
@@ -313,13 +348,18 @@ function wireApp(
       return;
     }
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 
     const session = sessions.get(sessionId)!;
+    syncSessionNsToken(session, req);
     await session.transport.handleRequest(req, res, body);
   });
 
@@ -327,13 +367,18 @@ function wireApp(
   app.get('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 
     const session = sessions.get(sessionId)!;
+    syncSessionNsToken(session, req);
     await session.transport.handleRequest(req, res);
   });
 
@@ -341,9 +386,13 @@ function wireApp(
   app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+      res.end(JSON.stringify({ error: 'Missing session ID' }));
+      return;
+    }
+    if (!sessions.has(sessionId)) {
+      respondSessionNotFound(res);
       return;
     }
 

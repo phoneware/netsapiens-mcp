@@ -315,6 +315,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   private nsClientSecret: string;
   private tokenLifetimeSec: number;
 
+  // In-flight upstream NS refreshes keyed by MCP bearer. NS rotates refresh
+  // tokens, so two concurrent refreshes for the same bearer means the second
+  // one presents an already-consumed refresh token and fails — concurrent
+  // verifies must share a single refresh instead.
+  private nsRefreshInflight = new Map<string, Promise<void>>();
+
   constructor(options: NetSapiensAuthProviderOptions) {
     this.nsApiUrl = options.nsApiUrl;
     this.nsClientId = options.nsClientId;
@@ -583,23 +589,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const NS_REFRESH_SKEW_MS = 60_000;
     const nsExpired = stored.nsExpiresAt && Date.now() > stored.nsExpiresAt - NS_REFRESH_SKEW_MS;
     if (nsExpired && stored.nsRefreshToken) {
-      try {
-        const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken);
-        const updated = await this.tokenStore.update(token, {
-          nsAccessToken: refreshed.access_token,
-          nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
-          nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
-        });
-        if (updated) stored = updated;
-        logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
-      } catch (err) {
-        logger.warn('Upstream NS token refresh failed during verify; client will need to re-auth', {
-          error: String(err),
-          username: stored.nsUsername,
-        });
-        // Fall through and let the API call fail with a 401, which will trigger
-        // the MCP client to use its refresh token (which in turn re-tries the NS refresh).
+      let inflight = this.nsRefreshInflight.get(token);
+      if (!inflight) {
+        inflight = this.refreshUpstreamNsToken(token, stored)
+          .finally(() => this.nsRefreshInflight.delete(token));
+        this.nsRefreshInflight.set(token, inflight);
       }
+      await inflight;
+      // Re-read so every waiter (not just the one that refreshed) returns the new token.
+      stored = (await this.tokenStore.get(token)) ?? stored;
     }
 
     return {
@@ -613,6 +611,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         nsUserRole: stored.nsUserRole,
       },
     };
+  }
+
+  private async refreshUpstreamNsToken(token: string, stored: StoredToken): Promise<void> {
+    try {
+      const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken!);
+      await this.tokenStore.update(token, {
+        nsAccessToken: refreshed.access_token,
+        nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+        nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
+      });
+      logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
+    } catch (err) {
+      logger.warn('Upstream NS token refresh failed during verify; client will need to re-auth', {
+        error: String(err),
+        username: stored.nsUsername,
+      });
+      // Fall through and let the API call fail with a 401, which will trigger
+      // the MCP client to use its refresh token (which in turn re-tries the NS refresh).
+    }
   }
 
   // -----------------------------------------------------------------------
