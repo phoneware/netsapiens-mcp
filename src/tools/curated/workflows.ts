@@ -14,6 +14,14 @@ import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/ty
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
+/** Compare phone numbers loosely: strip everything but digits and match on the trailing 10 (NANP), so E.164 vs domestic formatting doesn't break equality. */
+function numbersMatch(haystack: string, number: string): boolean {
+  const digits = (s: string) => s.replace(/\D/g, '');
+  const needle = digits(number).slice(-10);
+  if (!needle) return false;
+  return digits(haystack).includes(needle);
+}
+
 /** Settle a request and surface failures as a `{ error }` field instead of throwing. */
 async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<{ ok: boolean; data?: T; error?: string }> {
   try {
@@ -341,25 +349,69 @@ const recent_activity_for_number: CuratedTool = {
     const number = String(args.number);
     const since = args.since ? String(args.since) : undefined;
     const limit = typeof args.limit === 'number' ? args.limit : 25;
-    const [calls, messageSessions] = await Promise.all([
-      safe(
+    // The CDR search variant of this endpoint filters on `caller`/`dialled`
+    // (partial match) — there's no single param that means "either side of
+    // the call", so query both directions and merge. `datetime-start` is
+    // only sent when `since` is given; the bare listing form tolerates its
+    // absence.
+    const [callsAsCaller, callsAsDialled, messageSessions] = await Promise.all([
+      safe<Array<Record<string, unknown>>>(
         client.request({
           method: 'GET',
           pathTemplate: '/domains/{domain}/cdrs',
           pathParams: { domain },
-          queryParams: { 'orig-from-uri': number, 'term-to-uri': number, limit, 'start-time-after': since },
+          queryParams: { caller: number, limit, 'datetime-start': since },
         }),
       ),
-      safe(
+      safe<Array<Record<string, unknown>>>(
+        client.request({
+          method: 'GET',
+          pathTemplate: '/domains/{domain}/cdrs',
+          pathParams: { domain },
+          queryParams: { dialled: number, limit, 'datetime-start': since },
+        }),
+      ),
+      safe<Array<Record<string, unknown>>>(
         client.request({
           method: 'GET',
           pathTemplate: '/domains/{domain}/messagesessions',
           pathParams: { domain },
-          queryParams: { participant: number, limit },
+          queryParams: { limit: Math.max(limit * 4, 100) },
         }),
       ),
     ]);
-    return textResult({ number, domain, since, calls, message_sessions: messageSessions });
+    const callsById = new Map<unknown, Record<string, unknown>>();
+    for (const batch of [callsAsCaller, callsAsDialled]) {
+      if (!batch.ok || !Array.isArray(batch.data)) continue;
+      for (const call of batch.data) {
+        callsById.set(call.id ?? JSON.stringify(call), call);
+      }
+    }
+    const calls = {
+      ok: callsAsCaller.ok || callsAsDialled.ok,
+      error: callsAsCaller.ok || callsAsDialled.ok ? undefined : (callsAsCaller.error ?? callsAsDialled.error),
+      data: Array.from(callsById.values()).slice(0, limit),
+    };
+    // The domain-wide messagesessions endpoint has no server-side "involving
+    // this number" filter, so filter client-side against the participant
+    // fields the API does return.
+    const matchesNumber = (session: Record<string, unknown>) => {
+      const haystack = [session['messagesession-remote'], session['messagesession-sms-number'], session['messagesession-participants']]
+        .filter((v) => v != null)
+        .map(String)
+        .join(',');
+      return numbersMatch(haystack, number);
+    };
+    const filteredSessions = messageSessions.ok && Array.isArray(messageSessions.data)
+      ? messageSessions.data.filter(matchesNumber).slice(0, limit)
+      : messageSessions.data;
+    return textResult({
+      number,
+      domain,
+      since,
+      calls,
+      message_sessions: { ok: messageSessions.ok, error: messageSessions.error, data: filteredSessions },
+    });
   },
 };
 

@@ -386,6 +386,43 @@ describe('workflow tools (multi-call composites)', () => {
     expect((captured[0].body as { 'forward-destination': string })['forward-destination']).toBe('4001');
   });
 
+  it('recent_activity_for_number queries CDRs by caller/dialled (not the nonexistent orig-from-uri/term-to-uri) and filters message sessions client-side', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        if (o.pathTemplate === '/domains/{domain}/cdrs') {
+          return { success: true, data: [{ id: 'call-1' }] };
+        }
+        return {
+          success: true,
+          data: [
+            { 'messagesession-id': 'match', 'messagesession-remote': '+1 (415) 555-1234' },
+            { 'messagesession-id': 'no-match', 'messagesession-remote': '19998887777' },
+          ],
+        };
+      },
+    };
+    const result = (await handleToolCall(
+      client as never,
+      'recent_activity_for_number',
+      { number: '4155551234' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    const cdrCalls = calls.filter((c) => c.pathTemplate === '/domains/{domain}/cdrs');
+    expect(cdrCalls.length).toBe(2);
+    const cdrQueryKeys = cdrCalls.flatMap((c) => Object.keys(c.queryParams ?? {}));
+    expect(cdrQueryKeys).toContain('caller');
+    expect(cdrQueryKeys).toContain('dialled');
+    expect(cdrQueryKeys).not.toContain('orig-from-uri');
+    expect(cdrQueryKeys).not.toContain('term-to-uri');
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.message_sessions.data.map((s: { 'messagesession-id': string }) => s['messagesession-id'])).toEqual(['match']);
+  });
+
   it('schedule_forwarding with disable=true emits do-not-forward', async () => {
     const { handleToolCall } = await importTools();
     const captured: Array<{ body?: unknown }> = [];
