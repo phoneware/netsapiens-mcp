@@ -11,16 +11,9 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
+import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
-
-/** Compare phone numbers loosely: strip everything but digits and match on the trailing 10 (NANP), so E.164 vs domestic formatting doesn't break equality. */
-function numbersMatch(haystack: string, number: string): boolean {
-  const digits = (s: string) => s.replace(/\D/g, '');
-  const needle = digits(number).slice(-10);
-  if (!needle) return false;
-  return digits(haystack).includes(needle);
-}
 
 /** Settle a request and surface failures as a `{ error }` field instead of throwing. */
 async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<{ ok: boolean; data?: T; error?: string }> {
@@ -280,17 +273,30 @@ const find_and_call: CuratedTool = {
     const q = String(args.query);
     const confirm = args.confirm === true;
 
-    // Search both users and contacts in parallel
+    // Search both users and contacts in parallel. Neither /domains/{domain}/users
+    // nor /domains/{domain}/users/{user}/contacts has a server-side name/login/
+    // email filter (only limit/start and includeDomain respectively) — the API
+    // silently ignores an unrecognized filter param, so fetch broadly and match
+    // client-side instead.
     const [users, contacts] = await Promise.all([
       safe<Array<Record<string, unknown>>>(
-        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users', pathParams: { domain }, queryParams: { user: q, limit: 10 } }),
+        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users', pathParams: { domain }, queryParams: { limit: 1000 } }),
       ),
       safe<Array<Record<string, unknown>>>(
-        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/~/contacts', pathParams: { domain }, queryParams: { contact: q, limit: 10 } }),
+        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/~/contacts', pathParams: { domain } }),
       ),
     ]);
-    const userMatches = Array.isArray(users.data) ? users.data : [];
-    const contactMatches = Array.isArray(contacts.data) ? contacts.data : [];
+    const userMatches = (Array.isArray(users.data) ? users.data : []).filter((u) =>
+      fieldsMatch(u, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], q),
+    );
+    const contactMatches = (Array.isArray(contacts.data) ? contacts.data : []).filter(
+      (c) =>
+        fieldsMatch(c, ['name-first-name', 'name-middle-name', 'name-last-name', 'email', 'company'], q) ||
+        numbersMatch(
+          [c['phonenumber-work'], c['phonenumber-cell'], c['phonenumber-fax'], c['phonenumber-home']].filter((v) => v != null).join(','),
+          q,
+        ),
+    );
 
     // Pick an extension out of each candidate
     const candidates: Array<{ source: 'user' | 'contact'; extension?: string; record: Record<string, unknown> }> = [];
