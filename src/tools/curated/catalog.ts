@@ -12,6 +12,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import { WORKFLOW_TOOLS } from './workflows.js';
+import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
@@ -36,13 +37,22 @@ const find_user: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    const query = str(args.query, '');
+    const limit = num(args.limit) ?? 10;
+    // /domains/{domain}/users has no server-side name/login/email/extension
+    // filter (only limit/start) — the API silently ignores an unrecognized
+    // filter param, so fetch broadly and match client-side.
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users',
       pathParams: { domain: str(args.domain) },
-      queryParams: { user: str(args.query, ''), limit: num(args.limit) ?? 10 },
+      queryParams: { limit: 1000 },
     });
-    return textResult(r);
+    if (!r.success || !Array.isArray(r.data)) return textResult(r);
+    const matches = (r.data as Array<Record<string, unknown>>).filter((u) =>
+      fieldsMatch(u, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], query),
+    );
+    return textResult({ ...r, data: matches.slice(0, limit) });
   },
 };
 
@@ -60,12 +70,19 @@ const find_domain: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    const query = args.query ? String(args.query) : '';
+    const limit = num(args.limit) ?? 25;
+    // /domains has no server-side name filter (only limit/start) — fetch
+    // broadly and match client-side when a query is given.
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains',
-      queryParams: { domain: args.query ? String(args.query) : undefined, limit: num(args.limit) ?? 25 },
+      queryParams: { limit: query ? 1000 : limit },
     });
-    return textResult(r);
+    if (!r.success || !Array.isArray(r.data)) return textResult(r);
+    const list = r.data as Array<Record<string, unknown>>;
+    const matches = query ? list.filter((d) => fieldsMatch(d, ['domain', 'description'], query)) : list;
+    return textResult({ ...r, data: matches.slice(0, limit) });
   },
 };
 
@@ -85,13 +102,25 @@ const find_contact: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    const query = str(args.query, '');
+    const limit = num(args.limit) ?? 25;
+    // /domains/{domain}/users/{user}/contacts has no name/number/email filter
+    // (only includeDomain) — fetch the contact list and match client-side.
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/~/contacts',
       pathParams: { domain: str(args.domain) },
-      queryParams: { contact: str(args.query, ''), limit: num(args.limit) ?? 25 },
     });
-    return textResult(r);
+    if (!r.success || !Array.isArray(r.data)) return textResult(r);
+    const matches = (r.data as Array<Record<string, unknown>>).filter(
+      (c) =>
+        fieldsMatch(c, ['name-first-name', 'name-middle-name', 'name-last-name', 'email', 'company'], query) ||
+        numbersMatch(
+          [c['phonenumber-work'], c['phonenumber-cell'], c['phonenumber-fax'], c['phonenumber-home']].filter((v) => v != null).join(','),
+          query,
+        ),
+    );
+    return textResult({ ...r, data: matches.slice(0, limit) });
   },
 };
 
@@ -110,13 +139,17 @@ const find_phone_number: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    const number = String(args.number);
+    // /domains/{domain}/phonenumbers has no query filter at all — fetch the
+    // full domain number list and match client-side.
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phonenumbers',
       pathParams: { domain: str(args.domain) },
-      queryParams: { phonenumber: String(args.number) },
     });
-    return textResult(r);
+    if (!r.success || !Array.isArray(r.data)) return textResult(r);
+    const matches = (r.data as Array<Record<string, unknown>>).filter((p) => numbersMatch(String(p.phonenumber ?? ''), number));
+    return textResult({ ...r, data: matches });
   },
 };
 
@@ -135,13 +168,19 @@ const find_device: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    const query = String(args.query);
+    // /domains/{domain}/devices has no query filter at all — fetch the full
+    // domain device list and match client-side.
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/devices',
       pathParams: { domain: str(args.domain) },
-      queryParams: { device: String(args.query) },
     });
-    return textResult(r);
+    if (!r.success || !Array.isArray(r.data)) return textResult(r);
+    const matches = (r.data as Array<Record<string, unknown>>).filter((d) =>
+      fieldsMatch(d, ['device', 'user', 'device-sip-registration-user-agent', 'device-models-model'], query),
+    );
+    return textResult({ ...r, data: matches });
   },
 };
 
@@ -169,7 +208,8 @@ const recent_calls: CuratedTool = {
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/cdrs',
       pathParams: { domain: str(args.domain), user: str(args.user) },
-      queryParams: { limit: num(args.limit) ?? 25, 'start-time-after': args.since ? String(args.since) : undefined },
+      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
+      queryParams: { limit: num(args.limit) ?? 25, 'datetime-start': args.since ? String(args.since) : undefined },
     });
     return textResult(r);
   },
@@ -665,7 +705,8 @@ const call_statistics: CuratedTool = {
       method: 'GET',
       pathTemplate,
       pathParams,
-      queryParams: { 'start-time-after': args.since ? String(args.since) : undefined },
+      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
+      queryParams: { 'datetime-start': args.since ? String(args.since) : undefined },
     });
     return textResult(r);
   },
@@ -695,7 +736,8 @@ const agent_statistics: CuratedTool = {
       method: 'GET',
       pathTemplate,
       pathParams,
-      queryParams: { 'start-time-after': args.since ? String(args.since) : undefined },
+      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
+      queryParams: { 'datetime-start': args.since ? String(args.since) : undefined },
     });
     return textResult(r);
   },

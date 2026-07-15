@@ -309,12 +309,21 @@ describe('workflow tools (multi-call composites)', () => {
     expect(parsed.note).toMatch(/LOGGED OUT/);
   });
 
-  it('find_and_call returns candidates without calling when multiple matches and confirm=false', async () => {
+  it('find_and_call filters users client-side (no server-side name filter exists) and returns candidates without calling when multiple matches and confirm=false', async () => {
     const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
     const client = {
-      request: async (o: { pathTemplate: string }) => {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
         if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts')) {
-          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+          return {
+            success: true,
+            data: [
+              { user: '1001', 'name-first-name': 'Alice' },
+              { user: '1002', 'name-first-name': 'Alice', 'name-last-name': 'Second' },
+              { user: '1003', 'name-first-name': 'Bob' },
+            ],
+          };
         }
         return { success: true, data: [] };
       },
@@ -328,6 +337,9 @@ describe('workflow tools (multi-call composites)', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.ok).toBe(false);
     expect(parsed.matches.length).toBe(2);
+    // no fabricated `user=`/`contact=` filter param sent — the API doesn't support one
+    const userListCall = calls.find((c) => c.pathTemplate === '/domains/{domain}/users');
+    expect(userListCall?.queryParams).not.toHaveProperty('user');
   });
 
   it('find_and_call places the call when confirm=true', async () => {
@@ -337,7 +349,14 @@ describe('workflow tools (multi-call composites)', () => {
       request: async (o: { pathTemplate: string; method: string; body?: unknown }) => {
         if (o.method === 'POST') placed.push(o);
         if (o.pathTemplate.includes('/users') && !o.pathTemplate.includes('contacts') && o.method === 'GET') {
-          return { success: true, data: [{ user: '1001' }, { user: '1002' }] };
+          return {
+            success: true,
+            data: [
+              { user: '1001', 'name-first-name': 'Alice' },
+              { user: '1002', 'name-first-name': 'Alice', 'name-last-name': 'Second' },
+              { user: '1003', 'name-first-name': 'Bob' },
+            ],
+          };
         }
         return { success: true, data: [] };
       },
@@ -440,20 +459,138 @@ describe('workflow tools (multi-call composites)', () => {
 describe('composite handlers translate args correctly', () => {
   beforeEach(clearEnv);
 
-  it('find_user calls /domains/{domain}/users with user= query', async () => {
+  it('find_user fetches /domains/{domain}/users broadly (no server-side name filter exists) and filters client-side', async () => {
     const { handleToolCall } = await importTools();
     const calls: unknown[] = [];
     const fakeClient = {
       request: async (o: unknown) => {
         calls.push(o);
-        return { success: true, data: [] };
+        return {
+          success: true,
+          data: [
+            { user: '1001', 'name-first-name': 'Alice' },
+            { user: '1002', 'name-first-name': 'Bob' },
+          ],
+        };
       },
     };
-    await handleToolCall(fakeClient as never, 'find_user', { query: 'alice' }, 'user');
+    const result = (await handleToolCall(fakeClient as never, 'find_user', { query: 'alice' }, 'user')) as {
+      content: Array<{ text: string }>;
+    };
     const opts = calls[0] as { pathTemplate: string; pathParams: Record<string, string>; queryParams: Record<string, unknown> };
     expect(opts.pathTemplate).toBe('/domains/{domain}/users');
     expect(opts.pathParams.domain).toBe('~');
-    expect(opts.queryParams.user).toBe('alice');
+    // no fabricated `user=` filter — the endpoint doesn't support one
+    expect(opts.queryParams).not.toHaveProperty('user');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data).toEqual([{ user: '1001', 'name-first-name': 'Alice' }]);
+  });
+
+  it('find_domain fetches /domains broadly (no server-side name filter exists) and filters client-side', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return {
+          success: true,
+          data: [
+            { domain: 'acme.com', description: 'Acme Corp' },
+            { domain: 'other.com', description: 'Other Inc' },
+          ],
+        };
+      },
+    };
+    const result = (await handleToolCall(fakeClient as never, 'find_domain', { query: 'acme' }, 'domain_admin')) as {
+      content: Array<{ text: string }>;
+    };
+    expect(calls[0].queryParams).not.toHaveProperty('domain');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data).toEqual([{ domain: 'acme.com', description: 'Acme Corp' }]);
+  });
+
+  it('find_contact fetches contacts broadly (no `contact=` filter exists) and matches name/email/phone client-side', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return {
+          success: true,
+          data: [
+            { 'unique-id': '1', 'name-first-name': 'Alice', 'phonenumber-cell': '14155551234' },
+            { 'unique-id': '2', 'name-first-name': 'Bob', 'phonenumber-cell': '19998887777' },
+          ],
+        };
+      },
+    };
+    const result = (await handleToolCall(fakeClient as never, 'find_contact', { query: 'alice' }, 'user')) as {
+      content: Array<{ text: string }>;
+    };
+    expect(calls[0].queryParams?.contact).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data.map((c: { 'unique-id': string }) => c['unique-id'])).toEqual(['1']);
+  });
+
+  it('find_phone_number fetches the full domain list (no `phonenumber=` filter exists) and matches client-side', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return {
+          success: true,
+          data: [{ phonenumber: '14155551234' }, { phonenumber: '19998887777' }],
+        };
+      },
+    };
+    const result = (await handleToolCall(fakeClient as never, 'find_phone_number', { number: '4155551234' }, 'domain_admin')) as {
+      content: Array<{ text: string }>;
+    };
+    expect(calls[0].queryParams?.phonenumber).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data).toEqual([{ phonenumber: '14155551234' }]);
+  });
+
+  it('find_device fetches the full domain list (no `device=` filter exists) and matches client-side', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return {
+          success: true,
+          data: [
+            { device: 'mac-1', user: '1001' },
+            { device: 'mac-2', user: '1002' },
+          ],
+        };
+      },
+    };
+    const result = (await handleToolCall(fakeClient as never, 'find_device', { query: '1001' }, 'domain_admin')) as {
+      content: Array<{ text: string }>;
+    };
+    expect(calls[0].queryParams?.device).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data).toEqual([{ device: 'mac-1', user: '1001' }]);
+  });
+
+  it('recent_calls, call_statistics, and agent_statistics send `datetime-start` (not the nonexistent `start-time-after`) for `since`', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(fakeClient as never, 'recent_calls', { since: '2026-01-01T00:00:00Z' }, 'user');
+    await handleToolCall(fakeClient as never, 'call_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
+    await handleToolCall(fakeClient as never, 'agent_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
+    for (const c of calls) {
+      expect(c.queryParams).toHaveProperty('datetime-start', '2026-01-01T00:00:00Z');
+      expect(c.queryParams).not.toHaveProperty('start-time-after');
+    }
   });
 
   it('place_call POSTs the destination to /domains/{domain}/users/{user}/calls', async () => {
