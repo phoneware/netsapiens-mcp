@@ -11,6 +11,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
+import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -272,17 +273,30 @@ const find_and_call: CuratedTool = {
     const q = String(args.query);
     const confirm = args.confirm === true;
 
-    // Search both users and contacts in parallel
+    // Search both users and contacts in parallel. Neither /domains/{domain}/users
+    // nor /domains/{domain}/users/{user}/contacts has a server-side name/login/
+    // email filter (only limit/start and includeDomain respectively) — the API
+    // silently ignores an unrecognized filter param, so fetch broadly and match
+    // client-side instead.
     const [users, contacts] = await Promise.all([
       safe<Array<Record<string, unknown>>>(
-        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users', pathParams: { domain }, queryParams: { user: q, limit: 10 } }),
+        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users', pathParams: { domain }, queryParams: { limit: 1000 } }),
       ),
       safe<Array<Record<string, unknown>>>(
-        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/~/contacts', pathParams: { domain }, queryParams: { contact: q, limit: 10 } }),
+        client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/~/contacts', pathParams: { domain } }),
       ),
     ]);
-    const userMatches = Array.isArray(users.data) ? users.data : [];
-    const contactMatches = Array.isArray(contacts.data) ? contacts.data : [];
+    const userMatches = (Array.isArray(users.data) ? users.data : []).filter((u) =>
+      fieldsMatch(u, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], q),
+    );
+    const contactMatches = (Array.isArray(contacts.data) ? contacts.data : []).filter(
+      (c) =>
+        fieldsMatch(c, ['name-first-name', 'name-middle-name', 'name-last-name', 'email', 'company'], q) ||
+        numbersMatch(
+          [c['phonenumber-work'], c['phonenumber-cell'], c['phonenumber-fax'], c['phonenumber-home']].filter((v) => v != null).join(','),
+          q,
+        ),
+    );
 
     // Pick an extension out of each candidate
     const candidates: Array<{ source: 'user' | 'contact'; extension?: string; record: Record<string, unknown> }> = [];
@@ -341,25 +355,69 @@ const recent_activity_for_number: CuratedTool = {
     const number = String(args.number);
     const since = args.since ? String(args.since) : undefined;
     const limit = typeof args.limit === 'number' ? args.limit : 25;
-    const [calls, messageSessions] = await Promise.all([
-      safe(
+    // The CDR search variant of this endpoint filters on `caller`/`dialled`
+    // (partial match) — there's no single param that means "either side of
+    // the call", so query both directions and merge. `datetime-start` is
+    // only sent when `since` is given; the bare listing form tolerates its
+    // absence.
+    const [callsAsCaller, callsAsDialled, messageSessions] = await Promise.all([
+      safe<Array<Record<string, unknown>>>(
         client.request({
           method: 'GET',
           pathTemplate: '/domains/{domain}/cdrs',
           pathParams: { domain },
-          queryParams: { 'orig-from-uri': number, 'term-to-uri': number, limit, 'start-time-after': since },
+          queryParams: { caller: number, limit, 'datetime-start': since },
         }),
       ),
-      safe(
+      safe<Array<Record<string, unknown>>>(
+        client.request({
+          method: 'GET',
+          pathTemplate: '/domains/{domain}/cdrs',
+          pathParams: { domain },
+          queryParams: { dialled: number, limit, 'datetime-start': since },
+        }),
+      ),
+      safe<Array<Record<string, unknown>>>(
         client.request({
           method: 'GET',
           pathTemplate: '/domains/{domain}/messagesessions',
           pathParams: { domain },
-          queryParams: { participant: number, limit },
+          queryParams: { limit: Math.max(limit * 4, 100) },
         }),
       ),
     ]);
-    return textResult({ number, domain, since, calls, message_sessions: messageSessions });
+    const callsById = new Map<unknown, Record<string, unknown>>();
+    for (const batch of [callsAsCaller, callsAsDialled]) {
+      if (!batch.ok || !Array.isArray(batch.data)) continue;
+      for (const call of batch.data) {
+        callsById.set(call.id ?? JSON.stringify(call), call);
+      }
+    }
+    const calls = {
+      ok: callsAsCaller.ok || callsAsDialled.ok,
+      error: callsAsCaller.ok || callsAsDialled.ok ? undefined : (callsAsCaller.error ?? callsAsDialled.error),
+      data: Array.from(callsById.values()).slice(0, limit),
+    };
+    // The domain-wide messagesessions endpoint has no server-side "involving
+    // this number" filter, so filter client-side against the participant
+    // fields the API does return.
+    const matchesNumber = (session: Record<string, unknown>) => {
+      const haystack = [session['messagesession-remote'], session['messagesession-sms-number'], session['messagesession-participants']]
+        .filter((v) => v != null)
+        .map(String)
+        .join(',');
+      return numbersMatch(haystack, number);
+    };
+    const filteredSessions = messageSessions.ok && Array.isArray(messageSessions.data)
+      ? messageSessions.data.filter(matchesNumber).slice(0, limit)
+      : messageSessions.data;
+    return textResult({
+      number,
+      domain,
+      since,
+      calls,
+      message_sessions: { ok: messageSessions.ok, error: messageSessions.error, data: filteredSessions },
+    });
   },
 };
 
