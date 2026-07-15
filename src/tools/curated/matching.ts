@@ -29,3 +29,22 @@ export function numbersMatch(haystack: string, number: string): boolean {
   if (!needle) return false;
   return digits(haystack).includes(needle);
 }
+
+/**
+ * True if `dateValue` is on or after `since`. Used as a client-side backstop
+ * for date filters: `datetime-start`/`datetime-end` are a REQUIRED PAIR on
+ * NetSapiens CDR/statistics endpoints — sending `datetime-start` alone is
+ * silently ignored and returns unbounded history (confirmed against live
+ * data). Callers should always send both, but this backstop still filters
+ * client-side in case a caller forgets or the server-side bound isn't
+ * enforced as expected. Unparseable/missing dates are NOT excluded, since
+ * dropping a record we can't evaluate is worse than an occasional false
+ * positive.
+ */
+export function isOnOrAfter(dateValue: unknown, since: string): boolean {
+  if (dateValue == null) return true;
+  const t = Date.parse(String(dateValue));
+  const s = Date.parse(since);
+  if (Number.isNaN(t) || Number.isNaN(s)) return true;
+  return t >= s;
+}
