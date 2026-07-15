@@ -442,6 +442,49 @@ describe('workflow tools (multi-call composites)', () => {
     expect(parsed.message_sessions.data.map((s: { 'messagesession-id': string }) => s['messagesession-id'])).toEqual(['match']);
   });
 
+  it('recent_activity_for_number sends datetime-end alongside datetime-start (required pair — datetime-start alone is silently ignored) and enforces `since` client-side as a backstop', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        if (o.pathTemplate === '/domains/{domain}/cdrs') {
+          // Simulate a server that ignores the date bound and returns full history anyway —
+          // the client-side isOnOrAfter backstop must still narrow this down.
+          return {
+            success: true,
+            data: [
+              { id: 'old-call', 'call-start-datetime': '2020-01-01T00:00:00Z' },
+              { id: 'new-call', 'call-start-datetime': '2026-07-15T12:00:00Z' },
+            ],
+          };
+        }
+        return { success: true, data: [] };
+      },
+    };
+    const before = Date.now();
+    const result = (await handleToolCall(
+      client as never,
+      'recent_activity_for_number',
+      { number: '4155551234', since: '2026-07-01T00:00:00Z' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+    const after = Date.now();
+
+    const cdrCalls = calls.filter((c) => c.pathTemplate === '/domains/{domain}/cdrs');
+    for (const c of cdrCalls) {
+      expect(c.queryParams?.['datetime-start']).toBe('2026-07-01T00:00:00Z');
+      const until = c.queryParams?.['datetime-end'] as string;
+      expect(until).toBeTruthy();
+      const untilMs = Date.parse(until);
+      expect(untilMs).toBeGreaterThanOrEqual(before);
+      expect(untilMs).toBeLessThanOrEqual(after);
+    }
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.calls.data.map((c: { id: string }) => c.id)).toEqual(['new-call']);
+  });
+
   it('schedule_forwarding with disable=true emits do-not-forward', async () => {
     const { handleToolCall } = await importTools();
     const captured: Array<{ body?: unknown }> = [];
@@ -575,7 +618,11 @@ describe('composite handlers translate args correctly', () => {
     expect(parsed.data).toEqual([{ device: 'mac-1', user: '1001' }]);
   });
 
-  it('recent_calls, call_statistics, and agent_statistics send `datetime-start` (not the nonexistent `start-time-after`) for `since`', async () => {
+  it('recent_calls, call_statistics, and agent_statistics send `datetime-start` + `datetime-end` (not the nonexistent `start-time-after`) for `since`', async () => {
+    // `datetime-start`/`datetime-end` are a required pair on these endpoints —
+    // sending `datetime-start` alone is silently ignored by the live API
+    // (confirmed against production data), so `datetime-end` must always be
+    // sent alongside it.
     const { handleToolCall } = await importTools();
     const calls: Array<{ queryParams?: Record<string, unknown> }> = [];
     const fakeClient = {
@@ -584,13 +631,35 @@ describe('composite handlers translate args correctly', () => {
         return { success: true, data: [] };
       },
     };
+    const before = Date.now();
     await handleToolCall(fakeClient as never, 'recent_calls', { since: '2026-01-01T00:00:00Z' }, 'user');
     await handleToolCall(fakeClient as never, 'call_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
     await handleToolCall(fakeClient as never, 'agent_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
+    const after = Date.now();
+    expect(calls.length).toBe(3);
     for (const c of calls) {
       expect(c.queryParams).toHaveProperty('datetime-start', '2026-01-01T00:00:00Z');
       expect(c.queryParams).not.toHaveProperty('start-time-after');
+      const until = c.queryParams?.['datetime-end'] as string;
+      expect(until).toBeTruthy();
+      const untilMs = Date.parse(until);
+      expect(untilMs).toBeGreaterThanOrEqual(before);
+      expect(untilMs).toBeLessThanOrEqual(after);
     }
+  });
+
+  it('recent_calls omits datetime-start/datetime-end entirely when no `since` is given', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ queryParams?: Record<string, unknown> }> = [];
+    const fakeClient = {
+      request: async (o: { queryParams?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(fakeClient as never, 'recent_calls', {}, 'user');
+    expect(calls[0].queryParams?.['datetime-start']).toBeUndefined();
+    expect(calls[0].queryParams?.['datetime-end']).toBeUndefined();
   });
 
   it('place_call POSTs the destination to /domains/{domain}/users/{user}/calls', async () => {

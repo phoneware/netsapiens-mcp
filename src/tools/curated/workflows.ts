@@ -11,7 +11,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
-import { fieldsMatch, numbersMatch } from './matching.js';
+import { fieldsMatch, isOnOrAfter, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -355,18 +355,21 @@ const recent_activity_for_number: CuratedTool = {
     const number = String(args.number);
     const since = args.since ? String(args.since) : undefined;
     const limit = typeof args.limit === 'number' ? args.limit : 25;
+    // `datetime-start`/`datetime-end` are a REQUIRED PAIR on the CDR search
+    // endpoint — sending `datetime-start` alone is silently ignored and
+    // returns unbounded history (confirmed against live data). So whenever
+    // `since` is given, bound the other end at "now".
+    const until = since ? new Date().toISOString() : undefined;
     // The CDR search variant of this endpoint filters on `caller`/`dialled`
     // (partial match) — there's no single param that means "either side of
-    // the call", so query both directions and merge. `datetime-start` is
-    // only sent when `since` is given; the bare listing form tolerates its
-    // absence.
+    // the call", so query both directions and merge.
     const [callsAsCaller, callsAsDialled, messageSessions] = await Promise.all([
       safe<Array<Record<string, unknown>>>(
         client.request({
           method: 'GET',
           pathTemplate: '/domains/{domain}/cdrs',
           pathParams: { domain },
-          queryParams: { caller: number, limit, 'datetime-start': since },
+          queryParams: { caller: number, limit, 'datetime-start': since, 'datetime-end': until },
         }),
       ),
       safe<Array<Record<string, unknown>>>(
@@ -374,7 +377,7 @@ const recent_activity_for_number: CuratedTool = {
           method: 'GET',
           pathTemplate: '/domains/{domain}/cdrs',
           pathParams: { domain },
-          queryParams: { dialled: number, limit, 'datetime-start': since },
+          queryParams: { dialled: number, limit, 'datetime-start': since, 'datetime-end': until },
         }),
       ),
       safe<Array<Record<string, unknown>>>(
@@ -390,6 +393,9 @@ const recent_activity_for_number: CuratedTool = {
     for (const batch of [callsAsCaller, callsAsDialled]) {
       if (!batch.ok || !Array.isArray(batch.data)) continue;
       for (const call of batch.data) {
+        // Client-side backstop on top of the server-side datetime-start/end
+        // bound (see note above on why the server side alone isn't trusted).
+        if (since && !isOnOrAfter(call['call-start-datetime'] ?? call['call-answer-datetime'], since)) continue;
         callsById.set(call.id ?? JSON.stringify(call), call);
       }
     }
@@ -399,8 +405,8 @@ const recent_activity_for_number: CuratedTool = {
       data: Array.from(callsById.values()).slice(0, limit),
     };
     // The domain-wide messagesessions endpoint has no server-side "involving
-    // this number" filter, so filter client-side against the participant
-    // fields the API does return.
+    // this number" filter (or date filter at all), so filter client-side
+    // against the fields the API does return.
     const matchesNumber = (session: Record<string, unknown>) => {
       const haystack = [session['messagesession-remote'], session['messagesession-sms-number'], session['messagesession-participants']]
         .filter((v) => v != null)
@@ -409,7 +415,10 @@ const recent_activity_for_number: CuratedTool = {
       return numbersMatch(haystack, number);
     };
     const filteredSessions = messageSessions.ok && Array.isArray(messageSessions.data)
-      ? messageSessions.data.filter(matchesNumber).slice(0, limit)
+      ? messageSessions.data
+          .filter(matchesNumber)
+          .filter((s) => !since || isOnOrAfter(s['messagesession-last-timestamp'] ?? s['messagesession-start-timestamp'], since))
+          .slice(0, limit)
       : messageSessions.data;
     return textResult({
       number,
