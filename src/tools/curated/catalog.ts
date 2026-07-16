@@ -204,12 +204,17 @@ const recent_calls: CuratedTool = {
     },
   },
   handler: async (args, client) => {
+    // `datetime-start` is the real param — `start-time-after` doesn't exist on
+    // this endpoint. It's also a REQUIRED PAIR with `datetime-end`: sending
+    // `datetime-start` alone is silently ignored by the API (confirmed against
+    // live data), so bound the other end at "now" whenever `since` is given.
+    const since = args.since ? String(args.since) : undefined;
+    const until = since ? new Date().toISOString() : undefined;
     const r = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/cdrs',
       pathParams: { domain: str(args.domain), user: str(args.user) },
-      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
-      queryParams: { limit: num(args.limit) ?? 25, 'datetime-start': args.since ? String(args.since) : undefined },
+      queryParams: { limit: num(args.limit) ?? 25, 'datetime-start': since, 'datetime-end': until },
     });
     return textResult(r);
   },
@@ -701,12 +706,17 @@ const call_statistics: CuratedTool = {
       : '/domains/{domain}/statistics/callqueues/aggregate';
     const pathParams: Record<string, string> = { domain: str(args.domain) };
     if (args.queue) pathParams.queue = String(args.queue);
+    // `datetime-start` is the real param — `start-time-after` doesn't exist on
+    // this endpoint. It's also a REQUIRED PAIR with `datetime-end`: sending
+    // `datetime-start` alone is silently ignored by the API (confirmed against
+    // live data), so bound the other end at "now" whenever `since` is given.
+    const since = args.since ? String(args.since) : undefined;
+    const until = since ? new Date().toISOString() : undefined;
     const r = await client.request({
       method: 'GET',
       pathTemplate,
       pathParams,
-      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
-      queryParams: { 'datetime-start': args.since ? String(args.since) : undefined },
+      queryParams: { 'datetime-start': since, 'datetime-end': until },
     });
     return textResult(r);
   },
@@ -732,12 +742,17 @@ const agent_statistics: CuratedTool = {
       : '/domains/{domain}/statistics/agent';
     const pathParams: Record<string, string> = { domain: str(args.domain) };
     if (args.agent) pathParams.agent = String(args.agent);
+    // `datetime-start` is the real param — `start-time-after` doesn't exist on
+    // this endpoint. It's also a REQUIRED PAIR with `datetime-end`: sending
+    // `datetime-start` alone is silently ignored by the API (confirmed against
+    // live data), so bound the other end at "now" whenever `since` is given.
+    const since = args.since ? String(args.since) : undefined;
+    const until = since ? new Date().toISOString() : undefined;
     const r = await client.request({
       method: 'GET',
       pathTemplate,
       pathParams,
-      // `datetime-start` is the real param — `start-time-after` doesn't exist on this endpoint.
-      queryParams: { 'datetime-start': args.since ? String(args.since) : undefined },
+      queryParams: { 'datetime-start': since, 'datetime-end': until },
     });
     return textResult(r);
   },
