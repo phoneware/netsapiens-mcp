@@ -12,7 +12,15 @@
  *   NETSAPIENS_OAUTH_CLIENT_SECRET – NS OAuth client secret
  */
 
-import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  randomUUID,
+  randomBytes,
+  createHash,
+  createHmac,
+  createCipheriv,
+  createDecipheriv,
+  timingSafeEqual,
+} from 'node:crypto';
 import type { Request, Response } from 'express';
 import axios from 'axios';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
@@ -66,6 +74,22 @@ function getSessionSecret(): string {
 const PENDING_AUTH_COOKIE = 'mcp_pending_auth';
 const MFA_CHALLENGE_COOKIE = 'mcp_mfa_challenge';
 
+/** Hidden form fields carrying the same state as the cookies above. */
+const AUTH_STATE_FIELD = 'auth_state';
+const MFA_STATE_FIELD = 'mfa_state';
+
+/** How long a freshly issued login page is good for. */
+const PENDING_AUTH_TTL_SEC = 30 * 60;
+/** How long after a passcode prompt we still accept the code. */
+const MFA_CHALLENGE_TTL_SEC = 10 * 60;
+/**
+ * Absolute age past which we stop honoring an authentic-but-lapsed login page.
+ * Within it, a stale tab just signs in again; the OAuth params it carries are
+ * public and the auth code still lands on the client's registered redirect URI
+ * behind PKCE, so refreshing the window grants nothing new.
+ */
+const PENDING_AUTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
 export function signValue<T>(payload: T, ttlSec: number): string {
   const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
   const json = Buffer.from(JSON.stringify(data));
@@ -75,16 +99,75 @@ export function signValue<T>(payload: T, ttlSec: number): string {
 }
 
 export function verifySigned<T>(token: string): T | null {
+  const result = inspectSigned<T>(token);
+  return result.status === 'valid' ? result.value : null;
+}
+
+/**
+ * Signature/expiry verdict for a signed blob.
+ *
+ * `expired` still carries the payload: the signature proved we minted it, only
+ * the window lapsed. Callers decide whether a lapsed window is recoverable.
+ * The distinct statuses are what let us log *why* a login lost its state
+ * instead of collapsing every cause into "session expired".
+ */
+export type SignedInspection<T> =
+  | { status: 'valid'; value: T }
+  | { status: 'expired'; value: T; expiredAgoSec: number }
+  | { status: 'malformed' }
+  | { status: 'bad_signature' };
+
+export function inspectSigned<T>(token: string): SignedInspection<T> {
   try {
     const dot = token.indexOf('.');
-    if (dot <= 0) return null;
+    if (dot <= 0) return { status: 'malformed' };
     const b64 = token.slice(0, dot);
     const sig = token.slice(dot + 1);
     const expected = createHmac('sha256', getSessionSecret()).update(b64).digest('base64url');
     const a = Buffer.from(sig);
     const b = Buffer.from(expected);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return { status: 'bad_signature' };
     const data = JSON.parse(Buffer.from(b64, 'base64url').toString());
+    const exp = data.exp;
+    delete data.exp;
+    if (typeof exp === 'number' && exp < Math.floor(Date.now() / 1000)) {
+      return { status: 'expired', value: data as T, expiredAgoSec: Math.floor(Date.now() / 1000) - exp };
+    }
+    return { status: 'valid', value: data as T };
+  } catch {
+    return { status: 'malformed' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sealed (encrypted) state — for blobs that must ride in the page HTML but
+// hold secrets. The pending-authorization blob is public OAuth request
+// params, so signing is enough; the MFA challenge carries the user's password
+// and partial access token, so it gets AES-256-GCM on top of the signature.
+// ---------------------------------------------------------------------------
+
+function sealKey(): Buffer {
+  return createHash('sha256').update(`seal:${getSessionSecret()}`).digest();
+}
+
+export function sealValue<T>(payload: T, ttlSec: number): string {
+  const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', sealKey(), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv.toString('base64url'), ct.toString('base64url'), tag.toString('base64url')].join('.');
+}
+
+export function openSealed<T>(token: string): T | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [iv, ct, tag] = parts.map((p) => Buffer.from(p, 'base64url'));
+    const decipher = createDecipheriv('aes-256-gcm', sealKey(), iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+    const data = JSON.parse(plain);
     if (typeof data.exp === 'number' && data.exp < Math.floor(Date.now() / 1000)) return null;
     delete data.exp;
     return data as T;
@@ -120,6 +203,29 @@ function setSignedCookie(res: Response, name: string, value: string, maxAgeSec: 
 
 function clearCookie(res: Response, name: string): void {
   res.append('Set-Cookie', `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`);
+}
+
+/**
+ * Send a credential page. These carry sign-in state in the markup, so they
+ * must not sit in a disk cache or an intermediary.
+ */
+function sendPage(res: Response, status: number, html: string): void {
+  res.status(status)
+    .set('Cache-Control', 'no-store, private')
+    .set('Pragma', 'no-cache')
+    .type('html')
+    .send(html);
+}
+
+/**
+ * True when the browser tells us this POST came from another site. Carrying
+ * sign-in state in a form field means SameSite=Lax no longer blocks a
+ * cross-site submission on its own, so we check the fetch metadata directly.
+ * Absent header (curl, older browsers) is treated as same-site.
+ */
+export function isCrossSitePost(req: Request): boolean {
+  const site = req.headers['sec-fetch-site'];
+  return typeof site === 'string' && site === 'cross-site';
 }
 
 // ---------------------------------------------------------------------------
@@ -165,9 +271,17 @@ function logoHtml(): string {
   return `<div class="logo"><img src="${escapeHtml(url)}" alt=""></div>`;
 }
 
-function loginPageHtml(authorizeUrl: string, error?: string): string {
+function loginPageHtml(authorizeUrl: string, error?: string, authState?: string): string {
   const errorHtml = error
     ? `<div class="error">${escapeHtml(error)}</div>`
+    : '';
+
+  // The pending authorization also rides in the form, not just the cookie.
+  // Cookies get dropped for reasons we don't control (a second /authorize in
+  // another tab overwrites it, the tab sits until Max-Age lapses, the browser
+  // withholds it), and losing it used to dead-end the sign-in.
+  const stateHtml = authState
+    ? `<input type="hidden" name="${AUTH_STATE_FIELD}" value="${escapeHtml(authState)}">`
     : '';
 
   const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
@@ -207,6 +321,7 @@ function loginPageHtml(authorizeUrl: string, error?: string): string {
     <h1>${safeHeading}</h1>
     ${errorHtml}
     <form method="POST" action="${escapeHtml(authorizeUrl)}">
+      ${stateHtml}
       <label for="username">Username</label>
       <input type="text" id="username" name="username" required autocomplete="username" autofocus>
       <label for="password">Password</label>
@@ -223,9 +338,21 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function mfaPageHtml(mfaUrl: string, mfaVendor: string | undefined, error?: string): string {
+function mfaPageHtml(
+  mfaUrl: string,
+  mfaVendor: string | undefined,
+  error?: string,
+  mfaState?: string,
+): string {
   const errorHtml = error
     ? `<div class="error">${escapeHtml(error)}</div>`
+    : '';
+
+  // Same belt-and-suspenders as the login page. This blob is sealed, not just
+  // signed: it holds the password needed for the NS mfa grant, which must
+  // never be readable in page source.
+  const stateHtml = mfaState
+    ? `<input type="hidden" name="${MFA_STATE_FIELD}" value="${escapeHtml(mfaState)}">`
     : '';
 
   const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
@@ -269,6 +396,7 @@ function mfaPageHtml(mfaUrl: string, mfaVendor: string | undefined, error?: stri
     ${vendorHint}
     ${errorHtml}
     <form method="POST" action="${escapeHtml(mfaUrl)}">
+      ${stateHtml}
       <label for="passcode">Authentication Code</label>
       <input type="text" id="passcode" name="passcode" inputmode="numeric" pattern="[0-9]*"
              maxlength="6" required autocomplete="one-time-code" autofocus>
@@ -374,11 +502,67 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       resource: params.resource,
       createdAt: Date.now(),
     };
-    const cookie = signValue(pending, 15 * 60); // 15 min TTL
-    setSignedCookie(res, PENDING_AUTH_COOKIE, cookie, 15 * 60);
+    const state = signValue(pending, PENDING_AUTH_TTL_SEC);
+    setSignedCookie(res, PENDING_AUTH_COOKIE, state, PENDING_AUTH_TTL_SEC);
 
-    const html = loginPageHtml('/login');
-    res.status(200).type('html').send(html);
+    // The same state goes into the form, so the sign-in works even if the
+    // cookie never comes back to us.
+    const html = loginPageHtml('/login', undefined, state);
+    sendPage(res, 200, html);
+  }
+
+  /**
+   * Recover the pending authorization from the request. Prefers the cookie,
+   * falls back to the hidden form field, and accepts an authentic-but-lapsed
+   * state as long as the original /authorize is recent enough. The returned
+   * `reason` is what gets logged when nothing is recoverable.
+   */
+  private resolvePending(req: Request): {
+    pending: PendingAuthorization | null;
+    source: 'cookie' | 'form' | 'none';
+    reason: string;
+  } {
+    const cookies = parseCookies(req.headers.cookie);
+    const candidates: Array<{ source: 'cookie' | 'form'; token: string }> = [];
+    if (cookies[PENDING_AUTH_COOKIE]) {
+      candidates.push({ source: 'cookie', token: cookies[PENDING_AUTH_COOKIE] });
+    }
+    const formState = (req.body as Record<string, unknown> | undefined)?.[AUTH_STATE_FIELD];
+    if (typeof formState === 'string' && formState) {
+      candidates.push({ source: 'form', token: formState });
+    }
+    if (candidates.length === 0) {
+      return { pending: null, source: 'none', reason: 'no_state_present' };
+    }
+
+    const inspected = candidates.map((c) => ({ ...c, result: inspectSigned<PendingAuthorization>(c.token) }));
+
+    const fresh = inspected.find((c) => c.result.status === 'valid');
+    if (fresh && fresh.result.status === 'valid') {
+      return { pending: fresh.result.value, source: fresh.source, reason: 'valid' };
+    }
+
+    // Lapsed window, but the signature proves it is ours: let a stale tab
+    // finish signing in rather than dead-ending the user.
+    const lapsed = inspected.find(
+      (c) => c.result.status === 'expired'
+        && Date.now() - c.result.value.createdAt < PENDING_AUTH_MAX_AGE_MS,
+    );
+    if (lapsed && lapsed.result.status === 'expired') {
+      logger.info('Accepting lapsed pending-auth state', {
+        source: lapsed.source,
+        expiredAgoSec: lapsed.result.expiredAgoSec,
+        ageMs: Date.now() - lapsed.result.value.createdAt,
+      });
+      return { pending: lapsed.result.value, source: lapsed.source, reason: 'expired_within_grace' };
+    }
+
+    const reason = inspected.some((c) => c.result.status === 'expired')
+      ? 'expired_beyond_grace'
+      : inspected.some((c) => c.result.status === 'bad_signature')
+        ? 'bad_signature'
+        : 'malformed';
+    return { pending: null, source: 'none', reason };
   }
 
   /**
@@ -387,17 +571,32 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    * and redirects back to the MCP client.
    */
   async handleLogin(req: Request, res: Response, username: string, password: string): Promise<void> {
-    const cookies = parseCookies(req.headers.cookie);
-    const pending = cookies[PENDING_AUTH_COOKIE]
-      ? verifySigned<PendingAuthorization>(cookies[PENDING_AUTH_COOKIE])
-      : null;
-    if (!pending) {
-      // No valid pending-auth cookie. The cookie expired (>15 min) or the user
-      // landed on /login without going through /authorize. Show a generic
-      // sign-in failure page — the OAuth client will retry from the start.
-      res.status(440).type('html').send(loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.'));
+    if (isCrossSitePost(req)) {
+      logger.warn('Rejected cross-site login POST');
+      sendPage(res, 440, loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.'));
       return;
     }
+
+    const { pending, source, reason } = this.resolvePending(req);
+    if (!pending) {
+      // Nothing recoverable: no state at all, a state we didn't sign (a rotated
+      // MCP_SESSION_SECRET, or a request that never went through /authorize),
+      // or a login page older than the absolute cap.
+      logger.warn('Login rejected: no usable pending-auth state', {
+        reason,
+        hadCookie: !!parseCookies(req.headers.cookie)[PENDING_AUTH_COOKIE],
+        hadFormState: typeof (req.body as Record<string, unknown> | undefined)?.[AUTH_STATE_FIELD] === 'string',
+      });
+      sendPage(res, 440, loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.'));
+      return;
+    }
+    if (source === 'form') {
+      logger.info('Pending-auth state recovered from form field, not cookie', { reason });
+    }
+
+    // Re-mint the state so a retry on this page (wrong password, MFA bounce)
+    // starts a fresh window instead of inheriting the original deadline.
+    const refreshedState = signValue(pending, PENDING_AUTH_TTL_SEC);
 
     // Run NS password grant — may return final tokens OR an MFA challenge
     let grantResult: NsGrantResult;
@@ -407,7 +606,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       const msg = err.message?.includes('401')
         ? 'Invalid username or password.'
         : `Authentication failed: ${err.message}`;
-      res.status(200).type('html').send(loginPageHtml('/login', msg));
+      setSignedCookie(res, PENDING_AUTH_COOKIE, refreshedState, PENDING_AUTH_TTL_SEC);
+      sendPage(res, 200, loginPageHtml('/login', msg, refreshedState));
       return;
     }
 
@@ -421,11 +621,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         mfaVendor: grantResult.mfaVendor,
         nsIdType: grantResult.nsIdType,
       };
-      const cookie = signValue(challenge, 5 * 60); // 5 min TTL
-      setSignedCookie(res, MFA_CHALLENGE_COOKIE, cookie, 5 * 60);
+      const sealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
+      setSignedCookie(res, MFA_CHALLENGE_COOKIE, sealed, MFA_CHALLENGE_TTL_SEC);
       clearCookie(res, PENDING_AUTH_COOKIE);
 
-      res.status(200).type('html').send(mfaPageHtml('/mfa', grantResult.mfaVendor));
+      sendPage(res, 200, mfaPageHtml('/mfa', grantResult.mfaVendor, undefined, sealed));
       return;
     }
 
@@ -437,14 +637,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    * Called by our custom POST /mfa route after the user submits the passcode.
    */
   async handleMfa(req: Request, res: Response, passcode: string): Promise<void> {
+    if (isCrossSitePost(req)) {
+      logger.warn('Rejected cross-site MFA POST');
+      sendPage(res, 440, loginPageHtml('/login', 'MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.'));
+      return;
+    }
+
     const cookies = parseCookies(req.headers.cookie);
-    const challenge = cookies[MFA_CHALLENGE_COOKIE]
-      ? verifySigned<MfaChallenge>(cookies[MFA_CHALLENGE_COOKIE])
-      : null;
+    const formState = (req.body as Record<string, unknown> | undefined)?.[MFA_STATE_FIELD];
+    const sealed = cookies[MFA_CHALLENGE_COOKIE]
+      || (typeof formState === 'string' ? formState : undefined);
+    const challenge = sealed ? openSealed<MfaChallenge>(sealed) : null;
     if (!challenge) {
-      // Stale or missing MFA cookie — show a sign-in failure page; the OAuth
+      // Stale or missing MFA state — show a sign-in failure page; the OAuth
       // client will retry from the start.
-      res.status(440).type('html').send(loginPageHtml('/login', 'MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.'));
+      logger.warn('MFA rejected: no usable challenge state', {
+        hadCookie: !!cookies[MFA_CHALLENGE_COOKIE],
+        hadFormState: typeof formState === 'string',
+      });
+      sendPage(res, 440, loginPageHtml('/login', 'MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.'));
       return;
     }
 
@@ -455,7 +666,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
         ? 'Invalid or expired passcode. Try again.'
         : `MFA failed: ${err.message}`;
-      res.status(200).type('html').send(mfaPageHtml('/mfa', challenge.mfaVendor, msg));
+      // Re-seal so "try again" has state to work with, cookie or not.
+      const resealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
+      setSignedCookie(res, MFA_CHALLENGE_COOKIE, resealed, MFA_CHALLENGE_TTL_SEC);
+      sendPage(res, 200, mfaPageHtml('/mfa', challenge.mfaVendor, msg, resealed));
       return;
     }
 
