@@ -14,7 +14,7 @@
 - 🔐 **Hosted OAuth proxy** — The server *is* the OAuth 2.1 authorization server. The user signs in on a browser page hosted here, not in the chat. NetSapiens credentials never enter the model's context.
 - 🛡️ **MFA built into the flow** — Real NetSapiens accounts have a second factor. When the upstream returns an MFA challenge, the user gets a passcode page; the bearer that reaches the AI carries the verified session.
 - 🔁 **Transparent NetSapiens refresh** — Upstream access tokens are refreshed silently before they expire. AI sessions stay alive across long conversations.
-- 🍪 **Stateless login state** — OAuth pending state and MFA challenges ride in HMAC-signed `HttpOnly` cookies. Cloud Run instance switches mid-login don't break anything.
+- 🍪 **Cookieless login state** — OAuth pending state and MFA challenges ride in the login form itself, HMAC-signed (and AES-256-GCM sealed for MFA). No cookies, no server-side session, so restarts and Cloud Run instance switches mid-login don't break anything.
 - 🗄️ **Firestore persistence** — Issued tokens and dynamic client registrations survive deploys, scaling events, and instance churn. No one gets logged out on a release.
 - 🤝 **Claude *and* ChatGPT support** — Public-client dynamic registration (`token_endpoint_auth_method=none`, PKCE only) means ChatGPT connects out of the box alongside confidential clients like Claude.
 - 🧬 **727 auto-generated tools from the specs** — v2 OpenAPI (481) + v1 apidoc (274), regenerated on every build. When NetSapiens ships a new endpoint, drop in the new spec and rebuild.
@@ -34,7 +34,7 @@
 - **Auto-generated tools.** 481 tools from the NetSapiens v2 OpenAPI spec plus 274 from the v1 apidoc dump, all regenerated on every build from `spec/netsapiens-api-v2.json` and `spec/netsapiens-api-v1.json`.
 - **Hosted OAuth login.** The server acts as its own OAuth authorization server. The user enters NetSapiens credentials in a login page served by this MCP server — credentials never pass through the AI. MFA is supported.
 - **Transparent token refresh.** Upstream NetSapiens tokens are refreshed silently when they expire; AI clients see continuous sessions.
-- **Stateless flow state.** OAuth pending state and MFA challenges ride in HMAC-signed cookies, so logins survive container restarts and Cloud Run instance switches.
+- **Cookieless flow state.** OAuth pending state and MFA challenges ride in the form, signed so they can't be forged, so logins survive container restarts, instance switches, and a browser that drops cookies.
 - **Firestore persistence.** MCP tokens and DCR client registrations live in Firestore when `MCP_PERSISTENCE=firestore` (recommended on Cloud Run) so reconnects survive deploys.
 - **Public-client DCR.** Honors `token_endpoint_auth_method=none` for clients like ChatGPT that authenticate via PKCE only.
 - **Tool gating.** Read/write annotations on every tool, plus glob-based disable patterns (`MCP_DISABLED_TOOLS`) and action-level disables (`MCP_DISABLED_ACTIONS`).
@@ -45,7 +45,7 @@
 AI client (Claude/ChatGPT)
   │  OAuth 2.1 DCR + browser login
   ▼
-[ MCP HTTP server (this repo) ]    ← OAuth proxy, login page, MFA, cookies
+[ MCP HTTP server (this repo) ]    ← OAuth proxy, login page, MFA
   │  bearer token + PKCE
   ▼
 [ NetSapiens API (v1 + v2) ]
@@ -85,7 +85,7 @@ export MCP_BASE_URL=https://mcp.example.com
 export NETSAPIENS_API_URL=https://edge.example.com
 export NETSAPIENS_OAUTH_CLIENT_ID=<operator-client-id>
 export NETSAPIENS_OAUTH_CLIENT_SECRET=<operator-client-secret>
-export MCP_SESSION_SECRET=<32+ random hex>     # signs login-state cookies
+export MCP_SESSION_SECRET=<32+ random hex>     # signs and seals login-state blobs
 npm start
 ```
 
@@ -117,7 +117,7 @@ Required env vars on Cloud Run:
 | `MCP_BASE_URL` | public URL, e.g. `https://mcp.example.com` |
 | `NETSAPIENS_API_URL` | upstream NS API, e.g. `https://edge.example.com` |
 | `NETSAPIENS_OAUTH_CLIENT_ID` / `_SECRET` | NDP-provisioned client used for the password grant |
-| `MCP_SESSION_SECRET` | 32+ char random; signs cookies & must be stable across instances |
+| `MCP_SESSION_SECRET` | 32+ char random; signs and seals login state & must be stable across instances |
 | `MCP_PERSISTENCE=firestore` | enable Firestore-backed tokens and clients |
 | `GOOGLE_CLOUD_PROJECT` | Firestore project ID (auto-set on Cloud Run) |
 
@@ -136,15 +136,17 @@ Optional:
 
 1. AI client hits `GET /.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server` for discovery.
 2. AI client POSTs `/register` (RFC 7591 DCR). Public clients pass `token_endpoint_auth_method=none` and get back a `client_id` only; confidential clients get `client_id` + `client_secret`. Registrations persist in Firestore.
-3. AI redirects the user's browser to `/authorize?...` with PKCE parameters. The server puts the pending request in a signed cookie (`mcp_pending_auth`, 30 min TTL) **and** in a hidden `auth_state` field on the login form, then renders the login page.
-4. User submits credentials → server hits `POST {NS}/ns-api/v2/tokens` (password grant). If NS responds with `mfa_type`/`mfa_vendor`, the server stores the partial state in `mcp_mfa_challenge` plus a hidden `mfa_state` field and prompts for a passcode.
-5. On success, the server issues an authorization code and redirects back to the AI client. Cookies are cleared.
-
-**Why the state lives in two places.** A cookie alone strands users: open `/authorize` in a second tab and it overwrites the first tab's cookie, let a tab sit past the TTL, or have the browser withhold the cookie, and the sign-in dead-ends on "Your sign-in session has expired." The form field is the fallback, so the flow only fails when there is genuinely nothing to recover. A login page that lapsed but is still authentically ours is honored for up to 2 hours from `/authorize`, so a stale tab just signs in. The MFA blob is AES-256-GCM sealed rather than merely signed, because it carries the password needed for the NS `grant_type=mfa` call and must not be readable in page source. Cross-site POSTs to `/login` and `/mfa` are rejected via `Sec-Fetch-Site`, which is the CSRF protection `SameSite=Lax` used to provide implicitly.
-
-Rejections are logged with a reason (`no_state_present`, `bad_signature`, `expired_beyond_grace`, `malformed`) — a `bad_signature` cluster means `MCP_SESSION_SECRET` changed or differs between instances.
+3. AI redirects the user's browser to `/authorize?...` with PKCE parameters. The server signs the pending request into a hidden `auth_state` field on the login form and renders the page. No cookie, no server-side session.
+4. User submits credentials → server hits `POST {NS}/ns-api/v2/tokens` (password grant). If NS responds with `mfa_type`/`mfa_vendor`, the server seals the partial state into a hidden `mfa_state` field and prompts for a passcode.
+5. On success, the server issues an authorization code and redirects back to the AI client.
 6. AI exchanges the code at `/token` for our MCP-issued bearer + refresh token. The upstream NS token is stored alongside.
 7. On every `/mcp` request, the server verifies the bearer, transparently refreshes the upstream NS token if it's within 60s of expiry, and forwards the request through the right NS handler.
+
+**Why no cookies.** There is no session to keep here. `/authorize` receives everything the flow needs (client_id, redirect_uri, PKCE challenge, state), and the only job is handing those same params back at `POST /login`. A cookie is browser-global and request-independent, which is exactly wrong for that: a second `/authorize` in another tab overwrites the first tab's copy, a completed flow clears it out from under a tab still open, and any browser that withholds it takes the whole sign-in down with "Your sign-in session has expired." State that travels with the page has none of those failure modes — one copy per rendered form, signed so it can't be forged.
+
+The blob holds public OAuth request params, and the code it leads to still lands on the client's registered redirect URI behind PKCE, so the window is a generous 2 hours: a tab that sat open just signs in. The MFA blob is AES-256-GCM **sealed** rather than merely signed, because it carries the password needed for the NS `grant_type=mfa` call and must not be readable in page source. With no cookies there is no `SameSite` behavior to lean on, so cross-site POSTs to `/login` and `/mfa` are rejected via `Sec-Fetch-Site`, and both pages are served `no-store`.
+
+Rejections are logged with a reason (`no_state_present`, `expired`, `bad_signature`, `malformed`). A `bad_signature` cluster means `MCP_SESSION_SECRET` changed or differs between instances.
 
 ## 🧰 Tools
 
@@ -306,7 +308,7 @@ src/
   http-server.ts                # Express app + MCP transport + auth wiring
   netsapiens-client.ts          # axios-based NS client with v1Call/request adapters
   auth/
-    netsapiens-auth-provider.ts # OAuth provider, MFA, signed cookies
+    netsapiens-auth-provider.ts # OAuth provider, MFA, signed form state
     token-store.ts              # file-backed store + TokenStoreLike interface
     firestore-token-store.ts    # Firestore-backed store
     firestore-clients-store.ts  # Firestore-backed DCR registry

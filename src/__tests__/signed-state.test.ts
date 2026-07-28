@@ -1,6 +1,7 @@
 /**
- * Focused unit tests for the signed-cookie helpers used by the OAuth flow
- * to keep pending-auth and MFA state stateless across instances.
+ * Focused unit tests for the signed and sealed state helpers. The OAuth flow
+ * sets no cookies: these blobs travel in the login and MFA forms, so they must
+ * be unforgeable, and the sealed one unreadable.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -10,7 +11,6 @@ import {
   inspectSigned,
   sealValue,
   openSealed,
-  parseCookies,
 } from '../auth/netsapiens-auth-provider.js';
 
 beforeAll(() => {
@@ -101,32 +101,3 @@ describe('sealValue / openSealed', () => {
   });
 });
 
-describe('parseCookies', () => {
-  it('returns empty object for undefined or empty header', () => {
-    expect(parseCookies(undefined)).toEqual({});
-    expect(parseCookies('')).toEqual({});
-  });
-
-  it('parses a single cookie', () => {
-    expect(parseCookies('foo=bar')).toEqual({ foo: 'bar' });
-  });
-
-  it('parses multiple cookies separated by ; ', () => {
-    expect(parseCookies('a=1; b=2; c=3')).toEqual({ a: '1', b: '2', c: '3' });
-  });
-
-  it('tolerates extra whitespace and decodes URI-encoded values', () => {
-    expect(parseCookies('  foo=hello%20world ; bar=baz  ')).toEqual({
-      foo: 'hello world',
-      bar: 'baz',
-    });
-  });
-
-  it('ignores entries without an =', () => {
-    expect(parseCookies('foo; bar=baz')).toEqual({ bar: 'baz' });
-  });
-
-  it('handles values containing = signs (only splits on the first one)', () => {
-    expect(parseCookies('opaque=a.b.c')).toEqual({ opaque: 'a.b.c' });
-  });
-});
