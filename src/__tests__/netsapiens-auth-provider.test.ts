@@ -2,7 +2,7 @@
  * End-to-end tests for the NetSapiens HTTP auth flow using supertest.
  * Boots a real Express app via createApp(), mocks the NS token endpoint
  * with axios, and walks the OAuth flow including MFA, public-client DCR,
- * cookie-based pending state, and transparent NS refresh.
+ * form-carried flow state, and transparent NS refresh.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,14 @@ const NS_USER_URL = 'https://ns.example.com/ns-api/v2/domains/~/users/~';
 
 function pkceChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url');
+}
+
+/**
+ * Pull a hidden input's value out of a rendered page. The flow keeps its state
+ * in the form, never in a cookie, so this is how a browser carries it forward.
+ */
+function hiddenField(html: string, name: string): string | undefined {
+  return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
 async function importApp() {
@@ -135,8 +143,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
-        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       mockedAxios.post = vi.fn().mockResolvedValueOnce({
         data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
@@ -145,9 +152,8 @@ describe('OAuth flow (end-to-end)', () => {
 
       const login = await request(app)
         .post('/login')
-        .set('Cookie', pendingCookie)
         .type('form')
-        .send({ username: 'alice', password: 'pw' })
+        .send({ username: 'alice', password: 'pw', auth_state: authState })
         .expect(302);
       const code = new URL(login.headers.location as string).searchParams.get('code')!;
 
@@ -191,8 +197,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
-        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       mockedAxios.post = vi.fn().mockResolvedValueOnce({
         data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
@@ -201,9 +206,8 @@ describe('OAuth flow (end-to-end)', () => {
 
       const login = await request(app)
         .post('/login')
-        .set('Cookie', pendingCookie)
         .type('form')
-        .send({ username: 'alice', password: 'pw' })
+        .send({ username: 'alice', password: 'pw', auth_state: authState })
         .expect(302);
       const code = new URL(login.headers.location as string).searchParams.get('code')!;
 
@@ -276,10 +280,10 @@ describe('OAuth flow (end-to-end)', () => {
         })
         .expect(200);
 
-      // Pending-auth cookie must be set
-      const cookies = (authResp.headers['set-cookie'] || []) as unknown as string[];
-      const pendingCookie = cookies.find((c) => c.startsWith('mcp_pending_auth='));
-      expect(pendingCookie).toBeTruthy();
+      // The login page carries its own state, and sets no cookies at all.
+      const authState = hiddenField(authResp.text, 'auth_state');
+      expect(authState).toBeTruthy();
+      expect(authResp.headers['set-cookie']).toBeUndefined();
 
       // Mock NS password grant (no MFA challenge) + user role detection
       mockedAxios.post = vi.fn().mockResolvedValueOnce({
@@ -287,13 +291,10 @@ describe('OAuth flow (end-to-end)', () => {
       });
       mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
 
-      const cookieHeader = pendingCookie!.split(';')[0];
-
       const loginResp = await request(app)
         .post('/login')
-        .set('Cookie', cookieHeader)
         .type('form')
-        .send({ username: 'alice', password: 'hunter2' })
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
         .expect(302);
 
       const location = loginResp.headers.location as string;
@@ -349,8 +350,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const cookies = (auth.headers['set-cookie'] || []) as unknown as string[];
-      const cookie = cookies.find((c) => c.startsWith('mcp_pending_auth=')).split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       mockedAxios.post = vi.fn().mockRejectedValueOnce({
         response: { status: 403, data: { code: 403, message: 'Invalid User Login' } },
@@ -358,20 +358,19 @@ describe('OAuth flow (end-to-end)', () => {
 
       const r = await request(app)
         .post('/login')
-        .set('Cookie', cookie)
         .type('form')
-        .send({ username: 'x', password: 'y' })
+        .send({ username: 'x', password: 'y', auth_state: authState })
         .expect(200);
       expect(r.text).toContain('Invalid User Login');
     });
 
-    it('shows expired-session page when the pending cookie is missing', async () => {
+    it('shows expired-session page when the post carries no state', async () => {
       const { app } = await importApp();
       const r = await request(app)
         .post('/login')
         .type('form')
         .send({ username: 'a', password: 'b' });
-      // No pending cookie and no form state → friendly expiry page (HTTP 440).
+      // Nothing to complete the flow with → friendly expiry page (HTTP 440).
       expect(r.status).toBe(440);
       expect(r.text).toMatch(/session has expired|reconnect/i);
       expect(r.headers['cache-control']).toContain('no-store');
@@ -397,8 +396,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const cookies = (auth.headers['set-cookie'] || []) as unknown as string[];
-      const pendingCookie = cookies.find((c) => c.startsWith('mcp_pending_auth=')).split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       // First NS call: password grant returns MFA challenge
       mockedAxios.post = vi.fn()
@@ -418,22 +416,19 @@ describe('OAuth flow (end-to-end)', () => {
 
       const mfaResp = await request(app)
         .post('/login')
-        .set('Cookie', pendingCookie)
         .type('form')
-        .send({ username: 'alice', password: 'hunter2' })
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
         .expect(200);
 
-      const mfaCookies = (mfaResp.headers['set-cookie'] || []) as unknown as string[];
-      const mfaCookie = mfaCookies.find((c) => c.startsWith('mcp_mfa_challenge=')).split(';')[0];
-      expect(mfaCookie).toBeTruthy();
+      const mfaState = hiddenField(mfaResp.text, 'mfa_state')!;
+      expect(mfaState).toBeTruthy();
       expect(mfaResp.text).toMatch(/Authentication Code/i);
       expect(mfaResp.text).toMatch(/google/i);
 
       const finalize = await request(app)
         .post('/mfa')
-        .set('Cookie', mfaCookie)
         .type('form')
-        .send({ passcode: '123456' })
+        .send({ passcode: '123456', mfa_state: mfaState })
         .expect(302);
 
       expect(finalize.headers.location).toContain('http://localhost/cb?code=');
@@ -468,8 +463,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
-        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       mockedAxios.post = vi.fn()
         .mockResolvedValueOnce({
@@ -481,30 +475,21 @@ describe('OAuth flow (end-to-end)', () => {
 
       const mfaPage = await request(app)
         .post('/login')
-        .set('Cookie', pendingCookie)
         .type('form')
-        .send({ username: 'alice', password: 'pw' })
+        .send({ username: 'alice', password: 'pw', auth_state: authState })
         .expect(200);
-      const mfaCookie = (mfaPage.headers['set-cookie'] as unknown as string[])
-        .find((c) => c.startsWith('mcp_mfa_challenge='))!.split(';')[0];
+      const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
 
       const bad = await request(app)
         .post('/mfa')
-        .set('Cookie', mfaCookie)
         .type('form')
-        .send({ passcode: '000000' })
+        .send({ passcode: '000000', mfa_state: mfaState })
         .expect(200);
       expect(bad.text).toMatch(/Invalid|expired|passcode/i);
     });
   });
 
-  describe('login state survives a lost cookie', () => {
-    /** Pull a hidden input's value out of a rendered page. */
-    function hiddenField(html: string, name: string): string | undefined {
-      const m = html.match(new RegExp(`name="${name}" value="([^"]+)"`));
-      return m?.[1];
-    }
-
+  describe('cookieless login state', () => {
     async function startAuthorize(app: unknown, clientName: string) {
       const reg = await request(app as never)
         .post('/register')
@@ -525,9 +510,10 @@ describe('OAuth flow (end-to-end)', () => {
       return { reg, auth, verifier };
     }
 
-    it('signs in from the hidden form field when the browser sends no cookie', async () => {
+    it('sets no cookies anywhere in the flow', async () => {
       const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'form-state');
+      const { auth } = await startAuthorize(app, 'no-cookies');
+      expect(auth.headers['set-cookie']).toBeUndefined();
 
       const authState = hiddenField(auth.text, 'auth_state');
       expect(authState).toBeTruthy();
@@ -537,23 +523,47 @@ describe('OAuth flow (end-to-end)', () => {
       });
       mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
 
-      // No Cookie header at all — the form field is the only state.
       const login = await request(app)
         .post('/login')
         .type('form')
         .send({ username: 'alice', password: 'hunter2', auth_state: authState })
         .expect(302);
 
+      expect(login.headers['set-cookie']).toBeUndefined();
       expect(login.headers.location).toContain('http://localhost/cb?');
       expect(new URL(login.headers.location as string).searchParams.get('state')).toBe('xyz');
     });
 
-    it('lets a stale login page sign in when the window lapsed but the state is authentic', async () => {
+    it('two concurrent authorize tabs both work, each with its own state', async () => {
       const { app } = await importApp();
-      await startAuthorize(app, 'stale-tab');
+      // The cookie era's worst failure: the second tab clobbered the first
+      // tab's state, so whichever the user finished in could be stranded.
+      const first = await startAuthorize(app, 'tab-one');
+      const second = await startAuthorize(app, 'tab-two');
+      const firstState = hiddenField(first.auth.text, 'auth_state')!;
+      const secondState = hiddenField(second.auth.text, 'auth_state')!;
+      expect(firstState).not.toBe(secondState);
+
+      mockedAxios.post = vi.fn().mockResolvedValue({
+        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Basic User' } });
+
+      // Finish in the older tab, then the newer one. Both complete.
+      for (const state of [firstState, secondState]) {
+        await request(app)
+          .post('/login')
+          .type('form')
+          .send({ username: 'alice', password: 'hunter2', auth_state: state })
+          .expect(302);
+      }
+    });
+
+    it('accepts a login page that sat open well past a typical session', async () => {
+      const { app } = await importApp();
       const { signValue } = await import('../auth/netsapiens-auth-provider.js');
 
-      // A tab that sat open past the 30-minute window, well inside the 2-hour cap.
+      // 90 minutes old, inside the 2-hour window. A stale tab still signs in.
       const staleState = signValue(
         {
           clientId: 'any',
@@ -561,9 +571,9 @@ describe('OAuth flow (end-to-end)', () => {
           redirectUri: 'http://localhost/cb',
           state: 'xyz',
           scopes: [],
-          createdAt: Date.now() - 45 * 60 * 1000,
+          createdAt: Date.now() - 90 * 60 * 1000,
         },
-        -60,
+        30 * 60,
       );
 
       mockedAxios.post = vi.fn().mockResolvedValueOnce({
@@ -580,11 +590,11 @@ describe('OAuth flow (end-to-end)', () => {
       expect(login.headers.location).toContain('http://localhost/cb?');
     });
 
-    it('rejects a login page older than the absolute cap', async () => {
+    it('rejects a login page past its window', async () => {
       const { app } = await importApp();
       const { signValue } = await import('../auth/netsapiens-auth-provider.js');
 
-      const ancientState = signValue(
+      const expiredState = signValue(
         {
           clientId: 'any',
           codeChallenge: 'chal',
@@ -598,7 +608,7 @@ describe('OAuth flow (end-to-end)', () => {
       const r = await request(app)
         .post('/login')
         .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: ancientState })
+        .send({ username: 'alice', password: 'hunter2', auth_state: expiredState })
         .expect(440);
       expect(r.text).toMatch(/session has expired/i);
     });
@@ -616,7 +626,7 @@ describe('OAuth flow (end-to-end)', () => {
         .expect(440);
     });
 
-    it('keeps the state on the page after a wrong password, so the retry works cookieless', async () => {
+    it('keeps the state on the page after a wrong password, so the retry works', async () => {
       const { app } = await importApp();
       const { auth } = await startAuthorize(app, 'retry-state');
       const authState = hiddenField(auth.text, 'auth_state')!;
@@ -647,7 +657,7 @@ describe('OAuth flow (end-to-end)', () => {
         .expect(302);
     });
 
-    it('completes MFA from the hidden field alone, without leaking the password into the page', async () => {
+    it('completes MFA from the form state, without leaking the password into the page', async () => {
       const { app } = await importApp();
       const { auth } = await startAuthorize(app, 'mfa-form-state');
       const authState = hiddenField(auth.text, 'auth_state')!;
@@ -723,8 +733,8 @@ describe('OAuth flow (end-to-end)', () => {
       const { auth } = await startAuthorize(app, 'cross-site');
       const authState = hiddenField(auth.text, 'auth_state')!;
 
-      // Carrying state in the markup means SameSite=Lax no longer blocks a
-      // cross-site submission by itself, so the fetch metadata has to.
+      // With no cookies there is no SameSite behavior to lean on, so the fetch
+      // metadata is what stops another origin posting at our login form.
       mockedAxios.post = vi.fn();
       const r = await request(app)
         .post('/login')
@@ -771,8 +781,7 @@ describe('OAuth flow (end-to-end)', () => {
           code_challenge_method: 'S256',
         })
         .expect(200);
-      const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
-        .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+      const authState = hiddenField(auth.text, 'auth_state')!;
 
       // NS password grant returns a token that's ALREADY expired so
       // verifyAccessToken will trigger an immediate refresh.
@@ -784,9 +793,8 @@ describe('OAuth flow (end-to-end)', () => {
 
       const login = await request(app)
         .post('/login')
-        .set('Cookie', pendingCookie)
         .type('form')
-        .send({ username: 'alice', password: 'pw' })
+        .send({ username: 'alice', password: 'pw', auth_state: authState })
         .expect(302);
       const code = new URL(login.headers.location as string).searchParams.get('code')!;
 
@@ -860,8 +868,7 @@ describe('OAuth flow (end-to-end)', () => {
             code_challenge_method: 'S256',
           })
           .expect(200);
-        const pendingCookie = (auth.headers['set-cookie'] as unknown as string[])
-          .find((c) => c.startsWith('mcp_pending_auth='))!.split(';')[0];
+        const authState = hiddenField(auth.text, 'auth_state')!;
 
         // NS token with a 1s lifetime sits inside the 60s refresh-skew window
         // from the moment it's issued, so EVERY /mcp request triggers a
@@ -873,9 +880,8 @@ describe('OAuth flow (end-to-end)', () => {
 
         const login = await request(app)
           .post('/login')
-          .set('Cookie', pendingCookie)
           .type('form')
-          .send({ username: 'alice', password: 'pw' })
+          .send({ username: 'alice', password: 'pw', auth_state: authState })
           .expect(302);
         const code = new URL(login.headers.location as string).searchParams.get('code')!;
 
