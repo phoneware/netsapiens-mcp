@@ -371,9 +371,10 @@ describe('OAuth flow (end-to-end)', () => {
         .post('/login')
         .type('form')
         .send({ username: 'a', password: 'b' });
-      // No pending cookie → friendly expiry page (HTTP 440)
-      expect([200, 440]).toContain(r.status);
+      // No pending cookie and no form state → friendly expiry page (HTTP 440).
+      expect(r.status).toBe(440);
       expect(r.text).toMatch(/session has expired|reconnect/i);
+      expect(r.headers['cache-control']).toContain('no-store');
     });
   });
 
@@ -494,6 +495,261 @@ describe('OAuth flow (end-to-end)', () => {
         .send({ passcode: '000000' })
         .expect(200);
       expect(bad.text).toMatch(/Invalid|expired|passcode/i);
+    });
+  });
+
+  describe('login state survives a lost cookie', () => {
+    /** Pull a hidden input's value out of a rendered page. */
+    function hiddenField(html: string, name: string): string | undefined {
+      const m = html.match(new RegExp(`name="${name}" value="([^"]+)"`));
+      return m?.[1];
+    }
+
+    async function startAuthorize(app: unknown, clientName: string) {
+      const reg = await request(app as never)
+        .post('/register')
+        .send({ redirect_uris: ['http://localhost/cb'], client_name: clientName })
+        .expect(201);
+      const verifier = randomBytes(32).toString('base64url');
+      const auth = await request(app as never)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          client_id: reg.body.client_id,
+          redirect_uri: 'http://localhost/cb',
+          code_challenge: pkceChallenge(verifier),
+          code_challenge_method: 'S256',
+          state: 'xyz',
+        })
+        .expect(200);
+      return { reg, auth, verifier };
+    }
+
+    it('signs in from the hidden form field when the browser sends no cookie', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'form-state');
+
+      const authState = hiddenField(auth.text, 'auth_state');
+      expect(authState).toBeTruthy();
+
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+      // No Cookie header at all — the form field is the only state.
+      const login = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+        .expect(302);
+
+      expect(login.headers.location).toContain('http://localhost/cb?');
+      expect(new URL(login.headers.location as string).searchParams.get('state')).toBe('xyz');
+    });
+
+    it('lets a stale login page sign in when the window lapsed but the state is authentic', async () => {
+      const { app } = await importApp();
+      await startAuthorize(app, 'stale-tab');
+      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+
+      // A tab that sat open past the 30-minute window, well inside the 2-hour cap.
+      const staleState = signValue(
+        {
+          clientId: 'any',
+          codeChallenge: 'chal',
+          redirectUri: 'http://localhost/cb',
+          state: 'xyz',
+          scopes: [],
+          createdAt: Date.now() - 45 * 60 * 1000,
+        },
+        -60,
+      );
+
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+      const login = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: staleState })
+        .expect(302);
+
+      expect(login.headers.location).toContain('http://localhost/cb?');
+    });
+
+    it('rejects a login page older than the absolute cap', async () => {
+      const { app } = await importApp();
+      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+
+      const ancientState = signValue(
+        {
+          clientId: 'any',
+          codeChallenge: 'chal',
+          redirectUri: 'http://localhost/cb',
+          scopes: [],
+          createdAt: Date.now() - 3 * 60 * 60 * 1000,
+        },
+        -60,
+      );
+
+      const r = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: ancientState })
+        .expect(440);
+      expect(r.text).toMatch(/session has expired/i);
+    });
+
+    it('rejects a forged state', async () => {
+      const { app } = await importApp();
+      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+      const good = signValue({ clientId: 'a', redirectUri: 'http://localhost/cb', createdAt: Date.now() }, 600);
+      const forged = `${good.split('.')[0]}.deadbeef`;
+
+      await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: forged })
+        .expect(440);
+    });
+
+    it('keeps the state on the page after a wrong password, so the retry works cookieless', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'retry-state');
+      const authState = hiddenField(auth.text, 'auth_state')!;
+
+      mockedAxios.post = vi.fn().mockRejectedValueOnce({
+        response: { status: 403, data: { message: 'Invalid User Login' } },
+      });
+
+      const failed = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'wrong', auth_state: authState })
+        .expect(200);
+      expect(failed.text).toContain('Invalid User Login');
+
+      const retryState = hiddenField(failed.text, 'auth_state');
+      expect(retryState).toBeTruthy();
+
+      mockedAxios.post = vi.fn().mockResolvedValueOnce({
+        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+      });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+      await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'right', auth_state: retryState })
+        .expect(302);
+    });
+
+    it('completes MFA from the hidden field alone, without leaking the password into the page', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'mfa-form-state');
+      const authState = hiddenField(auth.text, 'auth_state')!;
+
+      mockedAxios.post = vi.fn()
+        .mockResolvedValueOnce({
+          data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
+        })
+        .mockResolvedValueOnce({
+          data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+        });
+      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+      const mfaPage = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+        .expect(200);
+
+      const mfaState = hiddenField(mfaPage.text, 'mfa_state');
+      expect(mfaState).toBeTruthy();
+      // The challenge carries the password for the NS mfa grant; sealed, it
+      // must not be readable in the page the browser renders.
+      expect(mfaPage.text).not.toContain('hunter2');
+      expect(mfaPage.text).not.toContain('partial-token');
+
+      const done = await request(app)
+        .post('/mfa')
+        .type('form')
+        .send({ passcode: '123456', mfa_state: mfaState })
+        .expect(302);
+      expect(done.headers.location).toContain('http://localhost/cb?');
+
+      const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(mfaCall[1]).toMatchObject({
+        grant_type: 'mfa',
+        passcode: '123456',
+        password: 'hunter2',
+        access_token: 'partial-token',
+      });
+    });
+
+    it('keeps the MFA state on the page after a bad passcode', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'mfa-retry-state');
+      const authState = hiddenField(auth.text, 'auth_state')!;
+
+      mockedAxios.post = vi.fn()
+        .mockResolvedValueOnce({
+          data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
+        })
+        .mockRejectedValueOnce({ response: { status: 401, data: { message: 'Invalid passcode' } } });
+
+      const mfaPage = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+        .expect(200);
+      const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
+
+      const bad = await request(app)
+        .post('/mfa')
+        .type('form')
+        .send({ passcode: '000000', mfa_state: mfaState })
+        .expect(200);
+      expect(bad.text).toMatch(/Invalid|expired|passcode/i);
+      expect(hiddenField(bad.text, 'mfa_state')).toBeTruthy();
+      expect(bad.text).not.toContain('hunter2');
+    });
+
+    it('rejects a cross-site POST even when it carries valid state', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'cross-site');
+      const authState = hiddenField(auth.text, 'auth_state')!;
+
+      // Carrying state in the markup means SameSite=Lax no longer blocks a
+      // cross-site submission by itself, so the fetch metadata has to.
+      mockedAxios.post = vi.fn();
+      const r = await request(app)
+        .post('/login')
+        .set('Sec-Fetch-Site', 'cross-site')
+        .type('form')
+        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+        .expect(440);
+      expect(r.text).toMatch(/session has expired/i);
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+    });
+
+    it('serves the credential pages no-store', async () => {
+      const { app } = await importApp();
+      const { auth } = await startAuthorize(app, 'no-store');
+      expect(auth.headers['cache-control']).toContain('no-store');
+    });
+
+    it('still rejects a login with no state anywhere', async () => {
+      const { app } = await importApp();
+      const r = await request(app)
+        .post('/login')
+        .type('form')
+        .send({ username: 'a', password: 'b' })
+        .expect(440);
+      expect(r.text).toMatch(/session has expired|reconnect/i);
     });
   });
 

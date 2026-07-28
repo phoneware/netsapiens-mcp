@@ -136,9 +136,13 @@ Optional:
 
 1. AI client hits `GET /.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server` for discovery.
 2. AI client POSTs `/register` (RFC 7591 DCR). Public clients pass `token_endpoint_auth_method=none` and get back a `client_id` only; confidential clients get `client_id` + `client_secret`. Registrations persist in Firestore.
-3. AI redirects the user's browser to `/authorize?...` with PKCE parameters. The server stores the pending request in a signed cookie (`mcp_pending_auth`, 15 min TTL) and renders the login page.
-4. User submits credentials → server hits `POST {NS}/ns-api/v2/tokens` (password grant). If NS responds with `mfa_type`/`mfa_vendor`, the server stores the partial state in `mcp_mfa_challenge` and prompts for a passcode.
+3. AI redirects the user's browser to `/authorize?...` with PKCE parameters. The server puts the pending request in a signed cookie (`mcp_pending_auth`, 30 min TTL) **and** in a hidden `auth_state` field on the login form, then renders the login page.
+4. User submits credentials → server hits `POST {NS}/ns-api/v2/tokens` (password grant). If NS responds with `mfa_type`/`mfa_vendor`, the server stores the partial state in `mcp_mfa_challenge` plus a hidden `mfa_state` field and prompts for a passcode.
 5. On success, the server issues an authorization code and redirects back to the AI client. Cookies are cleared.
+
+**Why the state lives in two places.** A cookie alone strands users: open `/authorize` in a second tab and it overwrites the first tab's cookie, let a tab sit past the TTL, or have the browser withhold the cookie, and the sign-in dead-ends on "Your sign-in session has expired." The form field is the fallback, so the flow only fails when there is genuinely nothing to recover. A login page that lapsed but is still authentically ours is honored for up to 2 hours from `/authorize`, so a stale tab just signs in. The MFA blob is AES-256-GCM sealed rather than merely signed, because it carries the password needed for the NS `grant_type=mfa` call and must not be readable in page source. Cross-site POSTs to `/login` and `/mfa` are rejected via `Sec-Fetch-Site`, which is the CSRF protection `SameSite=Lax` used to provide implicitly.
+
+Rejections are logged with a reason (`no_state_present`, `bad_signature`, `expired_beyond_grace`, `malformed`) — a `bad_signature` cluster means `MCP_SESSION_SECRET` changed or differs between instances.
 6. AI exchanges the code at `/token` for our MCP-issued bearer + refresh token. The upstream NS token is stored alongside.
 7. On every `/mcp` request, the server verifies the bearer, transparently refreshes the upstream NS token if it's within 60s of expiry, and forwards the request through the right NS handler.
 
