@@ -91,6 +91,19 @@ npm start
 
 Connect from Claude / ChatGPT by giving it the URL `https://mcp.example.com/mcp`. The client will DCR-register, redirect the user to `/authorize`, the user signs in, and the bearer flows back to the AI automatically.
 
+### Stateless by default
+
+The HTTP transport runs **stateless**: every `POST /mcp` builds its own MCP server, NetSapiens client, and transport from the request's bearer, then tears them down. Nothing is retained between requests, so any instance can serve any request and a deploy or a scale-down never strands a client mid-session.
+
+`GET /mcp` and `DELETE /mcp` answer `405` in this mode, which is what the streamable-HTTP spec prescribes when the server offers no SSE stream and has no session to terminate. Compliant clients treat that as "don't retry".
+
+Sessions still buy two things, both server-initiated: the elicitation confirmation prompt and `notifications/tools/list_changed` for tool promotion. Set `MCP_STATELESS=false` if you want them. If `MCP_CONFIRM_DESTRUCTIVE=true` and you have not set `MCP_STATELESS` either way, sessions are kept automatically rather than silently degrading that gate.
+
+| Mode | Session affinity needed | Elicitation prompts | list_changed notifications |
+|---|---|---|---|
+| `MCP_STATELESS=true` (default) | No | No | No |
+| `MCP_STATELESS=false` | Yes | Yes | Yes |
+
 ## ☁️ Cloud Run deployment
 
 This repo ships with a Cloud Run-friendly Dockerfile and a `cloudbuild.yaml`. The minimum production stack:
@@ -166,6 +179,18 @@ Every tool (curated, workflow, or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
 - `annotations.destructiveHint` — `true` for delete-style operations.
+
+### What each tool carries
+
+Every exposed tool ships the fields the current MCP revision defines, so clients can render and reason about it without guessing:
+
+- **`title`** — human-readable display name (`get_domain_users` → "Get Domain Users"), used in tool lists and permission prompts while `name` stays stable for dispatch.
+- **`annotations`** — `readOnlyHint` and `destructiveHint` as before, plus `idempotentHint` (reads, PUTs, and DELETEs repeat safely; creates do not) and `openWorldHint` (always true — every tool reaches a live NetSapiens platform).
+- **`structuredContent`** — attached to any result whose text block is valid JSON, so the model gets data instead of re-parsing prose. The text block stays for clients that don't read structured content.
+
+`tools/list` is paginated with opaque cursors (`MCP_TOOLS_PAGE_SIZE`, default 250), which matters in `full` mode where the listing is 700+ entries.
+
+The server also sends `instructions` on initialize: the NetSapiens conventions that otherwise cause failed calls (`~` for self, the `YYYY-MM-DD HH:MM:SS` datetime format, unfiltered collection endpoints needing `limit`). Stated once per session rather than repeated across 700 descriptions.
 
 ### API discovery: how the model reaches the long tail
 
@@ -290,7 +315,7 @@ npm run build       # tsc compiles the generated code
 
 ## 📊 Health and observability
 
-- `GET /health` — uptime, active sessions, NS API URL, version.
+- `GET /health` — uptime, transport mode (`stateless` / `session`), active sessions, NS API URL, version.
 - Structured JSON logs to stderr (use `LOG_LEVEL=debug` for verbose).
 - Each MCP request logs through Cloud Run's standard `httpRequest` schema; auth events log to `jsonPayload.message`.
 

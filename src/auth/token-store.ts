@@ -67,7 +67,10 @@ export class TokenStore {
   private readonly filePath: string;
 
   constructor(filePath?: string) {
-    this.filePath = filePath ?? join(homedir(), '.netsapiens-mcp', 'http-tokens.json');
+    this.filePath =
+      filePath ??
+      process.env.MCP_TOKEN_STORE_PATH ??
+      join(homedir(), '.netsapiens-mcp', 'http-tokens.json');
     this.load();
   }
 

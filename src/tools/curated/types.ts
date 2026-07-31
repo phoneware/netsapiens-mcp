@@ -14,6 +14,12 @@ export interface CuratedTool extends ToolDefinition {
   /** Minimum NetSapiens scope required to see this tool in the catalog. */
   minRole: UserRole;
   /**
+   * Human-readable display name (MCP `Tool.title`). Clients show this in tool
+   * lists and permission prompts. Defaults to a title-cased form of the tool
+   * name when omitted.
+   */
+  title?: string;
+  /**
    * Explicit destructive flag. Composites have names like `end_call` that
    * don't match the generator's prefix-based destructive heuristic, but they
    * DO mutate state irreversibly. Set this true so MCP_DISABLE_DESTRUCTIVE

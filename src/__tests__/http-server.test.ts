@@ -119,6 +119,7 @@ vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   }),
 }));
 
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { startHttpServer } from '../http-server.js';
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,7 @@ const ENV_KEYS = [
   'MCP_PORT',
   'MCP_HOST',
   'MCP_BASE_URL',
+  'MCP_STATELESS',
 ] as const;
 
 /** Make a simple HTTP request to localhost */
@@ -177,6 +179,14 @@ function request(
   });
 }
 
+/**
+ * Shut down every listener a test started. Without this each case leaks a
+ * bound port for the rest of the run, which collides with other suites.
+ */
+async function closeServers(servers: http.Server[]): Promise<void> {
+  await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -185,7 +195,7 @@ describe('startHttpServer()', () => {
   let savedEnv: Record<string, string | undefined>;
   // Use a different port per test to avoid EADDRINUSE
   let testPort: number;
-  let server: any;
+  const servers: http.Server[] = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -205,9 +215,15 @@ describe('startHttpServer()', () => {
     // Pick a random high port for each test
     testPort = 30000 + Math.floor(Math.random() * 10000);
     process.env.MCP_PORT = String(testPort);
+
+    // These cases cover the session-based transport. Stateless is the default
+    // now, so opt each one back into sessions explicitly; the stateless
+    // behaviour has its own describe block below.
+    process.env.MCP_STATELESS = 'false';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeServers(servers);
     for (const key of ENV_KEYS) {
       if (savedEnv[key] === undefined) {
         delete process.env[key];
@@ -220,7 +236,7 @@ describe('startHttpServer()', () => {
   it('starts the HTTP server and responds to /health', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     const res = await request(testPort, 'GET', '/health');
     expect(res.status).toBe(200);
@@ -230,6 +246,7 @@ describe('startHttpServer()', () => {
     expect(body).toHaveProperty('activeSessions');
     expect(body).toHaveProperty('nsApiUrl');
     expect(body).toHaveProperty('version');
+    expect(body.mode).toBe('session');
 
     consoleSpy.mockRestore();
   });
@@ -237,7 +254,7 @@ describe('startHttpServer()', () => {
   it('returns 401 or routes through bearerAuth on POST /mcp', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     // Our mock bearerAuth always passes, so we should get to the MCP handler.
     // With an initialize request, it should create a session.
@@ -255,7 +272,7 @@ describe('startHttpServer()', () => {
   it('rejects POST /mcp without session ID for non-initialize requests', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     const res = await request(testPort, 'POST', '/mcp', {
       body: { method: 'tools/list', jsonrpc: '2.0', id: 2 },
@@ -269,7 +286,7 @@ describe('startHttpServer()', () => {
   it('returns 404 for an unknown session ID so clients re-initialize', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     for (const method of ['POST', 'GET', 'DELETE'] as const) {
       const res = await request(testPort, method, '/mcp', {
@@ -285,7 +302,7 @@ describe('startHttpServer()', () => {
   it('rejects GET /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     const res = await request(testPort, 'GET', '/mcp', {
       headers: { authorization: 'Bearer test-token' },
@@ -297,13 +314,29 @@ describe('startHttpServer()', () => {
   it('rejects DELETE /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await startHttpServer();
+    servers.push(await startHttpServer());
 
     const res = await request(testPort, 'DELETE', '/mcp', {
       headers: { authorization: 'Bearer test-token' },
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it('allows CORS preflight for the MCP protocol version header', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    servers.push(await startHttpServer());
+
+    const res = await request(testPort, 'OPTIONS', '/mcp', {
+      headers: { origin: 'https://example.test' },
+    });
+
+    expect(res.status).toBe(204);
+    const allowed = String(res.headers['access-control-allow-headers']).toLowerCase();
+    expect(allowed).toContain('mcp-protocol-version');
+    expect(allowed).toContain('mcp-session-id');
+    expect(allowed).toContain('last-event-id');
   });
 
   it('throws when NETSAPIENS_OAUTH_CLIENT_ID is missing', async () => {
@@ -316,5 +349,120 @@ describe('startHttpServer()', () => {
     delete process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
     await expect(startHttpServer()).rejects.toThrow('NETSAPIENS_OAUTH_CLIENT_SECRET');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stateless transport (MCP_STATELESS, the default)
+// ---------------------------------------------------------------------------
+
+describe('stateless MCP transport', () => {
+  let savedEnv: Record<string, string | undefined>;
+  let testPort: number;
+  const servers: http.Server[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOnClose = undefined;
+    mockSessionId = 'test-session-id';
+
+    savedEnv = {};
+    for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+
+    process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
+    delete process.env.MCP_HOST;
+    delete process.env.MCP_BASE_URL;
+    delete process.env.MCP_STATELESS; // stateless is the default
+
+    testPort = 30000 + Math.floor(Math.random() * 10000);
+    process.env.MCP_PORT = String(testPort);
+  });
+
+  afterEach(async () => {
+    await closeServers(servers);
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it('reports stateless mode on /health', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    servers.push(await startHttpServer());
+
+    const res = await request(testPort, 'GET', '/health');
+    expect(JSON.parse(res.body).mode).toBe('stateless');
+  });
+
+  it('serves a non-initialize POST with no session ID', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    servers.push(await startHttpServer());
+
+    const res = await request(testPort, 'POST', '/mcp', {
+      body: { method: 'tools/list', jsonrpc: '2.0', id: 2 },
+      headers: { authorization: 'Bearer test-token' },
+    });
+
+    // Session mode answers 400 here; stateless builds a per-request server.
+    expect(res.status).toBe(200);
+    expect(mockConnect).toHaveBeenCalled();
+    expect(mockHandleRequest).toHaveBeenCalled();
+  });
+
+  it('builds a fresh transport with session IDs disabled on every request', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    servers.push(await startHttpServer());
+
+    for (const body of [
+      { method: 'initialize', jsonrpc: '2.0', id: 1 },
+      { method: 'tools/list', jsonrpc: '2.0', id: 2 },
+    ]) {
+      await request(testPort, 'POST', '/mcp', {
+        body,
+        headers: { authorization: 'Bearer test-token' },
+      });
+    }
+
+    expect(StreamableHTTPServerTransport).toHaveBeenCalledTimes(2);
+    for (const call of (StreamableHTTPServerTransport as unknown as { mock: { calls: any[][] } }).mock.calls) {
+      expect(call[0].sessionIdGenerator).toBeUndefined();
+    }
+  });
+
+  it('answers 405 on GET /mcp because no SSE stream is offered', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    servers.push(await startHttpServer());
+
+    const res = await request(testPort, 'GET', '/mcp', {
+      headers: { authorization: 'Bearer test-token' },
+    });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.allow).toBe('POST');
+  });
+
+  it('answers 405 on DELETE /mcp because there is no session to terminate', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    servers.push(await startHttpServer());
+
+    const res = await request(testPort, 'DELETE', '/mcp', {
+      headers: { authorization: 'Bearer test-token', 'mcp-session-id': 'whatever' },
+    });
+
+    expect(res.status).toBe(405);
+  });
+
+  it('keeps sessions when the destructive-confirmation gate is on and no preference is set', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    process.env.MCP_CONFIRM_DESTRUCTIVE = 'true';
+    try {
+      servers.push(await startHttpServer());
+      const res = await request(testPort, 'GET', '/health');
+      expect(JSON.parse(res.body).mode).toBe('session');
+    } finally {
+      delete process.env.MCP_CONFIRM_DESTRUCTIVE;
+    }
   });
 });
