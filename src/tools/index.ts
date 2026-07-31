@@ -606,7 +606,49 @@ export async function handleToolCall(
   }
   const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
   if (!def) return null;
-  return def.handler(args ?? {}, client as unknown as GenericApiClient);
+  return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous writes
+//
+// 42 NS write operations accept a `synchronous` body parameter, and it
+// defaults to "no". With "no" the API answers 202 with an empty body BEFORE
+// the write has replicated far enough to be read back, so any create-then-read
+// sequence races geo replication: the model writes, re-reads, finds nothing,
+// and reports a failure that did not happen.
+//
+// NetSapiens' own controllers set synchronous=yes whenever they chain a write
+// into a later read (AttendantsController sets it on the subscriber create
+// that its next six steps depend on). We do the same by default: any tool
+// whose schema declares `synchronous` gets "yes" unless the caller said
+// otherwise. It costs latency by design — that is the documented trade.
+//
+// MCP_SYNCHRONOUS_WRITES=false restores the API's own default.
+// ---------------------------------------------------------------------------
+
+function synchronousWritesEnabled(): boolean {
+  return process.env.MCP_SYNCHRONOUS_WRITES !== 'false';
+}
+
+/** True when a tool's input schema declares the `synchronous` parameter. */
+export function acceptsSynchronous(def: ToolDefinition | undefined): boolean {
+  const schema = def?.schema?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  return Boolean(schema?.properties && 'synchronous' in schema.properties);
+}
+
+/**
+ * Default `synchronous` to "yes" for tools that accept it. Never overrides an
+ * explicit value — a caller that wants fire-and-forget can still pass "no".
+ */
+export function applySynchronousDefault(
+  def: ToolDefinition | undefined,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!synchronousWritesEnabled()) return args;
+  if (args.synchronous !== undefined) return args;
+  if (!acceptsSynchronous(def)) return args;
+  return { ...args, synchronous: 'yes' };
 }
 
 // ---------------------------------------------------------------------------

@@ -529,6 +529,245 @@ const schedule_forwarding: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
+// 10. provision_user — the "add a user" chain, not just the subscriber row
+//
+// SubscribersController::create() writes the subscriber and nothing else: no
+// device, no DID. In OMP that is one screen but several writes, so a tool that
+// only creates the subscriber leaves a user who cannot register a phone or
+// receive an outside call. This runs the whole chain, in order, and stops at
+// the first failure rather than leaving a half-built user behind.
+// ---------------------------------------------------------------------------
+
+const provision_user: CuratedTool = {
+  minRole: 'domain_admin',
+  title: 'Provision User',
+  schema: {
+    name: 'provision_user',
+    description:
+      'Create a user and the pieces that make them usable: the user record, optionally a device to register a phone against, and optionally a DID routed to them. ' +
+      'Creating a user on its own leaves them with no device and no outside number — this runs the full sequence and reports what is still unconfigured. ' +
+      'Writes are synchronous, so each step is readable before the next one runs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domain to create the user in. Defaults to your own.' },
+        user: { type: 'string', description: 'Extension / user id, e.g. "1001".' },
+        first_name: { type: 'string' },
+        last_name: { type: 'string' },
+        email: { type: 'string' },
+        scope: {
+          type: 'string',
+          description: 'NS user scope. Defaults to "Basic User".',
+          enum: ['Basic User', 'Simple User', 'Advanced User', 'Call Center Agent', 'Site Manager', 'Call Center Supervisor', 'Office Manager', 'Reseller', 'Super User', 'NDP', 'No Portal'],
+          default: 'Basic User',
+        },
+        device: { type: 'string', description: 'Optional device / SIP registration name to create for the user, e.g. "1001a".' },
+        device_password: { type: 'string', description: 'Optional SIP registration password for the new device.' },
+        phone_number: { type: 'string', description: 'Optional DID to route to this user.' },
+        site: { type: 'string', description: 'Optional site to place the user in.' },
+        department: { type: 'string', description: 'Optional department.' },
+      },
+      required: ['user', 'first_name', 'last_name', 'email'],
+    },
+  },
+  handler: async (args, client) => {
+    const domain = str(args.domain);
+    const user = String(args.user);
+    const steps: Array<{ step: string; ok: boolean; detail?: unknown; error?: string }> = [];
+
+    const created = await safe(client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users',
+      pathParams: { domain },
+      body: {
+        synchronous: 'yes',
+        user,
+        'name-first-name': String(args.first_name),
+        'name-last-name': String(args.last_name),
+        email: String(args.email),
+        'user-scope': str(args.scope, 'Basic User'),
+        ...(args.site ? { site: String(args.site) } : {}),
+        ...(args.department ? { department: String(args.department) } : {}),
+      },
+    }));
+    steps.push({ step: 'create user', ok: created.ok, detail: created.data, error: created.error });
+
+    // A failed user create makes every later step meaningless, and retrying
+    // the whole tool is cleaner than leaving a device orphaned on a user that
+    // does not exist.
+    if (!created.ok) {
+      return textResult({
+        ok: false,
+        user: `${user}@${domain}`,
+        steps,
+        note: 'User creation failed; no device or phone number was created.',
+      });
+    }
+
+    if (args.device) {
+      const device = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/{domain}/users/{user}/devices',
+        pathParams: { domain, user },
+        body: {
+          synchronous: 'yes',
+          device: String(args.device),
+          ...(args.device_password ? { 'device-sip-registration-password': String(args.device_password) } : {}),
+        },
+      }));
+      steps.push({ step: 'create device', ok: device.ok, detail: device.data, error: device.error });
+    }
+
+    if (args.phone_number) {
+      // Phone numbers are dialrules under the hood, so this endpoint takes the
+      // destination user rather than a nested path. It does not accept
+      // `synchronous`, so it is last and its result is read back below.
+      const did = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/{domain}/phonenumbers',
+        pathParams: { domain },
+        body: {
+          phonenumber: String(args.phone_number),
+          'dial-rule-translation-destination-user': user,
+          enabled: 'yes',
+        },
+      }));
+      steps.push({ step: 'assign phone number', ok: did.ok, detail: did.data, error: did.error });
+    }
+
+    const verify = await safe(client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}',
+      pathParams: { domain, user },
+    }));
+
+    const missing: string[] = [];
+    if (!args.device) missing.push('no device — the user cannot register a phone until one is created');
+    if (!args.phone_number) missing.push('no DID — the user cannot receive outside calls until a number is routed to them');
+
+    return textResult({
+      ok: steps.every((s) => s.ok),
+      user: `${user}@${domain}`,
+      steps,
+      user_record: verify.ok ? verify.data : { error: verify.error },
+      still_unconfigured: missing,
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 11. deprovision_user — delete, then clean up what the platform leaves behind
+//
+// SubscribersController::delete() cascades to devices, contacts, addresses,
+// timeframes, voicemail nags, cdrschedules, and MFA. It never touches
+// dialrules/DIDs pointed at the user, or their call queue agent rows. So a
+// deleted user leaves DIDs routing at a destination that no longer exists.
+// This inventories those first, deletes the user, then removes the leftovers.
+// ---------------------------------------------------------------------------
+
+const deprovision_user: CuratedTool = {
+  minRole: 'domain_admin',
+  title: 'Deprovision User',
+  destructive: true,
+  schema: {
+    name: 'deprovision_user',
+    description:
+      'Remove a user completely: deletes the user (which cascades to their devices, contacts, addresses, timeframes and voicemail), then removes the two things NetSapiens leaves behind — DIDs still routed to them, and their call queue agent memberships. ' +
+      'Deleting a user through the plain endpoint leaves those DIDs pointing at a destination that no longer exists. ' +
+      'Pass dry_run to see exactly what would be removed without touching anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domain the user lives in. Defaults to your own.' },
+        user: { type: 'string', description: 'Extension / user id to remove.' },
+        dry_run: { type: 'boolean', default: false, description: 'Report what would be removed, change nothing.' },
+      },
+      required: ['user'],
+    },
+  },
+  handler: async (args, client) => {
+    const domain = str(args.domain);
+    const user = String(args.user);
+    const uid = `${user}@${domain}`;
+    const dryRun = args.dry_run === true;
+
+    // Inventory first: after the user is gone these are harder to attribute.
+    const [numbers, agents] = await Promise.all([
+      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/phonenumbers', pathParams: { domain } })),
+      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/agents', pathParams: { domain } })),
+    ]);
+
+    const numberRows = Array.isArray(numbers.data) ? (numbers.data as Array<Record<string, unknown>>) : [];
+    const orphanNumbers = numberRows.filter((n) => {
+      const dest = String(n['dial-rule-translation-destination-user'] ?? '');
+      return dest === user || dest === uid;
+    });
+
+    const agentRows = Array.isArray(agents.data) ? (agents.data as Array<Record<string, unknown>>) : [];
+    // Agent ids are `user@domain`, sometimes with a `:device` suffix.
+    const agentMemberships = agentRows.filter((a) => {
+      const id = String(a['callqueue-agent-id'] ?? '');
+      return id === uid || id.startsWith(`${uid}:`);
+    });
+
+    const plan = {
+      user: uid,
+      deletes_user: true,
+      cascaded_by_netsapiens: ['devices', 'contacts', 'addresses', 'timeframes', 'voicemail nags', 'cdr schedules', 'callqueue email reports', 'MFA enrollment'],
+      phone_numbers_to_release: orphanNumbers.map((n) => n.phonenumber),
+      queue_memberships_to_remove: agentMemberships.map((a) => ({ queue: a.callqueue, agent_id: a['callqueue-agent-id'] })),
+    };
+
+    if (dryRun) {
+      return textResult({ dry_run: true, plan });
+    }
+
+    const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+
+    const deleted = await safe(client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/users/{user}',
+      pathParams: { domain, user },
+    }));
+    steps.push({ step: `delete user ${uid}`, ok: deleted.ok, error: deleted.error });
+
+    // Clean up regardless of the delete result: a half-deleted user with live
+    // DIDs pointed at them is the worst of both states.
+    for (const n of orphanNumbers) {
+      const phonenumber = String(n.phonenumber);
+      const r = await safe(client.request({
+        method: 'DELETE',
+        pathTemplate: '/domains/{domain}/phonenumbers/{phonenumber}',
+        pathParams: { domain, phonenumber },
+      }));
+      steps.push({ step: `release phone number ${phonenumber}`, ok: r.ok, error: r.error });
+    }
+
+    for (const a of agentMemberships) {
+      const callqueue = String(a.callqueue);
+      const agentId = String(a['callqueue-agent-id']);
+      const r = await safe(client.request({
+        method: 'DELETE',
+        pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
+        pathParams: { domain, callqueue, 'callqueue-agent-id': agentId },
+      }));
+      steps.push({ step: `remove ${agentId} from queue ${callqueue}`, ok: r.ok, error: r.error });
+    }
+
+    return textResult({
+      ok: steps.every((s) => s.ok),
+      user: uid,
+      steps,
+      cascaded_by_netsapiens: plan.cascaded_by_netsapiens,
+      inventory_warnings: [
+        ...(numbers.ok ? [] : [`could not list phone numbers (${numbers.error}), any DIDs routed to this user may still exist`]),
+        ...(agents.ok ? [] : [`could not list queue agents (${agents.error}), queue memberships may still exist`]),
+      ],
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
 
 export const WORKFLOW_TOOLS: CuratedTool[] = [
   diagnose_call,
@@ -540,4 +779,6 @@ export const WORKFLOW_TOOLS: CuratedTool[] = [
   recent_activity_for_number,
   voicemail_inbox_summary,
   schedule_forwarding,
+  provision_user,
+  deprovision_user,
 ];
