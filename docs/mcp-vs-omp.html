@@ -442,6 +442,54 @@
     word-break: break-word;
   }
 
+  .seq {
+    font-family: var(--mono);
+    font-size: 0.735rem;
+    line-height: 1.45;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+  }
+
+  .seq li {
+    display: grid;
+    grid-template-columns: 1.15rem 1fr;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+
+  .seq li::before {
+    counter-increment: step;
+    content: counter(step);
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .seq .verb {
+    color: var(--brass);
+    font-weight: 600;
+  }
+
+  .seq .body {
+    display: block;
+    color: var(--ink-faint);
+    font-size: 0.94em;
+  }
+
+  .seq li.read::before { color: var(--platform); }
+  .seq li.cleanup::before { color: var(--client); }
+
+  .seq-note {
+    font-size: 0.82rem;
+    color: var(--ink-faint);
+    margin: 0.55rem 0 0;
+    font-family: var(--prose);
+  }
+
   /* ---- Before / after ledger ---- */
 
   .ledger {
@@ -819,103 +867,34 @@
       <div class="calls-row head">
         <div>Operation</div>
         <div>API calls</div>
-        <div>What the portal has to do</div>
+        <div>The calls, in order</div>
         <div>What the MCP does now</div>
       </div>
 
-      <div class="calls-row group platform"><div><i></i> NetSapiens runs the chain &mdash; one call finishes the job</div></div>
-
-      <div class="calls-row">
-        <div class="calls-op">Create a domain</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One save. The server writes the domain, video subscription, dial plan, catch-all dial rule and the domain subscriber behind it.</div>
-        <div class="calls-mcp"><b>create_domain</b>Identical single call. No composite, because wrapping it would only add ways to fail.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Create an auto attendant</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One save behind the attendant editor, covering 8 writes across 4 object types.</div>
-        <div class="calls-mcp"><b>post_domains_by_domain_autoattendants</b>Identical single call.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Create or update a timeframe</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One save. The update path alone touches 6 models across 29 write sites.</div>
-        <div class="calls-mcp"><b>post_domains_by_domain_timeframes_1</b>and <code>put_&hellip;_timeframes_by_id_6</code>. One per timeframe type.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Create a device</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One save; the device and its MAC registration are written together.</div>
-        <div class="calls-mcp"><b>create_device</b>Identical single call.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Create or update a call queue</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One save. Create writes the queue and hunt group; update also keeps the backing subscriber in step.</div>
-        <div class="calls-mcp"><b>create_callqueue</b>and <code>update_callqueue</code>. Note that create needs a description, which the spec does not mark required.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Send a message</div>
-        <div class="calls-n">1<small>each</small></div>
-        <div class="calls-omp">One send; message and session are written together with any upload and queue routing.</div>
-        <div class="calls-mcp"><b>send_message_sms</b>Identical single call.</div>
-      </div>
-
-      <div class="calls-row group client"><div><i></i> The client runs the chain &mdash; the portal walks a person through it</div></div>
-
-      <div class="calls-row">
-        <div class="calls-op">Add a usable user</div>
-        <div class="calls-n">3<small>calls</small></div>
-        <div class="calls-omp">Create the user, then create a device for them, then route a number to them. Three separate screens. Stop after the first and you have a user who cannot register a phone or take a call.</div>
-        <div class="calls-mcp"><b>provision_user</b>One tool call runs all three in order, stops at the first failure rather than orphaning a device, and reports what is still unconfigured.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Staff a call queue</div>
-        <div class="calls-n">2+n<small>calls</small></div>
-        <div class="calls-omp">Create the queue, add each agent one at a time, then route a number to it. A queue with no agents answers nothing.</div>
-        <div class="calls-mcp"><b>provision_call_queue</b>One tool call. Agents are added sequentially so a failure names the agent it happened on.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Forward calls until a date</div>
-        <div class="calls-n">2<small>calls</small></div>
-        <div class="calls-omp">Build a date-range timeframe, then create an answer rule that names it. Get the order wrong and the rule points at nothing.</div>
-        <div class="calls-mcp"><b>schedule_forwarding</b>Pass <code>until</code>. It refuses to create the rule if the timeframe failed, because a rule pointed at a missing timeframe applies never and reads as success.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Remove a user</div>
-        <div class="calls-n">1+2<small>calls</small></div>
-        <div class="calls-omp">One delete, which cascades to ten object types. Then you have to know to go and find the DID still routed at them and their row in any call queue, because nothing tells you.</div>
-        <div class="calls-mcp"><b>deprovision_user</b>One tool call. Inventories both leftovers before deleting, then releases them, and cleans up even if the delete itself failed.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Remove a call queue</div>
-        <div class="calls-n">1+n<small>calls</small></div>
-        <div class="calls-omp">One delete for the queue, then the same hunt for orphaned agent memberships and numbers.</div>
-        <div class="calls-mcp"><b>deprovision_call_queue</b>One tool call. Removes agents first, since once the queue is gone their endpoint has no queue to address.</div>
-      </div>
-
-      <div class="calls-row">
-        <div class="calls-op">Set a hold message</div>
-        <div class="calls-n">1<small>upload</small></div>
-        <div class="calls-omp">One multipart upload. The only media family with no text-to-speech option.</div>
-        <div class="calls-mcp"><b>set_hold_message</b>Takes base64 audio and sends the multipart upload for you. This was unreachable from here until the client learned to send multipart.</div>
-      </div>
+      <div class="calls-row group platform"><div><i></i> NetSapiens runs the chain &mdash; one call finishes the job, and one generated tool covers it</div></div>
+      <div class="calls-row"><div class="calls-op">Create a domain</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains</span></li></ol><p class="seq-note">The one call writes the domain row, video subscription, dial plan, catch-all dial rule and the domain subscriber.</p></div><div class="calls-mcp"><b>create_domain</b></div></div>
+      <div class="calls-row"><div class="calls-op">Create an auto attendant</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/autoattendants</span></li></ol><p class="seq-note">8 writes across 4 object types behind it, including a subscriber and three tier dial rules.</p></div><div class="calls-mcp"><b>post_domains_by_domain_autoattendants</b></div></div>
+      <div class="calls-row"><div class="calls-op">Create a timeframe</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/timeframes<span class="body">timeframe-name, timeframe-type, and the array for that type</span></span></li></ol><p class="seq-note">Writes 6 models. One operation per timeframe type; this is the specific-dates variant.</p></div><div class="calls-mcp"><b>post_domains_by_domain_timeframes_1</b></div></div>
+      <div class="calls-row"><div class="calls-op">Update a timeframe</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">PUT</span> /domains/{domain}/timeframes/{id}</span></li></ol><p class="seq-note">The heaviest handler in the source: 6 models across 29 write sites, reconciled rather than replaced.</p></div><div class="calls-mcp"><b>put_domains_by_domain_timeframes_by_id_6</b></div></div>
+      <div class="calls-row"><div class="calls-op">Create a device</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/devices<span class="body">device, device-sip-registration-password</span></span></li></ol><p class="seq-note">Device and MAC registration written together.</p></div><div class="calls-mcp"><b>create_device</b></div></div>
+      <div class="calls-row"><div class="calls-op">Create a call queue</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/callqueues<span class="body">callqueue, domain, description</span></span></li></ol><p class="seq-note">Queue and hunt group written together. The controller requires a description even though the spec does not mark it required.</p></div><div class="calls-mcp"><b>create_callqueue</b></div></div>
+      <div class="calls-row"><div class="calls-op">Update a call queue</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">PUT</span> /domains/{domain}/callqueues/{callqueue}</span></li></ol><p class="seq-note">Keeps queue, hunt group and the backing subscriber in step.</p></div><div class="calls-mcp"><b>update_callqueue</b></div></div>
+      <div class="calls-row"><div class="calls-op">Send a message</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/messagesessions/{id}/messages</span></li></ol><p class="seq-note">Message and message session written together, with upload and queue routing handled server-side.</p></div><div class="calls-mcp"><b>send_message_sms</b></div></div>
+      <div class="calls-row group client"><div><i></i> The client runs the chain &mdash; identical calls, but somebody has to sequence them</div></div>
+      <div class="calls-row"><div class="calls-op">Add a usable user</div><div class="calls-n">4<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users<span class="body">synchronous, user, name-first-name, name-last-name, email, user-scope</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/devices<span class="body">synchronous, device</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/phonenumbers<span class="body">phonenumber, dial-rule-translation-destination-user, enabled</span></span></li><li class="read"><span><span class="verb">GET</span> /domains/{domain}/users/{user}<span class="body">read back to confirm</span></span></li></ol><p class="seq-note">Stop after call 1 and the user cannot register a phone or take an outside call.</p></div><div class="calls-mcp"><b>provision_user</b>One tool call. Stops at the first failure rather than orphaning a device on a user that does not exist.</div></div>
+      <div class="calls-row"><div class="calls-op">Staff a call queue</div><div class="calls-n">2+n<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/callqueues<span class="body">synchronous, callqueue, domain, description</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/callqueues/{callqueue}/agents<span class="body">callqueue-agent-id &mdash; one call per agent</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/phonenumbers<span class="body">phonenumber, dial-rule-translation-destination-user, enabled</span></span></li></ol><p class="seq-note">A queue with no agents answers nothing; without the number nobody outside can reach it.</p></div><div class="calls-mcp"><b>provision_call_queue</b>One tool call. Agents go one at a time so a failure names the agent it happened on, and bare extensions are qualified to user@domain.</div></div>
+      <div class="calls-row"><div class="calls-op">Forward calls until a date</div><div class="calls-n">2<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/~/users/~/timeframes<span class="body">synchronous, timeframe-name, timeframe-type, timeframe-specific-dates-array</span></span></li><li><span><span class="verb">POST</span> /domains/~/users/~/answerrules<span class="body">synchronous, time-frame, enabled, forward-always</span></span></li></ol><p class="seq-note">Call 2 names the timeframe from call 1. Reverse them and the rule points at nothing.</p></div><div class="calls-mcp"><b>schedule_forwarding</b>Pass <code>until</code>. Refuses call 2 if call 1 failed, because a rule pointed at a missing timeframe applies never and still reads as success.</div></div>
+      <div class="calls-row"><div class="calls-op">Remove a user</div><div class="calls-n">2+1+n<small>calls</small></div><div class="calls-omp"><ol class="seq"><li class="read"><span><span class="verb">GET</span> /domains/{domain}/phonenumbers<span class="body">find DIDs routed at this user</span></span></li><li class="read"><span><span class="verb">GET</span> /domains/{domain}/agents<span class="body">find their queue memberships</span></span></li><li><span><span class="verb">DELETE</span> /domains/{domain}/users/{user}<span class="body">cascades to 10 object types</span></span></li><li class="cleanup"><span><span class="verb">DELETE</span> /domains/{domain}/phonenumbers/{phonenumber}<span class="body">per orphaned DID</span></span></li><li class="cleanup"><span><span class="verb">DELETE</span> /domains/{domain}/callqueues/{callqueue}/agents/{agent-id}<span class="body">per orphaned membership</span></span></li></ol><p class="seq-note">The delete alone leaves calls 4 and 5 undone, and nothing in the response tells you they exist.</p></div><div class="calls-mcp"><b>deprovision_user</b>One tool call. Reads the leftovers before deleting, then releases them, and cleans up even if the delete itself failed.</div></div>
+      <div class="calls-row"><div class="calls-op">Remove a call queue</div><div class="calls-n">2+1+n<small>calls</small></div><div class="calls-omp"><ol class="seq"><li class="read"><span><span class="verb">GET</span> /domains/{domain}/callqueues/{callqueue}/agents<span class="body">inventory the memberships</span></span></li><li class="read"><span><span class="verb">GET</span> /domains/{domain}/phonenumbers<span class="body">find DIDs routed at the queue</span></span></li><li class="cleanup"><span><span class="verb">DELETE</span> /domains/{domain}/callqueues/{callqueue}/agents/{agent-id}<span class="body">per agent, before the queue goes</span></span></li><li><span><span class="verb">DELETE</span> /domains/{domain}/callqueues/{callqueue}</span></li><li class="cleanup"><span><span class="verb">DELETE</span> /domains/{domain}/phonenumbers/{phonenumber}<span class="body">per orphaned DID</span></span></li></ol><p class="seq-note">Agents must go first. Once the queue row is gone their endpoint has no queue to address and the rows are unreachable.</p></div><div class="calls-mcp"><b>deprovision_call_queue</b>One tool call, in exactly that order. <code>dry_run</code> prints the plan without sending calls 3 to 5.</div></div>
+      <div class="calls-row"><div class="calls-op">Set a hold message</div><div class="calls-n">1<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/msg<span class="body">multipart/form-data with a File part</span></span></li></ol><p class="seq-note">The only media family with no text-to-speech or base64 variant, so the upload is the only route.</p></div><div class="calls-mcp"><b>set_hold_message</b>Takes base64 audio and builds the multipart request. Add <code>user</code> to scope it, or <code>index</code> to replace one, which switches to PUT.</div></div>
     </div>
 
     <p class="chart-note" style="margin-top:1rem">
-      Read from the controller source, not from the portal's network traffic, which is
-      not in this dump. The claim is the stronger one either way: no handler exists that
-      would let the portal finish any of these in fewer calls than we do.
+      Paths and body fields were recorded by driving each composite against an
+      instrumented client, so they are what the code sends rather than what it is
+      documented to send. The portal's own traffic is not in this dump, but the sequences
+      hold for both sides: these are the only handlers either interface can reach, and
+      none of them completes more than what is listed.
     </p>
   </section>
 
