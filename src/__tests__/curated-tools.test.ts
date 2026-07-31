@@ -954,3 +954,141 @@ describe('deprovision_user', () => {
     expect(isToolDestructive('provision_user')).toBe(false);
   });
 });
+
+describe('provision_call_queue', () => {
+  beforeEach(clearEnv);
+
+  it('creates the queue, then adds each agent, then routes the DID', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string; body?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; body?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+
+    await handleToolCall(
+      client as never,
+      'provision_call_queue',
+      { domain: 'acme.com', callqueue: 'support', agents: ['1001', '1002@acme.com'], phone_number: '+13035551212' },
+      'domain_admin',
+    );
+
+    expect(calls.map((c) => c.pathTemplate)).toEqual([
+      '/domains/{domain}/callqueues',
+      '/domains/{domain}/callqueues/{callqueue}/agents',
+      '/domains/{domain}/callqueues/{callqueue}/agents',
+      '/domains/{domain}/phonenumbers',
+    ]);
+    expect(calls[0].body?.synchronous).toBe('yes');
+    // Bare extensions get qualified; already-qualified ids are left alone.
+    expect(calls[1].body?.['callqueue-agent-id']).toBe('1001@acme.com');
+    expect(calls[2].body?.['callqueue-agent-id']).toBe('1002@acme.com');
+    expect(calls[3].body?.['dial-rule-translation-destination-user']).toBe('support');
+  });
+
+  it('does not add agents when the queue itself failed', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        calls.push(o.pathTemplate);
+        return { success: false, error: '409 already exists' };
+      },
+    };
+
+    const res = (await handleToolCall(
+      client as never,
+      'provision_call_queue',
+      { callqueue: 'support', agents: ['1001'] },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    expect(calls).toEqual(['/domains/{domain}/callqueues']);
+    expect(JSON.parse(res.content[0].text).ok).toBe(false);
+  });
+
+  it('warns that an unstaffed queue answers nothing', async () => {
+    const { handleToolCall } = await importTools();
+    const client = { request: async () => ({ success: true, data: {} }) };
+    const res = (await handleToolCall(
+      client as never,
+      'provision_call_queue',
+      { callqueue: 'support' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    const missing = JSON.parse(res.content[0].text).still_unconfigured.join(' ');
+    expect(missing).toMatch(/no agents/);
+    expect(missing).toMatch(/no DID/);
+  });
+});
+
+describe('deprovision_call_queue', () => {
+  beforeEach(clearEnv);
+
+  function queueWithLeftovers() {
+    const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+        calls.push(o);
+        if (o.method === 'GET' && o.pathTemplate.endsWith('/agents')) {
+          return { success: true, data: [{ 'callqueue-agent-id': '1001@acme.com' }, { 'callqueue-agent-id': '1002@acme.com' }] };
+        }
+        if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/phonenumbers') {
+          return {
+            success: true,
+            data: [
+              { phonenumber: '+13035551212', 'dial-rule-translation-destination-user': 'support' },
+              { phonenumber: '+13035559999', 'dial-rule-translation-destination-user': 'sales' },
+            ],
+          };
+        }
+        return { success: true, data: {} };
+      },
+    };
+    return { client, calls };
+  }
+
+  it('removes agents before the queue, then releases the DID', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = queueWithLeftovers();
+
+    await handleToolCall(client as never, 'deprovision_call_queue', { domain: 'acme.com', callqueue: 'support' }, 'domain_admin');
+
+    const deletes = calls.filter((c) => c.method === 'DELETE').map((c) => c.pathTemplate);
+    // Agents first — once the queue row is gone their endpoint has no queue to address.
+    expect(deletes).toEqual([
+      '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
+      '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
+      '/domains/{domain}/callqueues/{callqueue}',
+      '/domains/{domain}/phonenumbers/{phonenumber}',
+    ]);
+    const released = calls.filter((c) => c.pathTemplate === '/domains/{domain}/phonenumbers/{phonenumber}');
+    expect(released[0].pathParams?.phonenumber).toBe('+13035551212');
+  });
+
+  it('dry_run reports agents and numbers without deleting', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = queueWithLeftovers();
+
+    const res = (await handleToolCall(
+      client as never,
+      'deprovision_call_queue',
+      { domain: 'acme.com', callqueue: 'support', dry_run: true },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    expect(calls.every((c) => c.method === 'GET')).toBe(true);
+    const plan = JSON.parse(res.content[0].text).plan;
+    expect(plan.agents_to_remove).toEqual(['1001@acme.com', '1002@acme.com']);
+    expect(plan.phone_numbers_to_release).toEqual(['+13035551212']);
+  });
+
+  it('is classified destructive', async () => {
+    const { isToolDestructive } = await importTools();
+    expect(isToolDestructive('deprovision_call_queue')).toBe(true);
+    expect(isToolDestructive('provision_call_queue')).toBe(false);
+  });
+});
