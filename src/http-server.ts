@@ -19,9 +19,15 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import {
+  SERVER_INSTRUCTIONS,
+  isStatelessMode,
+  serverCapabilities,
+  serverImplementation,
+} from './server-info.js';
 import { logger } from './utils/logger.js';
 import type { UserRole } from './auth/roles.js';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 // ---------------------------------------------------------------------------
@@ -64,6 +70,21 @@ function respondSessionNotFound(res: ServerResponse): void {
   res.end(JSON.stringify({
     jsonrpc: '2.0',
     error: { code: -32001, message: 'Session not found' },
+    id: null,
+  }));
+}
+
+/**
+ * Streamable HTTP says a server that offers no SSE stream (or no client-driven
+ * session termination) at the MCP endpoint answers 405 with an Allow header.
+ * That is exactly the stateless case: there is no session to stream on or to
+ * delete, and a compliant client treats 405 as "don't retry".
+ */
+function respondMethodNotAllowed(res: ServerResponse, message: string): void {
+  res.writeHead(405, { 'Content-Type': 'application/json', Allow: 'POST' });
+  res.end(JSON.stringify({
+    jsonrpc: '2.0',
+    error: { code: -32000, message },
     id: null,
   }));
 }
@@ -111,24 +132,38 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
 
 /**
  * Starts the HTTP-based MCP server with OAuth 2.1 authentication.
+ *
+ * Returns the listening `http.Server` so callers can shut it down — tests
+ * especially, which otherwise leak a listener per case and collide on ports.
  */
-export async function startHttpServer(): Promise<void> {
+export async function startHttpServer(): Promise<HttpServer> {
   const { app, baseUrl, mcpUrl } = createApp();
   const config = loadConfig();
   const port = parseInt(process.env.MCP_PORT || '3000', 10);
   const host = process.env.MCP_HOST || '0.0.0.0';
 
-  app.listen(port, host, () => {
+  const httpServer = app.listen(port, host, () => {
     logger.info('NetSapiens MCP HTTP server started', {
       host,
       port,
+      mode: isStatelessMode() ? 'stateless' : 'session',
       authorize: `${baseUrl.origin}/authorize`,
       mcp: mcpUrl.href,
     });
+    if (isStatelessMode() && process.env.MCP_CONFIRM_DESTRUCTIVE === 'true') {
+      logger.warn(
+        'MCP_CONFIRM_DESTRUCTIVE is on but MCP_STATELESS was forced true. ' +
+        'Elicitation prompts need a session to reach the client, so destructive ' +
+        'calls will fall back to MCP_CONFIRM_FALLBACK (default: refuse). ' +
+        'Set MCP_STATELESS=false to keep the confirmation gate.',
+      );
+    }
     if (config.debug) {
       logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
     }
   });
+
+  return httpServer;
 }
 
 /**
@@ -163,8 +198,15 @@ function wireApp(
   app.use((_req, res, next) => {
     res.header('Access-Control-Allow-Origin', corsOrigin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, mcp-session-id, Accept');
-    res.header('Access-Control-Expose-Headers', 'mcp-session-id');
+    // `mcp-protocol-version` is required on every non-initialize request since
+    // the 2025-06-18 revision, and `last-event-id` is what a browser client
+    // sends to resume a broken SSE stream. Omitting either from the preflight
+    // allowlist breaks browser-hosted clients outright.
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, mcp-session-id, mcp-protocol-version, last-event-id, Accept',
+    );
+    res.header('Access-Control-Expose-Headers', 'mcp-session-id, mcp-protocol-version');
     if (_req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -223,6 +265,7 @@ function wireApp(
     res.json({
       status: 'ok',
       uptime: Math.floor(process.uptime()),
+      mode: isStatelessMode() ? 'stateless' : 'session',
       activeSessions: sessions.size,
       nsApiUrl: config.netsapiens.apiUrl,
       version: config.version,
@@ -323,13 +366,28 @@ function wireApp(
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     const body = (req as any).body;
 
+    // Stateless: build a throwaway server + transport for this one request and
+    // tear it down when the response closes. Every request carries its own
+    // bearer, so the NS client is rebuilt from that bearer each time and no
+    // cross-request state exists to go stale or to be pinned to an instance.
+    if (isStatelessMode()) {
+      const { server, client } = createAuthenticatedMcpServerForRequest(config, req);
+      void client;
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+
+      res.on('close', () => {
+        void Promise.resolve(transport.close()).catch(() => {});
+        void Promise.resolve(server.close()).catch(() => {});
+      });
+
+      await server.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
+    }
+
     if (isInitializeRequest(body)) {
       // Create a server + client using the authenticated user's NS token, role, and identity.
-      const extra = req.auth?.extra as Record<string, unknown> | undefined;
-      const nsAccessToken = extra?.nsAccessToken as string | undefined;
-      const nsUserRole = extra?.nsUserRole as UserRole | undefined;
-      const nsUsername = extra?.nsUsername as string | undefined;
-      const { server, client } = createAuthenticatedMcpServer(config, nsAccessToken, nsUserRole, nsUsername);
+      const { server, client } = createAuthenticatedMcpServerForRequest(config, req);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -367,6 +425,11 @@ function wireApp(
   app.get('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
+    if (isStatelessMode()) {
+      respondMethodNotAllowed(res, 'This server runs stateless; no server-initiated SSE stream is offered');
+      return;
+    }
+
     if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing session ID' }));
@@ -385,6 +448,11 @@ function wireApp(
   // DELETE /mcp — session termination
   app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    if (isStatelessMode()) {
+      respondMethodNotAllowed(res, 'This server runs stateless; there is no session to terminate');
+      return;
+    }
 
     if (!sessionId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -418,8 +486,8 @@ function createAuthenticatedMcpServer(
   userIdentity?: string,
 ) {
   const server = new Server(
-    { name: config.name, version: config.version },
-    { capabilities: { tools: {} } },
+    serverImplementation(config),
+    { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS },
   );
 
   // Build a client config. If we have a per-user NS access token from the
@@ -436,4 +504,22 @@ function createAuthenticatedMcpServer(
   };
 
   return { server, client };
+}
+
+/**
+ * Same as `createAuthenticatedMcpServer`, but pulls the NS token, role, and
+ * identity straight off the verified bearer. Both the stateless and the
+ * session path build their server this way, so they cannot drift.
+ */
+function createAuthenticatedMcpServerForRequest(
+  config: ReturnType<typeof loadConfig>,
+  req: AuthenticatedRequest,
+) {
+  const extra = req.auth?.extra as Record<string, unknown> | undefined;
+  return createAuthenticatedMcpServer(
+    config,
+    extra?.nsAccessToken as string | undefined,
+    extra?.nsUserRole as UserRole | undefined,
+    extra?.nsUsername as string | undefined,
+  );
 }

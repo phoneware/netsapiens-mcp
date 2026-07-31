@@ -16,6 +16,9 @@ function clearEnv() {
   delete process.env.MCP_DISABLE_PROMOTION;
   delete process.env.MCP_PROMOTE_THRESHOLD;
   delete process.env.MCP_PROMOTE_WINDOW_DAYS;
+  // tools/list_changed needs a stream back to the client, which only exists in
+  // session mode. Promotion notifications are tested there.
+  process.env.MCP_STATELESS = 'false';
 }
 
 async function importTools() {

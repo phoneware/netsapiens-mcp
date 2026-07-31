@@ -314,8 +314,11 @@ describe('createMcpServer()', () => {
     createMcpServer(config);
 
     expect(Server).toHaveBeenCalledWith(
-      { name: 'netsapiens-mcp', version: '1.1.1' },
-      { capabilities: { tools: {} } },
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({
+        capabilities: expect.objectContaining({ tools: expect.any(Object) }),
+        instructions: expect.stringContaining('NetSapiens'),
+      }),
     );
   });
 
@@ -370,8 +373,11 @@ describe('NetSapiensMCPServer', () => {
     createServer();
 
     expect(Server).toHaveBeenCalledWith(
-      { name: 'netsapiens-mcp', version: '1.1.1' },
-      { capabilities: { tools: {} } },
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({
+        capabilities: expect.objectContaining({ tools: expect.any(Object) }),
+        instructions: expect.stringContaining('NetSapiens'),
+      }),
     );
   });
 

@@ -241,3 +241,119 @@ describe('dispatch via exposed → registry mapping', () => {
     ).rejects.toThrow(/disabled/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Current-spec tool fields: title, full annotation hints, pagination,
+// structured content
+// ---------------------------------------------------------------------------
+
+describe('tool titles', () => {
+  beforeEach(clearDisableEnv);
+
+  it('gives every exposed tool a human-readable title', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const tools = await getAllToolDefinitions();
+    expect(tools.length).toBeGreaterThan(100);
+    for (const t of tools) {
+      expect(typeof t.title).toBe('string');
+      expect(t.title.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('title-cases words and upper-cases known acronyms', async () => {
+    const { toolTitle } = await importTools();
+    expect(toolTitle('get_domain_users')).toBe('Get Domain Users');
+    expect(toolTitle('get_cdrs_by_domain')).toBe('Get CDRS Domain');
+    expect(toolTitle('call_api')).toBe('Call API');
+  });
+});
+
+describe('annotation hints beyond read/destructive', () => {
+  beforeEach(clearDisableEnv);
+
+  it('marks every tool open-world, since they all reach the live NS platform', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const tools = await getAllToolDefinitions();
+    for (const t of tools) expect(t.annotations.openWorldHint).toBe(true);
+  });
+
+  it('treats reads and deletes as idempotent and creates as not', async () => {
+    const { getAllToolDefinitions } = await importTools();
+    const tools = await getAllToolDefinitions();
+    const byPrefix = (p: string) => tools.filter((t) => t.name.startsWith(p));
+
+    for (const t of byPrefix('get_')) expect(t.annotations.idempotentHint).toBe(true);
+    for (const t of byPrefix('delete_')) expect(t.annotations.idempotentHint).toBe(true);
+    for (const t of byPrefix('post_')) expect(t.annotations.idempotentHint).toBe(false);
+  });
+});
+
+describe('tools/list pagination', () => {
+  beforeEach(() => {
+    clearDisableEnv();
+    delete process.env.MCP_TOOLS_PAGE_SIZE;
+  });
+
+  it('walks the whole registry across cursors without gaps or repeats', async () => {
+    process.env.MCP_TOOLS_PAGE_SIZE = '50';
+    const { getAllToolDefinitions, paginateTools } = await importTools();
+    const all = await getAllToolDefinitions();
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = paginateTools(all, cursor);
+      expect(page.tools.length).toBeLessThanOrEqual(50);
+      seen.push(...page.tools.map((t) => t.name));
+      cursor = page.nextCursor;
+      pages++;
+      expect(pages).toBeLessThan(100); // guard against a cursor that never ends
+    } while (cursor);
+
+    expect(pages).toBeGreaterThan(1);
+    expect(seen).toEqual(all.map((t) => t.name));
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it('omits nextCursor on the last page', async () => {
+    process.env.MCP_TOOLS_PAGE_SIZE = '100000';
+    const { getAllToolDefinitions, paginateTools } = await importTools();
+    const all = await getAllToolDefinitions();
+    const page = paginateTools(all);
+    expect(page.tools.length).toBe(all.length);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it('rejects a cursor it did not issue', async () => {
+    const { getAllToolDefinitions, paginateTools } = await importTools();
+    const all = await getAllToolDefinitions();
+    expect(() => paginateTools(all, 'not-a-real-cursor')).toThrow(/Invalid cursor/);
+    expect(() => paginateTools(all, Buffer.from('ns:999999').toString('base64url'))).toThrow(/Invalid cursor/);
+  });
+});
+
+describe('structured content', () => {
+  beforeEach(clearDisableEnv);
+
+  it('adds structuredContent for a JSON object payload', async () => {
+    const { withStructuredContent } = await importTools();
+    const out = withStructuredContent({
+      content: [{ type: 'text', text: JSON.stringify({ success: true, data: { user: 'alice' } }) }],
+    });
+    expect(out.structuredContent).toEqual({ success: true, data: { user: 'alice' } });
+    expect(out.content[0].text).toContain('alice'); // text block preserved for older clients
+  });
+
+  it('wraps a JSON array so structuredContent stays an object', async () => {
+    const { withStructuredContent } = await importTools();
+    const out = withStructuredContent({ content: [{ type: 'text', text: '[1,2,3]' }] });
+    expect(out.structuredContent).toEqual({ result: [1, 2, 3] });
+  });
+
+  it('leaves non-JSON prose alone', async () => {
+    const { withStructuredContent } = await importTools();
+    const out = withStructuredContent({ content: [{ type: 'text', text: 'no session found' }] });
+    expect(out.structuredContent).toBeUndefined();
+  });
+});
