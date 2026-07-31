@@ -1190,3 +1190,96 @@ describe('deprovision_call_queue', () => {
     expect(isToolDestructive('provision_call_queue')).toBe(false);
   });
 });
+
+describe('multipart dead ends', () => {
+  beforeEach(clearEnv);
+
+  it('refuses a multipart-only tool and names the alternative', async () => {
+    const { handleToolCall } = await importTools();
+    const client = { request: async () => ({ success: true, data: {} }) };
+
+    await expect(
+      handleToolCall(client as never, 'call_api', { tool_name: 'create_greeting_file_upload', args: {} }, 'system_admin'),
+    ).rejects.toThrow(/multipart file upload/);
+
+    await expect(
+      handleToolCall(client as never, 'call_api', { tool_name: 'create_msg_domain_file_upload', args: {} }, 'system_admin'),
+    ).rejects.toThrow(/set_hold_message/);
+  });
+
+  it('hides them from search_api so the model never finds one', async () => {
+    const { handleToolCall } = await importTools();
+    const client = { request: async () => ({ success: true, data: {} }) };
+    const res = (await handleToolCall(
+      client as never,
+      'search_api',
+      { query: 'greeting upload', limit: 50 },
+      'system_admin',
+    )) as { content: Array<{ text: string }> };
+
+    const names = JSON.parse(res.content[0].text).matches.map((m: { name: string }) => m.name);
+    expect(names).not.toContain('create_greeting_file_upload');
+  });
+
+  it('set_hold_message sends a real multipart upload', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string; multipart?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; multipart?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+
+    await handleToolCall(
+      client as never,
+      'set_hold_message',
+      { audio_base64: 'QUJD', filename: 'closed.mp3', domain: 'acme.com' },
+      'domain_admin',
+    );
+
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].pathTemplate).toBe('/domains/{domain}/msg');
+    expect(calls[0].multipart).toMatchObject({ field: 'File', filename: 'closed.mp3', base64: 'QUJD', contentType: 'audio/mpeg' });
+  });
+
+  it('scopes to a user and switches to PUT when replacing an index', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+
+    await handleToolCall(
+      client as never,
+      'set_hold_message',
+      { audio_base64: 'QUJD', domain: 'acme.com', user: '1001', index: 2 },
+      'domain_admin',
+    );
+
+    expect(calls[0].method).toBe('PUT');
+    expect(calls[0].pathTemplate).toBe('/domains/{domain}/users/{user}/msg/{index}');
+    expect(calls[0].pathParams).toMatchObject({ domain: 'acme.com', user: '1001', index: '2' });
+  });
+});
+
+describe('provision_call_queue sends the description NetSapiens requires', () => {
+  beforeEach(clearEnv);
+
+  it('defaults it to the queue name when the caller omits it', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ body?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { body?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(client as never, 'provision_call_queue', { callqueue: 'support' }, 'domain_admin');
+    // CallqueuesController::create validates domain, queue AND description.
+    expect(calls[0].body?.description).toBe('support');
+  });
+});

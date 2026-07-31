@@ -895,7 +895,7 @@ const provision_call_queue: CuratedTool = {
           description: 'Users to staff the queue. Accepts "1001" or "1001@domain".',
         },
         phone_number: { type: 'string', description: 'Optional DID to route to this queue.' },
-        description: { type: 'string', description: 'Optional queue description.' },
+        description: { type: 'string', description: 'Queue description. NetSapiens requires one; defaults to the queue name.' },
       },
       required: ['callqueue'],
     },
@@ -914,7 +914,10 @@ const provision_call_queue: CuratedTool = {
         synchronous: 'yes',
         callqueue,
         domain,
-        ...(args.description ? { description: String(args.description) } : {}),
+        // CallqueuesController::create validates domain, queue AND description.
+        // The spec marks only the first two required, so a create without a
+        // description is a 400 nothing in the schema warns you about.
+        description: args.description ? String(args.description) : callqueue,
       },
     }));
     steps.push({ step: `create queue ${callqueue}`, ok: created.ok, detail: created.data, error: created.error });
@@ -1071,6 +1074,76 @@ const deprovision_call_queue: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
+// 14. set_hold_message — the one media family with no upload-free path
+//
+// Greetings and music-on-hold both offer a text-to-speech variant and a
+// base64-in-JSON variant, so the model can set them without ever sending a
+// file. Hold messages offer neither: POST and PUT on /msg accept nothing but
+// multipart/form-data. Reading and deleting them works; creating one was
+// simply unreachable from here until the client learned to send multipart.
+// ---------------------------------------------------------------------------
+
+const set_hold_message: CuratedTool = {
+  minRole: 'domain_admin',
+  title: 'Set Hold Message',
+  schema: {
+    name: 'set_hold_message',
+    description:
+      'Upload a hold message (the announcement played over music on hold) for a domain or a single user. ' +
+      'Unlike greetings and music-on-hold, NetSapiens offers no text-to-speech option here — the audio has to be uploaded, so pass it as base64. ' +
+      'Supply `index` to replace an existing message, or omit it to add a new one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        audio_base64: { type: 'string', description: 'The audio file, base64 encoded. WAV or MP3.' },
+        filename: { type: 'string', default: 'hold-message.wav', description: 'Filename to send with the upload.' },
+        domain: { type: 'string', description: 'Domain the message belongs to. Defaults to your own.' },
+        user: { type: 'string', description: 'Set for one user only. Omit for a domain-wide hold message.' },
+        index: { type: 'number', description: 'Existing message index to replace. Omit to add a new one.' },
+      },
+      required: ['audio_base64'],
+    },
+  },
+  handler: async (args, client) => {
+    const domain = str(args.domain);
+    const audio = String(args.audio_base64 ?? '');
+    if (!audio) return textResult({ error: 'audio_base64 is required.' });
+
+    const filename = str(args.filename, 'hold-message.wav');
+    const contentType = /\.mp3$/i.test(filename) ? 'audio/mpeg' : 'audio/wav';
+    const scoped = args.user != null && args.user !== '';
+    const replacing = args.index != null && args.index !== '';
+
+    const pathTemplate = scoped
+      ? replacing
+        ? '/domains/{domain}/users/{user}/msg/{index}'
+        : '/domains/{domain}/users/{user}/msg'
+      : replacing
+        ? '/domains/{domain}/msg/{index}'
+        : '/domains/{domain}/msg';
+
+    const pathParams: Record<string, string> = { domain };
+    if (scoped) pathParams.user = String(args.user);
+    if (replacing) pathParams.index = String(args.index);
+
+    const r = await safe(client.request({
+      method: replacing ? 'PUT' : 'POST',
+      pathTemplate,
+      pathParams,
+      multipart: { field: 'File', filename, base64: audio, contentType },
+    }));
+
+    return textResult({
+      ok: r.ok,
+      scope: scoped ? `${String(args.user)}@${domain}` : domain,
+      action: replacing ? `replaced index ${String(args.index)}` : 'added a new hold message',
+      filename,
+      result: r,
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
 
 export const WORKFLOW_TOOLS: CuratedTool[] = [
   diagnose_call,
@@ -1086,4 +1159,5 @@ export const WORKFLOW_TOOLS: CuratedTool[] = [
   deprovision_user,
   provision_call_queue,
   deprovision_call_queue,
+  set_hold_message,
 ];
