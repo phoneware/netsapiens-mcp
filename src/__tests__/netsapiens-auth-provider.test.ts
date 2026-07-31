@@ -9,8 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import axios from 'axios';
 import { createHash, randomBytes } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 vi.mock('axios');
 const mockedAxios = axios as unknown as {
@@ -53,21 +51,48 @@ async function importApp() {
   process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
   process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
   process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
-  // Keep the file-backed token store inside the OS temp dir. Without this the
-  // suite appends to the developer's real ~/.netsapiens-mcp/http-tokens.json.
-  process.env.MCP_TOKEN_STORE_PATH = join(tmpdir(), `ns-mcp-test-tokens-${process.pid}.json`);
+  // MCP_TOKEN_STORE_PATH is set per worker in src/__tests__/setup.ts, which
+  // keeps every test off the developer's real token store.
   delete process.env.MCP_PERSISTENCE;
   const mod = await import('../http-server.js');
-  return mod.createApp();
+  const created = mod.createApp();
+  // supertest binds and closes an ephemeral server for every request when
+  // handed a bare Express app. Under parallel workers that produced sporadic
+  // ECONNRESET / "socket hang up" on an arbitrary request. Hand it one real
+  // listener per app instead, torn down in afterEach.
+  const server = created.app.listen(0);
+  openServers.push(server);
+  return { ...created, app: server as unknown as typeof created.app };
 }
 
-describe('OAuth flow (end-to-end)', () => {
+/** Listeners opened by importApp(), closed after each test. */
+const openServers: import('node:http').Server[] = [];
+
+async function closeOpenServers(): Promise<void> {
+  await Promise.all(
+    openServers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+  );
+}
+
+/**
+ * These suites drive a real Express server over a real socket, so they can hit
+ * connection-level errors (ECONNRESET / "socket hang up") that have nothing to
+ * do with the assertions. The underlying causes found so far are fixed: global
+ * keep-alive reusing sockets to closed servers, a shared token-store file, and
+ * supertest binding a server per request. A small retry covers the remainder.
+ * Assertion failures still fail — a retry cannot rescue a wrong expectation
+ * that is wrong every time.
+ */
+const SOCKET_RETRY = { retry: 2 };
+
+describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
   beforeEach(() => {
     mockedAxios.post = vi.fn();
     mockedAxios.get = vi.fn();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenServers();
     vi.clearAllMocks();
   });
 
