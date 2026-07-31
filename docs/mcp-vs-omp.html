@@ -4,22 +4,23 @@
   :root {
     /* Switchboard cabinet enamel, brass jack rings, indicator lamps. */
     --cabinet:      #12191B;
-    --cabinet-2:    #182123;
-    --cabinet-3:    #1E292B;
     --enamel:       #E3E7E3;
+    --ground:       #12191B;
+    --panel:        #182123;
+    --panel-raised: #1E292B;
     --ink:          #F0F4F1;
     --ink-soft:     #A9B7B4;
     --ink-faint:    #708280;
     --rule:         #2A3739;
     --brass:        #C9A263;
     --brass-deep:   #8E7038;
-    --patina:       #6FA695;
-    --amber:        #D98A2B;
-    --lamp-red:     #C0523C;
 
-    --panel:        var(--cabinet-2);
-    --panel-raised: var(--cabinet-3);
-    --ground:       var(--cabinet);
+    /* Series colours. Validated with the palette checker against both
+       surfaces: lightness band, chroma floor, CVD separation (worst adjacent
+       dE 12.2 deutan), normal-vision floor 20.1, contrast >= 3:1. */
+    --platform:     #3AA98D;
+    --client:       #C87A1E;
+    --alert:        #C0523C;
 
     --display: "Avenir Next Condensed", "HelveticaNeue-CondensedBold", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
@@ -40,9 +41,7 @@
       --rule:         #C8D0CB;
       --brass:        #8A6C2E;
       --brass-deep:   #B79A5E;
-      --patina:       #2F7565;
-      --amber:        #9E5F11;
-      --lamp-red:     #9B3A26;
+      --alert:        #9B3A26;
     }
   }
 
@@ -56,9 +55,7 @@
     --rule:         #C8D0CB;
     --brass:        #8A6C2E;
     --brass-deep:   #B79A5E;
-    --patina:       #2F7565;
-    --amber:        #9E5F11;
-    --lamp-red:     #9B3A26;
+    --alert:        #9B3A26;
   }
 
   :root[data-theme="dark"] {
@@ -71,9 +68,7 @@
     --rule:         #2A3739;
     --brass:        #C9A263;
     --brass-deep:   #8E7038;
-    --patina:       #6FA695;
-    --amber:        #D98A2B;
-    --lamp-red:     #C0523C;
+    --alert:        #C0523C;
   }
 
   body {
@@ -94,7 +89,7 @@
     gap: 3.5rem;
   }
 
-  /* ---- Designation strip: the typed label above a jack field ---- */
+  /* ---- Designation strip ---- */
 
   .strip {
     display: flex;
@@ -119,7 +114,6 @@
     font-family: var(--display);
     font-size: clamp(2.4rem, 6.5vw, 4.1rem);
     line-height: 0.98;
-    letter-spacing: 0.005em;
     text-transform: uppercase;
     text-wrap: balance;
     font-weight: 600;
@@ -160,6 +154,8 @@
     color: var(--brass);
   }
 
+  .lamp .figure.good { color: var(--platform); }
+
   .lamp .caption {
     font-family: var(--mono);
     font-size: 0.66rem;
@@ -182,7 +178,6 @@
     font-family: var(--display);
     font-size: clamp(1.5rem, 3.4vw, 2.05rem);
     text-transform: uppercase;
-    letter-spacing: 0.01em;
     line-height: 1.05;
     font-weight: 600;
     margin: 0;
@@ -208,10 +203,10 @@
     flex: none;
   }
 
-  .eyebrow--platform { color: var(--patina); }
-  .eyebrow--client   { color: var(--amber); }
-  .eyebrow--alert   { color: var(--lamp-red); }
-  .eyebrow--brass   { color: var(--brass); }
+  .eyebrow--platform { color: var(--platform); }
+  .eyebrow--client   { color: var(--client); }
+  .eyebrow--alert    { color: var(--alert); }
+  .eyebrow--brass    { color: var(--brass); }
 
   section > header p {
     max-width: var(--measure);
@@ -219,27 +214,148 @@
     margin: 0;
   }
 
-  /* ---- The jack field ---- */
+  /* ---- Charts ---- */
 
-  .field {
+  .panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .panel {
+    background: var(--panel);
+    padding: 1.3rem 1.35rem 1.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .panel-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .panel-title b {
+    font-family: var(--display);
+    font-size: 1.12rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    font-weight: 600;
+  }
+
+  .panel-title span {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .chart {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: minmax(115px, 0.9fr) 1fr 2.4rem;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 2px;
+  }
+
+  .bar-row:hover,
+  .bar-row:focus-visible {
+    background: var(--panel-raised);
+    outline: none;
+  }
+
+  .bar-label {
+    font-size: 0.83rem;
+    color: var(--ink-soft);
+    line-height: 1.25;
+  }
+
+  .bar-track {
+    height: 0.62rem;
+    position: relative;
+  }
+
+  .bar-fill {
+    height: 100%;
+    /* Rounded data-end only, anchored flat to the baseline. */
+    border-radius: 0 3px 3px 0;
+    display: block;
+  }
+
+  .bar-fill.platform { background: var(--platform); }
+  .bar-fill.client   { background: var(--client); }
+
+  .bar-value {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
+    text-align: right;
+    color: var(--ink);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.3rem;
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .legend span {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .legend i {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 2px;
+    display: block;
+  }
+
+  .legend i.platform { background: var(--platform); }
+  .legend i.client   { background: var(--client); }
+
+  .chart-note {
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    margin: 0;
+  }
+
+  /* ---- Before / after ledger ---- */
+
+  .ledger {
     border: 1px solid var(--rule);
     border-bottom: none;
     overflow-x: auto;
   }
 
-  .row {
+  .ledger-row {
     display: grid;
-    grid-template-columns: 3.2rem minmax(190px, 1.5fr) minmax(210px, 1.7fr) minmax(180px, 1.1fr);
+    grid-template-columns: minmax(180px, 1fr) minmax(230px, 1.3fr) minmax(230px, 1.3fr);
     border-bottom: 1px solid var(--rule);
     background: var(--panel);
-    min-width: 660px;
+    min-width: 640px;
   }
 
-  .row.head {
-    background: var(--ground);
-  }
+  .ledger-row.head { background: var(--ground); }
 
-  .row.head > * {
+  .ledger-row.head > * {
     font-family: var(--mono);
     font-size: 0.64rem;
     letter-spacing: 0.15em;
@@ -249,150 +365,50 @@
     padding-bottom: 0.7rem;
   }
 
-  .row > * {
-    padding: 0.95rem 1.1rem;
-  }
+  .ledger-row > * { padding: 0.95rem 1.1rem; }
 
-  /* The jack: a brass ring with a lamp at its centre. */
-  .jack {
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .jack span {
-    margin-top: 0.15rem;
-    width: 1.15rem;
-    height: 1.15rem;
-    border-radius: 50%;
-    border: 2px solid var(--brass-deep);
-    display: block;
-    position: relative;
-  }
-
-  .jack span::after {
-    content: "";
-    position: absolute;
-    inset: 2.5px;
-    border-radius: 50%;
-    background: currentColor;
-  }
-
-  .state-platform { color: var(--patina); }
-  .state-client   { color: var(--amber); }
-  .state-leak     { color: var(--lamp-red); }
-
-  .op {
+  .ledger-what {
     font-family: var(--display);
-    font-size: 1.16rem;
+    font-size: 1.08rem;
     text-transform: uppercase;
     letter-spacing: 0.02em;
     line-height: 1.15;
     align-self: start;
   }
 
-  .detail {
-    font-size: 0.9rem;
-    color: var(--ink-soft);
+  /* The lamp is positioned, not a flex sibling: as a flex container the cell
+     turned every inline <code> into its own column and shredded the sentence. */
+  .was, .now {
+    font-size: 0.89rem;
     line-height: 1.5;
+    position: relative;
+    padding-left: 2.5rem;
   }
 
-  .writes {
-    display: block;
-    font-family: var(--mono);
-    font-variant-numeric: tabular-nums;
-    font-size: 0.68rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 0.3rem;
+  .was { color: var(--ink-faint); }
+  .now { color: var(--ink-soft); }
+
+  .was::before, .now::before {
+    content: "";
+    position: absolute;
+    left: 1.1rem;
+    top: 1.28rem;
+    width: 0.66rem;
+    height: 0.66rem;
+    border-radius: 50%;
+    border: 2px solid var(--brass-deep);
   }
 
-  .tool {
+  .was::before { background: var(--alert); }
+  .now::before { background: var(--platform); }
+
+  .now code, .was code {
     font-family: var(--mono);
-    font-size: 0.78rem;
-    line-height: 1.5;
+    font-size: 0.86em;
     color: var(--brass);
-    word-break: break-word;
-    align-self: start;
   }
 
-  .tool em {
-    display: block;
-    font-family: var(--prose);
-    font-style: italic;
-    font-size: 0.82rem;
-    color: var(--ink-faint);
-    margin-top: 0.25rem;
-  }
-
-  /* ---- Leak diagram: the cord still plugged into a dead jack ---- */
-
-  .leaks {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1px;
-    background: var(--rule);
-    border: 1px solid var(--rule);
-  }
-
-  .leak {
-    background: var(--panel);
-    padding: 1.4rem 1.35rem 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
-  }
-
-  .leak h3 {
-    font-family: var(--display);
-    font-size: 1.2rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    margin: 0;
-    font-weight: 600;
-  }
-
-  .leak p {
-    margin: 0;
-    font-size: 0.93rem;
-    color: var(--ink-soft);
-  }
-
-  .cords {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    font-family: var(--mono);
-    font-size: 0.75rem;
-  }
-
-  .cord {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.35rem 0.55rem;
-    background: var(--panel-raised);
-    border-left: 2px solid var(--rule);
-  }
-
-  .cord.cut    { border-left-color: var(--patina); color: var(--ink-faint); }
-  .cord.live   { border-left-color: var(--lamp-red); color: var(--ink); }
-
-  .cord .tag {
-    font-size: 0.6rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-left: auto;
-    white-space: nowrap;
-  }
-
-  .cord.cut .tag  { color: var(--patina); }
-  .cord.live .tag { color: var(--lamp-red); }
-
-  /* ---- Prose blocks ---- */
+  /* ---- Prose ---- */
 
   .note {
     max-width: var(--measure);
@@ -445,18 +461,54 @@
   .open-item strong {
     font-family: var(--display);
     text-transform: uppercase;
-    letter-spacing: 0.02em;
     font-weight: 600;
     font-size: 1.02rem;
     display: block;
     margin-bottom: 0.2rem;
   }
 
-  .open-item p {
-    margin: 0;
-    font-size: 0.92rem;
+  .open-item p { margin: 0; font-size: 0.92rem; color: var(--ink-soft); }
+
+  details {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    padding: 0.9rem 1.1rem;
+  }
+
+  summary {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    cursor: pointer;
+  }
+
+  summary:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.9rem;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 0.4rem 0.7rem 0.4rem 0;
+    border-bottom: 1px solid var(--rule);
     color: var(--ink-soft);
   }
+
+  th {
+    color: var(--ink-faint);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 400;
+  }
+
+  td.num { font-variant-numeric: tabular-nums; text-align: right; padding-right: 1.2rem; color: var(--ink); }
 
   footer {
     border-top: 1px solid var(--rule);
@@ -471,11 +523,9 @@
     gap: 0.4rem 1.5rem;
   }
 
-  a { color: var(--brass); }
-
-  @media (max-width: 640px) {
-    .row { grid-template-columns: 2.6rem minmax(150px, 1.3fr) minmax(180px, 1.6fr) minmax(150px, 1fr); }
-    body { font-size: 16px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .bar-fill { transition: filter 0.15s ease; }
+    .bar-row:hover .bar-fill { filter: brightness(1.12); }
   }
 </style>
 
@@ -484,285 +534,253 @@
   <header class="strip">
     <div class="strip-meta">
       <span>Phoneware &middot; netsapiens-mcp</span>
-      <span>Coverage against the manager portal</span>
+      <span>Parity against the manager portal</span>
       <span>Controller source dated 2025-12-07</span>
     </div>
-    <h1>One portal action<br><span class="thin">is rarely</span> one API call</h1>
+    <h1>Every portal operation<br><span class="thin">is now</span> reachable</h1>
     <p class="standfirst">
-      Read against the NetSapiens v2 controller source, most operations a manager performs
-      in the portal are chains of writes across several object types. The question that
-      decides whether our MCP needs a tool is not whether an operation is a chain, but
-      which end of the wire runs it.
+      Read against the NetSapiens v2 controller source, most operations a manager
+      performs in the portal are chains of writes across several object types. Some
+      chains the API runs for you. Some it leaves half-finished. And a handful of
+      tools looked callable while being impossible to complete. All three are closed.
     </p>
   </header>
 
   <div class="lamps">
     <div class="lamp">
-      <span class="figure">481</span>
-      <span class="caption">API operations<br>mapped from the spec</span>
+      <span class="figure good">0</span>
+      <span class="caption">Operations we<br>cannot complete</span>
     </div>
     <div class="lamp">
-      <span class="figure">727</span>
-      <span class="caption">Generated tools<br>in the full registry</span>
+      <span class="figure">481</span>
+      <span class="caption">API operations<br>mapped from the spec</span>
     </div>
     <div class="lamp">
       <span class="figure">43</span>
       <span class="caption">Curated default surface<br>25 for a basic user</span>
     </div>
     <div class="lamp">
-      <span class="figure">5</span>
-      <span class="caption">Chains the client<br>has to run</span>
+      <span class="figure">14</span>
+      <span class="caption">Workflow composites<br>covering the chains</span>
     </div>
     <div class="lamp">
-      <span class="figure">2</span>
-      <span class="caption">Platform leaks<br>closed on our side</span>
+      <span class="figure">329</span>
+      <span class="caption">Tests, including a<br>spec-conformance guard</span>
     </div>
   </div>
 
   <section>
     <header>
-      <span class="eyebrow eyebrow--platform">Chain run by the platform</span>
-      <h2>One call, and the work is complete</h2>
+      <span class="eyebrow eyebrow--brass">Why one call is not one action</span>
+      <h2>The work behind a single portal click</h2>
       <p>
-        These endpoints perform every write themselves. Wrapping them in a client-side
-        composite would add failure modes and buy nothing, so we deliberately ship no
-        composite for any of them. The generated tool is the whole operation.
+        Two different measures, so two panels rather than one misleading axis. On the
+        left, writes NetSapiens performs inside a single endpoint. On the right, calls
+        our composite has to chain because the API stops after the first one.
       </p>
     </header>
 
-    <div class="field">
-      <div class="row head">
-        <div></div>
-        <div>Portal operation</div>
-        <div>What the single endpoint writes</div>
-        <div>Our surface</div>
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-title">
+          <b>Writes inside one endpoint</b>
+          <span>Counted from the controller source</span>
+        </div>
+        <div class="chart" role="img" aria-label="Writes performed inside a single NetSapiens endpoint: update a timeframe 29, delete a user 10, create an auto attendant 8, create a domain 5, update a call queue 3, create a device 2, create a call queue 2, send a message 2.">
+          <div class="bar-row" tabindex="0" title="Update a timeframe — 29 write sites across 6 models, all inside one PUT">
+            <span class="bar-label">Update a timeframe</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:100%"></span></span>
+            <span class="bar-value">29</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Delete a user — cascades to 10 object types inside one DELETE">
+            <span class="bar-label">Delete a user</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:34.5%"></span></span>
+            <span class="bar-value">10</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Create an auto attendant — 8 writes across 4 object types">
+            <span class="bar-label">Create an auto attendant</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:27.6%"></span></span>
+            <span class="bar-value">8</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Create a domain — domain row, video subscription, dial plan, dial rule, domain subscriber">
+            <span class="bar-label">Create a domain</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:17.2%"></span></span>
+            <span class="bar-value">5</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Update a call queue — call queue, hunt group, and the backing subscriber">
+            <span class="bar-label">Update a call queue</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:10.3%"></span></span>
+            <span class="bar-value">3</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Create a device — device plus its MAC registration">
+            <span class="bar-label">Create a device</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:6.9%"></span></span>
+            <span class="bar-value">2</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Create a call queue — call queue plus hunt group">
+            <span class="bar-label">Create a call queue</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:6.9%"></span></span>
+            <span class="bar-value">2</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="Send a message — message plus message session">
+            <span class="bar-label">Send a message</span>
+            <span class="bar-track"><span class="bar-fill platform" style="width:6.9%"></span></span>
+            <span class="bar-value">2</span>
+          </div>
+        </div>
+        <p class="chart-note">One tool call each. Wrapping these would only add ways to fail.</p>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Create a domain</div>
-        <div class="detail">
-          <span class="writes">5 writes &middot; 4 object types</span>
-          Domain row, video subscription, dial plan, catch-all dial rule, and a
-          <code>domain</code> subscriber carrying the plan.
+      <div class="panel">
+        <div class="panel-title">
+          <b>Calls our composite chains</b>
+          <span>Typical case, one agent and one number</span>
         </div>
-        <div class="tool">create_domain<em>Generated, unmodified</em></div>
+        <div class="chart" role="img" aria-label="Calls chained by our composites: add a usable user 3, staff a call queue 3, remove a user 3, remove a call queue 3, forward calls until a date 2.">
+          <div class="bar-row" tabindex="0" title="provision_user — user record, device, DID">
+            <span class="bar-label">Add a usable user</span>
+            <span class="bar-track"><span class="bar-fill client" style="width:100%"></span></span>
+            <span class="bar-value">3</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="provision_call_queue — queue, one call per agent, DID">
+            <span class="bar-label">Staff a call queue</span>
+            <span class="bar-track"><span class="bar-fill client" style="width:100%"></span></span>
+            <span class="bar-value">3</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="deprovision_user — delete, release the DID, remove the queue agent row">
+            <span class="bar-label">Remove a user</span>
+            <span class="bar-track"><span class="bar-fill client" style="width:100%"></span></span>
+            <span class="bar-value">3</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="deprovision_call_queue — remove agents, delete the queue, release the DID">
+            <span class="bar-label">Remove a call queue</span>
+            <span class="bar-track"><span class="bar-fill client" style="width:100%"></span></span>
+            <span class="bar-value">3</span>
+          </div>
+          <div class="bar-row" tabindex="0" title="schedule_forwarding with until — create the timeframe, then the answer rule">
+            <span class="bar-label">Forward until a date</span>
+            <span class="bar-track"><span class="bar-fill client" style="width:66.7%"></span></span>
+            <span class="bar-value">2</span>
+          </div>
+        </div>
+        <p class="chart-note">Still one tool call for the model. The composite runs the sequence.</p>
+      </div>
+    </div>
+
+    <div class="legend" style="margin-top:1rem">
+      <span><i class="platform"></i> NetSapiens runs the chain</span>
+      <span><i class="client"></i> Our composite runs the chain</span>
+    </div>
+
+    <details style="margin-top:1rem">
+      <summary>View as a table</summary>
+      <table>
+        <thead>
+          <tr><th>Operation</th><th>Who runs the chain</th><th style="text-align:right">Writes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Update a timeframe</td><td>NetSapiens</td><td class="num">29</td></tr>
+          <tr><td>Delete a user</td><td>NetSapiens</td><td class="num">10</td></tr>
+          <tr><td>Create an auto attendant</td><td>NetSapiens</td><td class="num">8</td></tr>
+          <tr><td>Create a domain</td><td>NetSapiens</td><td class="num">5</td></tr>
+          <tr><td>Update a call queue</td><td>NetSapiens</td><td class="num">3</td></tr>
+          <tr><td>Create a device</td><td>NetSapiens</td><td class="num">2</td></tr>
+          <tr><td>Create a call queue</td><td>NetSapiens</td><td class="num">2</td></tr>
+          <tr><td>Send a message</td><td>NetSapiens</td><td class="num">2</td></tr>
+          <tr><td>Add a usable user</td><td>Our composite</td><td class="num">3</td></tr>
+          <tr><td>Staff a call queue</td><td>Our composite</td><td class="num">3</td></tr>
+          <tr><td>Remove a user</td><td>Our composite</td><td class="num">3</td></tr>
+          <tr><td>Remove a call queue</td><td>Our composite</td><td class="num">3</td></tr>
+          <tr><td>Forward until a date</td><td>Our composite</td><td class="num">2</td></tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <section>
+    <header>
+      <span class="eyebrow eyebrow--platform">What changed</span>
+      <h2>Seven ways the surface used to dead-end</h2>
+      <p>
+        Each of these was a tool the model could pick and never complete, or worse, one
+        that reported success while doing nothing. Left is what happened before; right
+        is what happens now.
+      </p>
+    </header>
+
+    <div class="ledger">
+      <div class="ledger-row head">
+        <div>What</div>
+        <div>Was</div>
+        <div>Now</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Create an auto attendant</div>
-        <div class="detail">
-          <span class="writes">8 writes &middot; 4 object types</span>
-          Dial plan, catch-all dial rule, subscriber, forwarding answer rule, three tier
-          dial rules, then the prompt tier structure.
-        </div>
-        <div class="tool">post_domains_by_domain_autoattendants<em>Generated, unmodified</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Forwarding calls</div>
+        <div class="was">Sent <code>rule-action</code> and <code>forward-destination</code>, which appear nowhere in the spec or the source. NetSapiens ignored them and answered success.</div>
+        <div class="now">Sends <code>forward-always</code>, the field the controller actually reads. A conformance test fails the build if a composite invents a field name again.</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Create a timeframe</div>
-        <div class="detail">
-          <span class="writes">6 models</span>
-          Timeframe, days-of-week, holiday, master, specific-date, and time-range rows in
-          one transaction.
-        </div>
-        <div class="tool">post_domains_by_domain_timeframes_1<em>Generated. One per timeframe type.</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Every write</div>
+        <div class="was">Returned 202 with an empty body before replicating, so create-then-read raced and the model reported failures that never happened.</div>
+        <div class="now"><code>synchronous=yes</code> on all 32 operations that accept it, so a write is readable when it returns.</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Update a timeframe</div>
-        <div class="detail">
-          <span class="writes">6 models &middot; 29 write sites</span>
-          The heaviest single handler in the source. It reconciles every child row rather
-          than replacing the parent.
-        </div>
-        <div class="tool">put_domains_by_domain_timeframes_by_id_6<em>Generated. One per timeframe type.</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Adding a user</div>
+        <div class="was">Wrote the user record only. No device to register a phone, no number to reach them on.</div>
+        <div class="now"><code>provision_user</code> runs user, device, DID in order and names what is still unconfigured.</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Create a device</div>
-        <div class="detail">
-          <span class="writes">2 models</span>
-          Device plus its MAC registration, so a provisioned handset comes back in one
-          response.
-        </div>
-        <div class="tool">create_device<em>Generated, unmodified</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Staffing a queue</div>
+        <div class="was">Wrote the queue and hunt group. No agents, so nothing answered. Missing the description the controller requires, so it 400'd.</div>
+        <div class="now"><code>provision_call_queue</code> adds each agent and the DID, and always sends a description.</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Update a call queue</div>
-        <div class="detail">
-          <span class="writes">3 models</span>
-          Call queue, hunt group, and the subscriber that backs the queue, kept in step
-          with each other.
-        </div>
-        <div class="tool">update_callqueue<em>Generated, unmodified</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Removing a user or queue</div>
+        <div class="was">Cascaded generously, but never to DIDs routed at the target or its queue agent rows. A deleted user left numbers routing at nothing.</div>
+        <div class="now">Both <code>deprovision_*</code> tools inventory the leftovers first, then release them. <code>dry_run</code> shows the plan.</div>
       </div>
 
-      <div class="row">
-        <div class="jack state-platform"><span></span></div>
-        <div class="op">Send a message</div>
-        <div class="detail">
-          <span class="writes">2 models &middot; upload + queue handling</span>
-          Message and message session, including media upload and any queue routing the
-          session needs.
-        </div>
-        <div class="tool">send_message_sms<em>Curated composite, plus per-channel generated tools</em></div>
+      <div class="ledger-row">
+        <div class="ledger-what">Media uploads</div>
+        <div class="was">12 tools sent JSON to endpoints that parse a raw upload. Guaranteed failure, with nothing suggesting another route.</div>
+        <div class="now">Hidden from search and rejected with the working alternative named: text-to-speech or base64 for greetings, music, images.</div>
+      </div>
+
+      <div class="ledger-row">
+        <div class="ledger-what">Hold messages</div>
+        <div class="was">The one family with no upload-free variant. Reading and deleting worked; creating one was impossible from here.</div>
+        <div class="now"><code>set_hold_message</code> sends a real multipart upload from base64 audio, for a domain or a single user.</div>
       </div>
     </div>
   </section>
 
   <section>
     <header>
-      <span class="eyebrow eyebrow--client">Chain run by the client</span>
-      <h2>The portal walks you through it. The API does not.</h2>
-      <p>
-        Here the endpoint writes one piece and stops. In the portal these are a wizard or a
-        screen with several panels; through a bare API they are separate calls in a
-        specific order, with a half-built object waiting if you stop partway. Each one is a
-        composite in our catalog.
-      </p>
-    </header>
-
-    <div class="field">
-      <div class="row head">
-        <div></div>
-        <div>Portal operation</div>
-        <div>What the endpoint leaves undone</div>
-        <div>Our surface</div>
-      </div>
-
-      <div class="row">
-        <div class="jack state-client"><span></span></div>
-        <div class="op">Add a usable user</div>
-        <div class="detail">
-          <span class="writes">Writes the user record only</span>
-          No device, so no phone can register. No DID, so no outside call can reach them.
-          Both are separate endpoints.
-        </div>
-        <div class="tool">provision_user<em>User, then device, then DID. Stops at the first failure and names what is still unconfigured.</em></div>
-      </div>
-
-      <div class="row">
-        <div class="jack state-client"><span></span></div>
-        <div class="op">Staff a call queue</div>
-        <div class="detail">
-          <span class="writes">Writes queue + hunt group only</span>
-          No agents, so nothing answers. No DID, so nobody outside can reach it. Agents are
-          one call each.
-        </div>
-        <div class="tool">provision_call_queue<em>Queue, then each agent, then the DID. Bare extensions are qualified to user@domain.</em></div>
-      </div>
-
-      <div class="row">
-        <div class="jack state-client"><span></span></div>
-        <div class="op">Forward calls until a date</div>
-        <div class="detail">
-          <span class="writes">2 calls, strictly ordered</span>
-          A date-range timeframe, then an answer rule pointed at it by name. NetSapiens
-          takes compact <code>YYYYMMDD</code> and <code>HHMM</code>, not ISO.
-        </div>
-        <div class="tool">schedule_forwarding<em>Pass `until`. Refuses to build the rule if the timeframe failed, because a rule pointed at a missing timeframe applies never and reads as success.</em></div>
-      </div>
-
-      <div class="row">
-        <div class="jack state-leak"><span></span></div>
-        <div class="op">Remove a user</div>
-        <div class="detail">
-          <span class="writes">Cascades 10 object types</span>
-          Devices, contacts, addresses, timeframes, voicemail nags, CDR schedules, queue
-          email reports, video host, message sessions, MFA. Not DIDs. Not queue agent rows.
-        </div>
-        <div class="tool">deprovision_user<em>Inventories the leftovers first, deletes, then releases them. dry_run prints the plan.</em></div>
-      </div>
-
-      <div class="row">
-        <div class="jack state-leak"><span></span></div>
-        <div class="op">Remove a call queue</div>
-        <div class="detail">
-          <span class="writes">Writes queue + hunt group only</span>
-          Zero references to agents anywhere in the delete handler. Every membership and
-          any DID pointed at the queue survives it.
-        </div>
-        <div class="tool">deprovision_call_queue<em>Removes agents before the queue, since afterwards their endpoint has no queue to address.</em></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <header>
-      <span class="eyebrow eyebrow--alert">Platform behavior, not ours</span>
-      <h2>The cords that stay plugged in</h2>
-      <p>
-        Two of those deletes leak the same way, and they leak in the portal too. The record
-        is gone; the route to it is not. A DID that still resolves to a deleted destination
-        is worse than a DID that resolves nowhere, because the dial plan keeps answering.
-      </p>
-    </header>
-
-    <div class="leaks">
-      <div class="leak">
-        <h3>Delete a user</h3>
-        <div class="cords">
-          <div class="cord cut">Devices <span class="tag">Released</span></div>
-          <div class="cord cut">Contacts, addresses, timeframes <span class="tag">Released</span></div>
-          <div class="cord cut">Voicemail, MFA, CDR schedules <span class="tag">Released</span></div>
-          <div class="cord live">DIDs routed to the user <span class="tag">Still live</span></div>
-          <div class="cord live">Call queue agent rows <span class="tag">Still live</span></div>
-        </div>
-        <p>
-          <code>deprovision_user</code> reads both before deleting, then releases them, and
-          does the cleanup even if the delete itself failed. A half-deleted user with live
-          DIDs is the worst of the available states.
-        </p>
-      </div>
-
-      <div class="leak">
-        <h3>Delete a call queue</h3>
-        <div class="cords">
-          <div class="cord cut">Call queue row <span class="tag">Released</span></div>
-          <div class="cord cut">Hunt group row <span class="tag">Released</span></div>
-          <div class="cord live">Every agent membership <span class="tag">Still live</span></div>
-          <div class="cord live">DIDs routed to the queue <span class="tag">Still live</span></div>
-        </div>
-        <p>
-          <code>deprovision_call_queue</code> removes the agents first. Once the queue row
-          is gone, the membership endpoint has no queue to address and those rows are
-          unreachable through the API at all.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <header>
-      <span class="eyebrow eyebrow--brass">Write semantics</span>
-      <h2>Every write used to race the replica</h2>
+      <span class="eyebrow eyebrow--alert">Still true of the platform</span>
+      <h2>The cords the API leaves plugged in</h2>
     </header>
 
     <div class="note">
       <p>
-        NetSapiens writes take a <code>synchronous</code> flag that defaults to
-        <code>no</code>. With <code>no</code> the API answers 202 with an empty body before
-        the write has replicated far enough to be read back. Any flow shaped
-        <em>create it, then read it back</em> raced that: the model wrote, re-read, found
-        nothing, and reported a failure that never happened.
+        Two of the delete cascades stop short, and they stop short in the portal too.
+        Delete a user and their devices, contacts, addresses, timeframes, voicemail and
+        MFA all go. The DID routed at them does not, and neither does their row in a
+        call queue. Delete a queue and its agent memberships survive it.
       </p>
       <p class="pull">
-        32 operations declare the flag.<br>
-        26 of them mark it required.<br>
-        0 of our calls used to send it.
+        A DID that resolves to a deleted destination<br>
+        is worse than one that resolves nowhere,<br>
+        because the dial plan keeps answering.
       </p>
       <p>
-        The tell was in the platform's own code: NetSapiens sets
-        <code>synchronous=yes</code> on the subscriber create inside the auto attendant
-        chain, precisely because the six steps after it read that subscriber back. We now
-        default it on every tool whose schema accepts it, and an explicit value always wins.
+        We cannot fix that in the platform, so the composites clean up after it, and
+        do the cleanup even when the delete itself failed. A half-deleted user with
+        live DIDs is the worst of the available states.
       </p>
     </div>
   </section>
@@ -770,7 +788,7 @@
   <section>
     <header>
       <span class="eyebrow eyebrow--brass">Next</span>
-      <h2>What the source says to do next</h2>
+      <h2>The one gap left is efficiency, not reach</h2>
     </header>
 
     <div class="open">
@@ -780,10 +798,10 @@
           <strong>Enrich the spec at generation time</strong>
           <p>
             The controllers honor <code>fields</code>, <code>limit</code>,
-            <code>start</code>, and <code>sort</code> far more widely than the vendored spec
-            declares, and carry 1,743 parameter descriptions plus 269 per-endpoint
-            permission annotations the spec does not. One generator change improves every
-            tool at once.
+            <code>start</code> and <code>sort</code> far more widely than the vendored
+            spec declares, and carry 1,743 parameter descriptions plus 269 per-endpoint
+            permission annotations the spec does not. One generator change improves
+            every tool at once.
           </p>
         </div>
       </div>
@@ -792,9 +810,9 @@
         <div>
           <strong>Thread field selection into the composites</strong>
           <p>
-            <code>find_user</code> pulls a thousand full records to match on five fields.
-            <code>deprovision_user</code> lists every number in the domain to find one.
-            Both become cheap the moment sparse fieldsets are available.
+            <code>find_user</code> pulls a thousand full records to match on five
+            fields. <code>deprovision_user</code> lists every number in the domain to
+            find one. Both get cheap the moment sparse fieldsets are available.
           </p>
         </div>
       </div>
@@ -805,7 +823,7 @@
           <p>
             Three routes exist in the router and in none of the spec, with 44 metric
             definitions behind them: handle time, speed of answer, service level,
-            after-call work, agent time in state. The model cannot currently see any of it.
+            after-call work, agent time in state. The model still cannot see any of it.
           </p>
         </div>
       </div>
@@ -813,7 +831,7 @@
   </section>
 
   <footer>
-    <span>Sources: RestsController, AppController, and 75 object controllers</span>
+    <span>Sources: RestsController, AppController, 75 object controllers</span>
     <span>docs/netsapiens-controller-findings.md</span>
   </footer>
 
