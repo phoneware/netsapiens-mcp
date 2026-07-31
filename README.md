@@ -168,7 +168,7 @@ The server exposes **a curated catalog of ~39 task-shaped tools by default** ins
 The catalog has three layers:
 
 1. **Thin composites** (~28) — one-or-two-call wrappers over common NS endpoints: `find_user`, `find_contact`, `find_domain`, `find_phone_number`, `find_device`, `recent_calls`, `active_calls`, `call_details`, `call_trace`, `place_call`, `transfer_call`, `end_call`, `my_voicemails`, `read_voicemail`, `forward_voicemail`, `list_message_sessions`, `read_messages`, `send_message`, `list_queues`, `queue_status`, `agent_login`, `agent_logout`, `agent_status`, `my_devices`, `my_answer_rules`, `update_my_answer_rule`, `call_statistics`, `agent_statistics`.
-2. **Workflow tools** (13) — multi-call composites that chain endpoints to deliver a higher-level intent in one shot: `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`, `provision_user`, `deprovision_user`, `provision_call_queue`, `deprovision_call_queue`.
+2. **Workflow tools** (14) — multi-call composites that chain endpoints to deliver a higher-level intent in one shot: `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`, `provision_user`, `deprovision_user`, `provision_call_queue`, `deprovision_call_queue`, `set_hold_message`.
 3. **API discovery / escape hatch** (2) — `search_api` and `call_api` (see next section).
 
 The catalog is **scope-aware**: a basic NS user sees ~25 self-service tools; a domain admin or above sees the full ~39 including supervisory and diagnostic operations. The catalog lives in `src/tools/curated/catalog.ts` and `src/tools/curated/workflows.ts`; edit there and rebuild.
@@ -196,6 +196,14 @@ Two composites cover operations that are a chain rather than a call:
 A full sweep of which NetSapiens operations are chains, and which end of the wire runs them, is in the findings doc. Creating a domain, creating an auto attendant, and creating or deleting a timeframe are all handled server-side in a single call, so they get no composite.
 
 These are grounded in the platform behavior documented in [`docs/netsapiens-controller-findings.md`](docs/netsapiens-controller-findings.md).
+
+### Dead ends, and how they are closed
+
+A generated tool can look callable and be impossible to complete. Three kinds showed up, and each is now handled rather than left for the model to discover:
+
+- **Multipart uploads.** The generator treats a `multipart/form-data` body like a JSON one, so it emitted 12 tools that send JSON to endpoints which parse a raw upload. They are hidden from `search_api` and rejected at dispatch with the working alternative named. Greetings, music-on-hold, and images all have a text-to-speech or base64 variant. Hold messages have neither, so `set_hold_message` sends a genuine multipart upload from base64 audio.
+- **Fields the spec understates.** `POST /callqueues` validates `domain`, `queue`, **and** `description` in the controller, while the spec marks only the first two required. `provision_call_queue` now always sends one.
+- **Invented field names.** A body key NetSapiens does not recognise is ignored, and the call still answers success, so the tool reports work it never did. `spec-conformance.test.ts` drives every write composite against a recording client and fails if any body key is absent from the spec for that operation. It would have caught the `rule-action` bug the day it was written.
 
 ### What each tool carries
 
