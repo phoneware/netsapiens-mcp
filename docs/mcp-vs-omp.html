@@ -853,13 +853,21 @@
   <section>
     <header>
       <span class="eyebrow eyebrow--brass">Call for call</span>
-      <h2>The portal makes the same calls we do</h2>
+      <h2>One request. The server makes the rest of the calls itself.</h2>
       <p>
-        Worth being precise about why: <code>isV2()</code> is a per-request flag on the
-        same controllers, and an action name resolves to a method on that same class.
-        The portal and this server run identical handlers. Neither interface has a
-        composite endpoint the other lacks, so the API calls needed to finish a job are
-        the same number on both sides. What differs is who has to remember the sequence.
+        Where one call does eight things, it does them in-process, not over HTTP.
+        <code>DomainsController::create</code> runs <code>new DialrulesController()</code>
+        and calls <code>-&gt;create($form, true)</code> on it directly, where the
+        <code>true</code> suppresses the inner response so only the outer one is emitted.
+        One request in, one response out, five writes in between.
+      </p>
+      <p>
+        Several of those cascades only run on v2, the interface this server speaks. On the
+        older v1 interface, creating a domain writes the domain row and stops, creating a
+        user skips the default answer rule, and creating an auto attendant is refused
+        outright with <em>&ldquo;Attendants Create are not supported in V1&rdquo;</em>. So
+        the calls below are what v2 costs. Anything still on v1 pays more for the same
+        result.
       </p>
     </header>
 
@@ -871,16 +879,16 @@
         <div>What the MCP does now</div>
       </div>
 
-      <div class="calls-row group platform"><div><i></i> NetSapiens runs the chain &mdash; one call finishes the job, and one generated tool covers it</div></div>
-      <div class="calls-row"><div class="calls-op">Create a domain</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains</span></li></ol><p class="seq-note">The one call writes the domain row, video subscription, dial plan, catch-all dial rule and the domain subscriber.</p></div><div class="calls-mcp"><b>create_domain</b></div></div>
-      <div class="calls-row"><div class="calls-op">Create an auto attendant</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/autoattendants</span></li></ol><p class="seq-note">8 writes across 4 object types behind it, including a subscriber and three tier dial rules.</p></div><div class="calls-mcp"><b>post_domains_by_domain_autoattendants</b></div></div>
+      <div class="calls-row group platform"><div><i></i> NetSapiens runs the chain in-process &mdash; one request, one generated tool</div></div>
+      <div class="calls-row"><div class="calls-op">Create a domain</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains</span></li></ol><p class="seq-note">Writes the domain row, video subscription, dial plan, catch-all dial rule and the domain subscriber. Everything past the domain row is gated to v2; on v1 the same call writes the domain row alone.</p></div><div class="calls-mcp"><b>create_domain</b></div></div>
+      <div class="calls-row"><div class="calls-op">Create an auto attendant</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/autoattendants</span></li></ol><p class="seq-note">8 writes across 4 object types, including a subscriber and three tier dial rules. v1 cannot do this at all &mdash; it answers 400.</p></div><div class="calls-mcp"><b>post_domains_by_domain_autoattendants</b></div></div>
       <div class="calls-row"><div class="calls-op">Create a timeframe</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/timeframes<span class="body">timeframe-name, timeframe-type, and the array for that type</span></span></li></ol><p class="seq-note">Writes 6 models. One operation per timeframe type; this is the specific-dates variant.</p></div><div class="calls-mcp"><b>post_domains_by_domain_timeframes_1</b></div></div>
       <div class="calls-row"><div class="calls-op">Update a timeframe</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">PUT</span> /domains/{domain}/timeframes/{id}</span></li></ol><p class="seq-note">The heaviest handler in the source: 6 models across 29 write sites, reconciled rather than replaced.</p></div><div class="calls-mcp"><b>put_domains_by_domain_timeframes_by_id_6</b></div></div>
       <div class="calls-row"><div class="calls-op">Create a device</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/devices<span class="body">device, device-sip-registration-password</span></span></li></ol><p class="seq-note">Device and MAC registration written together.</p></div><div class="calls-mcp"><b>create_device</b></div></div>
       <div class="calls-row"><div class="calls-op">Create a call queue</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/callqueues<span class="body">callqueue, domain, description</span></span></li></ol><p class="seq-note">Queue and hunt group written together. The controller requires a description even though the spec does not mark it required.</p></div><div class="calls-mcp"><b>create_callqueue</b></div></div>
       <div class="calls-row"><div class="calls-op">Update a call queue</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">PUT</span> /domains/{domain}/callqueues/{callqueue}</span></li></ol><p class="seq-note">Keeps queue, hunt group and the backing subscriber in step.</p></div><div class="calls-mcp"><b>update_callqueue</b></div></div>
       <div class="calls-row"><div class="calls-op">Send a message</div><div class="calls-n">1<small>call</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/messagesessions/{id}/messages</span></li></ol><p class="seq-note">Message and message session written together, with upload and queue routing handled server-side.</p></div><div class="calls-mcp"><b>send_message_sms</b></div></div>
-      <div class="calls-row group client"><div><i></i> The client runs the chain &mdash; identical calls, but somebody has to sequence them</div></div>
+      <div class="calls-row group client"><div><i></i> No cascade exists &mdash; these calls are ours to sequence, on either interface</div></div>
       <div class="calls-row"><div class="calls-op">Add a usable user</div><div class="calls-n">4<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/users<span class="body">synchronous, user, name-first-name, name-last-name, email, user-scope</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/users/{user}/devices<span class="body">synchronous, device</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/phonenumbers<span class="body">phonenumber, dial-rule-translation-destination-user, enabled</span></span></li><li class="read"><span><span class="verb">GET</span> /domains/{domain}/users/{user}<span class="body">read back to confirm</span></span></li></ol><p class="seq-note">Stop after call 1 and the user cannot register a phone or take an outside call.</p></div><div class="calls-mcp"><b>provision_user</b>One tool call. Stops at the first failure rather than orphaning a device on a user that does not exist.</div></div>
       <div class="calls-row"><div class="calls-op">Staff a call queue</div><div class="calls-n">2+n<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/{domain}/callqueues<span class="body">synchronous, callqueue, domain, description</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/callqueues/{callqueue}/agents<span class="body">callqueue-agent-id &mdash; one call per agent</span></span></li><li><span><span class="verb">POST</span> /domains/{domain}/phonenumbers<span class="body">phonenumber, dial-rule-translation-destination-user, enabled</span></span></li></ol><p class="seq-note">A queue with no agents answers nothing; without the number nobody outside can reach it.</p></div><div class="calls-mcp"><b>provision_call_queue</b>One tool call. Agents go one at a time so a failure names the agent it happened on, and bare extensions are qualified to user@domain.</div></div>
       <div class="calls-row"><div class="calls-op">Forward calls until a date</div><div class="calls-n">2<small>calls</small></div><div class="calls-omp"><ol class="seq"><li><span><span class="verb">POST</span> /domains/~/users/~/timeframes<span class="body">synchronous, timeframe-name, timeframe-type, timeframe-specific-dates-array</span></span></li><li><span><span class="verb">POST</span> /domains/~/users/~/answerrules<span class="body">synchronous, time-frame, enabled, forward-always</span></span></li></ol><p class="seq-note">Call 2 names the timeframe from call 1. Reverse them and the rule points at nothing.</p></div><div class="calls-mcp"><b>schedule_forwarding</b>Pass <code>until</code>. Refuses call 2 if call 1 failed, because a rule pointed at a missing timeframe applies never and still reads as success.</div></div>
@@ -892,9 +900,9 @@
     <p class="chart-note" style="margin-top:1rem">
       Paths and body fields were recorded by driving each composite against an
       instrumented client, so they are what the code sends rather than what it is
-      documented to send. The portal's own traffic is not in this dump, but the sequences
-      hold for both sides: these are the only handlers either interface can reach, and
-      none of them completes more than what is listed.
+      documented to send. The portal's own traffic is not in this dump, so which interface
+      it speaks is not something this source can settle. What the source does settle: on
+      v2 these are the calls, and three of the cascades above do not run on v1 at all.
     </p>
   </section>
 
