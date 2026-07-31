@@ -168,7 +168,7 @@ The server exposes **a curated catalog of ~39 task-shaped tools by default** ins
 The catalog has three layers:
 
 1. **Thin composites** (~28) — one-or-two-call wrappers over common NS endpoints: `find_user`, `find_contact`, `find_domain`, `find_phone_number`, `find_device`, `recent_calls`, `active_calls`, `call_details`, `call_trace`, `place_call`, `transfer_call`, `end_call`, `my_voicemails`, `read_voicemail`, `forward_voicemail`, `list_message_sessions`, `read_messages`, `send_message`, `list_queues`, `queue_status`, `agent_login`, `agent_logout`, `agent_status`, `my_devices`, `my_answer_rules`, `update_my_answer_rule`, `call_statistics`, `agent_statistics`.
-2. **Workflow tools** (9) — multi-call composites that chain endpoints to deliver a higher-level intent in one shot: `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`.
+2. **Workflow tools** (11) — multi-call composites that chain endpoints to deliver a higher-level intent in one shot: `diagnose_call`, `user_profile`, `queue_health`, `agent_dashboard`, `switch_queue`, `find_and_call`, `recent_activity_for_number`, `voicemail_inbox_summary`, `schedule_forwarding`, `provision_user`, `deprovision_user`.
 3. **API discovery / escape hatch** (2) — `search_api` and `call_api` (see next section).
 
 The catalog is **scope-aware**: a basic NS user sees ~25 self-service tools; a domain admin or above sees the full ~39 including supervisory and diagnostic operations. The catalog lives in `src/tools/curated/catalog.ts` and `src/tools/curated/workflows.ts`; edit there and rebuild.
@@ -179,6 +179,19 @@ Every tool (curated, workflow, or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
 - `annotations.destructiveHint` — `true` for delete-style operations.
+
+### Writes are synchronous, and multi-step operations are single tools
+
+
+
+This server defaults `synchronous` to `yes` on every tool whose schema accepts it, never overriding an explicit value. `MCP_SYNCHRONOUS_WRITES=false` restores the API's own default.
+
+Two composites cover operations that are a chain rather than a call:
+
+- **`provision_user`** — creating a user writes only the user record: no device, no DID. A user in that state cannot register a phone or take an outside call. This runs user → device → DID in order with synchronous writes, stops at the first failure instead of orphaning a device on a user that does not exist, and reports what is still unconfigured.
+- **`deprovision_user`** — deleting a user cascades server-side to their devices, contacts, addresses, timeframes, voicemail, and MFA, but **not** to DIDs routed at them or their queue agent rows. Those are left pointing at a destination that no longer exists. This inventories both first, deletes the user, then releases the leftovers. `dry_run: true` shows exactly what would go without touching anything.
+
+
 
 ### What each tool carries
 

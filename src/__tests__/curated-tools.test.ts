@@ -22,6 +22,11 @@ function clearEnv() {
   delete process.env.MCP_DISABLED_TOOLS;
   delete process.env.MCP_DISABLED_ACTIONS;
   delete process.env.MCP_DISABLE_ROLE_FILTER;
+  // These were previously left set by whichever test turned them on, so a
+  // later test could be silently refused by a filter it never asked for.
+  delete process.env.MCP_DISABLE_DESTRUCTIVE;
+  delete process.env.MCP_CONFIRM_DESTRUCTIVE;
+  delete process.env.MCP_SYNCHRONOUS_WRITES;
 }
 
 describe('MCP_TOOL_MODE', () => {
@@ -695,5 +700,257 @@ describe('composite handlers translate args correctly', () => {
     );
     const opts = calls[0] as { pathTemplate: string };
     expect(opts.pathTemplate).toContain('/transfer/peer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-step write orchestration
+// ---------------------------------------------------------------------------
+
+describe('synchronous writes', () => {
+  beforeEach(() => {
+    clearEnv();
+    delete process.env.MCP_SYNCHRONOUS_WRITES;
+  });
+
+  it('defaults synchronous=yes on a generated write that accepts it', async () => {
+    const { handleToolCall } = await importTools();
+    const bodies: unknown[] = [];
+    const client = {
+      request: async (o: { body?: unknown }) => {
+        bodies.push(o.body);
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(
+      client as never,
+      'call_api',
+      { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+      'system_admin',
+    );
+    expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('yes');
+  });
+
+  it('never overrides an explicit synchronous value', async () => {
+    const { handleToolCall } = await importTools();
+    const bodies: unknown[] = [];
+    const client = {
+      request: async (o: { body?: unknown }) => {
+        bodies.push(o.body);
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(
+      client as never,
+      'call_api',
+      { tool_name: 'create_user', args: { domain: 'd.com', user: '1001', synchronous: 'no' } },
+      'system_admin',
+    );
+    expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('no');
+  });
+
+  it('leaves the body alone when MCP_SYNCHRONOUS_WRITES=false', async () => {
+    process.env.MCP_SYNCHRONOUS_WRITES = 'false';
+    const { handleToolCall } = await importTools();
+    const bodies: unknown[] = [];
+    const client = {
+      request: async (o: { body?: unknown }) => {
+        bodies.push(o.body);
+        return { success: true, data: {} };
+      },
+    };
+    await handleToolCall(
+      client as never,
+      'call_api',
+      { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+      'system_admin',
+    );
+    expect((bodies[0] as Record<string, unknown>)?.synchronous).toBeUndefined();
+  });
+
+  it('does not add synchronous to a read', async () => {
+    const { handleToolCall } = await importTools();
+    const seen: Array<Record<string, unknown>> = [];
+    const client = {
+      request: async (o: Record<string, unknown>) => {
+        seen.push(o);
+        return { success: true, data: [] };
+      },
+    };
+    await handleToolCall(client as never, 'call_api', { tool_name: 'get_users', args: { domain: 'd.com' } }, 'domain_admin');
+    expect(seen[0]?.body).toBeUndefined();
+  });
+});
+
+describe('provision_user', () => {
+  beforeEach(clearEnv);
+
+  it('runs user, device, and DID in order with synchronous writes', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string; body?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; body?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+
+    await handleToolCall(
+      client as never,
+      'provision_user',
+      {
+        domain: 'acme.com', user: '1001', first_name: 'Ada', last_name: 'Lovelace',
+        email: 'ada@acme.com', device: '1001a', phone_number: '+13035551212',
+      },
+      'domain_admin',
+    );
+
+    const writes = calls.filter((c) => c.method === 'POST').map((c) => c.pathTemplate);
+    expect(writes).toEqual([
+      '/domains/{domain}/users',
+      '/domains/{domain}/users/{user}/devices',
+      '/domains/{domain}/phonenumbers',
+    ]);
+    expect(calls[0].body?.synchronous).toBe('yes');
+    expect(calls[1].body?.synchronous).toBe('yes');
+    // The DID is routed at the new user, which is what makes it reachable.
+    expect(calls[2].body?.['dial-rule-translation-destination-user']).toBe('1001');
+    // Ends with a read-back of the user it just created.
+    expect(calls[calls.length - 1].method).toBe('GET');
+  });
+
+  it('stops after a failed user create rather than orphaning a device', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        calls.push(o.pathTemplate);
+        return { success: false, error: '409 UID already exists.' };
+      },
+    };
+
+    const res = (await handleToolCall(
+      client as never,
+      'provision_user',
+      { user: '1001', first_name: 'A', last_name: 'B', email: 'a@b.com', device: '1001a', phone_number: '+13035551212' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    expect(calls).toEqual(['/domains/{domain}/users']);
+    const body = JSON.parse(res.content[0].text);
+    expect(body.ok).toBe(false);
+    expect(body.note).toMatch(/no device or phone number/i);
+  });
+
+  it('flags what is still unconfigured when only the user is created', async () => {
+    const { handleToolCall } = await importTools();
+    const client = { request: async () => ({ success: true, data: {} }) };
+    const res = (await handleToolCall(
+      client as never,
+      'provision_user',
+      { user: '1001', first_name: 'A', last_name: 'B', email: 'a@b.com' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    const body = JSON.parse(res.content[0].text);
+    expect(body.still_unconfigured.join(' ')).toMatch(/device/);
+    expect(body.still_unconfigured.join(' ')).toMatch(/DID/);
+  });
+});
+
+describe('deprovision_user', () => {
+  beforeEach(clearEnv);
+
+  /** A domain with one DID routed to 1001 and one queue membership for them. */
+  function domainWithLeftovers() {
+    const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+        calls.push(o);
+        if (o.pathTemplate === '/domains/{domain}/phonenumbers' && o.method === 'GET') {
+          return {
+            success: true,
+            data: [
+              { phonenumber: '+13035551212', 'dial-rule-translation-destination-user': '1001' },
+              { phonenumber: '+13035559999', 'dial-rule-translation-destination-user': '1002' },
+            ],
+          };
+        }
+        if (o.pathTemplate === '/domains/{domain}/agents' && o.method === 'GET') {
+          return {
+            success: true,
+            data: [
+              { 'callqueue-agent-id': '1001@acme.com', callqueue: 'support' },
+              { 'callqueue-agent-id': '1002@acme.com', callqueue: 'sales' },
+            ],
+          };
+        }
+        return { success: true, data: {} };
+      },
+    };
+    return { client, calls };
+  }
+
+  it('deletes the user, then releases their DID and queue membership', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = domainWithLeftovers();
+
+    await handleToolCall(client as never, 'deprovision_user', { domain: 'acme.com', user: '1001' }, 'domain_admin');
+
+    const deletes = calls.filter((c) => c.method === 'DELETE');
+    expect(deletes.map((c) => c.pathTemplate)).toEqual([
+      '/domains/{domain}/users/{user}',
+      '/domains/{domain}/phonenumbers/{phonenumber}',
+      '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
+    ]);
+    // Only this user's leftovers — 1002's number and queue row are untouched.
+    expect(deletes[1].pathParams?.phonenumber).toBe('+13035551212');
+    expect(deletes[2].pathParams?.['callqueue-agent-id']).toBe('1001@acme.com');
+    expect(deletes[2].pathParams?.callqueue).toBe('support');
+  });
+
+  it('dry_run reports the plan and writes nothing', async () => {
+    const { handleToolCall } = await importTools();
+    const { client, calls } = domainWithLeftovers();
+
+    const res = (await handleToolCall(
+      client as never,
+      'deprovision_user',
+      { domain: 'acme.com', user: '1001', dry_run: true },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    expect(calls.every((c) => c.method === 'GET')).toBe(true);
+    const body = JSON.parse(res.content[0].text);
+    expect(body.dry_run).toBe(true);
+    expect(body.plan.phone_numbers_to_release).toEqual(['+13035551212']);
+    expect(body.plan.queue_memberships_to_remove).toEqual([{ queue: 'support', agent_id: '1001@acme.com' }]);
+  });
+
+  it('warns when the inventory read failed, so leftovers are not silently missed', async () => {
+    const { handleToolCall } = await importTools();
+    const client = {
+      request: async (o: { method: string; pathTemplate: string }) => {
+        if (o.method === 'GET') return { success: false, error: '403 forbidden' };
+        return { success: true, data: {} };
+      },
+    };
+
+    const res = (await handleToolCall(
+      client as never,
+      'deprovision_user',
+      { domain: 'acme.com', user: '1001' },
+      'domain_admin',
+    )) as { content: Array<{ text: string }> };
+
+    const body = JSON.parse(res.content[0].text);
+    expect(body.inventory_warnings.length).toBe(2);
+    expect(body.inventory_warnings.join(' ')).toMatch(/may still exist/);
+  });
+
+  it('is classified destructive so the confirm gate and disable toggle catch it', async () => {
+    const { isToolDestructive } = await importTools();
+    expect(isToolDestructive('deprovision_user')).toBe(true);
+    expect(isToolDestructive('provision_user')).toBe(false);
   });
 });

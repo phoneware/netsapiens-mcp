@@ -606,7 +606,49 @@ export async function handleToolCall(
   }
   const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
   if (!def) return null;
-  return def.handler(args ?? {}, client as unknown as GenericApiClient);
+  return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous writes
+//
+
+
+
+
+
+//
+
+
+
+
+
+//
+// MCP_SYNCHRONOUS_WRITES=false restores the API's own default.
+// ---------------------------------------------------------------------------
+
+function synchronousWritesEnabled(): boolean {
+  return process.env.MCP_SYNCHRONOUS_WRITES !== 'false';
+}
+
+/** True when a tool's input schema declares the `synchronous` parameter. */
+export function acceptsSynchronous(def: ToolDefinition | undefined): boolean {
+  const schema = def?.schema?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  return Boolean(schema?.properties && 'synchronous' in schema.properties);
+}
+
+/**
+ * Default `synchronous` to "yes" for tools that accept it. Never overrides an
+ * explicit value — a caller that wants fire-and-forget can still pass "no".
+ */
+export function applySynchronousDefault(
+  def: ToolDefinition | undefined,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!synchronousWritesEnabled()) return args;
+  if (args.synchronous !== undefined) return args;
+  if (!acceptsSynchronous(def)) return args;
+  return { ...args, synchronous: 'yes' };
 }
 
 // ---------------------------------------------------------------------------
