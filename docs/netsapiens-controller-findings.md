@@ -182,6 +182,26 @@ Both deletes leak the same way: a DID left routing to a destination that no long
 
 `synchronous` is not merely available on those write operations — the spec marks it **required** on 26 of the 32 that declare it, including `POST /callqueues`, `POST /answerrules`, `POST /greetings`, and the whole `moh` family. The server's own description says a request can leave it off and get a 202, so the two disagree about strictness. Either way, sending it is correct under both readings, and we now always do.
 
+## Finding 9: some cascades run only on v2, so v2 is strictly cheaper than v1
+
+Finding 8 said one endpoint often performs the whole chain. Two details were missing, and both matter.
+
+**The chain runs in-process, not over HTTP.** `DomainsController::create` does `App::import('Controller', 'Dialrules'); $DialrulesController = new DialrulesController(); $DialrulesController->create($dp_create, true);` (`DomainsController.php:813-851`). That is a PHP object and a direct method call inside the same request. The second argument is the handlers' `$return` flag, which suppresses the inner HTTP response so only the outer one is emitted. One request in, one response out, five writes in between.
+
+**Three of those cascades are gated to v2**, the interface this MCP speaks:
+
+| Operation | On v2 | On v1 |
+|---|---|---|
+| Create a domain | domain row, video subscription, dial plan, catch-all dial rule, domain subscriber | domain row only (`DomainsController.php:813`) |
+| Create a user | user record plus a default answer rule (sim-ring to own devices) | user record only (`SubscribersController.php:3525`) |
+| Create or update an auto attendant | the full 8-write chain | refused: *"Attendants Create are not supported in V1"* (`AttendantsController.php:172`) |
+
+The gate is `if (isset($form['apiVer']) && $form['apiVer'] != "v1")`, or an explicit `isv2()` check.
+
+So the earlier framing, that both interfaces make the same calls because they share handlers, was too strong. They do share handlers, but the handlers do less on v1. Wherever a caller is still on v1, the same result costs more calls, and the auto attendant costs infinity.
+
+**Implication:** this is a point in the MCP's favour rather than a gap, but it should be stated accurately. It also means anything measuring "what the portal does" against v1 traffic is not a fair comparison for our call counts.
+
 ## Suggested order
 
 0. **Set `synchronous=yes` on writes that get read back** (Finding 7). This is the only item here fixing a live correctness bug rather than an efficiency or discoverability one.
