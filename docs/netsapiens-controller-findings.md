@@ -12,6 +12,18 @@ Findings from reading the NetSapiens v2 API implementation (the CakePHP controll
 | `Component/*Component.php` (44) | Call-center statistic definitions: metric code + the exact SQL aggregate. |
 | `fields.csv` | Internal DB column → API field name map (Apikeys, reseller, Domains, Users). |
 
+## What this source is, and what it is not
+
+Worth stating once, because it bounds every claim below.
+
+**It is the API tier of the NetSapiens application.** 69 of the 72 controllers set `$layout = 'api'`, none sets any other layout, there is exactly one `render()` call in the whole set (and it renders another controller's index), and nothing emits HTML. The only subdirectory is `Component/`. No `View/`, no `Model/`, no `webroot/`.
+
+**Both interfaces are served by these same controllers.** The v1 `?object=X&action=Y` calls and the v2 REST routes resolve to the same handler methods, told apart by `isV2()` or `apiVer`. That is provable from the handlers themselves, which branch on it internally (see Finding 9).
+
+**The manager portal's own code is not here.** OMP is a *client* of this tier. Its front-end, the part that decides which calls to make and in what order, is not in the dump.
+
+So: any claim about what a handler does when called is grounded in the source. Any claim about what the portal does is an inference from "these are the only handlers that exist, and here is what they do." The two are not the same strength, and Finding 9 exists because I initially stated the weaker one as if it were the stronger.
+
 ## Finding 1: our spec understates the API, and it costs us tokens
 
 The vendored OpenAPI spec declares list-shaping params on almost nothing. The controllers honor them broadly:
