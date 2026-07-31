@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import axios from 'axios';
 import { createHash, randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('axios');
 const mockedAxios = axios as unknown as {
@@ -51,6 +53,9 @@ async function importApp() {
   process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
   process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
   process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
+  // Keep the file-backed token store inside the OS temp dir. Without this the
+  // suite appends to the developer's real ~/.netsapiens-mcp/http-tokens.json.
+  process.env.MCP_TOKEN_STORE_PATH = join(tmpdir(), `ns-mcp-test-tokens-${process.pid}.json`);
   delete process.env.MCP_PERSISTENCE;
   const mod = await import('../http-server.js');
   return mod.createApp();
@@ -852,6 +857,10 @@ describe('OAuth flow (end-to-end)', () => {
       })) as unknown as typeof mockedAxios.create;
 
       try {
+        // This behaviour is session-mode only: stateless rebuilds the client
+        // from the bearer on every request, so there is no long-lived client
+        // to propagate a refreshed token into.
+        process.env.MCP_STATELESS = 'false';
         const { app } = await importApp();
         const reg = await request(app)
           .post('/register')
@@ -939,6 +948,7 @@ describe('OAuth flow (end-to-end)', () => {
         expect(cfg.headers.Authorization).toBe('Bearer ns-3');
       } finally {
         mockedAxios.create = origCreate;
+        delete process.env.MCP_STATELESS;
       }
     });
   });

@@ -10,6 +10,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { MCPServerConfig } from './types/config.js';
+import { SERVER_INSTRUCTIONS, serverCapabilities, serverImplementation } from './server-info.js';
 import { logger } from './utils/logger.js';
 import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
 
@@ -103,14 +104,10 @@ export class NetSapiensMCPServer {
 
   constructor(config: MCPServerConfig) {
     this.server = new Server(
+      serverImplementation(config),
       {
-        name: config.name,
-        version: config.version,
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
+        capabilities: serverCapabilities(),
+        instructions: SERVER_INSTRUCTIONS,
       }
     );
 
@@ -147,8 +144,8 @@ export class NetSapiensMCPServer {
  */
 export function createMcpServer(config: MCPServerConfig): { server: Server; client: NetSapiensClient } {
   const server = new Server(
-    { name: config.name, version: config.version },
-    { capabilities: { tools: {} } }
+    serverImplementation(config),
+    { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS }
   );
   const client = new NetSapiensClient(config.netsapiens);
   registerTools(server, client);

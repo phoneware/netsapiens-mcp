@@ -19,6 +19,7 @@ import { toolRegistry as v2ToolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
+import { isStatelessMode } from '../server-info.js';
 import { CURATED_CATALOG } from './curated/catalog.js';
 import { buildMetaTools } from './curated/meta.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
@@ -52,21 +53,75 @@ const READ_PREFIXES = ['get_', 'list_', 'count_', 'search_', 'test_', 'export_',
 const MIXED_PREFIXES = ['manage_'];
 const DESTRUCTIVE_HINTS = ['delete_', 'revoke_', 'remove_', 'cancel_', 'destroy_', 'reset_', 'restart_', 'reboot_', 'restore_'];
 
-function classifyTool(name: string): { readOnlyHint: boolean; destructiveHint: boolean } {
+/** The four annotation hints the current MCP spec defines on a tool. */
+export interface ToolHints {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
+}
+
+/**
+ * Fill in the two hints we can derive from the other two.
+ *
+ * `openWorldHint` is always true: every tool here reaches a live NetSapiens
+ * platform whose state we do not own. `idempotentHint` follows the HTTP verb
+ * the tool name encodes — reads, PUTs, and DELETEs land in the same place when
+ * repeated; a POST/create generally does not.
+ */
+function withDerivedHints(name: string, base: { readOnlyHint: boolean; destructiveHint: boolean }): ToolHints {
+  const nonIdempotent = name.startsWith('post_') || name.startsWith('create_') || name.startsWith('add_') || name.startsWith('send_');
+  return {
+    ...base,
+    idempotentHint: base.readOnlyHint ? true : !nonIdempotent,
+    openWorldHint: true,
+  };
+}
+
+function classifyTool(name: string): ToolHints {
   if (READ_PREFIXES.some((p) => name.startsWith(p))) {
-    return { readOnlyHint: true, destructiveHint: false };
+    return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
   }
   if (MIXED_PREFIXES.some((p) => name.startsWith(p))) {
-    return { readOnlyHint: false, destructiveHint: true };
+    return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
   }
   // HTTP verbs in the spec map cleanly: GET → read, DELETE → destructive, PUT/PATCH/POST → write.
-  if (name.startsWith('get_')) return { readOnlyHint: true, destructiveHint: false };
-  if (name.startsWith('delete_')) return { readOnlyHint: false, destructiveHint: true };
+  if (name.startsWith('get_')) return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
+  if (name.startsWith('delete_')) return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
   if (name.startsWith('put_') || name.startsWith('patch_') || name.startsWith('post_')) {
-    return { readOnlyHint: false, destructiveHint: false };
+    return withDerivedHints(name, { readOnlyHint: false, destructiveHint: false });
   }
   const destructive = DESTRUCTIVE_HINTS.some((p) => name.startsWith(p));
-  return { readOnlyHint: false, destructiveHint: destructive };
+  return withDerivedHints(name, { readOnlyHint: false, destructiveHint: destructive });
+}
+
+// ---------------------------------------------------------------------------
+// Display titles
+//
+// Since the 2025-06-18 revision a tool carries both a machine `name` and a
+// human `title`. Clients show the title in permission prompts and tool lists,
+// so `get_domains_by_domain_users` should read as "Get Domain Users" there
+// while the name stays stable for dispatch.
+// ---------------------------------------------------------------------------
+
+const TITLE_ACRONYMS = new Set(['api', 'cdr', 'cdrs', 'sms', 'mms', 'sip', 'dns', 'ssl', 'url', 'uid', 'ui', 'id', 'ip', 'moh', 'sfu', 'jwt', 'mfa', 'v1', 'v2']);
+
+/** Turn a snake_case tool name into a human-readable title. */
+export function toolTitle(name: string): string {
+  return name
+    .split('_')
+    .filter((w) => w && w !== 'by')
+    .map((w) => (TITLE_ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+/** The shape we hand back to MCP clients for each tool. */
+export interface ExposedTool {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: object;
+  annotations: ToolHints;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,12 +381,7 @@ function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean 
  * `userIdentity` is the NetSapiens username from the bearer token; promotion
  * is keyed on it so each NS user's catalog reflects their own muscle memory.
  */
-async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): Promise<Array<{
-  name: string;
-  description: string;
-  inputSchema: object;
-  annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-}>> {
+async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): Promise<ExposedTool[]> {
   const meta = buildMetaTools(
     toolRegistry,
     async (name, args, client) => {
@@ -346,12 +396,7 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
     (toolName) => isGeneratedToolVisible(toolName, userRole),
   );
   const all = [...CURATED_CATALOG, ...meta];
-  const tools: Array<{
-    name: string;
-    description: string;
-    inputSchema: object;
-    annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-  }> = [];
+  const tools: ExposedTool[] = [];
   const seen = new Set<string>();
   for (const t of all) {
     if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
@@ -365,9 +410,10 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
     seen.add(t.schema.name);
     tools.push({
       name: t.schema.name,
+      title: t.title ?? toolTitle(t.schema.name),
       description: t.schema.description,
       inputSchema: t.schema.inputSchema,
-      annotations: { readOnlyHint: readOnly, destructiveHint: destructive },
+      annotations: withDerivedHints(t.schema.name, { readOnlyHint: readOnly, destructiveHint: destructive }),
     });
   }
 
@@ -387,6 +433,7 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
       seen.add(exposed);
       tools.push({
         name: exposed,
+        title: toolTitle(exposed),
         description: `[promoted] ${def.schema.description}`,
         inputSchema: def.schema.inputSchema,
         annotations,
@@ -425,23 +472,13 @@ function findCuratedTool(name: string, userRole?: UserRole) {
 export async function getAllToolDefinitions(
   userRole?: UserRole,
   userIdentity?: string,
-): Promise<Array<{
-  name: string;
-  description: string;
-  inputSchema: object;
-  annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-}>> {
+): Promise<ExposedTool[]> {
   if (getToolMode() === 'curated') {
     return curatedExposedTools(userRole, userIdentity);
   }
 
   const mapping = buildNameMapping();
-  const tools: Array<{
-    name: string;
-    description: string;
-    inputSchema: object;
-    annotations: { readOnlyHint: boolean; destructiveHint: boolean };
-  }> = [];
+  const tools: ExposedTool[] = [];
   for (const [registryKey, def] of toolRegistry) {
     const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
     if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
@@ -450,12 +487,65 @@ export async function getAllToolDefinitions(
     if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
     tools.push({
       name: exposed,
+      title: toolTitle(exposed),
       description: def.schema.description,
       inputSchema: def.schema.inputSchema,
       annotations,
     });
   }
   return tools;
+}
+
+// ---------------------------------------------------------------------------
+// tools/list pagination
+//
+// The spec has always allowed a paginated tools/list; in `full` mode we hand
+// back 700+ tools in a single response, which is a large payload for a client
+// to parse before it can do anything. Cursors are opaque per the spec, so we
+// encode the offset and reject anything we did not mint.
+// ---------------------------------------------------------------------------
+
+const CURSOR_PREFIX = 'ns:';
+
+function toolsPageSize(): number {
+  const raw = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE || '', 10);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return 250;
+}
+
+function encodeCursor(offset: number): string {
+  return Buffer.from(`${CURSOR_PREFIX}${offset}`).toString('base64url');
+}
+
+/** Decode a cursor we issued. Throws InvalidParams on anything else. */
+function decodeCursor(cursor: string | undefined, total: number): number {
+  if (cursor == null) return 0;
+  let decoded: string;
+  try {
+    decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  } catch {
+    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+  }
+  if (!decoded.startsWith(CURSOR_PREFIX)) {
+    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+  }
+  const offset = Number.parseInt(decoded.slice(CURSOR_PREFIX.length), 10);
+  if (!Number.isFinite(offset) || offset < 0 || offset > total) {
+    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+  }
+  return offset;
+}
+
+/** Slice a tool list into one page plus the cursor for the next one. */
+export function paginateTools(
+  tools: ExposedTool[],
+  cursor?: string,
+): { tools: ExposedTool[]; nextCursor?: string } {
+  const size = toolsPageSize();
+  const offset = decodeCursor(cursor, tools.length);
+  const page = tools.slice(offset, offset + size);
+  const end = offset + page.length;
+  return end < tools.length ? { tools: page, nextCursor: encodeCursor(end) } : { tools: page };
 }
 
 /**
@@ -519,6 +609,41 @@ export async function handleToolCall(
   return def.handler(args ?? {}, client as unknown as GenericApiClient);
 }
 
+// ---------------------------------------------------------------------------
+// Structured tool results
+//
+// Every tool here already serialises its payload to a JSON string in a text
+// block. Since the 2025-06-18 revision a result may ALSO carry
+// `structuredContent`, which clients can hand to the model as data instead of
+// re-parsing prose. We attach it centrally so all ~750 tools get it without
+// touching a single handler, and we keep the text block for older clients.
+// ---------------------------------------------------------------------------
+
+type ToolResult = { content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> };
+
+/** Attach `structuredContent` when the text block is parseable JSON. */
+export function withStructuredContent(result: ToolResult): ToolResult {
+  if (!result || result.structuredContent || !Array.isArray(result.content)) return result;
+  const first = result.content[0];
+  if (!first || first.type !== 'text' || typeof first.text !== 'string') return result;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(first.text);
+  } catch {
+    return result; // Plain prose — nothing structured to add.
+  }
+
+  // structuredContent must be an object; wrap anything else so array and
+  // scalar payloads still get a machine-readable form.
+  const structured =
+    parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : { result: parsed };
+
+  return { ...result, structuredContent: structured };
+}
+
 /**
  * Wires ListTools and CallTool handlers onto an MCP Server.
  *
@@ -553,6 +678,10 @@ export function registerAllTools(
    */
   async function reconcilePromotedSet(): Promise<void> {
     if (!userIdentity) return;
+    // Stateless mode has no standalone stream to push a notification down, and
+    // we do not advertise tools.listChanged there. Promotion still happens —
+    // the client just sees it at its next tools/list instead of being nudged.
+    if (isStatelessMode()) return;
     try {
       const current = new Set(await getPromotedToolNames(userIdentity));
       if (promotedSnapshot === null) {
@@ -568,14 +697,14 @@ export function registerAllTools(
     }
   }
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = await getAllToolDefinitions(userRole, userIdentity);
+  server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+    const all = await getAllToolDefinitions(userRole, userIdentity);
     // Seed the snapshot from whatever the AI client just observed so that
     // subsequent CallTool reconciliations diff against the right baseline.
     if (userIdentity) {
       promotedSnapshot = new Set(await getPromotedToolNames(userIdentity));
     }
-    return { tools };
+    return paginateTools(all, request.params?.cursor);
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -621,7 +750,7 @@ export function registerAllTools(
       if (result === null || result === undefined) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
-      return result as { content: Array<{ type: 'text'; text: string }> };
+      return withStructuredContent(result as { content: Array<{ type: 'text'; text: string }> });
     } catch (error) {
       if (error instanceof McpError) {
         throw error;
