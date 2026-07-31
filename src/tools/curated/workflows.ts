@@ -768,6 +768,214 @@ const deprovision_user: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
+// 12. provision_call_queue — a queue with nobody in it answers nothing
+//
+// CallqueuesController::create() writes the callqueue and its huntgroup, then
+// stops. Agents are a separate endpoint, one call each, and a DID is a third.
+// A queue created on its own is invisible to callers and staffed by no one.
+// ---------------------------------------------------------------------------
+
+/** Normalise "1001" or "1001@acme.com" to a fully-qualified agent id. */
+function toUid(value: unknown, domain: string): string {
+  const raw = String(value);
+  return raw.includes('@') ? raw : `${raw}@${domain}`;
+}
+
+const provision_call_queue: CuratedTool = {
+  minRole: 'domain_admin',
+  title: 'Provision Call Queue',
+  schema: {
+    name: 'provision_call_queue',
+    description:
+      'Create a call queue and staff it: the queue itself, its agents, and optionally a DID routed to it. ' +
+      'Creating a queue on its own leaves it with no agents (so nothing answers) and no number (so nobody can reach it) — this runs the whole sequence and reports what is still missing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domain to create the queue in. Defaults to your own.' },
+        callqueue: { type: 'string', description: 'Queue name / extension, e.g. "support" or "2000".' },
+        agents: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Users to staff the queue. Accepts "1001" or "1001@domain".',
+        },
+        phone_number: { type: 'string', description: 'Optional DID to route to this queue.' },
+        description: { type: 'string', description: 'Optional queue description.' },
+      },
+      required: ['callqueue'],
+    },
+  },
+  handler: async (args, client) => {
+    const domain = str(args.domain);
+    const callqueue = String(args.callqueue);
+    const agents = Array.isArray(args.agents) ? args.agents : [];
+    const steps: Array<{ step: string; ok: boolean; detail?: unknown; error?: string }> = [];
+
+    const created = await safe(client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/callqueues',
+      pathParams: { domain },
+      body: {
+        synchronous: 'yes',
+        callqueue,
+        domain,
+        ...(args.description ? { description: String(args.description) } : {}),
+      },
+    }));
+    steps.push({ step: `create queue ${callqueue}`, ok: created.ok, detail: created.data, error: created.error });
+
+    if (!created.ok) {
+      return textResult({
+        ok: false,
+        callqueue: `${callqueue}@${domain}`,
+        steps,
+        note: 'Queue creation failed; no agents were added and no number was assigned.',
+      });
+    }
+
+    // Agents are added one call each. Sequential so a failure part-way through
+    // is attributable to a specific agent rather than lost in a race.
+    for (const a of agents) {
+      const agentId = toUid(a, domain);
+      const r = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents',
+        pathParams: { domain, callqueue },
+        body: { 'callqueue-agent-id': agentId },
+      }));
+      steps.push({ step: `add agent ${agentId}`, ok: r.ok, error: r.error });
+    }
+
+    if (args.phone_number) {
+      const did = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/{domain}/phonenumbers',
+        pathParams: { domain },
+        body: {
+          phonenumber: String(args.phone_number),
+          'dial-rule-translation-destination-user': callqueue,
+          enabled: 'yes',
+        },
+      }));
+      steps.push({ step: `route ${String(args.phone_number)} to the queue`, ok: did.ok, error: did.error });
+    }
+
+    const missing: string[] = [];
+    if (agents.length === 0) missing.push('no agents — calls will queue with nobody to answer them');
+    if (!args.phone_number) missing.push('no DID — outside callers cannot reach this queue directly');
+
+    return textResult({
+      ok: steps.every((s) => s.ok),
+      callqueue: `${callqueue}@${domain}`,
+      agents_added: agents.map((a) => toUid(a, domain)),
+      steps,
+      still_unconfigured: missing,
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 13. deprovision_call_queue — same orphan problem as users
+//
+// CallqueuesController::delete_callqueue() removes the callqueue and huntgroup
+// rows and contains zero references to agents. Deleting a queue therefore
+// leaves every agent membership behind, and any DID pointed at the queue keeps
+// routing to something that no longer exists.
+// ---------------------------------------------------------------------------
+
+const deprovision_call_queue: CuratedTool = {
+  minRole: 'domain_admin',
+  title: 'Deprovision Call Queue',
+  destructive: true,
+  schema: {
+    name: 'deprovision_call_queue',
+    description:
+      'Remove a call queue completely: deletes the queue, then removes the two things NetSapiens leaves behind — the agent memberships and any DID still routed to the queue. ' +
+      'Deleting a queue through the plain endpoint orphans both. Pass dry_run to see what would be removed without touching anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domain the queue lives in. Defaults to your own.' },
+        callqueue: { type: 'string', description: 'Queue name / extension to remove.' },
+        dry_run: { type: 'boolean', default: false, description: 'Report what would be removed, change nothing.' },
+      },
+      required: ['callqueue'],
+    },
+  },
+  handler: async (args, client) => {
+    const domain = str(args.domain);
+    const callqueue = String(args.callqueue);
+    const dryRun = args.dry_run === true;
+
+    const [agents, numbers] = await Promise.all([
+      safe(client.request({
+        method: 'GET',
+        pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents',
+        pathParams: { domain, callqueue },
+      })),
+      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/phonenumbers', pathParams: { domain } })),
+    ]);
+
+    const agentRows = Array.isArray(agents.data) ? (agents.data as Array<Record<string, unknown>>) : [];
+    const numberRows = Array.isArray(numbers.data) ? (numbers.data as Array<Record<string, unknown>>) : [];
+    const orphanNumbers = numberRows.filter((n) => {
+      const dest = String(n['dial-rule-translation-destination-user'] ?? '');
+      return dest === callqueue || dest === `${callqueue}@${domain}`;
+    });
+
+    const plan = {
+      callqueue: `${callqueue}@${domain}`,
+      deletes_queue: true,
+      agents_to_remove: agentRows.map((a) => a['callqueue-agent-id']),
+      phone_numbers_to_release: orphanNumbers.map((n) => n.phonenumber),
+    };
+
+    if (dryRun) return textResult({ dry_run: true, plan });
+
+    const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+
+    // Agents first: once the queue row is gone the membership endpoint has no
+    // queue to address, so the rows become unreachable through the API.
+    for (const a of agentRows) {
+      const agentId = String(a['callqueue-agent-id']);
+      const r = await safe(client.request({
+        method: 'DELETE',
+        pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
+        pathParams: { domain, callqueue, 'callqueue-agent-id': agentId },
+      }));
+      steps.push({ step: `remove agent ${agentId}`, ok: r.ok, error: r.error });
+    }
+
+    const deleted = await safe(client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/callqueues/{callqueue}',
+      pathParams: { domain, callqueue },
+    }));
+    steps.push({ step: `delete queue ${callqueue}`, ok: deleted.ok, error: deleted.error });
+
+    for (const n of orphanNumbers) {
+      const phonenumber = String(n.phonenumber);
+      const r = await safe(client.request({
+        method: 'DELETE',
+        pathTemplate: '/domains/{domain}/phonenumbers/{phonenumber}',
+        pathParams: { domain, phonenumber },
+      }));
+      steps.push({ step: `release phone number ${phonenumber}`, ok: r.ok, error: r.error });
+    }
+
+    return textResult({
+      ok: steps.every((s) => s.ok),
+      callqueue: `${callqueue}@${domain}`,
+      steps,
+      inventory_warnings: [
+        ...(agents.ok ? [] : [`could not list queue agents (${agents.error}), memberships may still exist`]),
+        ...(numbers.ok ? [] : [`could not list phone numbers (${numbers.error}), DIDs routed here may still exist`]),
+      ],
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
 
 export const WORKFLOW_TOOLS: CuratedTool[] = [
   diagnose_call,
@@ -781,4 +989,6 @@ export const WORKFLOW_TOOLS: CuratedTool[] = [
   schedule_forwarding,
   provision_user,
   deprovision_user,
+  provision_call_queue,
+  deprovision_call_queue,
 ];

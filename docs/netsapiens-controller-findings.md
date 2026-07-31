@@ -147,6 +147,41 @@ Any MCP flow shaped like "create it, then read it back to confirm or to get its 
 
 **Implication:** set `synchronous=yes` on curated write composites and on any generated write whose schema accepts it, at least wherever a read-back follows. It costs latency by design; that is the trade NetSapiens documented. Where a chain has a platform-side gap (DIDs and queue membership on user delete), say so in the tool description rather than letting the model assume the teardown was complete.
 
+## Finding 8: the full sweep of multi-step operations
+
+Two passes over the source: cross-controller calls (`App::import('Controller', ...)`, 80 of them), and handlers writing more than one model. That gives a complete picture of which operations are chains, and crucially which end of the wire runs the chain.
+
+### The API runs the chain (one call is enough)
+
+| Operation | What the single endpoint writes |
+|---|---|
+| Create domain | domain row, video subscription, dialplan, catch-all dialrule, and a `domain` subscriber (`DomainsController.php:647-890`) |
+| Create auto attendant | dialplan, catch-all dialrule, subscriber, answer rule, three tier dialrules, tier structure |
+| Create/update/delete timeframe | six models: Timeframe, TimeframeDOW, TimeframeHoliday, TimeframeMaster, TimeframeSDate, Timerange |
+| Delete user | ten object types including every device the user owns |
+| Create device | Device plus Mac |
+| Create call queue | Callqueue plus Huntgroup |
+| Update call queue | Callqueue, Huntgroup, and the backing Subscriber |
+| Send message | Message plus Messagesession, with upload and queue handling |
+
+For these, wrapping them in a client-side composite would only add ways to fail.
+
+### The client runs the chain (we need a composite)
+
+| Operation | The endpoint writes | What it does not do |
+|---|---|---|
+| Create user | the user record only | no device, no DID |
+| Create call queue | queue + huntgroup | no agents, no DID |
+| Delete user | ten object types | **not** DIDs routed at them, **not** queue agent rows |
+| Delete call queue | callqueue + huntgroup, zero agent references | **not** agent memberships, **not** DIDs routed at the queue |
+| Schedule time-bounded forwarding | one timeframe | the answer rule that points at it is a second call |
+
+Both deletes leak the same way: a DID left routing to a destination that no longer exists. `provision_user`, `deprovision_user`, `provision_call_queue`, and `deprovision_call_queue` cover the first four. Timeframe-plus-answer-rule is still a documented note inside `schedule_forwarding` rather than a solved step.
+
+### A sharper version of Finding 7
+
+`synchronous` is not merely available on those write operations — the spec marks it **required** on 26 of the 32 that declare it, including `POST /callqueues`, `POST /answerrules`, `POST /greetings`, and the whole `moh` family. The server's own description says a request can leave it off and get a 202, so the two disagree about strictness. Either way, sending it is correct under both readings, and we now always do.
+
 ## Suggested order
 
 0. **Set `synchronous=yes` on writes that get read back** (Finding 7). This is the only item here fixing a live correctness bug rather than an efficiency or discoverability one.
