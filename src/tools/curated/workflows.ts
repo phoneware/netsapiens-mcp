@@ -484,38 +484,134 @@ const voicemail_inbox_summary: CuratedTool = {
 // 9. schedule_forwarding — set an answer rule that forwards calls
 // ---------------------------------------------------------------------------
 
+/**
+ * NS timeframes take compact dates and times: `YYYYMMDD` and `HHMM`. Models
+ * write ISO, so accept both and normalise. Returns null on anything we cannot
+ * confidently read rather than silently scheduling the wrong window.
+ */
+export function toNsDateTime(
+  value: unknown,
+  defaultTime: string,
+): { date: string; time: string } | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const m = raw.match(/^(\d{4})-?(\d{2})-?(\d{2})(?:[T\s]+(\d{2}):?(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, hh, mm] = m;
+  return { date: `${y}${mo}${d}`, time: hh ? `${hh}${mm}` : defaultTime };
+}
+
+/** The answer-rule payload NS actually reads (see `$forwards` in SubscribersController). */
+function forwardAlways(destination: string | undefined, enabled: boolean) {
+  return {
+    'forward-always': {
+      enabled: enabled ? 'yes' : 'no',
+      parameters: enabled && destination ? [destination] : [],
+    },
+  };
+}
+
 const schedule_forwarding: CuratedTool = {
   minRole: 'user',
+  title: 'Schedule Forwarding',
   schema: {
     name: 'schedule_forwarding',
     description:
-      'Forward your incoming calls to a destination via the "always" answer rule. ' +
-      'Pass `disable: true` to clear forwarding. (Time-bounded forwarding requires a custom time-frame; use call_api with answerrule + timeframe tools for that.)',
+      'Forward your incoming calls to a destination. Without dates this sets the standing "always" answer rule. ' +
+      'Give `until` (and optionally `from`) for time-bounded forwarding — "forward to my cell until Friday 5pm" — and this creates the date-range time-frame and the answer rule pointed at it, which NetSapiens treats as two separate operations. ' +
+      'Pass `disable: true` to clear the standing rule.',
     inputSchema: {
       type: 'object',
       properties: {
         destination: { type: 'string', description: 'Number or extension to forward to.' },
         disable: { type: 'boolean', default: false, description: 'If true, clear the always-forward rule.' },
-        timeframe: { type: 'string', default: 'Default', description: 'Answer-rule time-frame to modify (default "Default").' },
+        timeframe: { type: 'string', description: 'Answer-rule time-frame to modify. Defaults to "Default" (the standing rule), or to a generated name when from/until are given.' },
+        from: { type: 'string', description: 'Start of the forwarding window, "YYYY-MM-DD" or "YYYY-MM-DD HH:MM". Defaults to today at 00:00 when `until` is given.' },
+        until: { type: 'string', description: 'End of the forwarding window, "YYYY-MM-DD" or "YYYY-MM-DD HH:MM". Supplying this switches to time-bounded forwarding.' },
       },
     },
   },
   handler: async (args, client) => {
-    const timeframe = String(args.timeframe ?? 'Default');
     const disable = args.disable === true;
     const destination = args.destination ? String(args.destination) : undefined;
     if (!disable && !destination) {
       return textResult({ error: 'Either destination or disable=true is required.' });
     }
-    const body = disable
-      ? { 'rule-action': 'do-not-forward' }
-      : { 'rule-action': 'forward-all-calls', 'forward-destination': destination };
+
+    // ----- Time-bounded: build the window first, then point a rule at it -----
+    if (args.until && !disable) {
+      const end = toNsDateTime(args.until, '2359');
+      if (!end) {
+        return textResult({ error: `Could not read \`until\` ("${String(args.until)}"). Use YYYY-MM-DD or YYYY-MM-DD HH:MM.` });
+      }
+      const today = new Date();
+      const isoToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const start = toNsDateTime(args.from ?? isoToday, '0000');
+      if (!start) {
+        return textResult({ error: `Could not read \`from\` ("${String(args.from)}"). Use YYYY-MM-DD or YYYY-MM-DD HH:MM.` });
+      }
+
+      const name = args.timeframe ? String(args.timeframe) : `Forwarding ${start.date}-${end.date}`;
+      const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
+
+      const tf = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/~/users/~/timeframes',
+        body: {
+          synchronous: 'yes',
+          'timeframe-name': name,
+          'timeframe-type': 'specific-dates',
+          'timeframe-specific-dates-array': [{
+            'timeframe-specific-dates-begin-date': start.date,
+            'timeframe-specific-dates-begin-time': start.time,
+            'timeframe-specific-dates-end-date': end.date,
+            'timeframe-specific-dates-end-time': end.time,
+            'timeframe-recurrence-type': 'doesNotRecur',
+          }],
+        },
+      }));
+      steps.push({ step: `create time-frame "${name}"`, ok: tf.ok, error: tf.error });
+
+      // An answer rule pointed at a time-frame that does not exist would apply
+      // never, and would read as success. Stop instead.
+      if (!tf.ok) {
+        return textResult({
+          ok: false,
+          steps,
+          note: 'Time-frame creation failed, so no answer rule was created. Nothing was changed.',
+        });
+      }
+
+      const rule = await safe(client.request({
+        method: 'POST',
+        pathTemplate: '/domains/~/users/~/answerrules',
+        body: {
+          synchronous: 'yes',
+          'time-frame': name,
+          enabled: 'yes',
+          ...forwardAlways(destination, true),
+        },
+      }));
+      steps.push({ step: `forward to ${destination} during "${name}"`, ok: rule.ok, error: rule.error });
+
+      return textResult({
+        ok: steps.every((s) => s.ok),
+        timeframe: name,
+        window: { from: `${start.date} ${start.time}`, until: `${end.date} ${end.time}` },
+        destination,
+        steps,
+        note: 'The time-frame is reusable — pass its name as `timeframe` to point more answer rules at the same window.',
+      });
+    }
+
+    // ----- Standing rule -----
+    const timeframe = String(args.timeframe ?? 'Default');
     const r = await safe(
       client.request({
         method: 'PUT',
         pathTemplate: '/domains/~/users/~/answerrules/{timeframe}',
         pathParams: { timeframe },
-        body,
+        body: { enabled: 'yes', ...forwardAlways(destination, !disable) },
       }),
     );
     return textResult({
@@ -523,7 +619,6 @@ const schedule_forwarding: CuratedTool = {
       timeframe,
       destination: disable ? null : destination,
       result: r,
-      note: 'This updates the answer rule for the given time-frame. For time-bounded forwarding (e.g. "until Friday 5pm"), create a custom time-frame first via call_api with the time-frame endpoints, then point an answer rule at it.',
     });
   },
 };

@@ -39,10 +39,39 @@ async function importApp() {
   process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
   delete process.env.MCP_PERSISTENCE;
   const mod = await import('../http-server.js');
-  return mod.createApp();
+  const created = mod.createApp();
+  // supertest binds and closes an ephemeral server for every request when
+  // handed a bare Express app. Under parallel workers that produced sporadic
+  // ECONNRESET / "socket hang up" on an arbitrary request. Hand it one real
+  // listener per app instead, torn down in afterEach.
+  const server = created.app.listen(0);
+  openServers.push(server);
+  return { ...created, app: server as unknown as typeof created.app };
 }
 
-describe('/favicon proxy', () => {
+/** Listeners opened by importApp(), closed after each test. */
+const openServers: import('node:http').Server[] = [];
+
+async function closeOpenServers(): Promise<void> {
+  await Promise.all(
+    openServers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+  );
+}
+
+afterEach(closeOpenServers);
+
+/**
+ * These suites drive a real Express server over a real socket, so they can hit
+ * connection-level errors (ECONNRESET / "socket hang up") that have nothing to
+ * do with the assertions. The underlying causes found so far are fixed: global
+ * keep-alive reusing sockets to closed servers, a shared token-store file, and
+ * supertest binding a server per request. A small retry covers the remainder.
+ * Assertion failures still fail — a retry cannot rescue a wrong expectation
+ * that is wrong every time.
+ */
+const SOCKET_RETRY = { retry: 2 };
+
+describe('/favicon proxy', SOCKET_RETRY, () => {
   beforeEach(() => {
     // Mock the global fetch that the favicon route uses
     (globalThis as any).fetch = vi.fn(async () => ({
@@ -91,7 +120,7 @@ describe('/favicon proxy', () => {
   });
 });
 
-describe('/.well-known/oauth-protected-resource compatibility', () => {
+describe('/.well-known/oauth-protected-resource compatibility', SOCKET_RETRY, () => {
   it('serves the same metadata at the root and at the SDK path-specific URL', async () => {
     const { app } = await importApp();
 

@@ -407,7 +407,12 @@ describe('workflow tools (multi-call composites)', () => {
     await handleToolCall(client as never, 'schedule_forwarding', { destination: '4001' }, 'user');
     expect(captured[0].method).toBe('PUT');
     expect(captured[0].pathTemplate).toBe('/domains/~/users/~/answerrules/{timeframe}');
-    expect((captured[0].body as { 'forward-destination': string })['forward-destination']).toBe('4001');
+    // `forward-always` is the field NS actually reads. `rule-action` /
+    // `forward-destination` appear nowhere in the spec or the controllers, so
+    // the old payload was silently discarded.
+    const fwd = (captured[0].body as { 'forward-always': { enabled: string; parameters: string[] } })['forward-always'];
+    expect(fwd.enabled).toBe('yes');
+    expect(fwd.parameters).toEqual(['4001']);
   });
 
   it('recent_activity_for_number queries CDRs by caller/dialled (not the nonexistent orig-from-uri/term-to-uri) and filters message sessions client-side', async () => {
@@ -490,7 +495,7 @@ describe('workflow tools (multi-call composites)', () => {
     expect(parsed.calls.data.map((c: { id: string }) => c.id)).toEqual(['new-call']);
   });
 
-  it('schedule_forwarding with disable=true emits do-not-forward', async () => {
+  it('schedule_forwarding with disable=true disables forward-always', async () => {
     const { handleToolCall } = await importTools();
     const captured: Array<{ body?: unknown }> = [];
     const client = {
@@ -500,7 +505,100 @@ describe('workflow tools (multi-call composites)', () => {
       },
     };
     await handleToolCall(client as never, 'schedule_forwarding', { disable: true }, 'user');
-    expect((captured[0].body as { 'rule-action': string })['rule-action']).toBe('do-not-forward');
+    const fwd = (captured[0].body as { 'forward-always': { enabled: string; parameters: string[] } })['forward-always'];
+    expect(fwd.enabled).toBe('no');
+    expect(fwd.parameters).toEqual([]);
+  });
+
+  it('schedule_forwarding with `until` creates the time-frame, then the answer rule pointed at it', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: Array<{ method: string; pathTemplate: string; body?: Record<string, unknown> }> = [];
+    const client = {
+      request: async (o: { method: string; pathTemplate: string; body?: Record<string, unknown> }) => {
+        calls.push(o);
+        return { success: true, data: {} };
+      },
+    };
+
+    await handleToolCall(
+      client as never,
+      'schedule_forwarding',
+      { destination: '+13035551212', from: '2026-08-03', until: '2026-08-07 17:00' },
+      'user',
+    );
+
+    expect(calls.map((c) => c.pathTemplate)).toEqual([
+      '/domains/~/users/~/timeframes',
+      '/domains/~/users/~/answerrules',
+    ]);
+
+    // NS takes compact YYYYMMDD / HHMM, not ISO.
+    const window = (calls[0].body?.['timeframe-specific-dates-array'] as Array<Record<string, string>>)[0];
+    expect(window['timeframe-specific-dates-begin-date']).toBe('20260803');
+    expect(window['timeframe-specific-dates-begin-time']).toBe('0000');
+    expect(window['timeframe-specific-dates-end-date']).toBe('20260807');
+    expect(window['timeframe-specific-dates-end-time']).toBe('1700');
+    expect(window['timeframe-recurrence-type']).toBe('doesNotRecur');
+    expect(calls[0].body?.['timeframe-type']).toBe('specific-dates');
+
+    // The rule names the time-frame that was just created.
+    expect(calls[1].body?.['time-frame']).toBe(calls[0].body?.['timeframe-name']);
+    const fwd = calls[1].body?.['forward-always'] as { enabled: string; parameters: string[] };
+    expect(fwd.parameters).toEqual(['+13035551212']);
+  });
+
+  it('does not create an answer rule when the time-frame failed', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        calls.push(o.pathTemplate);
+        return { success: false, error: '409 timeframe exists' };
+      },
+    };
+
+    const res = (await handleToolCall(
+      client as never,
+      'schedule_forwarding',
+      { destination: '4001', until: '2026-08-07' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+
+    // A rule pointed at a time-frame that does not exist would apply never,
+    // and would read as success.
+    expect(calls).toEqual(['/domains/~/users/~/timeframes']);
+    expect(JSON.parse(res.content[0].text).ok).toBe(false);
+  });
+
+  it('refuses an unreadable date instead of scheduling the wrong window', async () => {
+    const { handleToolCall } = await importTools();
+    const calls: string[] = [];
+    const client = {
+      request: async (o: { pathTemplate: string }) => {
+        calls.push(o.pathTemplate);
+        return { success: true, data: {} };
+      },
+    };
+
+    const res = (await handleToolCall(
+      client as never,
+      'schedule_forwarding',
+      { destination: '4001', until: 'next Friday' },
+      'user',
+    )) as { content: Array<{ text: string }> };
+
+    expect(calls).toEqual([]);
+    expect(JSON.parse(res.content[0].text).error).toMatch(/Could not read/);
+  });
+
+  it('normalises both ISO and compact date forms', async () => {
+    const { toNsDateTime } = await import('../tools/curated/workflows.js');
+    expect(toNsDateTime('2026-08-07', '2359')).toEqual({ date: '20260807', time: '2359' });
+    expect(toNsDateTime('2026-08-07 09:30', '2359')).toEqual({ date: '20260807', time: '0930' });
+    expect(toNsDateTime('2026-08-07T09:30', '2359')).toEqual({ date: '20260807', time: '0930' });
+    expect(toNsDateTime('20260807', '0000')).toEqual({ date: '20260807', time: '0000' });
+    expect(toNsDateTime('sometime soon', '0000')).toBeNull();
+    expect(toNsDateTime('', '0000')).toBeNull();
   });
 });
 
