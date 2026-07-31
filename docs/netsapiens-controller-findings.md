@@ -104,8 +104,52 @@ Another 27 router paths are absent from our spec, including `/domains/{domain}/c
 
 **Implication:** ship this as reference data behind a lookup so `fields=` values and filter names are correct by construction rather than by trial and error.
 
+## Finding 7: a single operation is often a chain, and one link is genuinely missing from our calls
+
+The premise worth testing: an operation in OMP does several things, and a single MCP or direct API call does not account for all of them. The source answers this in three parts, and only the third is a problem on our side.
+
+### Where the API already does the whole chain
+
+`POST /v2/domains/{domain}/attendants` looks like one write. `AttendantsController::create()` performs roughly eight, across four object types (`AttendantsController.php:225-290`):
+
+1. create a dialplan named `{domain}_{user}`
+2. create a catch-all dialrule in it
+3. create the subscriber (`srv_code=system-aa`)
+4. create the forwarding answer rule
+5. `setDialrule` for the `Prompt_100` tier
+6. `setDialrule` for `AAMain` catch-all
+7. `setDialrule` for `ToUserNotFound` catch-all
+8. build the tier/prompt structure via `v2handleTier`
+
+Deleting a user is the same story in reverse. `SubscribersController::delete()` cascades to cdrschedules, callqueue email reports, **every device the user owns**, voicemail nags, timeframes, addresses, contacts, the video host, message sessions (config-gated), and MFA enrollment before it removes the subscriber row.
+
+So for these, one call is the whole operation. We are not skipping steps.
+
+### Where the chain has a real gap, for everyone
+
+`delete_subscriber` contains **zero** references to `dialrule`, `phonenumber`, or queue agent membership. Delete a user who has a DID pointed at them and the dialrule survives, now routing to a destination that no longer exists. Same for their agent rows in a call queue. That gap is in the platform, not in our client, so OMP has it too, but it means "delete user" is not a complete teardown and a tool that presents it as one is misleading.
+
+Creating is not symmetric with deleting either: `SubscribersController::create()` has no device creation in it at all. "Add a user" is at minimum create subscriber → create device → (optionally) assign a DID via a dialrule → (optionally) answer rules. Our surface exposes each as an unrelated primitive with nothing signposting the sequence.
+
+### Where we are actually missing a step: `synchronous`
+
+**42 write operations (31 POST, 11 PUT) accept a `synchronous` body parameter. It defaults to `no`. Nothing in this repo ever sets it.**
+
+The spec states the semantics plainly:
+
+> When synchronous is requested with "yes" the response will be a 200 on success and will contain a valid JSON representation of the new resource. If no or left off request a 202 "Accepted" will be given [...] Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back before sending a response.
+
+The controllers implement exactly that: twelve handlers carry a poll loop that re-reads the object up to 20 times at 100ms intervals and returns the real record once it appears (for example `DevicesController.php:1895`). Without the flag they return a configurable success code (`NsHttpStatusCodeSuccessCreate`) and an empty body, before the write is guaranteed readable.
+
+The strongest evidence that this matters is that NetSapiens' own code sets it when chaining. `AttendantsController.php:256` sets `$sub_create['synchronous'] = "yes"` precisely because the next six steps read that subscriber back. The router hard-sets it for message sends (`RestsController.php:980`).
+
+Any MCP flow shaped like "create it, then read it back to confirm or to get its ID" is racing geo replication today. The model sees an empty 202, re-reads, finds nothing, and concludes the write failed.
+
+**Implication:** set `synchronous=yes` on curated write composites and on any generated write whose schema accepts it, at least wherever a read-back follows. It costs latency by design; that is the trade NetSapiens documented. Where a chain has a platform-side gap (DIDs and queue membership on user delete), say so in the tool description rather than letting the model assume the teardown was complete.
+
 ## Suggested order
 
+0. **Set `synchronous=yes` on writes that get read back** (Finding 7). This is the only item here fixing a live correctness bug rather than an efficiency or discoverability one.
 1. **Spec enrichment at generation time** — add `fields`/`limit`/`start`/`sort`/`order` per controller support, merge in the apidoc descriptions and `@apiPermission`. One generator change, improves every tool at once.
 2. **`fields` in the curated composites** — start with `find_user`, `find_device`, `recent_calls`; the biggest payloads for the least work.
 3. **`count` / `list` modes** on list-shaped tools.
@@ -134,4 +178,10 @@ done
 
 # Per-endpoint required scope
 grep -h '@apiPermission' *.php | sed 's/.*@apiPermission *//' | sort | uniq -c | sort -rn
+
+# Handlers that implement the synchronous read-back poll
+grep -n "synchronous" *.php
+
+# What a delete actually cascades to (and what it misses)
+sed -n '4334,4494p' SubscribersController.php | grep -E "loadModel|nsDelete|__delete"
 ```
