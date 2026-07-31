@@ -337,6 +337,111 @@
     margin: 0;
   }
 
+  /* ---- Call comparison ---- */
+
+  .calls {
+    border: 1px solid var(--rule);
+    border-bottom: none;
+    overflow-x: auto;
+  }
+
+  .calls-row {
+    display: grid;
+    grid-template-columns: minmax(165px, 1fr) 4.2rem minmax(215px, 1.25fr) minmax(200px, 1.15fr);
+    border-bottom: 1px solid var(--rule);
+    background: var(--panel);
+    min-width: 700px;
+  }
+
+  .calls-row.head { background: var(--ground); }
+
+  .calls-row.head > * {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
+    line-height: 1.5;
+  }
+
+  .calls-row.group {
+    background: var(--ground);
+    grid-template-columns: 1fr;
+  }
+
+  .calls-row.group > * {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .calls-row.group i {
+    width: 0.62rem;
+    height: 0.62rem;
+    border-radius: 50%;
+    display: block;
+    flex: none;
+  }
+
+  .calls-row.group.platform { color: var(--platform); }
+  .calls-row.group.platform i { background: var(--platform); }
+  .calls-row.group.client { color: var(--client); }
+  .calls-row.group.client i { background: var(--client); }
+
+  .calls-row > * { padding: 0.9rem 1.05rem; }
+
+  .calls-op {
+    font-family: var(--display);
+    font-size: 1.06rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    line-height: 1.15;
+    align-self: start;
+  }
+
+  .calls-n {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.15rem;
+    color: var(--ink);
+    align-self: start;
+    text-align: center;
+  }
+
+  .calls-n small {
+    display: block;
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 0.2rem;
+  }
+
+  .calls-omp, .calls-mcp {
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    align-self: start;
+  }
+
+  .calls-mcp b {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--brass);
+    display: block;
+    margin-bottom: 0.25rem;
+    word-break: break-word;
+  }
+
   /* ---- Before / after ledger ---- */
 
   .ledger {
@@ -695,6 +800,123 @@
         </tbody>
       </table>
     </details>
+  </section>
+
+  <section>
+    <header>
+      <span class="eyebrow eyebrow--brass">Call for call</span>
+      <h2>The portal makes the same calls we do</h2>
+      <p>
+        Worth being precise about why: <code>isV2()</code> is a per-request flag on the
+        same controllers, and an action name resolves to a method on that same class.
+        The portal and this server run identical handlers. Neither interface has a
+        composite endpoint the other lacks, so the API calls needed to finish a job are
+        the same number on both sides. What differs is who has to remember the sequence.
+      </p>
+    </header>
+
+    <div class="calls">
+      <div class="calls-row head">
+        <div>Operation</div>
+        <div>API calls</div>
+        <div>What the portal has to do</div>
+        <div>What the MCP does now</div>
+      </div>
+
+      <div class="calls-row group platform"><div><i></i> NetSapiens runs the chain &mdash; one call finishes the job</div></div>
+
+      <div class="calls-row">
+        <div class="calls-op">Create a domain</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One save. The server writes the domain, video subscription, dial plan, catch-all dial rule and the domain subscriber behind it.</div>
+        <div class="calls-mcp"><b>create_domain</b>Identical single call. No composite, because wrapping it would only add ways to fail.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Create an auto attendant</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One save behind the attendant editor, covering 8 writes across 4 object types.</div>
+        <div class="calls-mcp"><b>post_domains_by_domain_autoattendants</b>Identical single call.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Create or update a timeframe</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One save. The update path alone touches 6 models across 29 write sites.</div>
+        <div class="calls-mcp"><b>post_domains_by_domain_timeframes_1</b>and <code>put_&hellip;_timeframes_by_id_6</code>. One per timeframe type.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Create a device</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One save; the device and its MAC registration are written together.</div>
+        <div class="calls-mcp"><b>create_device</b>Identical single call.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Create or update a call queue</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One save. Create writes the queue and hunt group; update also keeps the backing subscriber in step.</div>
+        <div class="calls-mcp"><b>create_callqueue</b>and <code>update_callqueue</code>. Note that create needs a description, which the spec does not mark required.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Send a message</div>
+        <div class="calls-n">1<small>each</small></div>
+        <div class="calls-omp">One send; message and session are written together with any upload and queue routing.</div>
+        <div class="calls-mcp"><b>send_message_sms</b>Identical single call.</div>
+      </div>
+
+      <div class="calls-row group client"><div><i></i> The client runs the chain &mdash; the portal walks a person through it</div></div>
+
+      <div class="calls-row">
+        <div class="calls-op">Add a usable user</div>
+        <div class="calls-n">3<small>calls</small></div>
+        <div class="calls-omp">Create the user, then create a device for them, then route a number to them. Three separate screens. Stop after the first and you have a user who cannot register a phone or take a call.</div>
+        <div class="calls-mcp"><b>provision_user</b>One tool call runs all three in order, stops at the first failure rather than orphaning a device, and reports what is still unconfigured.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Staff a call queue</div>
+        <div class="calls-n">2+n<small>calls</small></div>
+        <div class="calls-omp">Create the queue, add each agent one at a time, then route a number to it. A queue with no agents answers nothing.</div>
+        <div class="calls-mcp"><b>provision_call_queue</b>One tool call. Agents are added sequentially so a failure names the agent it happened on.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Forward calls until a date</div>
+        <div class="calls-n">2<small>calls</small></div>
+        <div class="calls-omp">Build a date-range timeframe, then create an answer rule that names it. Get the order wrong and the rule points at nothing.</div>
+        <div class="calls-mcp"><b>schedule_forwarding</b>Pass <code>until</code>. It refuses to create the rule if the timeframe failed, because a rule pointed at a missing timeframe applies never and reads as success.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Remove a user</div>
+        <div class="calls-n">1+2<small>calls</small></div>
+        <div class="calls-omp">One delete, which cascades to ten object types. Then you have to know to go and find the DID still routed at them and their row in any call queue, because nothing tells you.</div>
+        <div class="calls-mcp"><b>deprovision_user</b>One tool call. Inventories both leftovers before deleting, then releases them, and cleans up even if the delete itself failed.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Remove a call queue</div>
+        <div class="calls-n">1+n<small>calls</small></div>
+        <div class="calls-omp">One delete for the queue, then the same hunt for orphaned agent memberships and numbers.</div>
+        <div class="calls-mcp"><b>deprovision_call_queue</b>One tool call. Removes agents first, since once the queue is gone their endpoint has no queue to address.</div>
+      </div>
+
+      <div class="calls-row">
+        <div class="calls-op">Set a hold message</div>
+        <div class="calls-n">1<small>upload</small></div>
+        <div class="calls-omp">One multipart upload. The only media family with no text-to-speech option.</div>
+        <div class="calls-mcp"><b>set_hold_message</b>Takes base64 audio and sends the multipart upload for you. This was unreachable from here until the client learned to send multipart.</div>
+      </div>
+    </div>
+
+    <p class="chart-note" style="margin-top:1rem">
+      Read from the controller source, not from the portal's network traffic, which is
+      not in this dump. The claim is the stronger one either way: no handler exists that
+      would let the portal finish any of these in fewer calls than we do.
+    </p>
   </section>
 
   <section>
