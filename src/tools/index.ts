@@ -20,6 +20,7 @@ import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { isStatelessMode } from '../server-info.js';
+import { MULTIPART_ONLY_TOOLS, multipartAlternative } from './multipart.js';
 import { CURATED_CATALOG } from './curated/catalog.js';
 import { buildMetaTools } from './curated/meta.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
@@ -368,6 +369,8 @@ function getToolMode(): ToolMode {
  */
 function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean {
   if (isToolDisabled(toolName)) return false;
+  // Needs a file upload we cannot send; a JSON sibling covers the same job.
+  if (MULTIPART_ONLY_TOOLS.has(toolName)) return false;
   if (!roleAllows(userRole, toolName)) return false;
   if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
   return true;
@@ -449,12 +452,10 @@ function findCuratedTool(name: string, userRole?: UserRole) {
     toolRegistry,
     async (innerName, innerArgs, client) =>
       handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
-    (toolName) => {
-      if (isToolDisabled(toolName)) return false;
-      if (!roleAllows(userRole, toolName)) return false;
-      if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
-      return true;
-    },
+    // Same predicate the ListTools path uses. This was a second, hand-copied
+    // version of the rule, and it had already drifted — search_api kept
+    // offering tools the dispatcher would reject.
+    (toolName) => isGeneratedToolVisible(toolName, userRole),
   );
   return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
 }
@@ -604,6 +605,17 @@ export async function handleToolCall(
       `Tool '${toolName}' requires a higher access tier than your account has`,
     );
   }
+  // Multipart-only operations were generated as if they took a JSON body, so
+  // they look callable and cannot work. Fail with the alternative named rather
+  // than letting the model burn a turn on a request the transport can't make.
+  if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
+        multipartAlternative(registryKey),
+    );
+  }
+
   const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
   if (!def) return null;
   return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);

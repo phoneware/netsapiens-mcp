@@ -14,6 +14,13 @@ export interface GenericApiClient {
     pathParams?: Record<string, string>;
     queryParams?: Record<string, unknown>;
     body?: unknown;
+    /**
+     * Send as multipart/form-data with one file part instead of JSON. Only the
+     * hold-message endpoints need this: they accept nothing but an upload and,
+     * unlike greetings and music-on-hold, have no text-to-speech or base64
+     * variant to fall back on.
+     */
+    multipart?: { field: string; filename: string; base64: string; contentType?: string };
   }): Promise<NetSapiensApiResponse<T>>;
 }
 

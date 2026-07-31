@@ -211,6 +211,17 @@ export class NetSapiensClient {
     pathParams?: Record<string, string>;
     queryParams?: Record<string, unknown>;
     body?: unknown;
+    /**
+     * Send the body as multipart/form-data with one file part, instead of JSON.
+     *
+     * A handful of NetSapiens media endpoints (the hold-message family) accept
+     * nothing else — they parse the raw multipart stream to pull the file out,
+     * and unlike greetings and music-on-hold they have no text-to-speech or
+     * base64 variant. Without this they are simply unreachable from here.
+     *
+     * `body` still carries the ordinary fields; they become form fields.
+     */
+    multipart?: { field: string; filename: string; base64: string; contentType?: string };
   }): Promise<NetSapiensApiResponse<T>> {
     try {
       let url = opts.pathTemplate;
@@ -233,6 +244,21 @@ export class NetSapiensClient {
       let response: AxiosResponse;
       if (method === 'GET' || method === 'DELETE') {
         response = await this.client.request({ method, url, ...config });
+      } else if (opts.multipart) {
+        const form = new FormData();
+        for (const [key, value] of Object.entries((opts.body ?? {}) as Record<string, unknown>)) {
+          if (value === undefined || value === null) continue;
+          form.append(key, String(value));
+        }
+        const bytes = Buffer.from(opts.multipart.base64, 'base64');
+        form.append(
+          opts.multipart.field,
+          new Blob([bytes], { type: opts.multipart.contentType || 'application/octet-stream' }),
+          opts.multipart.filename,
+        );
+        // Let the runtime set the boundary; a hand-written Content-Type here
+        // omits it and the server reads an empty body.
+        response = await this.client.request({ method, url, data: form, ...config });
       } else {
         response = await this.client.request({ method, url, data: opts.body, ...config });
       }
