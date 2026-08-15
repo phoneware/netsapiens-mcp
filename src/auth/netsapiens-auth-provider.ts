@@ -33,6 +33,7 @@ import type {
   OAuthTokenRevocationRequest,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { TokenStore } from './token-store.js';
+import { LoopbackTolerantClientsStore } from './loopback-redirect.js';
 import type { StoredToken, TokenStoreLike } from './token-store.js';
 import { FirestoreTokenStore } from './firestore-token-store.js';
 import { FirestoreClientsStore } from './firestore-clients-store.js';
@@ -433,13 +434,17 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const useFirestore = process.env.MCP_PERSISTENCE === 'firestore'
       || (process.env.MCP_PERSISTENCE !== 'file' && !!process.env.GOOGLE_CLOUD_PROJECT);
 
+    // Wrapped either way: a native client's loopback callback port changes per
+    // sign-in attempt, and the SDK matches redirect_uris by exact string.
     if (useFirestore) {
       this.tokenStore = new FirestoreTokenStore({ projectId: process.env.GOOGLE_CLOUD_PROJECT });
-      this._clientsStore = new FirestoreClientsStore({ projectId: process.env.GOOGLE_CLOUD_PROJECT });
+      this._clientsStore = new LoopbackTolerantClientsStore(
+        new FirestoreClientsStore({ projectId: process.env.GOOGLE_CLOUD_PROJECT }),
+      );
       logger.info('Auth provider using Firestore persistence');
     } else {
       this.tokenStore = new TokenStore(options.tokenStorePath);
-      this._clientsStore = new InMemoryClientsStore();
+      this._clientsStore = new LoopbackTolerantClientsStore(new InMemoryClientsStore());
       logger.info('Auth provider using file-backed token store + in-memory clients store');
     }
   }
