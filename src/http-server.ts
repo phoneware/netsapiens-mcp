@@ -19,6 +19,7 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import {
   SERVER_INSTRUCTIONS,
   isStatelessMode,
@@ -309,6 +310,11 @@ function wireApp(
       res.status(404).end();
     }
   });
+
+  // Publishes the requested loopback redirect_uri for the clients store, which
+  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
+  // scoped to /authorize so every other endpoint keeps exact redirect matching.
+  app.use('/authorize', allowLoopbackRedirectUri());
 
   // OAuth endpoints — discovery, authorize, token, register, revoke
   app.use(mcpAuthRouter({

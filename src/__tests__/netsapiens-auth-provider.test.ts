@@ -285,6 +285,69 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     });
   });
 
+  describe('loopback callback on a changed port', () => {
+    async function registerLoopbackClient(app: unknown, port: number): Promise<string> {
+      const reg = await request(app as never)
+        .post('/register')
+        .send({
+          redirect_uris: [`http://localhost:${port}/callback`],
+          client_name: 'native client',
+          token_endpoint_auth_method: 'none',
+        })
+        .expect(201);
+      return reg.body.client_id as string;
+    }
+
+    function authorize(app: unknown, clientId: string, redirectUri: string) {
+      return request(app as never).get('/authorize').query({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        code_challenge: pkceChallenge(randomBytes(32).toString('base64url')),
+        code_challenge_method: 'S256',
+        state: 'xyz',
+      });
+    }
+
+    // A native client picks its loopback port per attempt and persists only its
+    // client_id, so without this the second sign-in fails forever and nothing
+    // prompts the client to register again.
+    it('serves the login page when the port differs from the registered one', async () => {
+      const { app } = await importApp();
+      const clientId = await registerLoopbackClient(app, 1410);
+
+      const res = await authorize(app, clientId, 'http://localhost:54321/callback').expect(200);
+
+      expect(res.text).toContain('<form');
+      expect(res.text).not.toContain('Unregistered redirect_uri');
+    });
+
+    it('accepts an equivalent loopback spelling on a different port', async () => {
+      const { app } = await importApp();
+      const clientId = await registerLoopbackClient(app, 1410);
+
+      await authorize(app, clientId, 'http://127.0.0.1:9876/callback').expect(200);
+    });
+
+    it('still refuses a redirect_uri that leaves the machine', async () => {
+      const { app } = await importApp();
+      const clientId = await registerLoopbackClient(app, 1410);
+
+      const res = await authorize(app, clientId, 'https://evil.example.com/callback').expect(400);
+
+      expect(res.body.error_description).toBe('Unregistered redirect_uri');
+    });
+
+    it('still refuses a loopback redirect_uri on an unregistered path', async () => {
+      const { app } = await importApp();
+      const clientId = await registerLoopbackClient(app, 1410);
+
+      const res = await authorize(app, clientId, 'http://localhost:1410/steal').expect(400);
+
+      expect(res.body.error_description).toBe('Unregistered redirect_uri');
+    });
+  });
+
   describe('login → token (no MFA)', () => {
     it('walks /authorize → /login → /token and issues bearer + refresh', async () => {
       const { app } = await importApp();
