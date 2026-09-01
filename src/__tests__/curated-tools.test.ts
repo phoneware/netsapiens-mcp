@@ -803,6 +803,42 @@ describe('composite handlers translate args correctly', () => {
   expect(calls[1].pathParams?.user).toBe('2001');
  });
 
+ it('an office manager asking a bare call question gets the domain, not their own line', async () => {
+  // Morgan's report: she asked how many calls the office took and got her
+  // own two back. The model never passes `scope` for a natural question, so
+  // the default has to be right for her tier, not just reachable.
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ pathTemplate: string }> = [];
+  const fakeClient = {
+   request: async (o: { pathTemplate: string }) => {
+    calls.push(o);
+    return { success: true, data: [] };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'recent_calls', {}, 'domain_admin');
+  expect(calls[0].pathTemplate).toBe('/domains/{domain}/cdrs');
+
+  await handleToolCall(fakeClient as never, 'call_volume', {}, 'domain_admin');
+  expect(calls[1].pathTemplate).toBe('/domains/{domain}/cdrs/count');
+
+  // A manager can still narrow back to themselves on purpose.
+  await handleToolCall(fakeClient as never, 'recent_calls', { scope: 'mine' }, 'domain_admin');
+  expect(calls[2].pathTemplate).toBe('/domains/{domain}/users/{user}/cdrs');
+ });
+
+ it('reports the scope it actually used so a narrowed answer is never silent', async () => {
+  const { handleToolCall } = await importTools();
+  const fakeClient = { request: async () => ({ success: true, data: [] }) };
+  const reportedScope = (result: unknown): unknown => {
+   if (!result || typeof result !== 'object' || !('content' in result)) throw new Error('no content');
+   const content = result.content;
+   if (!Array.isArray(content) || typeof content[0]?.text !== 'string') throw new Error('no text block');
+   return JSON.parse(content[0].text).scope;
+  };
+  expect(reportedScope(await handleToolCall(fakeClient as never, 'recent_calls', {}, 'domain_admin'))).toBe('domain');
+  expect(reportedScope(await handleToolCall(fakeClient as never, 'recent_calls', {}, 'user'))).toBe('mine');
+ });
+
  it('place_call POSTs the destination to /domains/{domain}/users/{user}/calls', async () => {
   const { handleToolCall } = await importTools();
   const calls: unknown[] = [];
