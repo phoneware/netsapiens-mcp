@@ -117,38 +117,51 @@ await rpc('initialize', {
  clientInfo: { name: 'e2e', version: '0' },
 });
 
-const before = upstreamHits.length;
-const oldWay = await rpc('tools/call', { name: 'recent_calls', arguments: {} });
-const userPath = upstreamHits.slice(before).at(-1);
+const parse = (r) =>
+ r.result ? JSON.parse(r.result.content[0].text) : { data: null, error: r.error?.message ?? 'tool not available' };
 
-const b2 = upstreamHits.length;
-const domainWide = await rpc('tools/call', { name: 'recent_calls', arguments: { scope: 'domain' } });
-const domainPath = upstreamHits.slice(b2).at(-1);
+/** Call a tool and report which upstream NS path it actually reached. */
+async function callTool(name, args) {
+ const mark = upstreamHits.length;
+ const res = await rpc('tools/call', { name, arguments: args });
+ return { path: upstreamHits.slice(mark).at(-1), body: parse(res) };
+}
 
-const b3 = upstreamHits.length;
-const volume = await rpc('tools/call', { name: 'call_volume', arguments: { scope: 'domain' } });
-const countPath = upstreamHits.slice(b3).at(-1);
-
-const parse = (r) => (r.result ? JSON.parse(r.result.content[0].text) : { data: null, error: r.error?.message ?? 'tool not available' });
+// The question Morgan actually asks. A model answering "how many calls did we
+// take today" passes no scope hint, so the default has to be right on its own.
+const bareVolume = await callTool('call_volume', {});
+const bareCalls = await callTool('recent_calls', {});
+// Explicit narrowing still has to work, or managers lose their own view.
+const ownCalls = await callTool('recent_calls', { scope: 'mine' });
+// And one named user stays one named user.
+const oneUser = await callTool('recent_calls', { user: '2002' });
 
 console.log('\n=== Office Manager, connected over OAuth as 1001@SpoonerPT ===');
 console.log('NS reported scope        : Office Manager');
-console.log('\n-- "my recent calls" (default) --');
-console.log('  upstream path          :', userPath);
-console.log('  calls returned         :', parse(oldWay).data?.length ?? 'n/a');
-console.log('\n-- "calls across the whole domain" (scope=domain) --');
-console.log('  upstream path          :', domainPath);
-console.log('  calls returned         :', parse(domainWide).data?.length ?? 'n/a');
-console.log('\n-- "how many calls did the domain take today" (call_volume) --');
-console.log('  total                  :', parse(volume).data?.total ?? `unavailable (${parse(volume).error})`);
+console.log('\n-- "how many calls did we take today" (no scope passed) --');
+console.log('  upstream path          :', bareVolume.path);
+console.log('  scope reported         :', bareVolume.body.scope ?? 'none');
+console.log('  total                  :', bareVolume.body.data?.total ?? `unavailable (${bareVolume.body.error})`);
+console.log('\n-- "show me recent calls" (no scope passed) --');
+console.log('  upstream path          :', bareCalls.path);
+console.log('  calls returned         :', bareCalls.body.data?.length ?? 'n/a');
+console.log('\n-- "just my own calls" (scope=mine) --');
+console.log('  upstream path          :', ownCalls.path);
+console.log('  calls returned         :', ownCalls.body.data?.length ?? 'n/a');
+console.log('\n-- "calls for extension 2002" --');
+console.log('  upstream path          :', oneUser.path);
 
 const ok =
- userPath === '/ns-api/v2/domains/~/users/~/cdrs' &&
- domainPath === '/ns-api/v2/domains/~/cdrs' &&
- countPath === '/ns-api/v2/domains/~/cdrs/count' &&
- parse(volume).data?.total === DOMAIN_CDR_COUNT;
+ bareVolume.path === '/ns-api/v2/domains/~/cdrs/count' &&
+ bareVolume.body.data?.total === DOMAIN_CDR_COUNT &&
+ bareCalls.path === '/ns-api/v2/domains/~/cdrs' &&
+ ownCalls.path === '/ns-api/v2/domains/~/users/~/cdrs' &&
+ ownCalls.body.data?.length === USER_CDRS.length &&
+ oneUser.path === '/ns-api/v2/domains/~/users/2002/cdrs';
 
-console.log(`\n${ok ? 'PASS' : 'FAIL'}: domain question answers ${parse(volume).data?.total ?? 'nothing'}, not ${USER_CDRS.length}\n`);
+console.log(
+ `\n${ok ? 'PASS' : 'FAIL'}: the bare question answers ${bareVolume.body.data?.total ?? 'nothing'}, not ${USER_CDRS.length}\n`,
+);
 
 server.kill('SIGTERM');
 ns.close();
