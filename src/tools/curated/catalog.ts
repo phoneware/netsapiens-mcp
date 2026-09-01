@@ -11,6 +11,7 @@
 
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
+import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { WORKFLOW_TOOLS } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 
@@ -199,36 +200,59 @@ function cdrWindow(args: Record<string, unknown>): { 'datetime-start'?: string; 
  return { 'datetime-start': since, 'datetime-end': until };
 }
 
+/**
+ * Resolve which CDR breadth the caller actually meant.
+ *
+ * An office manager (domain_admin and up) asking about "calls" means the
+ * office: that is the job. Defaulting them to their own line produced a wrong
+ * answer with no error, because the model has no way to know its question was
+ * narrowed. A plain user still defaults to themselves, and NS enforces the
+ * real boundary on the token either way.
+ */
+function cdrScope(args: Record<string, unknown>, userRole?: UserRole): 'mine' | 'user' | 'domain' {
+ if (args.user != null && args.user !== '') return 'user';
+ const asked = args.scope == null ? undefined : String(args.scope);
+ if (asked === 'mine' || asked === 'user' || asked === 'domain') return asked;
+ return userRole && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.domain_admin ? 'domain' : 'mine';
+}
+
+const SCOPE_PROPERTIES = {
+ scope: {
+  type: 'string',
+  enum: ['mine', 'user', 'domain'],
+  description:
+   'Whose calls. Defaults to "domain" for office managers and above, "mine" for everyone else. ' +
+   'Set "mine" explicitly to narrow a manager back to their own line.',
+ },
+ user: { type: 'string', description: 'One specific user. Implies scope="user" and overrides `scope`.' },
+ domain: { type: 'string', description: 'Defaults to your own domain.' },
+ since: { type: 'string', description: 'Start of window, RFC3339 or "YYYY-MM-DD HH:MM:SS"' },
+ until: { type: 'string', description: 'End of window, same format as `since`. Defaults to now when `since` is set.' },
+ type: { type: 'string', description: 'Inbound, Outbound, On-net, Off-net, Missed, Received' },
+} as const;
+
 const recent_calls: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'recent_calls',
   description:
-   'Recent call detail records (CDR). `scope` picks whose calls: "mine" (default), "user" for one other ' +
-   'user, or "domain" for every call in the domain. Domain-wide questions ("how many calls did the office ' +
-   'take today", "calls across the domain") REQUIRE scope="domain" — the default returns only your own ' +
-   'calls, however senior your NetSapiens scope is. Passing `domain` alone does not widen the view.',
+   'Recent call detail records (CDR). For an office manager or above this returns the whole domain by ' +
+   'default, which is what "how did we do today" means. Pass scope="mine" for just your own calls, or ' +
+   '`user` for one person. The response reports the scope it actually used.',
   inputSchema: {
    type: 'object',
-   properties: {
-    scope: { type: 'string', enum: ['mine', 'user', 'domain'], default: 'mine', description: 'Whose calls to read.' },
-    user: { type: 'string', description: 'User to inspect. Implies scope="user".' },
-    domain: { type: 'string' },
-    limit: { type: 'number', default: 25 },
-    since: { type: 'string', description: 'Start of window, RFC3339 or "YYYY-MM-DD HH:MM:SS"' },
-    until: { type: 'string', description: 'End of window, same format as `since`. Defaults to now when `since` is set.' },
-    type: { type: 'string', description: 'Inbound, Outbound, On-net, Off-net, Missed, Received' },
-   },
+   properties: { ...SCOPE_PROPERTIES, limit: { type: 'number', default: 25 } },
   },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
+  const scope = cdrScope(args, userRole);
   const queryParams = {
    limit: num(args.limit) ?? 25,
    ...cdrWindow(args),
    type: args.type ? String(args.type) : undefined,
   };
   const r =
-   args.user == null && String(args.scope ?? 'mine') === 'domain'
+   scope === 'domain'
     ? await client.request({
      method: 'GET',
      pathTemplate: '/domains/{domain}/cdrs',
@@ -241,7 +265,7 @@ const recent_calls: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult(r);
+  return textResult({ scope, ...r });
  },
 };
 
@@ -250,25 +274,16 @@ const call_volume: CuratedTool = {
  schema: {
   name: 'call_volume',
   description:
-   'Count calls and sum minutes over a time window. Use this for "how many calls" questions — ' +
-   '`recent_calls` is capped by `limit` and cannot produce a count. `scope="domain"` counts the whole ' +
-   'domain; the default counts only your own calls.',
-  inputSchema: {
-   type: 'object',
-   properties: {
-    scope: { type: 'string', enum: ['mine', 'user', 'domain'], default: 'mine' },
-    user: { type: 'string', description: 'User to count. Implies scope="user".' },
-    domain: { type: 'string' },
-    since: { type: 'string', description: 'Start of window, RFC3339 or "YYYY-MM-DD HH:MM:SS"' },
-    until: { type: 'string', description: 'End of window, same format as `since`. Defaults to now when `since` is set.' },
-    type: { type: 'string', description: 'Inbound, Outbound, On-net, Off-net, Missed, Received' },
-   },
-  },
+   'Count calls and sum minutes over a time window. Use this for "how many calls" questions: ' +
+   '`recent_calls` is capped by `limit` and cannot produce a count. Same scope rules as `recent_calls`, ' +
+   'so an office manager gets the whole domain by default. The response reports the scope it used.',
+  inputSchema: { type: 'object', properties: { ...SCOPE_PROPERTIES } },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
+  const scope = cdrScope(args, userRole);
   const queryParams = { ...cdrWindow(args), type: args.type ? String(args.type) : undefined };
   const r =
-   args.user == null && String(args.scope ?? 'mine') === 'domain'
+   scope === 'domain'
     ? await client.request({
      method: 'GET',
      pathTemplate: '/domains/{domain}/cdrs/count',
@@ -281,7 +296,7 @@ const call_volume: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult(r);
+  return textResult({ scope, ...r });
  },
 };
 

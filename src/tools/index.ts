@@ -9,10 +9,10 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
+ CallToolRequestSchema,
+ ErrorCode,
+ ListToolsRequestSchema,
+ McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
 import { toolRegistry as v2ToolRegistry } from '../generated/registry.js';
@@ -28,9 +28,9 @@ import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index
 
 /** Set-equality helper used to detect promotion / demotion changes. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const v of a) if (!b.has(v)) return false;
-  return true;
+ if (a.size !== b.size) return false;
+ for (const v of a) if (!b.has(v)) return false;
+ return true;
 }
 
 /**
@@ -43,7 +43,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 const toolRegistry = new Map<string, ToolDefinition>();
 for (const [name, def] of v2ToolRegistry) toolRegistry.set(name, def);
 for (const [name, def] of v1ToolRegistry) {
-  if (!toolRegistry.has(name)) toolRegistry.set(name, def);
+ if (!toolRegistry.has(name)) toolRegistry.set(name, def);
 }
 
 // ---------------------------------------------------------------------------
@@ -56,10 +56,10 @@ const DESTRUCTIVE_HINTS = ['delete_', 'revoke_', 'remove_', 'cancel_', 'destroy_
 
 /** The four annotation hints the current MCP spec defines on a tool. */
 export interface ToolHints {
-  readOnlyHint: boolean;
-  destructiveHint: boolean;
-  idempotentHint: boolean;
-  openWorldHint: boolean;
+ readOnlyHint: boolean;
+ destructiveHint: boolean;
+ idempotentHint: boolean;
+ openWorldHint: boolean;
 }
 
 /**
@@ -71,29 +71,29 @@ export interface ToolHints {
  * repeated; a POST/create generally does not.
  */
 function withDerivedHints(name: string, base: { readOnlyHint: boolean; destructiveHint: boolean }): ToolHints {
-  const nonIdempotent = name.startsWith('post_') || name.startsWith('create_') || name.startsWith('add_') || name.startsWith('send_');
-  return {
-    ...base,
-    idempotentHint: base.readOnlyHint ? true : !nonIdempotent,
-    openWorldHint: true,
-  };
+ const nonIdempotent = name.startsWith('post_') || name.startsWith('create_') || name.startsWith('add_') || name.startsWith('send_');
+ return {
+  ...base,
+  idempotentHint: base.readOnlyHint ? true : !nonIdempotent,
+  openWorldHint: true,
+ };
 }
 
 function classifyTool(name: string): ToolHints {
-  if (READ_PREFIXES.some((p) => name.startsWith(p))) {
-    return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
-  }
-  if (MIXED_PREFIXES.some((p) => name.startsWith(p))) {
-    return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
-  }
-  // HTTP verbs in the spec map cleanly: GET → read, DELETE → destructive, PUT/PATCH/POST → write.
-  if (name.startsWith('get_')) return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
-  if (name.startsWith('delete_')) return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
-  if (name.startsWith('put_') || name.startsWith('patch_') || name.startsWith('post_')) {
-    return withDerivedHints(name, { readOnlyHint: false, destructiveHint: false });
-  }
-  const destructive = DESTRUCTIVE_HINTS.some((p) => name.startsWith(p));
-  return withDerivedHints(name, { readOnlyHint: false, destructiveHint: destructive });
+ if (READ_PREFIXES.some((p) => name.startsWith(p))) {
+  return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
+ }
+ if (MIXED_PREFIXES.some((p) => name.startsWith(p))) {
+  return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
+ }
+ // HTTP verbs in the spec map cleanly: GET → read, DELETE → destructive, PUT/PATCH/POST → write.
+ if (name.startsWith('get_')) return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
+ if (name.startsWith('delete_')) return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
+ if (name.startsWith('put_') || name.startsWith('patch_') || name.startsWith('post_')) {
+  return withDerivedHints(name, { readOnlyHint: false, destructiveHint: false });
+ }
+ const destructive = DESTRUCTIVE_HINTS.some((p) => name.startsWith(p));
+ return withDerivedHints(name, { readOnlyHint: false, destructiveHint: destructive });
 }
 
 // ---------------------------------------------------------------------------
@@ -109,20 +109,20 @@ const TITLE_ACRONYMS = new Set(['api', 'cdr', 'cdrs', 'sms', 'mms', 'sip', 'dns'
 
 /** Turn a snake_case tool name into a human-readable title. */
 export function toolTitle(name: string): string {
-  return name
-    .split('_')
-    .filter((w) => w && w !== 'by')
-    .map((w) => (TITLE_ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(' ');
+ return name
+  .split('_')
+  .filter((w) => w && w !== 'by')
+  .map((w) => (TITLE_ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+  .join(' ');
 }
 
 /** The shape we hand back to MCP clients for each tool. */
 export interface ExposedTool {
-  name: string;
-  title: string;
-  description: string;
-  inputSchema: object;
-  annotations: ToolHints;
+ name: string;
+ title: string;
+ description: string;
+ inputSchema: object;
+ annotations: ToolHints;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,45 +130,45 @@ export interface ExposedTool {
 // ---------------------------------------------------------------------------
 
 function compileToolPatterns(patterns: string): RegExp | null {
-  const list = patterns.split(',').map((s) => s.trim()).filter(Boolean);
-  if (list.length === 0) return null;
-  const regexParts = list.map((pat) =>
-    pat
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*'),
-  );
-  return new RegExp(`^(${regexParts.join('|')})$`);
+ const list = patterns.split(',').map((s) => s.trim()).filter(Boolean);
+ if (list.length === 0) return null;
+ const regexParts = list.map((pat) =>
+  pat
+   .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+   .replace(/\*/g, '.*'),
+ );
+ return new RegExp(`^(${regexParts.join('|')})$`);
 }
 
 let disabledPatternsCache: { source: string; regex: RegExp | null } | null = null;
 function getDisabledPattern(): RegExp | null {
-  const env = process.env.MCP_DISABLED_TOOLS || '';
-  if (!disabledPatternsCache || disabledPatternsCache.source !== env) {
-    disabledPatternsCache = { source: env, regex: compileToolPatterns(env) };
-  }
-  return disabledPatternsCache.regex;
+ const env = process.env.MCP_DISABLED_TOOLS || '';
+ if (!disabledPatternsCache || disabledPatternsCache.source !== env) {
+  disabledPatternsCache = { source: env, regex: compileToolPatterns(env) };
+ }
+ return disabledPatternsCache.regex;
 }
 
 export function isToolDisabled(name: string): boolean {
-  const re = getDisabledPattern();
-  return re ? re.test(name) : false;
+ const re = getDisabledPattern();
+ return re ? re.test(name) : false;
 }
 
 let disabledActionsCache: { source: string; set: Set<string> } | null = null;
 function getDisabledActions(): Set<string> {
-  const env = process.env.MCP_DISABLED_ACTIONS || '';
-  if (!disabledActionsCache || disabledActionsCache.source !== env) {
-    const set = new Set(env.split(',').map((s) => s.trim()).filter(Boolean));
-    disabledActionsCache = { source: env, set };
-  }
-  return disabledActionsCache.set;
+ const env = process.env.MCP_DISABLED_ACTIONS || '';
+ if (!disabledActionsCache || disabledActionsCache.source !== env) {
+  const set = new Set(env.split(',').map((s) => s.trim()).filter(Boolean));
+  disabledActionsCache = { source: env, set };
+ }
+ return disabledActionsCache.set;
 }
 
 export function isActionDisabled(action: unknown): boolean {
-  if (typeof action !== 'string') return false;
-  const set = getDisabledActions();
-  if (set.size === 0) return false;
-  return set.has(action);
+ if (typeof action !== 'string') return false;
+ const set = getDisabledActions();
+ if (set.size === 0) return false;
+ return set.has(action);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,54 +187,54 @@ export function isActionDisabled(action: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 const TIER_RULES: Array<{ role: UserRole; patterns: RegExp[] }> = [
-  {
-    role: 'system_admin',
-    patterns: [
-      /certificate/i,
-      /(^|_)template(s)?(_|$)/i,
-      /(^|_)image(s)?(_|$)/i,
-      /(^|_)route(s)?(_|$)/i,
-      /connection/i,
-      /firebase/i,
-      /backup/i,
-      /restore/i,
-      /accesslog|access_log/i,
-      /auditlog|audit_log/i,
-      /(^|_)sfu(_|$)/i,
-      /(^|_)insight(_|$)/i,
-      /configuration|config_definition|configdef/i,
-      // system-wide dial policy (domain-scoped variants contain "domain")
-      /^(get|post|put|delete|read|create|update)_dialpolicy/i,
-      /v1_(configuration|template|image|route|connection|firebase|backup|restore|accesslog|auditlog|sfu|insight|uiconfigdef)/i,
-    ],
-  },
-  {
-    role: 'reseller',
-    patterns: [
-      /reseller/i,
-      /^create_domain$|^delete_domain$|^domain_billing$|^count_domains$/i,
-      /v1_reseller/i,
-    ],
-  },
+ {
+  role: 'system_admin',
+  patterns: [
+   /certificate/i,
+   /(^|_)template(s)?(_|$)/i,
+   /(^|_)image(s)?(_|$)/i,
+   /(^|_)route(s)?(_|$)/i,
+   /connection/i,
+   /firebase/i,
+   /backup/i,
+   /restore/i,
+   /accesslog|access_log/i,
+   /auditlog|audit_log/i,
+   /(^|_)sfu(_|$)/i,
+   /(^|_)insight(_|$)/i,
+   /configuration|config_definition|configdef/i,
+   // system-wide dial policy (domain-scoped variants contain "domain")
+   /^(get|post|put|delete|read|create|update)_dialpolicy/i,
+   /v1_(configuration|template|image|route|connection|firebase|backup|restore|accesslog|auditlog|sfu|insight|uiconfigdef)/i,
+  ],
+ },
+ {
+  role: 'reseller',
+  patterns: [
+   /reseller/i,
+   /^create_domain$|^delete_domain$|^domain_billing$|^count_domains$/i,
+   /v1_reseller/i,
+  ],
+ },
 ];
 
 /** Minimum role required to see a tool. Defaults to 'user' if unmatched. */
 export function toolMinRole(name: string): UserRole {
-  for (const rule of TIER_RULES) {
-    if (rule.patterns.some((p) => p.test(name))) return rule.role;
-  }
-  return 'user';
+ for (const rule of TIER_RULES) {
+  if (rule.patterns.some((p) => p.test(name))) return rule.role;
+ }
+ return 'user';
 }
 
 function roleFilterEnabled(): boolean {
-  return process.env.MCP_DISABLE_ROLE_FILTER !== 'true';
+ return process.env.MCP_DISABLE_ROLE_FILTER !== 'true';
 }
 
 /** True if a user of `userRole` is allowed to see/use a tool requiring `minRole`. */
 function roleAllows(userRole: UserRole | undefined, name: string): boolean {
-  if (!userRole || !roleFilterEnabled()) return true;
-  const required = toolMinRole(name);
-  return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[required];
+ if (!userRole || !roleFilterEnabled()) return true;
+ const required = toolMinRole(name);
+ return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[required];
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ function roleAllows(userRole: UserRole | undefined, name: string): boolean {
 // ---------------------------------------------------------------------------
 
 function disableDestructiveEnabled(): boolean {
-  return process.env.MCP_DISABLE_DESTRUCTIVE === 'true';
+ return process.env.MCP_DISABLE_DESTRUCTIVE === 'true';
 }
 
 /**
@@ -257,9 +257,9 @@ function disableDestructiveEnabled(): boolean {
  * prefix-based heuristic the generated registry uses.
  */
 export function isToolDestructive(name: string): boolean {
-  const curated = CURATED_CATALOG.find((t) => t.schema.name === name);
-  if (curated && curated.destructive !== undefined) return curated.destructive;
-  return classifyTool(name).destructiveHint;
+ const curated = CURATED_CATALOG.find((t) => t.schema.name === name);
+ if (curated && curated.destructive !== undefined) return curated.destructive;
+ return classifyTool(name).destructiveHint;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,73 +273,73 @@ export function isToolDestructive(name: string): boolean {
 // ---------------------------------------------------------------------------
 
 const SHORTEN_RULES: Array<[RegExp, string]> = [
-  [/domains_by_domain/g, 'domain'],
-  [/users_by_user/g, 'user'],
-  [/conferences_by_conference/g, 'conference'],
-  [/participants_by_participant/g, 'participant'],
-  [/callqueues_by_callqueue/g, 'callqueue'],
-  [/calls_by_call_id/g, 'call'],
-  [/meetings_by_id/g, 'meeting'],
-  [/instance_by_instance/g, 'instance'],
-  [/devices_by_device/g, 'device'],
-  [/dialplans_by_dialplan/g, 'dialplan'],
-  [/dialpolicy_by_policy/g, 'dialpolicy'],
-  [/sites_by_site/g, 'site'],
-  [/resellers_by_reseller/g, 'reseller'],
-  [/schedule_by_schedule_name/g, 'schedule'],
-  [/timeframes_by_timeframe/g, 'timeframe'],
-  [/contacts_by_contact_id/g, 'contact'],
-  [/agents_by_agent/g, 'agent'],
+ [/domains_by_domain/g, 'domain'],
+ [/users_by_user/g, 'user'],
+ [/conferences_by_conference/g, 'conference'],
+ [/participants_by_participant/g, 'participant'],
+ [/callqueues_by_callqueue/g, 'callqueue'],
+ [/calls_by_call_id/g, 'call'],
+ [/meetings_by_id/g, 'meeting'],
+ [/instance_by_instance/g, 'instance'],
+ [/devices_by_device/g, 'device'],
+ [/dialplans_by_dialplan/g, 'dialplan'],
+ [/dialpolicy_by_policy/g, 'dialpolicy'],
+ [/sites_by_site/g, 'site'],
+ [/resellers_by_reseller/g, 'reseller'],
+ [/schedule_by_schedule_name/g, 'schedule'],
+ [/timeframes_by_timeframe/g, 'timeframe'],
+ [/contacts_by_contact_id/g, 'contact'],
+ [/agents_by_agent/g, 'agent'],
 ];
 
 function shortenName(name: string): string {
-  let out = name;
-  for (const [pattern, replacement] of SHORTEN_RULES) {
-    out = out.replace(pattern, replacement);
-  }
-  return out;
+ let out = name;
+ for (const [pattern, replacement] of SHORTEN_RULES) {
+  out = out.replace(pattern, replacement);
+ }
+ return out;
 }
 
 const MCP_MAX_NAME_LEN = 64;
 
 interface NameMapping {
-  // exposed name (what MCP clients see) → registry key (original generated name)
-  exposedToRegistry: Map<string, string>;
-  // registry key → exposed name (for ListTools rendering)
-  registryToExposed: Map<string, string>;
+ // exposed name (what MCP clients see) → registry key (original generated name)
+ exposedToRegistry: Map<string, string>;
+ // registry key → exposed name (for ListTools rendering)
+ registryToExposed: Map<string, string>;
 }
 
 let nameMappingCache: NameMapping | null = null;
 function buildNameMapping(): NameMapping {
-  if (nameMappingCache) return nameMappingCache;
-  const exposedToRegistry = new Map<string, string>();
-  const registryToExposed = new Map<string, string>();
-  const collisions: string[] = [];
-  for (const [registryKey] of toolRegistry) {
-    let exposed = registryKey;
-    if (registryKey.length > MCP_MAX_NAME_LEN) {
-      exposed = shortenName(registryKey);
-    }
-    if (exposed.length > MCP_MAX_NAME_LEN) {
-      // Still too long — truncate with a deterministic hash suffix.
-      const hash = Buffer.from(registryKey).toString('base64url').slice(0, 6);
-      exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 7)}_${hash}`;
-    }
-    if (exposedToRegistry.has(exposed)) {
-      collisions.push(`${registryKey} → ${exposed}`);
-      // Disambiguate with a short hash suffix.
-      const hash = Buffer.from(registryKey).toString('base64url').slice(0, 4);
-      exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 5)}_${hash}`;
-    }
-    exposedToRegistry.set(exposed, registryKey);
-    registryToExposed.set(registryKey, exposed);
+ if (nameMappingCache) return nameMappingCache;
+ const exposedToRegistry = new Map<string, string>();
+ const registryToExposed = new Map<string, string>();
+ const collisions: string[] = [];
+ for (const [registryKey] of toolRegistry) {
+  let exposed = registryKey;
+  if (registryKey.length > MCP_MAX_NAME_LEN) {
+   exposed = shortenName(registryKey);
   }
-  if (collisions.length) {
-    // eslint-disable-next-line no-console
-    console.warn('[tools] shortened-name collisions resolved with hashes:', collisions);
+  if (exposed.length > MCP_MAX_NAME_LEN) {
+   // Still too long — truncate with a deterministic hash suffix.
+   const hash = Buffer.from(registryKey).toString('base64url').slice(0, 6);
+   exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 7)}_${hash}`;
   }
-  nameMappingCache = { exposedToRegistry, registryToExposed };
-  return nameMappingCache;
+  if (exposedToRegistry.has(exposed)) {
+   collisions.push(`${registryKey} → ${exposed}`);
+   // Disambiguate with a short hash suffix.
+   const hash = Buffer.from(registryKey).toString('base64url').slice(0, 4);
+   exposed = `${exposed.slice(0, MCP_MAX_NAME_LEN - 5)}_${hash}`;
+  }
+  exposedToRegistry.set(exposed, registryKey);
+  registryToExposed.set(registryKey, exposed);
+ }
+ if (collisions.length) {
+  // eslint-disable-next-line no-console
+  console.warn('[tools] shortened-name collisions resolved with hashes:', collisions);
+ }
+ nameMappingCache = { exposedToRegistry, registryToExposed };
+ return nameMappingCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -359,8 +359,8 @@ function buildNameMapping(): NameMapping {
 type ToolMode = 'curated' | 'full';
 
 function getToolMode(): ToolMode {
-  const v = (process.env.MCP_TOOL_MODE || '').toLowerCase();
-  return v === 'full' ? 'full' : 'curated';
+ const v = (process.env.MCP_TOOL_MODE || '').toLowerCase();
+ return v === 'full' ? 'full' : 'curated';
 }
 
 /**
@@ -368,12 +368,12 @@ function getToolMode(): ToolMode {
  * should appear in search results / promoted into a user's catalog.
  */
 function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean {
-  if (isToolDisabled(toolName)) return false;
-  // Needs a file upload we cannot send; a JSON sibling covers the same job.
-  if (MULTIPART_ONLY_TOOLS.has(toolName)) return false;
-  if (!roleAllows(userRole, toolName)) return false;
-  if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
-  return true;
+ if (isToolDisabled(toolName)) return false;
+ // Needs a file upload we cannot send; a JSON sibling covers the same job.
+ if (MULTIPART_ONLY_TOOLS.has(toolName)) return false;
+ if (!roleAllows(userRole, toolName)) return false;
+ if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+ return true;
 }
 
 /**
@@ -385,79 +385,79 @@ function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean 
  * is keyed on it so each NS user's catalog reflects their own muscle memory.
  */
 async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): Promise<ExposedTool[]> {
-  const meta = buildMetaTools(
-    toolRegistry,
-    async (name, args, client) => {
-      // Reuse handleToolCall so every filter (disable, action, role, name
-      // mapping, destructive) applies to call_api invocations too.
-      return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
-    },
-    // search_api visibility: hide anything the operator has disabled, anything
-    // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
-    // anything destructive. Stops the model from finding a tool that call_api
-    // would then reject.
-    (toolName) => isGeneratedToolVisible(toolName, userRole),
-  );
-  const all = [...CURATED_CATALOG, ...meta];
-  const tools: ExposedTool[] = [];
-  const seen = new Set<string>();
-  for (const t of all) {
-    if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
-    if (isToolDisabled(t.schema.name)) continue;
-    // Respect explicit composite metadata in addition to the prefix-based
-    // inference, then honor the semantic MCP_DISABLE_DESTRUCTIVE toggle.
-    const inferred = classifyTool(t.schema.name);
-    const destructive = t.destructive ?? inferred.destructiveHint;
-    const readOnly = t.readOnly ?? inferred.readOnlyHint;
-    if (disableDestructiveEnabled() && destructive) continue;
-    seen.add(t.schema.name);
-    tools.push({
-      name: t.schema.name,
-      title: t.title ?? toolTitle(t.schema.name),
-      description: t.schema.description,
-      inputSchema: t.schema.inputSchema,
-      annotations: withDerivedHints(t.schema.name, { readOnlyHint: readOnly, destructiveHint: destructive }),
-    });
-  }
+ const meta = buildMetaTools(
+  toolRegistry,
+  async (name, args, client) => {
+   // Reuse handleToolCall so every filter (disable, action, role, name
+   // mapping, destructive) applies to call_api invocations too.
+   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
+  },
+  // search_api visibility: hide anything the operator has disabled, anything
+  // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
+  // anything destructive. Stops the model from finding a tool that call_api
+  // would then reject.
+  (toolName) => isGeneratedToolVisible(toolName, userRole),
+ );
+ const all = [...CURATED_CATALOG, ...meta];
+ const tools: ExposedTool[] = [];
+ const seen = new Set<string>();
+ for (const t of all) {
+  if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
+  if (isToolDisabled(t.schema.name)) continue;
+  // Respect explicit composite metadata in addition to the prefix-based
+  // inference, then honor the semantic MCP_DISABLE_DESTRUCTIVE toggle.
+  const inferred = classifyTool(t.schema.name);
+  const destructive = t.destructive ?? inferred.destructiveHint;
+  const readOnly = t.readOnly ?? inferred.readOnlyHint;
+  if (disableDestructiveEnabled() && destructive) continue;
+  seen.add(t.schema.name);
+  tools.push({
+   name: t.schema.name,
+   title: t.title ?? toolTitle(t.schema.name),
+   description: t.schema.description,
+   inputSchema: t.schema.inputSchema,
+   annotations: withDerivedHints(t.schema.name, { readOnlyHint: readOnly, destructiveHint: destructive }),
+  });
+ }
 
-  // Per-user promotion: append generated tools the user has called frequently
-  // through call_api, subject to the same filters. Promoted tools appear under
-  // their shortened exposed names.
-  if (userIdentity) {
-    const promoted = await getPromotedToolNames(userIdentity);
-    const mapping = buildNameMapping();
-    for (const registryKey of promoted) {
-      if (!isGeneratedToolVisible(registryKey, userRole)) continue;
-      const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
-      if (seen.has(exposed)) continue;
-      const def = toolRegistry.get(registryKey);
-      if (!def) continue;
-      const annotations = classifyTool(registryKey);
-      seen.add(exposed);
-      tools.push({
-        name: exposed,
-        title: toolTitle(exposed),
-        description: `[promoted] ${def.schema.description}`,
-        inputSchema: def.schema.inputSchema,
-        annotations,
-      });
-    }
+ // Per-user promotion: append generated tools the user has called frequently
+ // through call_api, subject to the same filters. Promoted tools appear under
+ // their shortened exposed names.
+ if (userIdentity) {
+  const promoted = await getPromotedToolNames(userIdentity);
+  const mapping = buildNameMapping();
+  for (const registryKey of promoted) {
+   if (!isGeneratedToolVisible(registryKey, userRole)) continue;
+   const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
+   if (seen.has(exposed)) continue;
+   const def = toolRegistry.get(registryKey);
+   if (!def) continue;
+   const annotations = classifyTool(registryKey);
+   seen.add(exposed);
+   tools.push({
+    name: exposed,
+    title: toolTitle(exposed),
+    description: `[promoted] ${def.schema.description}`,
+    inputSchema: def.schema.inputSchema,
+    annotations,
+   });
   }
-  return tools;
+ }
+ return tools;
 }
 
 /** Lookup a curated or meta tool by exposed name (per-call construction to bind userRole). */
 function findCuratedTool(name: string, userRole?: UserRole) {
-  const meta = buildMetaTools(
-    toolRegistry,
-    async (innerName, innerArgs, client) =>
-      handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
-    // Same predicate the ListTools path uses. This was a second, hand-copied
-    // version of the rule, and it had already drifted — search_api kept
-    // offering tools the dispatcher would reject.
-    (toolName) => isGeneratedToolVisible(toolName, userRole),
-  );
-  return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
+ const meta = buildMetaTools(
+  toolRegistry,
+  async (innerName, innerArgs, client) =>
+   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
+  // Same predicate the ListTools path uses. This was a second, hand-copied
+  // version of the rule, and it had already drifted — search_api kept
+  // offering tools the dispatcher would reject.
+  (toolName) => isGeneratedToolVisible(toolName, userRole),
+ );
+ return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
 }
 
 /**
@@ -471,30 +471,30 @@ function findCuratedTool(name: string, userRole?: UserRole) {
  * the promotion lookup.
  */
 export async function getAllToolDefinitions(
-  userRole?: UserRole,
-  userIdentity?: string,
+ userRole?: UserRole,
+ userIdentity?: string,
 ): Promise<ExposedTool[]> {
-  if (getToolMode() === 'curated') {
-    return curatedExposedTools(userRole, userIdentity);
-  }
+ if (getToolMode() === 'curated') {
+  return curatedExposedTools(userRole, userIdentity);
+ }
 
-  const mapping = buildNameMapping();
-  const tools: ExposedTool[] = [];
-  for (const [registryKey, def] of toolRegistry) {
-    const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
-    if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
-    if (!roleAllows(userRole, registryKey)) continue;
-    const annotations = classifyTool(registryKey);
-    if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
-    tools.push({
-      name: exposed,
-      title: toolTitle(exposed),
-      description: def.schema.description,
-      inputSchema: def.schema.inputSchema,
-      annotations,
-    });
-  }
-  return tools;
+ const mapping = buildNameMapping();
+ const tools: ExposedTool[] = [];
+ for (const [registryKey, def] of toolRegistry) {
+  const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
+  if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
+  if (!roleAllows(userRole, registryKey)) continue;
+  const annotations = classifyTool(registryKey);
+  if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
+  tools.push({
+   name: exposed,
+   title: toolTitle(exposed),
+   description: def.schema.description,
+   inputSchema: def.schema.inputSchema,
+   annotations,
+  });
+ }
+ return tools;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,44 +509,44 @@ export async function getAllToolDefinitions(
 const CURSOR_PREFIX = 'ns:';
 
 function toolsPageSize(): number {
-  const raw = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE || '', 10);
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  return 250;
+ const raw = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE || '', 10);
+ if (Number.isFinite(raw) && raw > 0) return raw;
+ return 250;
 }
 
 function encodeCursor(offset: number): string {
-  return Buffer.from(`${CURSOR_PREFIX}${offset}`).toString('base64url');
+ return Buffer.from(`${CURSOR_PREFIX}${offset}`).toString('base64url');
 }
 
 /** Decode a cursor we issued. Throws InvalidParams on anything else. */
 function decodeCursor(cursor: string | undefined, total: number): number {
-  if (cursor == null) return 0;
-  let decoded: string;
-  try {
-    decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-  } catch {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
-  }
-  if (!decoded.startsWith(CURSOR_PREFIX)) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
-  }
-  const offset = Number.parseInt(decoded.slice(CURSOR_PREFIX.length), 10);
-  if (!Number.isFinite(offset) || offset < 0 || offset > total) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
-  }
-  return offset;
+ if (cursor == null) return 0;
+ let decoded: string;
+ try {
+  decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+ } catch {
+  throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+ }
+ if (!decoded.startsWith(CURSOR_PREFIX)) {
+  throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+ }
+ const offset = Number.parseInt(decoded.slice(CURSOR_PREFIX.length), 10);
+ if (!Number.isFinite(offset) || offset < 0 || offset > total) {
+  throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: ${cursor}`);
+ }
+ return offset;
 }
 
 /** Slice a tool list into one page plus the cursor for the next one. */
 export function paginateTools(
-  tools: ExposedTool[],
-  cursor?: string,
+ tools: ExposedTool[],
+ cursor?: string,
 ): { tools: ExposedTool[]; nextCursor?: string } {
-  const size = toolsPageSize();
-  const offset = decodeCursor(cursor, tools.length);
-  const page = tools.slice(offset, offset + size);
-  const end = offset + page.length;
-  return end < tools.length ? { tools: page, nextCursor: encodeCursor(end) } : { tools: page };
+ const size = toolsPageSize();
+ const offset = decodeCursor(cursor, tools.length);
+ const page = tools.slice(offset, offset + size);
+ const end = offset + page.length;
+ return end < tools.length ? { tools: page, nextCursor: encodeCursor(end) } : { tools: page };
 }
 
 /**
@@ -558,67 +558,67 @@ export function paginateTools(
  * rejected (defense-in-depth alongside the ListTools filter).
  */
 export async function handleToolCall(
-  client: NetSapiensClient,
-  toolName: string,
-  args: Record<string, unknown>,
-  userRole?: UserRole,
+ client: NetSapiensClient,
+ toolName: string,
+ args: Record<string, unknown>,
+ userRole?: UserRole,
 ): Promise<unknown> {
-  if (isToolDisabled(toolName)) {
-    throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
-  }
-  if (args && isActionDisabled((args as { action?: unknown }).action)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
-    );
-  }
-  if (disableDestructiveEnabled() && isToolDestructive(toolName)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Tool '${toolName}' is destructive and MCP_DISABLE_DESTRUCTIVE is set`,
-    );
-  }
+ if (isToolDisabled(toolName)) {
+  throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
+ }
+ if (args && isActionDisabled((args as { action?: unknown }).action)) {
+  throw new McpError(
+   ErrorCode.InvalidParams,
+   `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
+  );
+ }
+ if (disableDestructiveEnabled() && isToolDestructive(toolName)) {
+  throw new McpError(
+   ErrorCode.InvalidParams,
+   `Tool '${toolName}' is destructive and MCP_DISABLE_DESTRUCTIVE is set`,
+  );
+ }
 
-  // Curated/meta tools take precedence so call_api can re-enter for the
-  // generated registry without infinite recursion through the curated layer.
-  if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
-    const curated = findCuratedTool(toolName, userRole);
-    if (curated) {
-      if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[curated.minRole] && roleFilterEnabled()) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Tool '${toolName}' requires a higher access tier than your account has`,
-        );
-      }
-      return curated.handler(args ?? {}, client as unknown as GenericApiClient);
-    }
-    // Fall through to the generated registry only if explicitly invoked via
-    // call_api (which routes through handleToolCall recursively).
-  }
-
-  // Translate the exposed (possibly-shortened) name back to the registry key.
-  const mapping = buildNameMapping();
-  const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
-  if (!roleAllows(userRole, registryKey)) {
+ // Curated/meta tools take precedence so call_api can re-enter for the
+ // generated registry without infinite recursion through the curated layer.
+ if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
+  const curated = findCuratedTool(toolName, userRole);
+  if (curated) {
+   if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[curated.minRole] && roleFilterEnabled()) {
     throw new McpError(
-      ErrorCode.InvalidParams,
-      `Tool '${toolName}' requires a higher access tier than your account has`,
+     ErrorCode.InvalidParams,
+     `Tool '${toolName}' requires a higher access tier than your account has`,
     );
+   }
+   return curated.handler(args ?? {}, client as unknown as GenericApiClient, userRole);
   }
-  // Multipart-only operations were generated as if they took a JSON body, so
-  // they look callable and cannot work. Fail with the alternative named rather
-  // than letting the model burn a turn on a request the transport can't make.
-  if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
-        multipartAlternative(registryKey),
-    );
-  }
+  // Fall through to the generated registry only if explicitly invoked via
+  // call_api (which routes through handleToolCall recursively).
+ }
 
-  const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
-  if (!def) return null;
-  return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+ // Translate the exposed (possibly-shortened) name back to the registry key.
+ const mapping = buildNameMapping();
+ const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+ if (!roleAllows(userRole, registryKey)) {
+  throw new McpError(
+   ErrorCode.InvalidParams,
+   `Tool '${toolName}' requires a higher access tier than your account has`,
+  );
+ }
+ // Multipart-only operations were generated as if they took a JSON body, so
+ // they look callable and cannot work. Fail with the alternative named rather
+ // than letting the model burn a turn on a request the transport can't make.
+ if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
+  throw new McpError(
+   ErrorCode.InvalidParams,
+   `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
+   multipartAlternative(registryKey),
+  );
+ }
+
+ const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
+ if (!def) return null;
+ return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
 }
 
 // ---------------------------------------------------------------------------
@@ -640,13 +640,13 @@ export async function handleToolCall(
 // ---------------------------------------------------------------------------
 
 function synchronousWritesEnabled(): boolean {
-  return process.env.MCP_SYNCHRONOUS_WRITES !== 'false';
+ return process.env.MCP_SYNCHRONOUS_WRITES !== 'false';
 }
 
 /** True when a tool's input schema declares the `synchronous` parameter. */
 export function acceptsSynchronous(def: ToolDefinition | undefined): boolean {
-  const schema = def?.schema?.inputSchema as { properties?: Record<string, unknown> } | undefined;
-  return Boolean(schema?.properties && 'synchronous' in schema.properties);
+ const schema = def?.schema?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+ return Boolean(schema?.properties && 'synchronous' in schema.properties);
 }
 
 /**
@@ -654,13 +654,13 @@ export function acceptsSynchronous(def: ToolDefinition | undefined): boolean {
  * explicit value — a caller that wants fire-and-forget can still pass "no".
  */
 export function applySynchronousDefault(
-  def: ToolDefinition | undefined,
-  args: Record<string, unknown>,
+ def: ToolDefinition | undefined,
+ args: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!synchronousWritesEnabled()) return args;
-  if (args.synchronous !== undefined) return args;
-  if (!acceptsSynchronous(def)) return args;
-  return { ...args, synchronous: 'yes' };
+ if (!synchronousWritesEnabled()) return args;
+ if (args.synchronous !== undefined) return args;
+ if (!acceptsSynchronous(def)) return args;
+ return { ...args, synchronous: 'yes' };
 }
 
 // ---------------------------------------------------------------------------
@@ -677,25 +677,25 @@ type ToolResult = { content: Array<{ type: 'text'; text: string }>; structuredCo
 
 /** Attach `structuredContent` when the text block is parseable JSON. */
 export function withStructuredContent(result: ToolResult): ToolResult {
-  if (!result || result.structuredContent || !Array.isArray(result.content)) return result;
-  const first = result.content[0];
-  if (!first || first.type !== 'text' || typeof first.text !== 'string') return result;
+ if (!result || result.structuredContent || !Array.isArray(result.content)) return result;
+ const first = result.content[0];
+ if (!first || first.type !== 'text' || typeof first.text !== 'string') return result;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(first.text);
-  } catch {
-    return result; // Plain prose — nothing structured to add.
-  }
+ let parsed: unknown;
+ try {
+  parsed = JSON.parse(first.text);
+ } catch {
+  return result; // Plain prose — nothing structured to add.
+ }
 
-  // structuredContent must be an object; wrap anything else so array and
-  // scalar payloads still get a machine-readable form.
-  const structured =
-    parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : { result: parsed };
+ // structuredContent must be an object; wrap anything else so array and
+ // scalar payloads still get a machine-readable form.
+ const structured =
+  parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+   ? (parsed as Record<string, unknown>)
+   : { result: parsed };
 
-  return { ...result, structuredContent: structured };
+ return { ...result, structuredContent: structured };
 }
 
 /**
@@ -707,112 +707,112 @@ export function withStructuredContent(result: ToolResult): ToolResult {
  * @param userIdentity    NS username (used to scope per-user tool promotion).
  */
 export function registerAllTools(
-  server: Server,
-  client: NetSapiensClient,
-  userRole?: UserRole,
-  userIdentity?: string,
+ server: Server,
+ client: NetSapiensClient,
+ userRole?: UserRole,
+ userIdentity?: string,
 ): void {
-  /**
-   * Per-session snapshot of the user's promoted-tool set, captured the first
-   * time we look at it and re-snapped whenever something changes. Lets us
-   * detect BOTH directions of change between consecutive tool calls:
-   *   - Promotion: new tool entered the set after this call crossed the
-   *     threshold.
-   *   - Demotion: a tool's last-use just slid outside MCP_PROMOTE_WINDOW_DAYS
-   *     during the session.
-   * Either case fires sendToolListChanged exactly once.
-   */
-  let promotedSnapshot: Set<string> | null = null;
+ /**
+  * Per-session snapshot of the user's promoted-tool set, captured the first
+  * time we look at it and re-snapped whenever something changes. Lets us
+  * detect BOTH directions of change between consecutive tool calls:
+  *   - Promotion: new tool entered the set after this call crossed the
+  *     threshold.
+  *   - Demotion: a tool's last-use just slid outside MCP_PROMOTE_WINDOW_DAYS
+  *     during the session.
+  * Either case fires sendToolListChanged exactly once.
+  */
+ let promotedSnapshot: Set<string> | null = null;
 
-  /**
-   * Reconcile the cached snapshot against the live promoted set. Fires a
-   * tools/list_changed notification if they differ (and on first call when
-   * the snapshot is uninitialized but the live set is non-empty).
-   * Best-effort: errors here never bubble into the tool-call result.
-   */
-  async function reconcilePromotedSet(): Promise<void> {
-    if (!userIdentity) return;
-    // Stateless mode has no standalone stream to push a notification down, and
-    // we do not advertise tools.listChanged there. Promotion still happens —
-    // the client just sees it at its next tools/list instead of being nudged.
-    if (isStatelessMode()) return;
-    try {
-      const current = new Set(await getPromotedToolNames(userIdentity));
-      if (promotedSnapshot === null) {
-        promotedSnapshot = current;
-        return;
-      }
-      if (!setsEqual(promotedSnapshot, current)) {
-        promotedSnapshot = current;
-        await server.sendToolListChanged();
-      }
-    } catch {
-      // Promotion is non-critical; never let it disrupt the dispatch.
-    }
+ /**
+  * Reconcile the cached snapshot against the live promoted set. Fires a
+  * tools/list_changed notification if they differ (and on first call when
+  * the snapshot is uninitialized but the live set is non-empty).
+  * Best-effort: errors here never bubble into the tool-call result.
+  */
+ async function reconcilePromotedSet(): Promise<void> {
+  if (!userIdentity) return;
+  // Stateless mode has no standalone stream to push a notification down, and
+  // we do not advertise tools.listChanged there. Promotion still happens —
+  // the client just sees it at its next tools/list instead of being nudged.
+  if (isStatelessMode()) return;
+  try {
+   const current = new Set(await getPromotedToolNames(userIdentity));
+   if (promotedSnapshot === null) {
+    promotedSnapshot = current;
+    return;
+   }
+   if (!setsEqual(promotedSnapshot, current)) {
+    promotedSnapshot = current;
+    await server.sendToolListChanged();
+   }
+  } catch {
+   // Promotion is non-critical; never let it disrupt the dispatch.
   }
+ }
 
-  server.setRequestHandler(ListToolsRequestSchema, async (request) => {
-    const all = await getAllToolDefinitions(userRole, userIdentity);
-    // Seed the snapshot from whatever the AI client just observed so that
-    // subsequent CallTool reconciliations diff against the right baseline.
-    if (userIdentity) {
-      promotedSnapshot = new Set(await getPromotedToolNames(userIdentity));
+ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+  const all = await getAllToolDefinitions(userRole, userIdentity);
+  // Seed the snapshot from whatever the AI client just observed so that
+  // subsequent CallTool reconciliations diff against the right baseline.
+  if (userIdentity) {
+   promotedSnapshot = new Set(await getPromotedToolNames(userIdentity));
+  }
+  return paginateTools(all, request.params?.cursor);
+ });
+
+ server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  const callArgs = (args ?? {}) as Record<string, unknown>;
+
+  try {
+   // Optional confirmation gate. Skip elicitation entirely if
+   // MCP_DISABLE_DESTRUCTIVE will block the call anyway — that policy
+   // wins; we don't want to prompt the user for a call we'll reject.
+   if (
+    confirmDestructiveEnabled() &&
+    !disableDestructiveEnabled() &&
+    isToolDestructive(name)
+   ) {
+    await elicitConfirmation(server, name, callArgs);
+    // elicitConfirmation throws on decline/cancel; if we got here the
+    // user accepted, so dispatch normally.
+   }
+
+   const result = await handleToolCall(client, name, callArgs, userRole);
+
+   // Per-user tool promotion: record call_api invocations, then
+   // reconcile the promoted set so EITHER a new promotion OR a decay
+   // since the last call surfaces a tools/list_changed notification.
+   if (name === 'call_api' && result) {
+    const innerToolName = String(callArgs?.tool_name ?? '');
+    if (innerToolName) {
+     try {
+      await recordCallApiInvocation(userIdentity, innerToolName);
+     } catch {
+      // Promotion tracking is best-effort. Already logged inside the store.
+     }
     }
-    return paginateTools(all, request.params?.cursor);
-  });
+   }
+   // Run the reconciliation on every successful tool call (not just
+   // call_api). That way a stale tool that decayed mid-session — say,
+   // the user spent a while in find_user / recent_calls and the
+   // window slid past their last call_api invocation — still surfaces
+   // a list-changed notification at the next opportunity.
+   if (result) await reconcilePromotedSet();
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const callArgs = (args ?? {}) as Record<string, unknown>;
-
-    try {
-      // Optional confirmation gate. Skip elicitation entirely if
-      // MCP_DISABLE_DESTRUCTIVE will block the call anyway — that policy
-      // wins; we don't want to prompt the user for a call we'll reject.
-      if (
-        confirmDestructiveEnabled() &&
-        !disableDestructiveEnabled() &&
-        isToolDestructive(name)
-      ) {
-        await elicitConfirmation(server, name, callArgs);
-        // elicitConfirmation throws on decline/cancel; if we got here the
-        // user accepted, so dispatch normally.
-      }
-
-      const result = await handleToolCall(client, name, callArgs, userRole);
-
-      // Per-user tool promotion: record call_api invocations, then
-      // reconcile the promoted set so EITHER a new promotion OR a decay
-      // since the last call surfaces a tools/list_changed notification.
-      if (name === 'call_api' && result) {
-        const innerToolName = String(callArgs?.tool_name ?? '');
-        if (innerToolName) {
-          try {
-            await recordCallApiInvocation(userIdentity, innerToolName);
-          } catch {
-            // Promotion tracking is best-effort. Already logged inside the store.
-          }
-        }
-      }
-      // Run the reconciliation on every successful tool call (not just
-      // call_api). That way a stale tool that decayed mid-session — say,
-      // the user spent a while in find_user / recent_calls and the
-      // window slid past their last call_api invocation — still surfaces
-      // a list-changed notification at the next opportunity.
-      if (result) await reconcilePromotedSet();
-
-      if (result === null || result === undefined) {
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-      }
-      return withStructuredContent(result as { content: Array<{ type: 'text'; text: string }> });
-    } catch (error) {
-      if (error instanceof McpError) {
-        throw error;
-      }
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Error executing tool ${name}: ${error}`,
-      );
-    }
-  });
+   if (result === null || result === undefined) {
+    throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+   }
+   return withStructuredContent(result as { content: Array<{ type: 'text'; text: string }> });
+  } catch (error) {
+   if (error instanceof McpError) {
+    throw error;
+   }
+   throw new McpError(
+    ErrorCode.InternalError,
+    `Error executing tool ${name}: ${error}`,
+   );
+  }
+ });
 }
