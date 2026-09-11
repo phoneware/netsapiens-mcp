@@ -575,22 +575,62 @@ const send_message: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'send_message',
-  description: 'Send a message (SMS or chat) to a destination.',
+  description: 'Send a message (SMS or chat) to a destination or an existing message session.',
   inputSchema: {
    type: 'object',
    properties: {
-    to: { type: 'string', description: 'Destination number or user@domain' },
-    text: { type: 'string' },
-    type: { type: 'string', enum: ['sms', 'chat'], default: 'sms' },
+    to: { type: 'string', description: 'Destination: user extension (e.g. "102") or user@domain for chat; E.164 / 10-digit phone number for SMS.' },
+    text: { type: 'string', description: 'Message body text.' },
+    type: {
+     type: 'string',
+     enum: ['sms', 'chat'],
+     description: 'Message type: "chat" between internal users, "sms" to external phone numbers. Defaults to "chat" for extensions or user@domain, "sms" for phone numbers.',
+    },
+    session_id: { type: 'string', description: 'Optional existing message session ID. When provided, sends the message into that session.' },
+    from: { type: 'string', description: 'Optional outbound phone number for SMS (from-number).' },
    },
    required: ['to', 'text'],
   },
  },
  handler: async (args, client) => {
+  const dest = Array.isArray(args.to)
+   ? args.to.map((t) => String(t).trim())
+   : String(args.to).trim();
+
+  let msgType = args.type ? String(args.type) : undefined;
+  if (!msgType) {
+   const firstDest = Array.isArray(dest) ? dest[0] ?? '' : dest;
+   const digitsOnly = firstDest.replace(/[\s().-]/g, '');
+   const isPhone = /^\+?[1-9]\d{9,14}$/.test(digitsOnly);
+   msgType = isPhone ? 'sms' : 'chat';
+  }
+
+  const body: Record<string, unknown> = {
+   destination: dest,
+   message: String(args.text),
+   type: msgType,
+  };
+
+  if (args.from || (args as Record<string, unknown>)['from_number']) {
+   body['from-number'] = String(args.from ?? (args as Record<string, unknown>)['from_number']);
+  }
+
+  const sessionId = args.session_id ? String(args.session_id) : (args as Record<string, unknown>)['session'] ? String((args as Record<string, unknown>)['session']) : undefined;
+
+  if (sessionId) {
+   const r = await client.request({
+    method: 'POST',
+    pathTemplate: '/domains/~/users/~/messagesessions/{session}/messages',
+    pathParams: { session: sessionId },
+    body,
+   });
+   return textResult(r);
+  }
+
   const r = await client.request({
    method: 'POST',
-   pathTemplate: '/domains/~/users/~/messagesessions',
-   body: { destination: String(args.to), message: String(args.text), type: String(args.type ?? 'sms') },
+   pathTemplate: '/domains/~/users/~/messages',
+   body,
   });
   return textResult(r);
  },
