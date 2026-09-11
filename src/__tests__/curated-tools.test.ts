@@ -873,6 +873,120 @@ describe('composite handlers translate args correctly', () => {
   const opts = calls[0] as { pathTemplate: string };
   expect(opts.pathTemplate).toContain('/transfer/peer');
  });
+
+ it('send_message POSTs chat message between users to /domains/~/users/~/messages', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true, data: { id: 'msg-1' } };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '102', text: 'Hello Bob', type: 'chat' }, 'user');
+  expect(calls.length).toBe(1);
+  const opts = calls[0] as { method: string; pathTemplate: string; body: Record<string, unknown> };
+  expect(opts.method).toBe('POST');
+  expect(opts.pathTemplate).toBe('/domains/~/users/~/messages');
+  expect(opts.body).toEqual({
+   destination: '102',
+   message: 'Hello Bob',
+   type: 'chat',
+  });
+ });
+
+ it('send_message auto-detects type=chat for user extensions when type is omitted', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '102', text: 'Hey there' }, 'user');
+  const opts = calls[0] as { method: string; pathTemplate: string; body: { type: string; destination: string } };
+  expect(opts.pathTemplate).toBe('/domains/~/users/~/messages');
+  expect(opts.body.type).toBe('chat');
+  expect(opts.body.destination).toBe('102');
+ });
+
+ it('send_message auto-detects type=chat for user@domain when type is omitted', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: 'alice@acme.com', text: 'Hey Alice' }, 'user');
+  const opts = calls[0] as { body: { type: string; destination: string } };
+  expect(opts.body.type).toBe('chat');
+  expect(opts.body.destination).toBe('alice@acme.com');
+ });
+
+ it('send_message auto-detects type=sms for 10-digit/E.164 phone numbers when type is omitted', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '+14805551234', text: 'SMS text' }, 'user');
+  const opts = calls[0] as { body: { type: string; destination: string } };
+  expect(opts.body.type).toBe('sms');
+  expect(opts.body.destination).toBe('+14805551234');
+ });
+
+ it('send_message respects explicit type overrides', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '+14805551234', text: 'Overridden', type: 'chat' }, 'user');
+  const opts = calls[0] as { body: { type: string } };
+  expect(opts.body.type).toBe('chat');
+ });
+
+ it('send_message routes to /domains/~/users/~/messagesessions/{session}/messages when session_id is provided', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '102', text: 'In session', session_id: 'sess-abc-123' }, 'user');
+  const opts = calls[0] as { method: string; pathTemplate: string; pathParams: Record<string, string>; body: Record<string, unknown> };
+  expect(opts.method).toBe('POST');
+  expect(opts.pathTemplate).toBe('/domains/~/users/~/messagesessions/{session}/messages');
+  expect(opts.pathParams.session).toBe('sess-abc-123');
+  expect(opts.body.destination).toBe('102');
+  expect(opts.body.type).toBe('chat');
+ });
+
+ it('send_message sets from-number when from is provided', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: unknown) => {
+    calls.push(o);
+    return { success: true };
+   },
+  };
+  await handleToolCall(fakeClient as never, 'send_message', { to: '4805551234', text: 'SMS from DID', from: '4805559999' }, 'user');
+  const opts = calls[0] as { body: Record<string, unknown> };
+  expect(opts.body['from-number']).toBe('4805559999');
+  expect(opts.body.type).toBe('sms');
+ });
 });
 
 // ---------------------------------------------------------------------------
