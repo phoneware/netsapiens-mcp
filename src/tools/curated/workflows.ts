@@ -12,6 +12,7 @@ import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
 import { fieldsMatch, isOnOrAfter, numbersMatch } from './matching.js';
+import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -26,8 +27,220 @@ async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<
   }
 }
 
+function matchesCallId(record: Record<string, unknown>, callId: string): boolean {
+  return (
+    record['id'] === callId ||
+    record['call-orig-call-id'] === callId ||
+    record['call-term-call-id'] === callId ||
+    record['call-parent-call-id'] === callId ||
+    record['call-through-call-id'] === callId ||
+    record['orig_callid'] === callId ||
+    record['term_callid'] === callId ||
+    record['by_callid'] === callId ||
+    record['servedCallId'] === callId ||
+    record['cdr_id'] === callId
+  );
+}
+
+export interface CallLookupOptions {
+  callId: string;
+  domain?: string;
+  user?: string;
+  servers?: string;
+  startTime?: string;
+  endTime?: string;
+  userRole?: UserRole;
+}
+
+export interface CallLookupSuccess {
+  source: 'active' | 'cdr';
+  callData: Record<string, unknown>;
+  server: string;
+  startTime?: string;
+  endTime?: string;
+  isTraceExpected: boolean;
+}
+
+export interface CallLookupFailure {
+  error: string;
+  detail: string;
+  searchedWindow: { start: string; end: string };
+  callData?: Record<string, unknown>;
+}
+
+export async function lookupCallForTrace(
+  options: CallLookupOptions,
+  client: GenericApiClient,
+): Promise<{ ok: true; data: CallLookupSuccess; searchedWindow: { start: string; end: string } } | { ok: false; failure: CallLookupFailure }> {
+  const domain = str(options.domain);
+  const user = str(options.user);
+  const callid = options.callId;
+
+  const windowEnd = options.endTime ? String(options.endTime) : new Date().toISOString();
+  const windowStart = options.startTime
+    ? String(options.startTime)
+    : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const searchedWindow = { start: windowStart, end: windowEnd };
+
+  if (options.servers) {
+    return {
+      ok: true,
+      data: {
+        source: 'active',
+        callData: {},
+        server: String(options.servers),
+        startTime: options.startTime,
+        endTime: options.endTime,
+        isTraceExpected: true,
+      },
+      searchedWindow,
+    };
+  }
+
+  // 1. Try active call lookup first (returns 404 for completed calls)
+  const activeRes = await safe(
+    client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
+      pathParams: { domain, user, callid },
+    }),
+  );
+
+  if (activeRes.ok && activeRes.data && typeof activeRes.data === 'object' && !Array.isArray(activeRes.data)) {
+    const callData = activeRes.data as Record<string, unknown>;
+    const server = (callData['core-server'] ?? callData['hostname']) as string | undefined;
+    if (server) {
+      const startTime = (options.startTime ?? callData['call-start-datetime']) as string | undefined;
+      const endTime = (options.endTime ?? callData['call-disconnect-datetime']) as string | undefined;
+      return {
+        ok: true,
+        data: {
+          source: 'active',
+          callData,
+          server,
+          startTime: startTime ? String(startTime) : undefined,
+          endTime: endTime ? String(endTime) : undefined,
+          isTraceExpected: true,
+        },
+        searchedWindow,
+      };
+    }
+  }
+
+  // 2. Active call was not found (completed call) -> search CDRs
+  const isResellerOrAbove = options.userRole && ROLE_HIERARCHY[options.userRole] >= ROLE_HIERARCHY.reseller;
+
+  let matchedCdr: Record<string, unknown> | undefined;
+
+  if (isResellerOrAbove) {
+    // Reseller and above use /cdrs with orig_callid then term_callid
+    let cdrRes = await safe(
+      client.request({
+        method: 'GET',
+        pathTemplate: '/cdrs',
+        queryParams: {
+          'datetime-start': windowStart,
+          'datetime-end': windowEnd,
+          orig_callid: callid,
+          limit: 10,
+        },
+      }),
+    );
+    let records = Array.isArray(cdrRes.data) ? (cdrRes.data as Array<Record<string, unknown>>) : [];
+    matchedCdr = records.find((r) => matchesCallId(r, callid));
+
+    if (!matchedCdr) {
+      cdrRes = await safe(
+        client.request({
+          method: 'GET',
+          pathTemplate: '/cdrs',
+          queryParams: {
+            'datetime-start': windowStart,
+            'datetime-end': windowEnd,
+            term_callid: callid,
+            limit: 10,
+          },
+        }),
+      );
+      records = Array.isArray(cdrRes.data) ? (cdrRes.data as Array<Record<string, unknown>>) : [];
+      matchedCdr = records.find((r) => matchesCallId(r, callid));
+    }
+  } else {
+    // Domain admin and below use /domains/{domain}/cdrs with client-side matching
+    const cdrRes = await safe(
+      client.request({
+        method: 'GET',
+        pathTemplate: '/domains/{domain}/cdrs',
+        pathParams: { domain },
+        queryParams: {
+          'datetime-start': windowStart,
+          'datetime-end': windowEnd,
+          limit: 100,
+        },
+      }),
+    );
+    const records = Array.isArray(cdrRes.data) ? (cdrRes.data as Array<Record<string, unknown>>) : [];
+    matchedCdr = records.find((r) => matchesCallId(r, callid));
+  }
+
+  if (!matchedCdr) {
+    return {
+      ok: false,
+      failure: {
+        error: 'Call not found',
+        detail: `No active call or CDR found matching call_id "${callid}" in the searched window. Try providing explicit start_time and end_time (or servers).`,
+        searchedWindow,
+      },
+    };
+  }
+
+  const server = (matchedCdr['core-server'] ?? matchedCdr['hostname']) as string | undefined;
+  if (!server) {
+    return {
+      ok: false,
+      failure: {
+        error: 'Core server not found in CDR',
+        detail: `Matched CDR record for call_id "${callid}" did not specify core-server or hostname.`,
+        searchedWindow,
+        callData: matchedCdr,
+      },
+    };
+  }
+
+  const traceExpectedRaw = matchedCdr['is-trace-expected'] ?? matchedCdr['expected_trace'];
+  const isTraceExpected = traceExpectedRaw == null || String(traceExpectedRaw).toLowerCase() === 'yes';
+
+  if (!isTraceExpected) {
+    return {
+      ok: false,
+      failure: {
+        error: 'Call trace is not available for this call',
+        detail: `Log retention has elapsed (is-trace-expected: "${traceExpectedRaw}"). Detailed SIP logs are no longer available on ${server}.`,
+        searchedWindow,
+        callData: matchedCdr,
+      },
+    };
+  }
+
+  const startTime = (options.startTime ?? matchedCdr['call-start-datetime'] ?? matchedCdr['time_start']) as string | undefined;
+  const endTime = (options.endTime ?? matchedCdr['call-disconnect-datetime'] ?? matchedCdr['time_release']) as string | undefined;
+
+  return {
+    ok: true,
+    data: {
+      source: 'cdr',
+      callData: matchedCdr,
+      server,
+      startTime: startTime ? String(startTime) : undefined,
+      endTime: endTime ? String(endTime) : undefined,
+      isTraceExpected: true,
+    },
+    searchedWindow,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// 1. diagnose_call — CDR + SIP trace + queue context in one shot
+// 1. diagnose_call: CDR + SIP trace + queue context in one shot
 // ---------------------------------------------------------------------------
 
 const diagnose_call: CuratedTool = {
@@ -40,25 +253,72 @@ const diagnose_call: CuratedTool = {
     inputSchema: {
       type: 'object',
       properties: {
-        call_id: { type: 'string' },
-        domain: { type: 'string' },
-        user: { type: 'string', default: '~' },
+        call_id: { type: 'string', description: 'Call ID or SIP Call-ID' },
+        domain: { type: 'string', description: 'Domain name' },
+        user: { type: 'string', default: '~', description: 'User extension' },
+        servers: { type: 'string', description: 'Core server FQDN handling the call (optional)' },
+        start_time: { type: 'string', description: 'Start time window for trace' },
+        end_time: { type: 'string', description: 'End time window for trace' },
       },
       required: ['call_id'],
     },
   },
-  handler: async (args, client) => {
+  handler: async (args, client, userRole) => {
+    const callid = String(args.call_id);
     const domain = str(args.domain);
     const user = str(args.user);
-    const callid = String(args.call_id);
-    const [cdr, sipflow, cradle] = await Promise.all([
-      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}', pathParams: { domain, user, callid } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/sipflow/{callid}', pathParams: { callid } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/cradle2grave/{callid}', pathParams: { callid } })),
+
+    const lookup = await lookupCallForTrace(
+      {
+        callId: callid,
+        domain,
+        user,
+        servers: args.servers ? String(args.servers) : undefined,
+        startTime: args.start_time ? String(args.start_time) : undefined,
+        endTime: args.end_time ? String(args.end_time) : undefined,
+        userRole,
+      },
+      client,
+    );
+
+    if (!lookup.ok) {
+      return textResult({
+        call_id: callid,
+        error: lookup.failure.error,
+        detail: lookup.failure.detail,
+        searched_window: lookup.failure.searchedWindow,
+        cdr: lookup.failure.callData,
+      });
+    }
+
+    const { server, startTime, endTime, callData } = lookup.data;
+
+    const sipflowParams: Record<string, unknown> = {
+      callids: callid,
+      servers: server,
+      type: 'call_trace',
+    };
+    if (startTime) sipflowParams.start_time = startTime;
+    if (endTime) sipflowParams.end_time = endTime;
+
+    const cradleParams: Record<string, unknown> = {
+      callids: callid,
+      servers: server,
+      type: 'cradle_to_grave',
+    };
+    if (startTime) cradleParams.start_time = startTime;
+    if (endTime) cradleParams.end_time = endTime;
+
+    const [sipflow, cradle] = await Promise.all([
+      safe(client.request({ method: 'GET', pathTemplate: '/sipflow', queryParams: sipflowParams })),
+      safe(client.request({ method: 'GET', pathTemplate: '/sipflow', queryParams: cradleParams })),
     ]);
+
     return textResult({
       call_id: callid,
-      cdr,
+      cdr: callData,
+      server_used: server,
+      searched_window: lookup.searchedWindow,
       sip_trace: sipflow,
       cradle_to_grave: cradle,
     });
@@ -74,7 +334,7 @@ const user_profile: CuratedTool = {
   schema: {
     name: 'user_profile',
     description:
-      'A combined snapshot of a NetSapiens user — basic details, registered devices, answer rules, recent calls, and voicemail count. ' +
+      'A combined snapshot of a NetSapiens user: basic details, registered devices, answer rules, recent calls, and voicemail count. ' +
       'Useful for "tell me everything about this user" without making five separate calls.',
     inputSchema: {
       type: 'object',
@@ -94,7 +354,7 @@ const user_profile: CuratedTool = {
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/devices', pathParams: { domain, user } })),
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/answerrules', pathParams: { domain, user } })),
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/cdrs', pathParams: { domain, user }, queryParams: { limit } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/voicemails', pathParams: { domain, user } })),
+      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}', pathParams: { domain, user, folder: 'new' } })),
     ]);
     const voicemailCount = Array.isArray(voicemails.data) ? voicemails.data.length : undefined;
     return textResult({
@@ -431,8 +691,17 @@ const recent_activity_for_number: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
-// 8. voicemail_inbox_summary — new VMs with caller + transcript condensed
+// 8. voicemail_inbox_summary: new VMs with caller + transcript condensed
 // ---------------------------------------------------------------------------
+
+function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const f = raw.toLowerCase().trim();
+  if (f === 'new' || f === 'inbox') return 'new';
+  if (f === 'save' || f === 'saved') return 'save';
+  if (f === 'trash' || f === 'deleted') return 'trash';
+  return f as 'new' | 'save' | 'trash';
+}
 
 const voicemail_inbox_summary: CuratedTool = {
   minRole: 'user',
@@ -445,13 +714,13 @@ const voicemail_inbox_summary: CuratedTool = {
       type: 'object',
       properties: {
         limit: { type: 'number', default: 25 },
-        folder: { type: 'string', default: 'new', description: 'Voicemail folder (default "new").' },
+        folder: { type: 'string', default: 'new', description: 'Voicemail folder: "new" (inbox), "save" (saved), or "trash". Defaults to "new".' },
       },
     },
   },
   handler: async (args, client) => {
     const limit = typeof args.limit === 'number' ? args.limit : 25;
-    const folder = String(args.folder ?? 'new');
+    const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
     const list = await safe<Array<Record<string, unknown>>>(
       client.request({
         method: 'GET',
