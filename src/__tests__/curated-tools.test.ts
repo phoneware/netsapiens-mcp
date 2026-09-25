@@ -254,8 +254,9 @@ describe('workflow tools (multi-call composites)', () => {
   await handleToolCall(client as never, 'diagnose_call', { call_id: 'c-1' }, 'domain_admin');
   const paths = calls.map((c) => c.pathTemplate).sort();
   expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
-  expect(paths).toContain('/sipflow/{callid}');
-  expect(paths).toContain('/cradle2grave/{callid}');
+  expect(paths).toContain('/sipflow');
+  const sipflowCalls = calls.filter((c) => c.pathTemplate === '/sipflow');
+  expect(sipflowCalls.length).toBe(2);
  });
 
  it('user_profile makes five concurrent reads', async () => {

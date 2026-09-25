@@ -351,13 +351,59 @@ const call_trace: CuratedTool = {
  schema: {
   name: 'call_trace',
   description: 'SIP flow / call trace for a specific call. Useful for diagnosing why a call did what it did.',
-  inputSchema: { type: 'object', properties: { call_id: { type: 'string' } }, required: ['call_id'] },
+  inputSchema: {
+   type: 'object',
+   properties: {
+    call_id: { type: 'string', description: 'Call ID or SIP Call-ID' },
+    domain: { type: 'string', description: 'Domain name (defaults to ~)' },
+    user: { type: 'string', description: 'User extension (defaults to ~)' },
+    servers: { type: 'string', description: 'Core server FQDN handling the call (looked up from call details if omitted)' },
+    start_time: { type: 'string', description: 'Search window start timestamp' },
+    end_time: { type: 'string', description: 'Search window end timestamp' },
+   },
+   required: ['call_id'],
+  },
  },
  handler: async (args, client) => {
+  const domain = str(args.domain);
+  const user = str(args.user);
+  const callid = String(args.call_id);
+  let server = args.servers ? String(args.servers) : undefined;
+  let startTime = args.start_time ? String(args.start_time) : undefined;
+  let endTime = args.end_time ? String(args.end_time) : undefined;
+
+  if (!server) {
+   try {
+    const callRes = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
+     pathParams: { domain, user, callid },
+    });
+    const callObj = (callRes?.data && typeof callRes.data === 'object' && !Array.isArray(callRes.data))
+     ? (callRes.data as Record<string, unknown>)
+     : undefined;
+    if (callObj) {
+     server = (callObj['core-server'] ?? callObj['hostname']) as string | undefined;
+     if (!startTime && callObj['call-start-datetime']) startTime = String(callObj['call-start-datetime']);
+     if (!endTime && callObj['call-disconnect-datetime']) endTime = String(callObj['call-disconnect-datetime']);
+    }
+   } catch {
+    // continue with available parameters
+   }
+  }
+
+  const queryParams: Record<string, unknown> = {
+   callids: callid,
+   servers: server ?? '',
+   type: 'call_trace',
+  };
+  if (startTime) queryParams.start_time = startTime;
+  if (endTime) queryParams.end_time = endTime;
+
   const r = await client.request({
    method: 'GET',
-   pathTemplate: '/sipflow/{callid}',
-   pathParams: { callid: String(args.call_id) },
+   pathTemplate: '/sipflow',
+   queryParams,
   });
   return textResult(r);
  },

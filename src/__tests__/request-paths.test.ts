@@ -112,14 +112,6 @@ function mockArgs(schema: ToolSchema | undefined, mode: 'full' | 'minimal') {
  return args;
 }
 
-/**
- * Legacy non-spec paths outside the voicemail scope that are preserved because
- * changing them requires updating call_trace, diagnose_call, and existing tests in curated-tools.test.ts.
- */
-const KNOWN_NON_SPEC_EXCEPTIONS: Record<string, true> = {
- '/sipflow/{callid}': true,
- '/cradle2grave/{callid}': true,
-};
 
 const ALL_TOOLS = [...CURATED_CATALOG, ...WORKFLOW_TOOLS];
 
@@ -143,7 +135,6 @@ describe('request paths gate', () => {
   const invalid: string[] = [];
 
   for (const p of uniquePaths) {
-   if (KNOWN_NON_SPEC_EXCEPTIONS[p]) continue;
    const matches = findSpecPath(p);
    if (matches.length === 0) {
     invalid.push(p);
@@ -334,6 +325,39 @@ describe('request paths gate', () => {
    await tool!.handler({ folder: 'saved' }, client, 'user');
    expect(recorded.length).toBe(1);
    expect(recorded[0].pathParams?.folder).toBe('save');
+  });
+
+  it('call_trace calls GET /sipflow with callids, servers, and type=call_trace', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const client = recordingClient(recorded);
+
+   await tool!.handler({ call_id: 'c-100', servers: 'core1.netsapiens.com' }, client, 'domain_admin');
+
+   expect(recorded.length).toBeGreaterThan(0);
+   const traceCall = recorded.find((r) => r.pathTemplate === '/sipflow');
+   expect(traceCall).toBeDefined();
+   expect(traceCall?.method.toUpperCase()).toBe('GET');
+   expect(traceCall?.queryParams?.type).toBe('call_trace');
+   expect(traceCall?.queryParams?.servers).toBe('core1.netsapiens.com');
+  });
+
+  it('diagnose_call calls GET /sipflow for both call_trace and cradle_to_grave', async () => {
+   const tool = WORKFLOW_TOOLS.find((t) => t.schema.name === 'diagnose_call');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const client = recordingClient(recorded);
+
+   await tool!.handler({ call_id: 'c-100', domain: 'test.com', servers: 'core1.netsapiens.com' }, client, 'domain_admin');
+
+   const sipflowCalls = recorded.filter((r) => r.pathTemplate === '/sipflow');
+   expect(sipflowCalls.length).toBe(2);
+   const types = sipflowCalls.map((c) => c.queryParams?.type);
+   expect(types).toContain('call_trace');
+   expect(types).toContain('cradle_to_grave');
   });
  });
 });
