@@ -451,34 +451,67 @@ const end_call: CuratedTool = {
 // VOICEMAIL
 // ---------------------------------------------------------------------------
 
+const VOICEMAIL_FOLDERS: ReadonlyArray<'new' | 'save' | 'trash'> = ['new', 'save', 'trash'];
+
+function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | undefined {
+ if (typeof raw !== 'string') return undefined;
+ const f = raw.toLowerCase().trim();
+ if (f === 'new' || f === 'inbox') return 'new';
+ if (f === 'save' || f === 'saved') return 'save';
+ if (f === 'trash' || f === 'deleted') return 'trash';
+ if (f === 'all') return undefined;
+ return f as 'new' | 'save' | 'trash';
+}
+
 const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new", "saved", "trash") to filter.',
+  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
-    folder: { type: 'string', description: 'new | saved | trash | (omit for all)' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), "trash", or omit for all folders.' },
     limit: { type: 'number', default: 25 },
    },
   },
  },
  handler: async (args, client) => {
-  const folder = args.folder ? String(args.folder) : undefined;
-  const r = folder
-   ? await client.request({
+  const limit = num(args.limit) ?? 25;
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
     method: 'GET',
     pathTemplate: '/domains/~/users/~/voicemails/{folder}',
-    pathParams: { folder },
-    queryParams: { limit: num(args.limit) ?? 25 },
-   })
-   : await client.request({
-    method: 'GET',
-    pathTemplate: '/domains/~/users/~/voicemails',
-    queryParams: { limit: num(args.limit) ?? 25 },
+    pathParams: { folder: targetFolder },
+    queryParams: { limit },
    });
-  return textResult(r);
+   if (r && Array.isArray(r.data)) {
+    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+   }
+   return textResult(r);
+  }
+  const responses = await Promise.all(
+   VOICEMAIL_FOLDERS.map(async (folder) => {
+    try {
+     const res = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/~/users/~/voicemails/{folder}',
+      pathParams: { folder },
+      queryParams: { limit },
+     });
+     const items = Array.isArray(res?.data) ? (res.data as Array<Record<string, unknown>>) : [];
+     return items.map((item) => ({ ...item, folder }));
+    } catch {
+     return [];
+    }
+   }),
+  );
+  const merged = responses.flat();
+  return textResult({
+   success: true,
+   data: merged.slice(0, limit),
+  });
  },
 };
 
@@ -486,16 +519,45 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available).',
-  inputSchema: { type: 'object', properties: { voicemail_id: { type: 'string' } }, required: ['voicemail_id'] },
+  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". If omitted, searches new, save, then trash.' },
+   },
+   required: ['voicemail_id'],
+  },
  },
  handler: async (args, client) => {
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}',
-   pathParams: { id: String(args.voicemail_id) },
-  });
-  return textResult(r);
+  const filename = String(args.voicemail_id);
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+    pathParams: { folder: targetFolder, filename },
+   });
+   return textResult(r);
+  }
+  for (const folder of VOICEMAIL_FOLDERS) {
+   try {
+    const r = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+     pathParams: { folder, filename },
+    });
+    if (r?.success !== false && r?.data) {
+     if (Array.isArray(r.data) && r.data.length === 0) {
+      continue;
+     }
+     return textResult(r);
+    }
+   } catch {
+    // continue to next folder
+   }
+  }
+  return textResult({ success: false, error: 'Voicemail not found' });
  },
 };
 
@@ -507,19 +569,21 @@ const forward_voicemail: CuratedTool = {
   inputSchema: {
    type: 'object',
    properties: {
-    voicemail_id: { type: 'string' },
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
     to: { type: 'string', description: 'Destination user extension' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". Defaults to "new".' },
     note: { type: 'string', description: 'Optional note to attach' },
    },
    required: ['voicemail_id', 'to'],
   },
  },
  handler: async (args, client) => {
+  const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const r = await client.request({
-   method: 'POST',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}/forward',
-   pathParams: { id: String(args.voicemail_id) },
-   body: { destination: String(args.to), note: args.note ? String(args.note) : undefined },
+   method: 'PATCH',
+   pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}/forward',
+   pathParams: { folder, filename: String(args.voicemail_id) },
+   body: { 'voicemail-forward-new-destination': String(args.to) },
   });
   return textResult(r);
  },

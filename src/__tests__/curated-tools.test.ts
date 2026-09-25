@@ -268,7 +268,7 @@ describe('workflow tools (multi-call composites)', () => {
   expect(paths.has('/domains/{domain}/users/{user}/devices')).toBe(true);
   expect(paths.has('/domains/{domain}/users/{user}/answerrules')).toBe(true);
   expect(paths.has('/domains/{domain}/users/{user}/cdrs')).toBe(true);
-  expect(paths.has('/domains/{domain}/users/{user}/voicemails')).toBe(true);
+  expect(paths.has('/domains/{domain}/users/{user}/voicemails/{folder}')).toBe(true);
  });
 
  it('queue_health lists queues then fans out per-queue status', async () => {
