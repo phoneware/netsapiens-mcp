@@ -240,14 +240,32 @@ function cdrWindow(args: Record<string, unknown>): { 'datetime-start'?: string; 
  * narrowed. A plain user still defaults to themselves, and NS enforces the
  * real boundary on the token either way.
  */
-function cdrScope(args: Record<string, unknown>, userRole?: UserRole): 'mine' | 'user' | 'domain' {
+export function cdrScope(args: Record<string, unknown>, userRole?: UserRole): 'mine' | 'user' | 'domain' {
  if (args.user != null && args.user !== '') return 'user';
  const asked = args.scope == null ? undefined : String(args.scope);
  if (asked === 'mine' || asked === 'user' || asked === 'domain') return asked;
  return userRole && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.domain_admin ? 'domain' : 'mine';
 }
 
-const SCOPE_PROPERTIES = {
+export function cdrScopeNote(
+ scope: 'mine' | 'user' | 'domain',
+ args: Record<string, unknown>,
+ userRole?: UserRole,
+): string {
+ if (scope === 'domain') {
+  return 'every call in the domain, not just yours; pass scope="mine" or user="<extension>" to narrow';
+ }
+ if (scope === 'user') {
+  const target = args.user != null && args.user !== '' ? String(args.user) : '<extension>';
+  return `only extension ${target}`;
+ }
+ if (userRole && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.domain_admin) {
+  return 'only the signed-in user\'s calls; pass scope="domain" for the whole office';
+ }
+ return 'only the signed-in user\'s calls';
+}
+
+export const SCOPE_PROPERTIES = {
  scope: {
   type: 'string',
   enum: ['mine', 'user', 'domain'],
@@ -255,7 +273,10 @@ const SCOPE_PROPERTIES = {
    'Whose calls. Defaults to "domain" for office managers and above, "mine" for everyone else. ' +
    'Set "mine" explicitly to narrow a manager back to their own line.',
  },
- user: { type: 'string', description: 'One specific user. Implies scope="user" and overrides `scope`.' },
+ user: {
+  type: 'string',
+  description: 'One specific user by extension or user id, e.g. "290". Implies scope="user" and overrides `scope`.',
+ },
  domain: { type: 'string', description: 'Defaults to your own domain.' },
  since: { type: 'string', description: 'Start of window, RFC3339 or "YYYY-MM-DD HH:MM:SS"' },
  until: { type: 'string', description: 'End of window, same format as `since`. Defaults to now when `since` is set.' },
@@ -277,6 +298,7 @@ const recent_calls: CuratedTool = {
  },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
+  const scope_note = cdrScopeNote(scope, args, userRole);
   const queryParams = {
    limit: num(args.limit) ?? 25,
    ...cdrWindow(args),
@@ -296,7 +318,7 @@ const recent_calls: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult({ scope, ...r });
+  return textResult({ scope, scope_note, ...r });
  },
 };
 
@@ -312,6 +334,7 @@ const call_volume: CuratedTool = {
  },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
+  const scope_note = cdrScopeNote(scope, args, userRole);
   const queryParams = { ...cdrWindow(args), type: args.type ? String(args.type) : undefined };
   const r =
    scope === 'domain'
@@ -327,7 +350,7 @@ const call_volume: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult({ scope, ...r });
+  return textResult({ scope, scope_note, ...r });
  },
 };
 

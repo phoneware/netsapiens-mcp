@@ -4,6 +4,7 @@
  */
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { logger } from './utils/logger.js';
 import {
   NetSapiensConfig,
   NetSapiensApiResponse,
@@ -114,6 +115,10 @@ export class NetSapiensClient {
     // Add request interceptor to handle OAuth tokens
     this.client.interceptors.request.use(
       async (config) => {
+        (config as any).metadata = {
+          startTime: Date.now(),
+          pathTemplate: (config as any).pathTemplate ?? config.url,
+        };
         if (this.oauthManager) {
           // Get fresh OAuth token
           const token = await this.oauthManager.getAccessToken();
@@ -129,13 +134,27 @@ export class NetSapiensClient {
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        const metadata = (response.config as any)?.metadata;
+        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
+        const pathTemplate = (response.config as any)?.pathTemplate ?? metadata?.pathTemplate ?? response.config?.url;
+        logger.info('NetSapiens API request', {
+          method: response.config?.method?.toUpperCase(),
+          pathTemplate,
+          status: response.status,
+          durationMs,
+        });
+        return response;
+      },
       (error) => {
-        console.error('NetSapiens API Error:', {
+        const metadata = (error.config as any)?.metadata;
+        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
+        const pathTemplate = (error.config as any)?.pathTemplate ?? metadata?.pathTemplate ?? error.config?.url;
+        logger.info('NetSapiens API request', {
+          method: error.config?.method?.toUpperCase(),
+          pathTemplate,
           status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data,
-          url: error.config?.url
+          durationMs,
         });
         return Promise.reject(error);
       }
@@ -177,12 +196,13 @@ export class NetSapiensClient {
       const response: AxiosResponse = await this.client.request({
         method: 'POST',
         url: v1Url,
+        pathTemplate: '/ns-api/',
         data: body.toString(),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Accept: 'application/json',
         },
-      });
+      } as any);
       return { success: true, data: response.data as T };
     } catch (error: any) {
       const status = error.response?.status;
@@ -240,7 +260,7 @@ export class NetSapiensClient {
       }
 
       const method = opts.method.toUpperCase();
-      const config: any = { params };
+      const config: any = { params, pathTemplate: opts.pathTemplate };
       let response: AxiosResponse;
       if (method === 'GET' || method === 'DELETE') {
         response = await this.client.request({ method, url, ...config });

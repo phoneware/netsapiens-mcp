@@ -613,7 +613,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   ): Promise<void> {
     let nsUserRole: string | undefined;
     try {
-      nsUserRole = await this.detectNsUserRole(nsTokens.access_token);
+      nsUserRole = await this.detectNsUserRole(nsTokens.access_token, username);
     } catch (err) {
       logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
     }
@@ -939,7 +939,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     }
   }
 
-  private async detectNsUserRole(nsAccessToken: string): Promise<string | undefined> {
+  private async detectNsUserRole(nsAccessToken: string, username?: string): Promise<string | undefined> {
     try {
       const response = await axios.get(`${this.nsApiUrl}/ns-api/v2/domains/~/users/~`, {
         headers: { Authorization: `Bearer ${nsAccessToken}` },
@@ -948,7 +948,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       // NetSapiens returns role info in user-scope, scope, or type fields
       const scope = data?.['user-scope'] ?? data?.scope ?? data?.type;
       const role = mapNsScope(scope);
-      logger.info('Detected NS user role', { scope, role });
+      const user = username ?? data?.user ?? data?.username;
+      logger.info('Detected NS user role', { scope, role, username: user });
       return role;
     } catch (err) {
       logger.warn('NS role detection API call failed', { error: String(err) });
