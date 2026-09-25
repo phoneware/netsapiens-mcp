@@ -4,6 +4,7 @@
  */
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { logger } from './utils/logger.js';
 import {
   NetSapiensConfig,
   NetSapiensApiResponse,
@@ -114,6 +115,10 @@ export class NetSapiensClient {
     // Add request interceptor to handle OAuth tokens
     this.client.interceptors.request.use(
       async (config) => {
+        (config as any).metadata = {
+          startTime: Date.now(),
+          pathTemplate: (config as any).pathTemplate ?? config.url,
+        };
         if (this.oauthManager) {
           // Get fresh OAuth token
           const token = await this.oauthManager.getAccessToken();
@@ -129,21 +134,47 @@ export class NetSapiensClient {
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
-      (response) => response,
-   async (error: unknown) => {
-    const err = error as { response?: { status?: number; statusText?: string; data?: unknown }; config?: { url?: string } };
-    if (err.response?.status === 401 && this.config.onUnauthorized) {
-     try {
-      await this.config.onUnauthorized(error);
-     } catch {
-      // Ignore onUnauthorized callback errors
-     }
-    }
-        console.error('NetSapiens API Error:', {
-     status: err.response?.status,
-     statusText: err.response?.statusText,
-     data: err.response?.data,
-     url: err.config?.url
+      (response) => {
+        const metadata = (response.config as any)?.metadata;
+        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
+        const pathTemplate = (response.config as any)?.pathTemplate ?? metadata?.pathTemplate ?? response.config?.url;
+        logger.info('NetSapiens API request', {
+          method: response.config?.method?.toUpperCase(),
+          pathTemplate,
+          status: response.status,
+          durationMs,
+        });
+        return response;
+      },
+      async (error: unknown) => {
+        const err = error as {
+          response?: { status?: number; data?: unknown };
+          config?: { url?: string; method?: string; metadata?: { startTime?: number; pathTemplate?: string }; pathTemplate?: string };
+        };
+        // NS error bodies are { code, message }; the message is what names the
+        // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
+        const data = err.response?.data as { message?: unknown } | undefined;
+        const nsMessage = typeof data?.message === 'string' ? data.message : undefined;
+        // A 401 "Invalid Scope" is NS refusing one resource to this user's role,
+        // not a dead token. Invalidating the bearer on it signs the user out of
+        // every tool because one call asked for something above their tier.
+        if (err.response?.status === 401 && !/invalid scope/i.test(nsMessage ?? '') && this.config.onUnauthorized) {
+          try {
+            await this.config.onUnauthorized(error);
+          } catch {
+            // Ignore onUnauthorized callback errors
+          }
+        }
+        const metadata = err.config?.metadata;
+        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
+        const pathTemplate = err.config?.pathTemplate ?? metadata?.pathTemplate ?? err.config?.url;
+        logger.warn('NetSapiens API request', {
+          method: err.config?.method?.toUpperCase(),
+          pathTemplate,
+          url: err.config?.url,
+          status: err.response?.status,
+          error: nsMessage,
+          durationMs,
         });
         return Promise.reject(error);
       }
@@ -192,12 +223,13 @@ export class NetSapiensClient {
       const response: AxiosResponse = await this.client.request({
         method: 'POST',
         url: v1Url,
+        pathTemplate: '/ns-api/',
         data: body.toString(),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Accept: 'application/json',
         },
-      });
+      } as any);
       return { success: true, data: response.data as T };
     } catch (error: any) {
       const status = error.response?.status;
@@ -255,7 +287,7 @@ export class NetSapiensClient {
       }
 
       const method = opts.method.toUpperCase();
-      const config: any = { params };
+      const config: any = { params, pathTemplate: opts.pathTemplate };
       let response: AxiosResponse;
       if (method === 'GET' || method === 'DELETE') {
         response = await this.client.request({ method, url, ...config });

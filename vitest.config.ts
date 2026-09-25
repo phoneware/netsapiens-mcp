@@ -7,7 +7,7 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 30000,
     setupFiles: ['src/__tests__/setup.ts'],
-    exclude: ['**/node_modules/**', '**/build/**', 'src/__tests__/setup.ts'],
+    exclude: ['**/node_modules/**', '**/build/**', 'src/__tests__/setup.ts', '**/.claude/**'],
     coverage: {
       exclude: ['src/generated/**', 'build/**', 'vitest.config.ts'],
     },
