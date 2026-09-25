@@ -26,7 +26,10 @@ export class FirestoreTokenStore {
   private readonly refreshCollection: string;
 
   constructor(opts: { collection?: string; projectId?: string } = {}) {
-    this.collection = opts.collection ?? 'mcp_tokens';
+    const defaultCollection = process.env.MCP_READ_ONLY === 'true'
+      ? 'readonly_mcp_tokens'
+      : 'mcp_tokens';
+    this.collection = opts.collection ?? defaultCollection;
     this.refreshCollection = `${this.collection}_refresh`;
     this.db = new Firestore({ projectId: opts.projectId });
     logger.info('Firestore token store initialized', {

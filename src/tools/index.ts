@@ -367,12 +367,67 @@ function getToolMode(): ToolMode {
  * Visibility predicate for the generated registry. Returns true when a tool
  * should appear in search results / promoted into a user's catalog.
  */
+export const MUTATING_CURATED_TOOLS = new Set([
+  'place_call',
+  'transfer_call',
+  'end_call',
+  'forward_voicemail',
+  'send_message',
+  'agent_login',
+  'agent_logout',
+  'update_my_answer_rule',
+  'switch_queue',
+  'find_and_call',
+  'schedule_forwarding',
+  'provision_user',
+  'deprovision_user',
+  'provision_call_queue',
+  'deprovision_call_queue',
+  'set_hold_message',
+]);
+
+export function isReadOnlyMode(): boolean {
+  return process.env.MCP_READ_ONLY === 'true';
+}
+
+export function isToolReadOnly(name: string): boolean {
+  if (name === 'search_api') return true;
+  if (name === 'call_api') return true;
+
+  if (MUTATING_CURATED_TOOLS.has(name)) {
+    return false;
+  }
+
+  const curated = CURATED_CATALOG.find((t) => t.schema.name === name);
+  if (curated) {
+    if (curated.readOnly !== undefined) return curated.readOnly;
+    if (curated.destructive) return false;
+    return true;
+  }
+
+  const mutatingPrefixes = [
+    'post_', 'put_', 'patch_', 'delete_', 'create_', 'update_',
+    'remove_', 'add_', 'set_', 'send_', 'switch_', 'end_', 'place_',
+    'transfer_', 'forward_', 'schedule_', 'provision_', 'deprovision_',
+    'v1_create_', 'v1_update_', 'v1_delete_', 'v1_post_', 'v1_put_',
+    'v1_patch_', 'agent_login', 'agent_logout'
+  ];
+  if (mutatingPrefixes.some((p) => name.startsWith(p))) {
+    return false;
+  }
+
+  const unv1 = name.startsWith('v1_') ? name.slice(3) : name;
+  const hints = classifyTool(unv1);
+  return hints.readOnlyHint && !hints.destructiveHint;
+}
+
 function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean {
  if (isToolDisabled(toolName)) return false;
  // Needs a file upload we cannot send; a JSON sibling covers the same job.
  if (MULTIPART_ONLY_TOOLS.has(toolName)) return false;
  if (!roleAllows(userRole, toolName)) return false;
  if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+ if (isReadOnlyMode() && !isToolReadOnly(toolName)) return false;
  return true;
 }
 
@@ -410,6 +465,7 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
   const destructive = t.destructive ?? inferred.destructiveHint;
   const readOnly = t.readOnly ?? inferred.readOnlyHint;
   if (disableDestructiveEnabled() && destructive) continue;
+  if (isReadOnlyMode() && !isToolReadOnly(t.schema.name)) continue;
   seen.add(t.schema.name);
   tools.push({
    name: t.schema.name,
@@ -486,6 +542,7 @@ export async function getAllToolDefinitions(
   if (!roleAllows(userRole, registryKey)) continue;
   const annotations = classifyTool(registryKey);
   if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
+  if (isReadOnlyMode() && !isToolReadOnly(registryKey)) continue;
   tools.push({
    name: exposed,
    title: toolTitle(exposed),
@@ -563,6 +620,29 @@ export async function handleToolCall(
  args: Record<string, unknown>,
  userRole?: UserRole,
 ): Promise<unknown> {
+ if (isReadOnlyMode()) {
+  if (toolName === 'call_api') {
+   const innerName = String(args?.tool_name ?? '');
+   const mapping = buildNameMapping();
+   const registryKey = mapping.exposedToRegistry.get(innerName) ?? innerName;
+   if (!isToolReadOnly(registryKey) || !isToolReadOnly(innerName)) {
+    throw new McpError(
+     ErrorCode.InvalidParams,
+     "Tool '" + innerName + "' is not permitted in read-only mode (read-only mode permits GET operations only)",
+    );
+   }
+  } else {
+   const mapping = buildNameMapping();
+   const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+   if (!isToolReadOnly(registryKey) || !isToolReadOnly(toolName)) {
+    throw new McpError(
+     ErrorCode.InvalidParams,
+     "Tool '" + toolName + "' is not permitted in read-only mode",
+    );
+   }
+  }
+ }
+
  if (isToolDisabled(toolName)) {
   throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
  }
