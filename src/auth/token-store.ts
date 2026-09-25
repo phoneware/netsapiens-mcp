@@ -34,7 +34,9 @@ export interface StoredToken {
   /** Detected NS user role */
   nsUserRole?: string;
  /** Upstream NetSapiens platform API URL (e.g. https://edge.phoneware.cloud) */
- nsApiUrl?: string;
+  nsApiUrl?: string;
+  /** MCP Server base URL this token was issued for (cross-server isolation) */
+  serverBaseUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,10 +71,13 @@ export class TokenStore {
   private readonly filePath: string;
 
   constructor(filePath?: string) {
+    const defaultFileName = process.env.MCP_READ_ONLY === 'true'
+      ? 'http-tokens-readonly.json'
+      : 'http-tokens.json';
     this.filePath =
       filePath ??
       process.env.MCP_TOKEN_STORE_PATH ??
-      join(homedir(), '.netsapiens-mcp', 'http-tokens.json');
+      join(homedir(), '.netsapiens-mcp', defaultFileName);
     this.load();
   }
 

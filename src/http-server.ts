@@ -127,6 +127,7 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
     nsClientId,
     nsClientSecret,
     tokenLifetimeSec,
+    serverBaseUrl: baseUrl.origin,
   });
 
   const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
