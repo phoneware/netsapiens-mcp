@@ -27,7 +27,7 @@ async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// 1. diagnose_call — CDR + SIP trace + queue context in one shot
+// 1. diagnose_call: CDR + SIP trace + queue context in one shot
 // ---------------------------------------------------------------------------
 
 const diagnose_call: CuratedTool = {
@@ -40,9 +40,12 @@ const diagnose_call: CuratedTool = {
     inputSchema: {
       type: 'object',
       properties: {
-        call_id: { type: 'string' },
-        domain: { type: 'string' },
-        user: { type: 'string', default: '~' },
+        call_id: { type: 'string', description: 'Call ID or SIP Call-ID' },
+        domain: { type: 'string', description: 'Domain name' },
+        user: { type: 'string', default: '~', description: 'User extension' },
+        servers: { type: 'string', description: 'Core server FQDN handling the call (optional)' },
+        start_time: { type: 'string', description: 'Start time window for trace' },
+        end_time: { type: 'string', description: 'End time window for trace' },
       },
       required: ['call_id'],
     },
@@ -51,11 +54,54 @@ const diagnose_call: CuratedTool = {
     const domain = str(args.domain);
     const user = str(args.user);
     const callid = String(args.call_id);
-    const [cdr, sipflow, cradle] = await Promise.all([
-      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}', pathParams: { domain, user, callid } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/sipflow/{callid}', pathParams: { callid } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/cradle2grave/{callid}', pathParams: { callid } })),
+    let server = args.servers ? String(args.servers) : undefined;
+    let startTime = args.start_time ? String(args.start_time) : undefined;
+    let endTime = args.end_time ? String(args.end_time) : undefined;
+
+    // 1. First fetch call details
+    const cdr = await safe(
+      client.request({
+        method: 'GET',
+        pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
+        pathParams: { domain, user, callid },
+      }),
+    );
+
+    if (cdr.ok && cdr.data && typeof cdr.data === 'object' && !Array.isArray(cdr.data)) {
+      const callData = cdr.data as Record<string, unknown>;
+      if (!server) {
+        server = (callData['core-server'] ?? callData['hostname']) as string | undefined;
+      }
+      if (!startTime && callData['call-start-datetime']) {
+        startTime = String(callData['call-start-datetime']);
+      }
+      if (!endTime && callData['call-disconnect-datetime']) {
+        endTime = String(callData['call-disconnect-datetime']);
+      }
+    }
+
+    const sipflowParams: Record<string, unknown> = {
+      callids: callid,
+      servers: server ?? '',
+      type: 'call_trace',
+    };
+    if (startTime) sipflowParams.start_time = startTime;
+    if (endTime) sipflowParams.end_time = endTime;
+
+    const cradleParams: Record<string, unknown> = {
+      callids: callid,
+      servers: server ?? '',
+      type: 'cradle_to_grave',
+    };
+    if (startTime) cradleParams.start_time = startTime;
+    if (endTime) cradleParams.end_time = endTime;
+
+    // 2. Fetch SIP flow and cradle-to-grave via GET /sipflow
+    const [sipflow, cradle] = await Promise.all([
+      safe(client.request({ method: 'GET', pathTemplate: '/sipflow', queryParams: sipflowParams })),
+      safe(client.request({ method: 'GET', pathTemplate: '/sipflow', queryParams: cradleParams })),
     ]);
+
     return textResult({
       call_id: callid,
       cdr,
