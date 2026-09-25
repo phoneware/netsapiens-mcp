@@ -12,7 +12,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
-import { WORKFLOW_TOOLS } from './workflows.js';
+import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
@@ -61,19 +61,50 @@ const find_domain: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'find_domain',
-  description: 'Look up a NetSapiens domain by name or filter. Use without a query to list domains you can see.',
+  description:
+   'Look up a NetSapiens domain by name or filter. For domain administrators and below, this returns ' +
+   "the caller's own domain. For resellers and system administrators, this lists all visible domains. " +
+   'Use without a query to see your domain or list visible domains.',
   inputSchema: {
    type: 'object',
    properties: {
-    query: { type: 'string', description: 'Domain name fragment. Omit to list all visible domains.' },
+    query: {
+     type: 'string',
+     description:
+      'Domain name fragment. For resellers and above, omit to list all visible domains. ' +
+      'For domain administrators, omit to return your own domain.',
+    },
     limit: { type: 'number', default: 25 },
    },
   },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const query = args.query ? String(args.query) : '';
   const limit = num(args.limit) ?? 25;
-  // /domains has no server-side name filter (only limit/start) — fetch
+  const isReseller = userRole != null && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.reseller;
+
+  if (!isReseller) {
+   // Domain administrators only have access to their own domain.
+   // Fetch the caller domain via /domains/{domain} with '~'.
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}',
+    pathParams: { domain: '~' },
+    queryParams: {},
+   });
+   if (!r.success) return textResult(r);
+   const raw = r.data;
+   const list: Array<Record<string, unknown>> = Array.isArray(raw)
+    ? (raw as Array<Record<string, unknown>>)
+    : raw && typeof raw === 'object'
+     ? [raw as Record<string, unknown>]
+     : [];
+   const matches = query ? list.filter((d) => fieldsMatch(d, ['domain', 'description'], query)) : list;
+   return textResult({ ...r, data: matches.slice(0, limit) });
+  }
+
+  // Resellers and system administrators have access to list visible domains.
+  // /domains has no server-side name filter (only limit/start): fetch
   // broadly and match client-side when a query is given.
   const r = await client.request({
    method: 'GET',
@@ -209,14 +240,32 @@ function cdrWindow(args: Record<string, unknown>): { 'datetime-start'?: string; 
  * narrowed. A plain user still defaults to themselves, and NS enforces the
  * real boundary on the token either way.
  */
-function cdrScope(args: Record<string, unknown>, userRole?: UserRole): 'mine' | 'user' | 'domain' {
+export function cdrScope(args: Record<string, unknown>, userRole?: UserRole): 'mine' | 'user' | 'domain' {
  if (args.user != null && args.user !== '') return 'user';
  const asked = args.scope == null ? undefined : String(args.scope);
  if (asked === 'mine' || asked === 'user' || asked === 'domain') return asked;
  return userRole && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.domain_admin ? 'domain' : 'mine';
 }
 
-const SCOPE_PROPERTIES = {
+export function cdrScopeNote(
+ scope: 'mine' | 'user' | 'domain',
+ args: Record<string, unknown>,
+ userRole?: UserRole,
+): string {
+ if (scope === 'domain') {
+  return 'every call in the domain, not just yours; pass scope="mine" or user="<extension>" to narrow';
+ }
+ if (scope === 'user') {
+  const target = args.user != null && args.user !== '' ? String(args.user) : '<extension>';
+  return `only extension ${target}`;
+ }
+ if (userRole && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.domain_admin) {
+  return 'only the signed-in user\'s calls; pass scope="domain" for the whole office';
+ }
+ return 'only the signed-in user\'s calls';
+}
+
+export const SCOPE_PROPERTIES = {
  scope: {
   type: 'string',
   enum: ['mine', 'user', 'domain'],
@@ -224,7 +273,10 @@ const SCOPE_PROPERTIES = {
    'Whose calls. Defaults to "domain" for office managers and above, "mine" for everyone else. ' +
    'Set "mine" explicitly to narrow a manager back to their own line.',
  },
- user: { type: 'string', description: 'One specific user. Implies scope="user" and overrides `scope`.' },
+ user: {
+  type: 'string',
+  description: 'One specific user by extension or user id, e.g. "290". Implies scope="user" and overrides `scope`.',
+ },
  domain: { type: 'string', description: 'Defaults to your own domain.' },
  since: { type: 'string', description: 'Start of window, RFC3339 or "YYYY-MM-DD HH:MM:SS"' },
  until: { type: 'string', description: 'End of window, same format as `since`. Defaults to now when `since` is set.' },
@@ -246,6 +298,7 @@ const recent_calls: CuratedTool = {
  },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
+  const scope_note = cdrScopeNote(scope, args, userRole);
   const queryParams = {
    limit: num(args.limit) ?? 25,
    ...cdrWindow(args),
@@ -265,7 +318,7 @@ const recent_calls: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult({ scope, ...r });
+  return textResult({ scope, scope_note, ...r });
  },
 };
 
@@ -281,6 +334,7 @@ const call_volume: CuratedTool = {
  },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
+  const scope_note = cdrScopeNote(scope, args, userRole);
   const queryParams = { ...cdrWindow(args), type: args.type ? String(args.type) : undefined };
   const r =
    scope === 'domain'
@@ -296,7 +350,7 @@ const call_volume: CuratedTool = {
      pathParams: { domain: str(args.domain), user: str(args.user) },
      queryParams,
     });
-  return textResult({ scope, ...r });
+  return textResult({ scope, scope_note, ...r });
  },
 };
 
@@ -351,13 +405,60 @@ const call_trace: CuratedTool = {
  schema: {
   name: 'call_trace',
   description: 'SIP flow / call trace for a specific call. Useful for diagnosing why a call did what it did.',
-  inputSchema: { type: 'object', properties: { call_id: { type: 'string' } }, required: ['call_id'] },
+  inputSchema: {
+   type: 'object',
+   properties: {
+    call_id: { type: 'string', description: 'Call ID or SIP Call-ID' },
+    domain: { type: 'string', description: 'Domain name (defaults to ~)' },
+    user: { type: 'string', description: 'User extension (defaults to ~)' },
+    servers: { type: 'string', description: 'Core server FQDN handling the call (looked up from call details if omitted)' },
+    start_time: { type: 'string', description: 'Search window start timestamp' },
+    end_time: { type: 'string', description: 'Search window end timestamp' },
+   },
+   required: ['call_id'],
+  },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
+  const callid = String(args.call_id);
+  const domain = str(args.domain);
+  const user = str(args.user);
+
+  const lookup = await lookupCallForTrace(
+   {
+    callId: callid,
+    domain,
+    user,
+    servers: args.servers ? String(args.servers) : undefined,
+    startTime: args.start_time ? String(args.start_time) : undefined,
+    endTime: args.end_time ? String(args.end_time) : undefined,
+    userRole,
+   },
+   client,
+  );
+
+  if (!lookup.ok) {
+   return textResult({
+    call_id: callid,
+    error: lookup.failure.error,
+    detail: lookup.failure.detail,
+    searched_window: lookup.failure.searchedWindow,
+   });
+  }
+
+  const { server, startTime, endTime } = lookup.data;
+
+  const queryParams: Record<string, unknown> = {
+   callids: callid,
+   servers: server,
+   type: 'call_trace',
+  };
+  if (startTime) queryParams.start_time = startTime;
+  if (endTime) queryParams.end_time = endTime;
+
   const r = await client.request({
    method: 'GET',
-   pathTemplate: '/sipflow/{callid}',
-   pathParams: { callid: String(args.call_id) },
+   pathTemplate: '/sipflow',
+   queryParams,
   });
   return textResult(r);
  },
@@ -451,34 +552,67 @@ const end_call: CuratedTool = {
 // VOICEMAIL
 // ---------------------------------------------------------------------------
 
+const VOICEMAIL_FOLDERS: ReadonlyArray<'new' | 'save' | 'trash'> = ['new', 'save', 'trash'];
+
+function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | undefined {
+ if (typeof raw !== 'string') return undefined;
+ const f = raw.toLowerCase().trim();
+ if (f === 'new' || f === 'inbox') return 'new';
+ if (f === 'save' || f === 'saved') return 'save';
+ if (f === 'trash' || f === 'deleted') return 'trash';
+ if (f === 'all') return undefined;
+ return f as 'new' | 'save' | 'trash';
+}
+
 const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new", "saved", "trash") to filter.',
+  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
-    folder: { type: 'string', description: 'new | saved | trash | (omit for all)' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), "trash", or omit for all folders.' },
     limit: { type: 'number', default: 25 },
    },
   },
  },
  handler: async (args, client) => {
-  const folder = args.folder ? String(args.folder) : undefined;
-  const r = folder
-   ? await client.request({
+  const limit = num(args.limit) ?? 25;
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
     method: 'GET',
     pathTemplate: '/domains/~/users/~/voicemails/{folder}',
-    pathParams: { folder },
-    queryParams: { limit: num(args.limit) ?? 25 },
-   })
-   : await client.request({
-    method: 'GET',
-    pathTemplate: '/domains/~/users/~/voicemails',
-    queryParams: { limit: num(args.limit) ?? 25 },
+    pathParams: { folder: targetFolder },
+    queryParams: { limit },
    });
-  return textResult(r);
+   if (r && Array.isArray(r.data)) {
+    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+   }
+   return textResult(r);
+  }
+  const responses = await Promise.all(
+   VOICEMAIL_FOLDERS.map(async (folder) => {
+    try {
+     const res = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/~/users/~/voicemails/{folder}',
+      pathParams: { folder },
+      queryParams: { limit },
+     });
+     const items = Array.isArray(res?.data) ? (res.data as Array<Record<string, unknown>>) : [];
+     return items.map((item) => ({ ...item, folder }));
+    } catch {
+     return [];
+    }
+   }),
+  );
+  const merged = responses.flat();
+  return textResult({
+   success: true,
+   data: merged.slice(0, limit),
+  });
  },
 };
 
@@ -486,16 +620,45 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available).',
-  inputSchema: { type: 'object', properties: { voicemail_id: { type: 'string' } }, required: ['voicemail_id'] },
+  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". If omitted, searches new, save, then trash.' },
+   },
+   required: ['voicemail_id'],
+  },
  },
  handler: async (args, client) => {
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}',
-   pathParams: { id: String(args.voicemail_id) },
-  });
-  return textResult(r);
+  const filename = String(args.voicemail_id);
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+    pathParams: { folder: targetFolder, filename },
+   });
+   return textResult(r);
+  }
+  for (const folder of VOICEMAIL_FOLDERS) {
+   try {
+    const r = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+     pathParams: { folder, filename },
+    });
+    if (r?.success !== false && r?.data) {
+     if (Array.isArray(r.data) && r.data.length === 0) {
+      continue;
+     }
+     return textResult(r);
+    }
+   } catch {
+    // continue to next folder
+   }
+  }
+  return textResult({ success: false, error: 'Voicemail not found' });
  },
 };
 
@@ -507,19 +670,21 @@ const forward_voicemail: CuratedTool = {
   inputSchema: {
    type: 'object',
    properties: {
-    voicemail_id: { type: 'string' },
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
     to: { type: 'string', description: 'Destination user extension' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". Defaults to "new".' },
     note: { type: 'string', description: 'Optional note to attach' },
    },
    required: ['voicemail_id', 'to'],
   },
  },
  handler: async (args, client) => {
+  const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const r = await client.request({
-   method: 'POST',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}/forward',
-   pathParams: { id: String(args.voicemail_id) },
-   body: { destination: String(args.to), note: args.note ? String(args.note) : undefined },
+   method: 'PATCH',
+   pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}/forward',
+   pathParams: { folder, filename: String(args.voicemail_id) },
+   body: { 'voicemail-forward-new-destination': String(args.to) },
   });
   return textResult(r);
  },

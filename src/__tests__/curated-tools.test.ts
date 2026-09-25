@@ -250,12 +250,22 @@ describe('workflow tools (multi-call composites)', () => {
 
  it('diagnose_call fans out to CDR, sipflow, and cradle-to-grave in parallel', async () => {
   const { handleToolCall } = await importTools();
-  const { client, calls } = recorder();
+  const calls: Array<{ method: string; pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+  const client = {
+   request: async (o: typeof calls[number]) => {
+    calls.push(o);
+    if (o.pathTemplate.includes('/calls/')) {
+     return { success: true, data: { 'core-server': 'core1.netsapiens.com' } };
+    }
+    return { success: true, data: [] };
+   },
+  };
   await handleToolCall(client as never, 'diagnose_call', { call_id: 'c-1' }, 'domain_admin');
   const paths = calls.map((c) => c.pathTemplate).sort();
   expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
-  expect(paths).toContain('/sipflow/{callid}');
-  expect(paths).toContain('/cradle2grave/{callid}');
+  expect(paths).toContain('/sipflow');
+  const sipflowCalls = calls.filter((c) => c.pathTemplate === '/sipflow');
+  expect(sipflowCalls.length).toBe(2);
  });
 
  it('user_profile makes five concurrent reads', async () => {
@@ -268,7 +278,7 @@ describe('workflow tools (multi-call composites)', () => {
   expect(paths.has('/domains/{domain}/users/{user}/devices')).toBe(true);
   expect(paths.has('/domains/{domain}/users/{user}/answerrules')).toBe(true);
   expect(paths.has('/domains/{domain}/users/{user}/cdrs')).toBe(true);
-  expect(paths.has('/domains/{domain}/users/{user}/voicemails')).toBe(true);
+  expect(paths.has('/domains/{domain}/users/{user}/voicemails/{folder}')).toBe(true);
  });
 
  it('queue_health lists queues then fans out per-queue status', async () => {
