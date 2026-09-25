@@ -130,12 +130,20 @@ export class NetSapiensClient {
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
       (response) => response,
-      (error) => {
+   async (error: unknown) => {
+    const err = error as { response?: { status?: number; statusText?: string; data?: unknown }; config?: { url?: string } };
+    if (err.response?.status === 401 && this.config.onUnauthorized) {
+     try {
+      await this.config.onUnauthorized(error);
+     } catch {
+      // Ignore onUnauthorized callback errors
+     }
+    }
         console.error('NetSapiens API Error:', {
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data,
-          url: error.config?.url
+     status: err.response?.status,
+     statusText: err.response?.statusText,
+     data: err.response?.data,
+     url: err.config?.url
         });
         return Promise.reject(error);
       }
@@ -152,6 +160,13 @@ export class NetSapiensClient {
     this.config.apiToken = token;
   }
 
+ /**
+  * Update the base API URL used for NS API calls.
+  */
+ setApiUrl(url: string): void {
+  this.config.apiUrl = url;
+  this.client.defaults.baseURL = `${url}/ns-api/v2`;
+ }
   /**
    * v1 RPC-style call — POST /ns-api/?object=X&action=Y with form-urlencoded body.
    * Used by generated tools under src/generated/v1/.

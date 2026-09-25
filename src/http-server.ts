@@ -28,9 +28,9 @@ import {
 } from './server-info.js';
 import { logger } from './utils/logger.js';
 import type { UserRole } from './auth/roles.js';
+import type { NetSapiensConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -57,7 +57,9 @@ interface McpSession {
 function syncSessionNsToken(session: McpSession, req: AuthenticatedRequest): void {
   const extra = req.auth?.extra as Record<string, unknown> | undefined;
   const nsAccessToken = extra?.nsAccessToken as string | undefined;
+ const nsApiUrl = extra?.nsApiUrl as string | undefined;
   if (nsAccessToken) session.client.setApiToken(nsAccessToken);
+ if (nsApiUrl) session.client.setApiUrl(nsApiUrl);
 }
 
 /**
@@ -335,14 +337,23 @@ function wireApp(
 
   // Login form submission — the authorize() method shows the page, this handles POST
   app.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+  const { token, platform, username, password } = req.body;
+
+  if (token) {
+   if (!platform) {
+    res.status(400).json({ error: 'Missing platform' });
+    return;
+   }
+   await authProvider.handleTokenLogin(req, res, String(platform), String(token));
+   return;
+  }
 
     if (!username || !password) {
       res.status(400).json({ error: 'Missing username or password' });
       return;
     }
 
-    await authProvider.handleLogin(req, res, username, password);
+  await authProvider.handleLogin(req, res, String(username), String(password));
   });
 
   // MFA passcode submission (second step when NS requires MFA)
@@ -377,7 +388,7 @@ function wireApp(
     // bearer, so the NS client is rebuilt from that bearer each time and no
     // cross-request state exists to go stale or to be pinned to an instance.
     if (isStatelessMode()) {
-      const { server, client } = createAuthenticatedMcpServerForRequest(config, req);
+   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
       void client;
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
@@ -393,7 +404,7 @@ function wireApp(
 
     if (isInitializeRequest(body)) {
       // Create a server + client using the authenticated user's NS token, role, and identity.
-      const { server, client } = createAuthenticatedMcpServerForRequest(config, req);
+   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -490,6 +501,9 @@ function createAuthenticatedMcpServer(
   nsAccessToken?: string,
   userRole?: UserRole,
   userIdentity?: string,
+ nsApiUrl?: string,
+ authProvider?: NetSapiensAuthProvider,
+ bearerToken?: string,
 ) {
   const server = new Server(
     serverImplementation(config),
@@ -498,8 +512,17 @@ function createAuthenticatedMcpServer(
 
   // Build a client config. If we have a per-user NS access token from the
   // OAuth flow, use that. Otherwise fall back to the operator-level config.
-  const clientConfig = nsAccessToken
-    ? { apiUrl: config.netsapiens.apiUrl, apiToken: nsAccessToken, timeout: config.netsapiens.timeout }
+ const clientConfig: NetSapiensConfig = nsAccessToken
+  ? {
+   apiUrl: nsApiUrl || config.netsapiens.apiUrl,
+   apiToken: nsAccessToken,
+   timeout: config.netsapiens.timeout,
+   onUnauthorized: async () => {
+    if (authProvider && bearerToken) {
+     await authProvider.invalidateToken(bearerToken);
+    }
+   },
+  }
     : config.netsapiens;
 
   const client = new NetSapiensClient(clientConfig);
@@ -520,6 +543,7 @@ function createAuthenticatedMcpServer(
 function createAuthenticatedMcpServerForRequest(
   config: ReturnType<typeof loadConfig>,
   req: AuthenticatedRequest,
+ authProvider?: NetSapiensAuthProvider,
 ) {
   const extra = req.auth?.extra as Record<string, unknown> | undefined;
   return createAuthenticatedMcpServer(
@@ -527,5 +551,8 @@ function createAuthenticatedMcpServerForRequest(
     extra?.nsAccessToken as string | undefined,
     extra?.nsUserRole as UserRole | undefined,
     extra?.nsUsername as string | undefined,
+  extra?.nsApiUrl as string | undefined,
+  authProvider,
+  req.auth?.token,
   );
 }
