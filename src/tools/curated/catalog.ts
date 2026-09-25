@@ -61,19 +61,50 @@ const find_domain: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'find_domain',
-  description: 'Look up a NetSapiens domain by name or filter. Use without a query to list domains you can see.',
+  description:
+   'Look up a NetSapiens domain by name or filter. For domain administrators and below, this returns ' +
+   "the caller's own domain. For resellers and system administrators, this lists all visible domains. " +
+   'Use without a query to see your domain or list visible domains.',
   inputSchema: {
    type: 'object',
    properties: {
-    query: { type: 'string', description: 'Domain name fragment. Omit to list all visible domains.' },
+    query: {
+     type: 'string',
+     description:
+      'Domain name fragment. For resellers and above, omit to list all visible domains. ' +
+      'For domain administrators, omit to return your own domain.',
+    },
     limit: { type: 'number', default: 25 },
    },
   },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const query = args.query ? String(args.query) : '';
   const limit = num(args.limit) ?? 25;
-  // /domains has no server-side name filter (only limit/start) — fetch
+  const isReseller = userRole != null && ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY.reseller;
+
+  if (!isReseller) {
+   // Domain administrators only have access to their own domain.
+   // Fetch the caller domain via /domains/{domain} with '~'.
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}',
+    pathParams: { domain: '~' },
+    queryParams: {},
+   });
+   if (!r.success) return textResult(r);
+   const raw = r.data;
+   const list: Array<Record<string, unknown>> = Array.isArray(raw)
+    ? (raw as Array<Record<string, unknown>>)
+    : raw && typeof raw === 'object'
+     ? [raw as Record<string, unknown>]
+     : [];
+   const matches = query ? list.filter((d) => fieldsMatch(d, ['domain', 'description'], query)) : list;
+   return textResult({ ...r, data: matches.slice(0, limit) });
+  }
+
+  // Resellers and system administrators have access to list visible domains.
+  // /domains has no server-side name filter (only limit/start): fetch
   // broadly and match client-side when a query is given.
   const r = await client.request({
    method: 'GET',
