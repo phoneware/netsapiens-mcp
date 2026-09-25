@@ -74,7 +74,7 @@ const user_profile: CuratedTool = {
   schema: {
     name: 'user_profile',
     description:
-      'A combined snapshot of a NetSapiens user — basic details, registered devices, answer rules, recent calls, and voicemail count. ' +
+      'A combined snapshot of a NetSapiens user: basic details, registered devices, answer rules, recent calls, and voicemail count. ' +
       'Useful for "tell me everything about this user" without making five separate calls.',
     inputSchema: {
       type: 'object',
@@ -94,7 +94,7 @@ const user_profile: CuratedTool = {
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/devices', pathParams: { domain, user } })),
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/answerrules', pathParams: { domain, user } })),
       safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/cdrs', pathParams: { domain, user }, queryParams: { limit } })),
-      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/voicemails', pathParams: { domain, user } })),
+      safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}', pathParams: { domain, user, folder: 'new' } })),
     ]);
     const voicemailCount = Array.isArray(voicemails.data) ? voicemails.data.length : undefined;
     return textResult({
@@ -431,8 +431,17 @@ const recent_activity_for_number: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
-// 8. voicemail_inbox_summary — new VMs with caller + transcript condensed
+// 8. voicemail_inbox_summary: new VMs with caller + transcript condensed
 // ---------------------------------------------------------------------------
+
+function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const f = raw.toLowerCase().trim();
+  if (f === 'new' || f === 'inbox') return 'new';
+  if (f === 'save' || f === 'saved') return 'save';
+  if (f === 'trash' || f === 'deleted') return 'trash';
+  return f as 'new' | 'save' | 'trash';
+}
 
 const voicemail_inbox_summary: CuratedTool = {
   minRole: 'user',
@@ -445,13 +454,13 @@ const voicemail_inbox_summary: CuratedTool = {
       type: 'object',
       properties: {
         limit: { type: 'number', default: 25 },
-        folder: { type: 'string', default: 'new', description: 'Voicemail folder (default "new").' },
+        folder: { type: 'string', default: 'new', description: 'Voicemail folder: "new" (inbox), "save" (saved), or "trash". Defaults to "new".' },
       },
     },
   },
   handler: async (args, client) => {
     const limit = typeof args.limit === 'number' ? args.limit : 25;
-    const folder = String(args.folder ?? 'new');
+    const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
     const list = await safe<Array<Record<string, unknown>>>(
       client.request({
         method: 'GET',
