@@ -12,7 +12,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
-import { WORKFLOW_TOOLS } from './workflows.js';
+import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
@@ -364,37 +364,38 @@ const call_trace: CuratedTool = {
    required: ['call_id'],
   },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
+  const callid = String(args.call_id);
   const domain = str(args.domain);
   const user = str(args.user);
-  const callid = String(args.call_id);
-  let server = args.servers ? String(args.servers) : undefined;
-  let startTime = args.start_time ? String(args.start_time) : undefined;
-  let endTime = args.end_time ? String(args.end_time) : undefined;
 
-  if (!server) {
-   try {
-    const callRes = await client.request({
-     method: 'GET',
-     pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
-     pathParams: { domain, user, callid },
-    });
-    const callObj = (callRes?.data && typeof callRes.data === 'object' && !Array.isArray(callRes.data))
-     ? (callRes.data as Record<string, unknown>)
-     : undefined;
-    if (callObj) {
-     server = (callObj['core-server'] ?? callObj['hostname']) as string | undefined;
-     if (!startTime && callObj['call-start-datetime']) startTime = String(callObj['call-start-datetime']);
-     if (!endTime && callObj['call-disconnect-datetime']) endTime = String(callObj['call-disconnect-datetime']);
-    }
-   } catch {
-    // continue with available parameters
-   }
+  const lookup = await lookupCallForTrace(
+   {
+    callId: callid,
+    domain,
+    user,
+    servers: args.servers ? String(args.servers) : undefined,
+    startTime: args.start_time ? String(args.start_time) : undefined,
+    endTime: args.end_time ? String(args.end_time) : undefined,
+    userRole,
+   },
+   client,
+  );
+
+  if (!lookup.ok) {
+   return textResult({
+    call_id: callid,
+    error: lookup.failure.error,
+    detail: lookup.failure.detail,
+    searched_window: lookup.failure.searchedWindow,
+   });
   }
+
+  const { server, startTime, endTime } = lookup.data;
 
   const queryParams: Record<string, unknown> = {
    callids: callid,
-   servers: server ?? '',
+   servers: server,
    type: 'call_trace',
   };
   if (startTime) queryParams.start_time = startTime;
