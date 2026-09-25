@@ -21,8 +21,10 @@ import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { isStatelessMode } from '../server-info.js';
 import { MULTIPART_ONLY_TOOLS, multipartAlternative } from './multipart.js';
-import { CURATED_CATALOG } from './curated/catalog.js';
+import { CURATED_CATALOG, cdrScope } from './curated/catalog.js';
+import type { CuratedTool } from './curated/types.js';
 import { buildMetaTools } from './curated/meta.js';
+import { logger } from '../utils/logger.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
@@ -390,7 +392,7 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
   async (name, args, client) => {
    // Reuse handleToolCall so every filter (disable, action, role, name
    // mapping, destructive) applies to call_api invocations too.
-   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole);
+   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity);
   },
   // search_api visibility: hide anything the operator has disabled, anything
   // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
@@ -446,14 +448,56 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
  return tools;
 }
 
+const EXTENSION_ARG_REGEX =
+ /^(ext|extension|extension_no|extension_num|extension_number|ext_no|ext_num|ext_number|user_id|userid|user_num|user_number)$/i;
+
+function isCdrTool(name: string): boolean {
+ return name === 'recent_calls' || name === 'call_volume' || name.toLowerCase().includes('cdr');
+}
+
+/**
+ * Validates tool arguments against inputSchema.properties.
+ * Rejects unknown arguments with McpError(InvalidParams).
+ */
+export function validateToolArguments(
+ toolName: string,
+ inputSchema: object,
+ args: Record<string, unknown> | undefined,
+): void {
+ const schema = inputSchema as {
+  properties?: Record<string, unknown>;
+  additionalProperties?: boolean | unknown;
+ };
+
+ if (!schema.properties || typeof schema.properties !== 'object') {
+  return;
+ }
+ if (schema.additionalProperties === true) {
+  return;
+ }
+
+ const declaredProps = Object.keys(schema.properties);
+ const passedArgs = Object.keys(args ?? {});
+ const unknownArgs = passedArgs.filter((arg) => !declaredProps.includes(arg));
+
+ if (unknownArgs.length > 0) {
+  const hasExtensionArg = unknownArgs.some((arg) => EXTENSION_ARG_REGEX.test(arg));
+  let message = `Unknown argument${unknownArgs.length > 1 ? 's' : ''} for tool '${toolName}': ${unknownArgs.join(', ')}. Accepted arguments: ${declaredProps.join(', ')}`;
+  if (isCdrTool(toolName) && hasExtensionArg) {
+   message += '; use `user` for an extension, e.g. user="290"';
+  }
+  throw new McpError(ErrorCode.InvalidParams, message);
+ }
+}
+
 /** Lookup a curated or meta tool by exposed name (per-call construction to bind userRole). */
-function findCuratedTool(name: string, userRole?: UserRole) {
+function findCuratedTool(name: string, userRole?: UserRole, userIdentity?: string) {
  const meta = buildMetaTools(
   toolRegistry,
   async (innerName, innerArgs, client) =>
-   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole),
+   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity),
   // Same predicate the ListTools path uses. This was a second, hand-copied
-  // version of the rule, and it had already drifted — search_api kept
+  // version of the rule, and it had already drifted: search_api kept
   // offering tools the dispatcher would reject.
   (toolName) => isGeneratedToolVisible(toolName, userRole),
  );
@@ -562,27 +606,45 @@ export async function handleToolCall(
  toolName: string,
  args: Record<string, unknown>,
  userRole?: UserRole,
+ userIdentity?: string,
 ): Promise<unknown> {
- if (isToolDisabled(toolName)) {
-  throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
- }
- if (args && isActionDisabled((args as { action?: unknown }).action)) {
-  throw new McpError(
-   ErrorCode.InvalidParams,
-   `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
-  );
- }
- if (disableDestructiveEnabled() && isToolDestructive(toolName)) {
-  throw new McpError(
-   ErrorCode.InvalidParams,
-   `Tool '${toolName}' is destructive and MCP_DISABLE_DESTRUCTIVE is set`,
-  );
- }
+ const startTime = Date.now();
+ const argNames = Object.keys(args ?? {});
 
- // Curated/meta tools take precedence so call_api can re-enter for the
- // generated registry without infinite recursion through the curated layer.
- if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
-  const curated = findCuratedTool(toolName, userRole);
+ try {
+  if (isToolDisabled(toolName)) {
+   throw new McpError(ErrorCode.MethodNotFound, `Tool '${toolName}' is disabled on this server`);
+  }
+  if (args && isActionDisabled((args as { action?: unknown }).action)) {
+   throw new McpError(
+    ErrorCode.InvalidParams,
+    `Action '${(args as { action?: unknown }).action}' is disabled on this server (blocked by MCP_DISABLED_ACTIONS)`,
+   );
+  }
+  if (disableDestructiveEnabled() && isToolDestructive(toolName)) {
+   throw new McpError(
+    ErrorCode.InvalidParams,
+    `Tool '${toolName}' is destructive and MCP_DISABLE_DESTRUCTIVE is set`,
+   );
+  }
+
+  // Curated/meta tools take precedence so call_api can re-enter for the
+  // generated registry without infinite recursion through the curated layer.
+  let curated: CuratedTool | undefined;
+  if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
+   curated = findCuratedTool(toolName, userRole, userIdentity);
+  }
+
+  const mapping = buildNameMapping();
+  const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+  const def: ToolDefinition | undefined = curated ? undefined : toolRegistry.get(registryKey);
+
+  const toolSchema = curated?.schema ?? def?.schema;
+  if (toolSchema?.inputSchema && typeof toolSchema.inputSchema === 'object') {
+   validateToolArguments(toolName, toolSchema.inputSchema, args);
+  }
+
+  let result: unknown;
   if (curated) {
    if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[curated.minRole] && roleFilterEnabled()) {
     throw new McpError(
@@ -590,35 +652,99 @@ export async function handleToolCall(
      `Tool '${toolName}' requires a higher access tier than your account has`,
     );
    }
-   return curated.handler(args ?? {}, client as unknown as GenericApiClient, userRole);
+   result = await curated.handler(args ?? {}, client as unknown as GenericApiClient, userRole);
+  } else {
+   if (!roleAllows(userRole, registryKey)) {
+    throw new McpError(
+     ErrorCode.InvalidParams,
+     `Tool '${toolName}' requires a higher access tier than your account has`,
+    );
+   }
+   if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
+    throw new McpError(
+     ErrorCode.InvalidParams,
+     `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
+     multipartAlternative(registryKey),
+    );
+   }
+
+   if (!def) {
+    result = null;
+   } else {
+    result = await def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+   }
   }
-  // Fall through to the generated registry only if explicitly invoked via
-  // call_api (which routes through handleToolCall recursively).
- }
 
- // Translate the exposed (possibly-shortened) name back to the registry key.
- const mapping = buildNameMapping();
- const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
- if (!roleAllows(userRole, registryKey)) {
-  throw new McpError(
-   ErrorCode.InvalidParams,
-   `Tool '${toolName}' requires a higher access tier than your account has`,
-  );
- }
- // Multipart-only operations were generated as if they took a JSON body, so
- // they look callable and cannot work. Fail with the alternative named rather
- // than letting the model burn a turn on a request the transport can't make.
- if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
-  throw new McpError(
-   ErrorCode.InvalidParams,
-   `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
-   multipartAlternative(registryKey),
-  );
- }
+  const durationMs = Date.now() - startTime;
+  let parsedResult: Record<string, unknown> | undefined;
+  if (result && typeof result === 'object' && 'content' in result && Array.isArray((result as { content?: unknown[] }).content)) {
+   const text = (result as { content: Array<{ text?: string }> }).content[0]?.text;
+   if (typeof text === 'string') {
+    try {
+     parsedResult = JSON.parse(text);
+    } catch {
+     // Plain text result
+    }
+   }
+  }
 
- const def: ToolDefinition | undefined = toolRegistry.get(registryKey);
- if (!def) return null;
- return def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+  let ok = true;
+  let errorMessage: string | undefined;
+  if (result === null || result === undefined) {
+   ok = false;
+   errorMessage = `Tool '${toolName}' is not registered`;
+  } else if (parsedResult && typeof parsedResult === 'object') {
+   if (parsedResult.success === false) {
+    ok = false;
+    errorMessage = parsedResult.error ? String(parsedResult.error) : 'Request failed';
+   } else if (parsedResult.ok === false && parsedResult.error) {
+    ok = false;
+    errorMessage = String(parsedResult.error);
+   } else if (parsedResult.error && typeof parsedResult.error === 'string' && !parsedResult.success) {
+    ok = false;
+    errorMessage = String(parsedResult.error);
+   }
+  }
+
+  const resolvedScope = (typeof parsedResult?.scope === 'string' ? parsedResult.scope : undefined)
+   ?? (isCdrTool(toolName) ? cdrScope(args, userRole) : undefined);
+
+  const logContext: Record<string, unknown> = {
+   tool: toolName,
+   role: userRole,
+   username: userIdentity,
+   argNames,
+   ok,
+   durationMs,
+  };
+  if (!ok && errorMessage) {
+   logContext.error = errorMessage;
+  }
+  if (resolvedScope !== undefined) {
+   logContext.scope = resolvedScope;
+  }
+
+  logger.info('Tool call', logContext);
+  return result;
+ } catch (err: unknown) {
+  const durationMs = Date.now() - startTime;
+  const resolvedScope = isCdrTool(toolName) ? cdrScope(args, userRole) : undefined;
+  const errorMessage = err instanceof McpError ? err.message : (err instanceof Error ? err.message : String(err));
+  const logContext: Record<string, unknown> = {
+   tool: toolName,
+   role: userRole,
+   username: userIdentity,
+   argNames,
+   ok: false,
+   error: errorMessage,
+   durationMs,
+  };
+  if (resolvedScope !== undefined) {
+   logContext.scope = resolvedScope;
+  }
+  logger.info('Tool call', logContext);
+  throw err;
+ }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +905,7 @@ export function registerAllTools(
     // user accepted, so dispatch normally.
    }
 
-   const result = await handleToolCall(client, name, callArgs, userRole);
+   const result = await handleToolCall(client, name, callArgs, userRole, userIdentity);
 
    // Per-user tool promotion: record call_api invocations, then
    // reconcile the promoted set so EITHER a new promotion OR a decay
