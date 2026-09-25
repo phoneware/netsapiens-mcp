@@ -246,7 +246,7 @@ describe('Tool call arguments and scope resolution', () => {
     }
   });
 
-  it('NetSapiensClient logs upstream requests at info level on success and error', async () => {
+  it('NetSapiensClient logs upstream requests: info on success, warn with the NS message on error', async () => {
     const infoSpy = vi.spyOn(logger, 'info');
     const client = new NetSapiensClient({ apiUrl: 'https://example.com' });
     const handlers = (client as unknown as {
@@ -284,24 +284,27 @@ describe('Tool call arguments and scope resolution', () => {
       durationMs: expect.any(Number),
     });
 
-    // Test error response
+    // Test error response: warn level, carrying the NS message that names the failure
+    const warnSpy = vi.spyOn(logger, 'warn');
     await expect(
       rejected({
-        response: { status: 404 },
+        response: { status: 401, data: { code: 401, message: 'Invalid Scope [APP001]' } },
         config: {
-          method: 'post',
-          url: '/domains/~/users',
-          metadata: { startTime: Date.now() - 30, pathTemplate: '/domains/{domain}/users' },
+          method: 'get',
+          url: '/domains',
+          metadata: { startTime: Date.now() - 30, pathTemplate: '/domains' },
         },
       }),
     ).rejects.toBeDefined();
 
-    const errorLogs = infoSpy.mock.calls.filter((c) => c[0] === 'NetSapiens API request');
-    expect(errorLogs.length).toBe(2);
-    expect(errorLogs[1][1]).toEqual({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/users',
-      status: 404,
+    const errorLogs = warnSpy.mock.calls.filter((c) => c[0] === 'NetSapiens API request');
+    expect(errorLogs.length).toBe(1);
+    expect(errorLogs[0][1]).toEqual({
+      method: 'GET',
+      pathTemplate: '/domains',
+      url: '/domains',
+      status: 401,
+      error: 'Invalid Scope [APP001]',
       durationMs: expect.any(Number),
     });
   });
