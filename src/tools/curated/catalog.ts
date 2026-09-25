@@ -12,7 +12,7 @@
 import type { CuratedTool } from './types.js';
 import { textResult } from './types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
-import { WORKFLOW_TOOLS } from './workflows.js';
+import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
@@ -382,13 +382,60 @@ const call_trace: CuratedTool = {
  schema: {
   name: 'call_trace',
   description: 'SIP flow / call trace for a specific call. Useful for diagnosing why a call did what it did.',
-  inputSchema: { type: 'object', properties: { call_id: { type: 'string' } }, required: ['call_id'] },
+  inputSchema: {
+   type: 'object',
+   properties: {
+    call_id: { type: 'string', description: 'Call ID or SIP Call-ID' },
+    domain: { type: 'string', description: 'Domain name (defaults to ~)' },
+    user: { type: 'string', description: 'User extension (defaults to ~)' },
+    servers: { type: 'string', description: 'Core server FQDN handling the call (looked up from call details if omitted)' },
+    start_time: { type: 'string', description: 'Search window start timestamp' },
+    end_time: { type: 'string', description: 'Search window end timestamp' },
+   },
+   required: ['call_id'],
+  },
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
+  const callid = String(args.call_id);
+  const domain = str(args.domain);
+  const user = str(args.user);
+
+  const lookup = await lookupCallForTrace(
+   {
+    callId: callid,
+    domain,
+    user,
+    servers: args.servers ? String(args.servers) : undefined,
+    startTime: args.start_time ? String(args.start_time) : undefined,
+    endTime: args.end_time ? String(args.end_time) : undefined,
+    userRole,
+   },
+   client,
+  );
+
+  if (!lookup.ok) {
+   return textResult({
+    call_id: callid,
+    error: lookup.failure.error,
+    detail: lookup.failure.detail,
+    searched_window: lookup.failure.searchedWindow,
+   });
+  }
+
+  const { server, startTime, endTime } = lookup.data;
+
+  const queryParams: Record<string, unknown> = {
+   callids: callid,
+   servers: server,
+   type: 'call_trace',
+  };
+  if (startTime) queryParams.start_time = startTime;
+  if (endTime) queryParams.end_time = endTime;
+
   const r = await client.request({
    method: 'GET',
-   pathTemplate: '/sipflow/{callid}',
-   pathParams: { callid: String(args.call_id) },
+   pathTemplate: '/sipflow',
+   queryParams,
   });
   return textResult(r);
  },
@@ -482,34 +529,67 @@ const end_call: CuratedTool = {
 // VOICEMAIL
 // ---------------------------------------------------------------------------
 
+const VOICEMAIL_FOLDERS: ReadonlyArray<'new' | 'save' | 'trash'> = ['new', 'save', 'trash'];
+
+function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | undefined {
+ if (typeof raw !== 'string') return undefined;
+ const f = raw.toLowerCase().trim();
+ if (f === 'new' || f === 'inbox') return 'new';
+ if (f === 'save' || f === 'saved') return 'save';
+ if (f === 'trash' || f === 'deleted') return 'trash';
+ if (f === 'all') return undefined;
+ return f as 'new' | 'save' | 'trash';
+}
+
 const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new", "saved", "trash") to filter.',
+  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
-    folder: { type: 'string', description: 'new | saved | trash | (omit for all)' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), "trash", or omit for all folders.' },
     limit: { type: 'number', default: 25 },
    },
   },
  },
  handler: async (args, client) => {
-  const folder = args.folder ? String(args.folder) : undefined;
-  const r = folder
-   ? await client.request({
+  const limit = num(args.limit) ?? 25;
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
     method: 'GET',
     pathTemplate: '/domains/~/users/~/voicemails/{folder}',
-    pathParams: { folder },
-    queryParams: { limit: num(args.limit) ?? 25 },
-   })
-   : await client.request({
-    method: 'GET',
-    pathTemplate: '/domains/~/users/~/voicemails',
-    queryParams: { limit: num(args.limit) ?? 25 },
+    pathParams: { folder: targetFolder },
+    queryParams: { limit },
    });
-  return textResult(r);
+   if (r && Array.isArray(r.data)) {
+    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+   }
+   return textResult(r);
+  }
+  const responses = await Promise.all(
+   VOICEMAIL_FOLDERS.map(async (folder) => {
+    try {
+     const res = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/~/users/~/voicemails/{folder}',
+      pathParams: { folder },
+      queryParams: { limit },
+     });
+     const items = Array.isArray(res?.data) ? (res.data as Array<Record<string, unknown>>) : [];
+     return items.map((item) => ({ ...item, folder }));
+    } catch {
+     return [];
+    }
+   }),
+  );
+  const merged = responses.flat();
+  return textResult({
+   success: true,
+   data: merged.slice(0, limit),
+  });
  },
 };
 
@@ -517,16 +597,45 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available).',
-  inputSchema: { type: 'object', properties: { voicemail_id: { type: 'string' } }, required: ['voicemail_id'] },
+  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". If omitted, searches new, save, then trash.' },
+   },
+   required: ['voicemail_id'],
+  },
  },
  handler: async (args, client) => {
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}',
-   pathParams: { id: String(args.voicemail_id) },
-  });
-  return textResult(r);
+  const filename = String(args.voicemail_id);
+  const targetFolder = normalizeVoicemailFolder(args.folder);
+  if (targetFolder) {
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+    pathParams: { folder: targetFolder, filename },
+   });
+   return textResult(r);
+  }
+  for (const folder of VOICEMAIL_FOLDERS) {
+   try {
+    const r = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
+     pathParams: { folder, filename },
+    });
+    if (r?.success !== false && r?.data) {
+     if (Array.isArray(r.data) && r.data.length === 0) {
+      continue;
+     }
+     return textResult(r);
+    }
+   } catch {
+    // continue to next folder
+   }
+  }
+  return textResult({ success: false, error: 'Voicemail not found' });
  },
 };
 
@@ -538,19 +647,21 @@ const forward_voicemail: CuratedTool = {
   inputSchema: {
    type: 'object',
    properties: {
-    voicemail_id: { type: 'string' },
+    voicemail_id: { type: 'string', description: 'Voicemail filename or ID' },
     to: { type: 'string', description: 'Destination user extension' },
+    folder: { type: 'string', description: 'Folder name: "new" (inbox), "save" (saved), or "trash". Defaults to "new".' },
     note: { type: 'string', description: 'Optional note to attach' },
    },
    required: ['voicemail_id', 'to'],
   },
  },
  handler: async (args, client) => {
+  const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const r = await client.request({
-   method: 'POST',
-   pathTemplate: '/domains/~/users/~/voicemails/{id}/forward',
-   pathParams: { id: String(args.voicemail_id) },
-   body: { destination: String(args.to), note: args.note ? String(args.note) : undefined },
+   method: 'PATCH',
+   pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}/forward',
+   pathParams: { folder, filename: String(args.voicemail_id) },
+   body: { 'voicemail-forward-new-destination': String(args.to) },
   });
   return textResult(r);
  },
