@@ -451,9 +451,8 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
 const EXTENSION_ARG_REGEX =
  /^(ext|extension|extension_no|extension_num|extension_number|ext_no|ext_num|ext_number|user_id|userid|user_num|user_number)$/i;
 
-function isCdrTool(name: string): boolean {
- return name === 'recent_calls' || name === 'call_volume' || name.toLowerCase().includes('cdr');
-}
+/** The curated CDR tools whose breadth is resolved by `cdrScope`; generated CDR tools are not. */
+const CDR_SCOPE_TOOLS: Record<string, true> = { recent_calls: true, call_volume: true };
 
 /**
  * Validates tool arguments against inputSchema.properties.
@@ -483,7 +482,7 @@ export function validateToolArguments(
  if (unknownArgs.length > 0) {
   const hasExtensionArg = unknownArgs.some((arg) => EXTENSION_ARG_REGEX.test(arg));
   let message = `Unknown argument${unknownArgs.length > 1 ? 's' : ''} for tool '${toolName}': ${unknownArgs.join(', ')}. Accepted arguments: ${declaredProps.join(', ')}`;
-  if (isCdrTool(toolName) && hasExtensionArg) {
+  if ((CDR_SCOPE_TOOLS[toolName] || toolName.toLowerCase().includes('cdr')) && hasExtensionArg) {
    message += '; use `user` for an extension, e.g. user="290"';
   }
   throw new McpError(ErrorCode.InvalidParams, message);
@@ -707,7 +706,7 @@ export async function handleToolCall(
   }
 
   const resolvedScope = (typeof parsedResult?.scope === 'string' ? parsedResult.scope : undefined)
-   ?? (isCdrTool(toolName) ? cdrScope(args, userRole) : undefined);
+   ?? (CDR_SCOPE_TOOLS[toolName] ? cdrScope(args, userRole) : undefined);
 
   const logContext: Record<string, unknown> = {
    tool: toolName,
@@ -728,7 +727,7 @@ export async function handleToolCall(
   return result;
  } catch (err: unknown) {
   const durationMs = Date.now() - startTime;
-  const resolvedScope = isCdrTool(toolName) ? cdrScope(args, userRole) : undefined;
+  const resolvedScope = CDR_SCOPE_TOOLS[toolName] ? cdrScope(args, userRole) : undefined;
   const errorMessage = err instanceof McpError ? err.message : (err instanceof Error ? err.message : String(err));
   const logContext: Record<string, unknown> = {
    tool: toolName,

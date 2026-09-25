@@ -146,14 +146,30 @@ export class NetSapiensClient {
         });
         return response;
       },
-      (error) => {
-        const metadata = (error.config as any)?.metadata;
+      async (error: unknown) => {
+        const err = error as {
+          response?: { status?: number; data?: unknown };
+          config?: { url?: string; method?: string; metadata?: { startTime?: number; pathTemplate?: string }; pathTemplate?: string };
+        };
+        if (err.response?.status === 401 && this.config.onUnauthorized) {
+          try {
+            await this.config.onUnauthorized(error);
+          } catch {
+            // Ignore onUnauthorized callback errors
+          }
+        }
+        const metadata = err.config?.metadata;
         const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
-        const pathTemplate = (error.config as any)?.pathTemplate ?? metadata?.pathTemplate ?? error.config?.url;
-        logger.info('NetSapiens API request', {
-          method: error.config?.method?.toUpperCase(),
+        const pathTemplate = err.config?.pathTemplate ?? metadata?.pathTemplate ?? err.config?.url;
+        const data = err.response?.data as { message?: unknown } | undefined;
+        // NS error bodies are { code, message }; the message is what names the
+        // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
+        logger.warn('NetSapiens API request', {
+          method: err.config?.method?.toUpperCase(),
           pathTemplate,
-          status: error.response?.status,
+          url: err.config?.url,
+          status: err.response?.status,
+          error: typeof data?.message === 'string' ? data.message : undefined,
           durationMs,
         });
         return Promise.reject(error);
@@ -171,6 +187,13 @@ export class NetSapiensClient {
     this.config.apiToken = token;
   }
 
+ /**
+  * Update the base API URL used for NS API calls.
+  */
+ setApiUrl(url: string): void {
+  this.config.apiUrl = url;
+  this.client.defaults.baseURL = `${url}/ns-api/v2`;
+ }
   /**
    * v1 RPC-style call — POST /ns-api/?object=X&action=Y with form-urlencoded body.
    * Used by generated tools under src/generated/v1/.
