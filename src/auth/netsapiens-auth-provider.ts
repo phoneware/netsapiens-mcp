@@ -37,7 +37,8 @@ import { LoopbackTolerantClientsStore } from './loopback-redirect.js';
 import type { StoredToken, TokenStoreLike } from './token-store.js';
 import { FirestoreTokenStore } from './firestore-token-store.js';
 import { FirestoreClientsStore } from './firestore-clients-store.js';
-import { mapNsScope } from './roles.js';
+import { mapNsScope, type UserRole } from './roles.js';
+import { getAllowedPlatforms, getPlatform, isPlatformAllowed } from './platforms.js';
 import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -245,7 +246,12 @@ function logoHtml(): string {
   return `<div class="logo"><img src="${escapeHtml(url)}" alt=""></div>`;
 }
 
-function loginPageHtml(authorizeUrl: string, error?: string, authState?: string): string {
+function loginPageHtml(
+ authorizeUrl: string,
+ error?: string,
+ authState?: string,
+ initialTab: 'password' | 'token' = 'password',
+): string {
   const errorHtml = error
     ? `<div class="error">${escapeHtml(error)}</div>`
     : '';
@@ -258,6 +264,7 @@ function loginPageHtml(authorizeUrl: string, error?: string, authState?: string)
 
   const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
   const safeHeading = escapeHtml(heading);
+ const platforms = getAllowedPlatforms();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -271,17 +278,23 @@ function loginPageHtml(authorizeUrl: string, error?: string, authState?: string)
            background: #f5f5f5; display: flex; justify-content: center; align-items: center;
            min-height: 100vh; }
     .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
-            padding: 2rem; width: 100%; max-width: 400px; }
+            padding: 2rem; width: 100%; max-width: 420px; }
     .logo { text-align: center; margin-bottom: 1rem; }
     .logo img { max-width: 96px; max-height: 96px; height: auto; }
-    h1 { font-size: 1.25rem; margin-bottom: 1.5rem; text-align: center; }
+    h1 { font-size: 1.25rem; margin-bottom: 1.25rem; text-align: center; }
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; }
+    .tab-btn { flex: 1; padding: 0.5rem; background: none; border: none; font-size: 0.85rem; font-weight: 500; color: #6b7280; cursor: pointer; border-radius: 4px; transition: background 0.15s, color 0.15s; }
+    .tab-btn.active { color: #2563eb; background: #eff6ff; font-weight: 600; }
+    .tab-btn:hover { background: #f3f4f6; }
+    .auth-form { display: none; }
+    .auth-form.active { display: block; }
     label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
-    input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px;
-            font-size: 0.9rem; margin-bottom: 1rem; }
-    input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
-    button { width: 100%; padding: 0.6rem; background: #2563eb; color: #fff; border: none;
+    input, select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 0.9rem; margin-bottom: 1rem; background: #fff; }
+    input:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+    button[type="submit"] { width: 100%; padding: 0.6rem; background: #2563eb; color: #fff; border: none;
              border-radius: 4px; font-size: 0.95rem; cursor: pointer; }
-    button:hover { background: #1d4ed8; }
+    button[type="submit"]:hover { background: #1d4ed8; }
     .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
              border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; }
     .footer { text-align: center; margin-top: 1rem; font-size: 0.75rem; color: #888; }
@@ -292,14 +305,45 @@ function loginPageHtml(authorizeUrl: string, error?: string, authState?: string)
     ${logoHtml()}
     <h1>${safeHeading}</h1>
     ${errorHtml}
-    <form method="POST" action="${escapeHtml(authorizeUrl)}">
+    <div class="tabs">
+      <button type="button" class="tab-btn ${initialTab === 'password' ? 'active' : ''}" onclick="switchTab('password')">Password</button>
+      <button type="button" class="tab-btn ${initialTab === 'token' ? 'active' : ''}" onclick="switchTab('token')">Sign in with a NetSapiens token</button>
+    </div>
+    <form method="POST" action="${escapeHtml(authorizeUrl)}" id="password-form" class="auth-form ${initialTab === 'password' ? 'active' : ''}">
       ${stateHtml}
       <label for="username">Username</label>
-      <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+      <input type="text" id="username" name="username" required autocomplete="username" ${initialTab === 'password' ? 'autofocus' : ''}>
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required autocomplete="current-password">
       <button type="submit">Sign In</button>
     </form>
+    <form method="POST" action="${escapeHtml(authorizeUrl)}" id="token-form" class="auth-form ${initialTab === 'token' ? 'active' : ''}">
+      ${stateHtml}
+      <label for="platform">Platform</label>
+      <select id="platform" name="platform" required>
+        ${platforms.map((p) => `<option value="${escapeHtml(p.apiUrl)}">${escapeHtml(p.label)} (${escapeHtml(new URL(p.apiUrl).hostname)})</option>`).join('\n        ')}
+      </select>
+      <label for="token">NetSapiens Token or API Key</label>
+      <input type="password" id="token" name="token" required placeholder="Paste your API key or token" autocomplete="off" ${initialTab === 'token' ? 'autofocus' : ''}>
+      <button type="submit">Sign In with Token</button>
+    </form>
+    <script>
+      function switchTab(tab) {
+        var btns = document.querySelectorAll('.tab-btn');
+        var forms = document.querySelectorAll('.auth-form');
+        btns.forEach(function(b) { b.classList.remove('active'); });
+        forms.forEach(function(f) { f.classList.remove('active'); });
+        if (tab === 'token') {
+          if (btns[1]) btns[1].classList.add('active');
+          var tf = document.getElementById('token-form');
+          if (tf) tf.classList.add('active');
+        } else {
+          if (btns[0]) btns[0].classList.add('active');
+          var pf = document.getElementById('password-form');
+          if (pf) pf.classList.add('active');
+        }
+      }
+    </script>
     <div class="footer">Credentials are sent directly to the server, never to the AI.</div>
   </div>
 </body>
@@ -560,7 +604,130 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    await this.completeLogin(pending, grantResult.tokens, username, res);
+  await this.completeLogin(pending, { ...grantResult.tokens, nsApiUrl: this.nsApiUrl }, username, res);
+ }
+
+ /**
+  * Called by our custom POST /login route after the user submits token credentials.
+  * Validates the token against the allowlisted platform API, generates an authorization code,
+  * and redirects back to the MCP client.
+  */
+ async handleTokenLogin(req: Request, res: Response, platform: string, token: string): Promise<void> {
+  if (isCrossSitePost(req)) {
+   logger.warn('Rejected cross-site token login POST');
+   sendPage(res, 440, loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.', undefined, 'token'));
+   return;
+  }
+
+  const { pending, reason } = this.resolvePending(req);
+  if (!pending) {
+   logger.warn('Token login rejected: no usable pending-auth state', { reason });
+   sendPage(res, 440, loginPageHtml('/login', 'Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.', undefined, 'token'));
+   return;
+  }
+
+  const refreshedState = signValue(pending, PENDING_AUTH_TTL_SEC);
+
+  const resolvedPlatform = getPlatform(platform);
+  if (!resolvedPlatform) {
+   logger.warn('Token login rejected: unknown or forbidden platform', { platform });
+   sendPage(res, 200, loginPageHtml('/login', 'Selected platform is not recognized or not allowed.', refreshedState, 'token'));
+   return;
+  }
+
+  let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number };
+  try {
+   validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
+  } catch (err: unknown) {
+   const errMsg = (err as Error).message || String(err);
+   const msg = errMsg.includes('401')
+    ? 'Invalid NetSapiens token or API key.'
+    : `Authentication failed: ${errMsg}`;
+   sendPage(res, 200, loginPageHtml('/login', msg, refreshedState, 'token'));
+   return;
+  }
+
+  const nsTokens: NsTokenResponse = {
+   access_token: token,
+   expires_in: validated.expiresIn,
+   username: validated.username,
+   nsUserRole: validated.userRole,
+   nsApiUrl: resolvedPlatform.apiUrl,
+  };
+
+  await this.completeLogin(pending, nsTokens, validated.username, res);
+ }
+
+ /**
+  * Validates a NetSapiens token against an allowlisted platform API.
+  * Performs a cheap authenticated read (GET /domains/~/users/~, falling back
+  * to GET /apikeys/~ for machine API keys where domain cannot be expanded from token).
+  * Throws if platform is forbidden or token is invalid.
+  */
+ async validateNsToken(
+  apiUrl: string,
+  token: string,
+ ): Promise<{ username: string; userRole?: UserRole; scope?: string; expiresIn?: number }> {
+  if (!isPlatformAllowed(apiUrl)) {
+   throw new Error(`Platform URL is not allowed: ${apiUrl}`);
+  }
+
+  let expiresIn: number | undefined;
+  if (token.includes('.')) {
+   try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+     if (typeof payload.exp === 'number') {
+      const remainingSec = payload.exp - Math.floor(Date.now() / 1000);
+      if (remainingSec > 0) expiresIn = remainingSec;
+     }
+    }
+   } catch {
+    // Not a standard JWT, ignore
+   }
+  }
+
+  // Try GET /domains/~/users/~
+  try {
+   const userRes = await axios.get(`${apiUrl}/ns-api/v2/domains/~/users/~`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    timeout: 15000,
+   });
+   const data = userRes.data;
+   const scope = data?.['user-scope'] ?? data?.scope ?? data?.type;
+   const userRole = mapNsScope(scope);
+   const username = data?.login || (data?.domain && data?.user ? `${data.user}@${data.domain}` : undefined) || data?.user || 'token-user';
+   return { username, userRole, scope: typeof scope === 'string' ? scope : undefined, expiresIn };
+  } catch (err: unknown) {
+   const status = (err as { response?: { status?: number; data?: unknown } })?.response?.status;
+   if (status === 400) {
+    // Fallback for machine API keys where domain cannot be expanded from token
+    try {
+     const keyRes = await axios.get(`${apiUrl}/ns-api/v2/apikeys/~`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      timeout: 15000,
+     });
+     const keyData = keyRes.data;
+     const scope = keyData?.['user-scope'] ?? keyData?.scope;
+     const userRole = mapNsScope(scope);
+     const username = keyData?.description || keyData?.['key-id'] || 'api-user';
+     return { username, userRole, scope: typeof scope === 'string' ? scope : undefined, expiresIn };
+    } catch (keyErr: unknown) {
+     const keyStatus = (keyErr as { response?: { status?: number; data?: { message?: string } } })?.response?.status;
+     const keyMsg = (keyErr as { response?: { data?: { message?: string } } })?.response?.data?.message || (keyErr as Error).message;
+     if (keyStatus === 401) {
+      throw new Error('401 Unauthorized: Invalid NetSapiens API key.');
+     }
+     throw new Error(`API key validation failed: ${keyMsg}`);
+    }
+   }
+   if (status === 401) {
+    throw new Error('401 Unauthorized: Invalid NetSapiens token.');
+   }
+   const data = (err as { response?: { data?: { message?: string } } })?.response?.data;
+   throw new Error(`Token validation failed: ${data?.message || (err as Error).message}`);
+  }
   }
 
   /**
@@ -599,7 +766,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    await this.completeLogin(challenge.pending, nsTokens, challenge.username, res);
+  await this.completeLogin(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, res);
   }
 
   /**
@@ -611,17 +778,18 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     username: string,
     res: Response,
   ): Promise<void> {
-    let nsUserRole: string | undefined;
+  let nsUserRole = nsTokens.nsUserRole;
+  if (!nsUserRole) {
     try {
-      nsUserRole = await this.detectNsUserRole(nsTokens.access_token);
+    nsUserRole = await this.detectNsUserRole(nsTokens.access_token, nsTokens.nsApiUrl);
     } catch (err) {
       logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
     }
+  }
 
     const code = randomBytes(32).toString('hex');
     this.authCodes.set(code, { pending, nsTokens: { ...nsTokens, username, nsUserRole } });
     setTimeout(() => this.authCodes.delete(code), 5 * 60 * 1000);
-
     const redirectUrl = new URL(pending.redirectUri);
     redirectUrl.searchParams.set('code', code);
     if (pending.state) {
@@ -675,9 +843,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     let nsTokens: NsTokenResponse;
     if (stored.nsRefreshToken) {
       try {
-        nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken);
+    nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
         nsTokens.username = stored.nsUsername;
         nsTokens.nsUserRole = stored.nsUserRole;
+    nsTokens.nsApiUrl = stored.nsApiUrl;
       } catch (err) {
         logger.warn('Upstream NS refresh-grant failed during MCP refresh', {
           username: stored.nsUsername,
@@ -732,7 +901,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     // The MCP client never sees this — it just keeps using the same MCP bearer token.
     const NS_REFRESH_SKEW_MS = 60_000;
     const nsExpired = stored.nsExpiresAt && Date.now() > stored.nsExpiresAt - NS_REFRESH_SKEW_MS;
-    if (nsExpired && stored.nsRefreshToken) {
+  if (nsExpired) {
+   if (stored.nsRefreshToken) {
       let inflight = this.nsRefreshInflight.get(token);
       if (!inflight) {
         inflight = this.refreshUpstreamNsToken(token, stored)
@@ -742,6 +912,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       await inflight;
       // Re-read so every waiter (not just the one that refreshed) returns the new token.
       stored = (await this.tokenStore.get(token)) ?? stored;
+    if (stored.nsExpiresAt && Date.now() > stored.nsExpiresAt) {
+     await this.tokenStore.delete(token);
+     throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
+    }
+   } else {
+    // No refresh path! E.g. expiring portal token or token sign-in
+    await this.tokenStore.delete(token);
+    throw new InvalidTokenError('Upstream access token expired');
+   }
     }
 
     return {
@@ -753,13 +932,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         nsAccessToken: stored.nsAccessToken,
         nsUsername: stored.nsUsername,
         nsUserRole: stored.nsUserRole,
+    nsApiUrl: stored.nsApiUrl,
       },
     };
   }
 
   private async refreshUpstreamNsToken(token: string, stored: StoredToken): Promise<void> {
     try {
-      const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken!);
+   const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken!, stored.nsApiUrl);
       await this.tokenStore.update(token, {
         nsAccessToken: refreshed.access_token,
         nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
@@ -829,6 +1009,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       nsExpiresAt,
       nsUsername: nsTokens.username,
       nsUserRole: nsTokens.nsUserRole,
+   nsApiUrl: nsTokens.nsApiUrl,
     };
 
     await this.tokenStore.set(stored);
@@ -939,9 +1120,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     }
   }
 
-  private async detectNsUserRole(nsAccessToken: string): Promise<string | undefined> {
+ private async detectNsUserRole(nsAccessToken: string, targetApiUrl?: string): Promise<string | undefined> {
+  const url = targetApiUrl || this.nsApiUrl;
     try {
-      const response = await axios.get(`${this.nsApiUrl}/ns-api/v2/domains/~/users/~`, {
+   const response = await axios.get(`${url}/ns-api/v2/domains/~/users/~`, {
         headers: { Authorization: `Bearer ${nsAccessToken}` },
       });
       const data = response.data;
@@ -950,15 +1132,29 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       const role = mapNsScope(scope);
       logger.info('Detected NS user role', { scope, role });
       return role;
-    } catch (err) {
+  } catch (err: unknown) {
+   const status = (err as { response?: { status?: number } })?.response?.status;
+   if (status === 400) {
+    try {
+     const keyRes = await axios.get(`${url}/ns-api/v2/apikeys/~`, {
+      headers: { Authorization: `Bearer ${nsAccessToken}` },
+     });
+     const keyData = keyRes.data;
+     const scope = keyData?.['user-scope'] ?? keyData?.scope;
+     return mapNsScope(scope);
+    } catch {
+     // Ignore
+    }
+   }
       logger.warn('NS role detection API call failed', { error: String(err) });
       return undefined;
     }
   }
 
-  private async nsRefreshGrant(nsRefreshToken: string): Promise<NsTokenResponse> {
+ private async nsRefreshGrant(nsRefreshToken: string, targetApiUrl?: string): Promise<NsTokenResponse> {
+  const url = targetApiUrl || this.nsApiUrl;
     const response = await axios.post(
-      `${this.nsApiUrl}/ns-api/v2/tokens`,
+   `${url}/ns-api/v2/tokens`,
       {
         grant_type: 'refresh_token',
         client_id: this.nsClientId,
@@ -973,16 +1169,22 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       refresh_token: response.data.refresh_token,
       expires_in: response.data.expires_in,
       username: '', // caller fills this in
+   nsApiUrl: targetApiUrl,
     };
   }
+
+ async invalidateToken(mcpToken: string): Promise<void> {
+  await this.tokenStore.delete(mcpToken);
+ }
 }
 
 interface NsTokenResponse {
   access_token: string;
   refresh_token?: string;
-  expires_in: number;
+ expires_in?: number;
   username: string;
   nsUserRole?: string;
+ nsApiUrl?: string;
 }
 
 type NsGrantResult =

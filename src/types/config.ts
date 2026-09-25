@@ -27,6 +27,8 @@ export interface NetSapiensConfig {
     requests: number;
     perMilliseconds: number;
   };
+  /** Optional callback invoked on upstream 401 Unauthorized */
+  onUnauthorized?: (err: unknown) => Promise<void> | void;
 }
 
 export interface MCPServerConfig {
