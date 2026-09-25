@@ -343,21 +343,156 @@ describe('request paths gate', () => {
    expect(traceCall?.queryParams?.type).toBe('call_trace');
    expect(traceCall?.queryParams?.servers).toBe('core1.netsapiens.com');
   });
-
-  it('diagnose_call calls GET /sipflow for both call_trace and cradle_to_grave', async () => {
-   const tool = WORKFLOW_TOOLS.find((t) => t.schema.name === 'diagnose_call');
+  it('completed call as domain_admin falls from active 404 to /domains/{domain}/cdrs and calls /sipflow with servers from CDR', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
    expect(tool).toBeTruthy();
 
    const recorded: Recorded[] = [];
-   const client = recordingClient(recorded);
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      // Active call 404 for completed call
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-100',
+         'core-server': 'core-phx.netsapiens.com',
+         'call-start-datetime': '2026-09-23T22:50:00Z',
+         'call-disconnect-datetime': '2026-09-23T22:55:00Z',
+         'is-trace-expected': 'yes',
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: true, data: { trace: 'ladder' } };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
 
-   await tool!.handler({ call_id: 'c-100', domain: 'test.com', servers: 'core1.netsapiens.com' }, client, 'domain_admin');
+   const result = await tool!.handler({ call_id: 'c-100', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
+   expect(paths).toContain('/domains/{domain}/cdrs');
+   expect(paths).toContain('/sipflow');
 
-   const sipflowCalls = recorded.filter((r) => r.pathTemplate === '/sipflow');
-   expect(sipflowCalls.length).toBe(2);
-   const types = sipflowCalls.map((c) => c.queryParams?.type);
-   expect(types).toContain('call_trace');
-   expect(types).toContain('cradle_to_grave');
+   const sipflowCall = recorded.find((r) => r.pathTemplate === '/sipflow');
+   expect(sipflowCall?.queryParams?.servers).toBe('core-phx.netsapiens.com');
+   expect(sipflowCall?.queryParams?.callids).toBe('c-100');
+   expect(result.content[0].text).toBeDefined();
+  });
+
+  it('completed call as reseller falls to /cdrs with orig_callid and calls /sipflow with servers from CDR', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/cdrs') {
+      expect(o.queryParams?.orig_callid).toBe('c-200');
+      return {
+       success: true,
+       data: [
+        {
+         orig_callid: 'c-200',
+         hostname: 'core-las.netsapiens.com',
+         time_start: '2026-09-23T18:30:00Z',
+         time_release: '2026-09-23T18:37:00Z',
+         expected_trace: 'yes',
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: true, data: { trace: 'ladder' } };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-200' }, mockClient, 'reseller');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).toContain('/cdrs');
+   expect(paths).toContain('/sipflow');
+
+   const sipflowCall = recorded.find((r) => r.pathTemplate === '/sipflow');
+   expect(sipflowCall?.queryParams?.servers).toBe('core-las.netsapiens.com');
+   expect(sipflowCall?.queryParams?.callids).toBe('c-200');
+  });
+
+  it('completed call with no active call or CDR match returns clear error without calling /sipflow', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return { success: true, data: [] }; // no matches
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-missing', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).not.toContain('/sipflow');
+
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.error).toBeDefined();
+   expect(parsed.searched_window).toBeDefined();
+   expect(parsed.searched_window.start).toBeDefined();
+   expect(parsed.searched_window.end).toBeDefined();
+  });
+
+  it('completed call where is-trace-expected is not yes returns plain error without calling /sipflow', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-old',
+         'core-server': 'core-phx.netsapiens.com',
+         'is-trace-expected': 'no',
+        },
+       ],
+      };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-old', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).not.toContain('/sipflow');
+
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.error).toContain('trace');
   });
  });
 });
