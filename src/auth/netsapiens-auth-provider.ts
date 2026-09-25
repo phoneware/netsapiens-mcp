@@ -262,7 +262,10 @@ function loginPageHtml(
     ? `<input type="hidden" name="${AUTH_STATE_FIELD}" value="${escapeHtml(authState)}">`
     : '';
 
-  const heading = process.env.MCP_LOGIN_HEADER || 'NetSapiens MCP — Sign In';
+  const defaultHeading = process.env.MCP_READ_ONLY === 'true'
+    ? 'NetSapiens MCP (Read-Only) — Sign In'
+    : 'NetSapiens MCP — Sign In';
+  const heading = process.env.MCP_LOGIN_HEADER || defaultHeading;
   const safeHeading = escapeHtml(heading);
  const platforms = getAllowedPlatforms();
 
@@ -438,6 +441,8 @@ export interface NetSapiensAuthProviderOptions {
   tokenLifetimeSec?: number;
   /** Path to the token store file (default ~/.netsapiens-mcp/http-tokens.json) */
   tokenStorePath?: string;
+  /** MCP Server base URL for cross-server token isolation */
+  serverBaseUrl?: string;
 }
 
 interface MfaChallenge {
@@ -459,6 +464,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   private nsClientId: string;
   private nsClientSecret: string;
   private tokenLifetimeSec: number;
+  private serverBaseUrl?: string;
 
   // In-flight upstream NS refreshes keyed by MCP bearer. NS rotates refresh
   // tokens, so two concurrent refreshes for the same bearer means the second
@@ -471,6 +477,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     this.nsClientId = options.nsClientId;
     this.nsClientSecret = options.nsClientSecret;
     this.tokenLifetimeSec = options.tokenLifetimeSec ?? 3600;
+    this.serverBaseUrl = options.serverBaseUrl || process.env.MCP_BASE_URL;
 
     // Pick persistence backend: Firestore when MCP_PERSISTENCE=firestore
     // (or when GOOGLE_CLOUD_PROJECT is set, the most common Cloud Run signal),
@@ -885,6 +892,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       throw new InvalidTokenError('Invalid access token');
     }
 
+    if (stored.serverBaseUrl && this.serverBaseUrl) {
+      if (stored.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
+        logger.warn('Token rejected: serverBaseUrl mismatch (cross-server token)', {
+          tokenServer: stored.serverBaseUrl,
+          expectedServer: this.serverBaseUrl,
+        });
+        throw new InvalidTokenError('Access token was issued for a different server');
+      }
+    }
+
     if (Date.now() > stored.expiresAt) {
       const ageMs = Date.now() - stored.expiresAt;
       logger.info('MCP bearer expired — client should refresh', {
@@ -1010,6 +1027,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       nsUsername: nsTokens.username,
       nsUserRole: nsTokens.nsUserRole,
    nsApiUrl: nsTokens.nsApiUrl,
+      serverBaseUrl: this.serverBaseUrl,
     };
 
     await this.tokenStore.set(stored);
