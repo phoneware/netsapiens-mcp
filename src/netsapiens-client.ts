@@ -151,7 +151,14 @@ export class NetSapiensClient {
           response?: { status?: number; data?: unknown };
           config?: { url?: string; method?: string; metadata?: { startTime?: number; pathTemplate?: string }; pathTemplate?: string };
         };
-        if (err.response?.status === 401 && this.config.onUnauthorized) {
+        // NS error bodies are { code, message }; the message is what names the
+        // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
+        const data = err.response?.data as { message?: unknown } | undefined;
+        const nsMessage = typeof data?.message === 'string' ? data.message : undefined;
+        // A 401 "Invalid Scope" is NS refusing one resource to this user's role,
+        // not a dead token. Invalidating the bearer on it signs the user out of
+        // every tool because one call asked for something above their tier.
+        if (err.response?.status === 401 && !/invalid scope/i.test(nsMessage ?? '') && this.config.onUnauthorized) {
           try {
             await this.config.onUnauthorized(error);
           } catch {
@@ -161,15 +168,12 @@ export class NetSapiensClient {
         const metadata = err.config?.metadata;
         const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
         const pathTemplate = err.config?.pathTemplate ?? metadata?.pathTemplate ?? err.config?.url;
-        const data = err.response?.data as { message?: unknown } | undefined;
-        // NS error bodies are { code, message }; the message is what names the
-        // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
         logger.warn('NetSapiens API request', {
           method: err.config?.method?.toUpperCase(),
           pathTemplate,
           url: err.config?.url,
           status: err.response?.status,
-          error: typeof data?.message === 'string' ? data.message : undefined,
+          error: nsMessage,
           durationMs,
         });
         return Promise.reject(error);

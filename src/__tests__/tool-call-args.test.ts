@@ -309,6 +309,26 @@ describe('Tool call arguments and scope resolution', () => {
     });
   });
 
+  it('a 401 Invalid Scope does not sign the user out; a 401 for a dead token does', async () => {
+    const onUnauthorized = vi.fn(async () => { });
+    const client = new NetSapiensClient({ apiUrl: 'https://example.com', apiToken: 't', onUnauthorized });
+    // axios keeps registered interceptors on a private `handlers` array; reading it
+    // drives the real error path without a network round trip.
+    const internals = client as unknown as {
+      client: { interceptors: { response: { handlers: Array<{ rejected: (err: unknown) => Promise<unknown> }> } } };
+    };
+    const { rejected } = internals.client.interceptors.response.handlers[0];
+    const fail = (message: string) =>
+      rejected({ response: { status: 401, data: { code: 401, message } }, config: { method: 'get', url: '/domains' } });
+
+    // An Office Manager asking for a reseller-only resource: a permissions answer, not an expired session.
+    await expect(fail('Invalid Scope [APP001]')).rejects.toBeDefined();
+    expect(onUnauthorized).not.toHaveBeenCalled();
+
+    await expect(fail('Invalid Token')).rejects.toBeDefined();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
   it('adds username to Detected NS user role log line', async () => {
     const infoSpy = vi.spyOn(logger, 'info');
 
