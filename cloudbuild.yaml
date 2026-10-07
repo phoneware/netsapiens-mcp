@@ -4,7 +4,7 @@
 # in the phoneware-edge project). Runs the test suite, builds the image,
 # pushes it to Artifact Registry, and deploys to Cloud Run.
 #
-# IMPORTANT — env vars are managed OUTSIDE this file. The deploy step does
+# IMPORTANT: env vars are managed OUTSIDE this file. The deploy step does
 # NOT pass --set-env-vars, so Cloud Run inherits all env vars from the
 # previous active revision (MCP_SESSION_SECRET, NETSAPIENS_OAUTH_CLIENT_*,
 # MCP_PERSISTENCE=firestore, MCP_TOOL_MODE=curated, MCP_LOGIN_HEADER,
@@ -98,7 +98,8 @@ steps:
             --cpu=1 \
             --timeout=3600 \
             --session-affinity \
-            --set-env-vars="MCP_TRANSPORT=http,MCP_PORT=3000,NODE_ENV=production,MCP_BASE_URL=https://mcp-readonly.edge.phoneware.cloud,NETSAPIENS_API_URL=https://edge.phoneware.cloud,NETSAPIENS_OAUTH_CLIENT_ID=phoneware-edge-mcp,NETSAPIENS_OAUTH_CLIENT_SECRET=b33d344b36b978fa0621752642b1bee6,MCP_LOGIN_HEADER=Login to Phoneware EDGE (Read-Only),MCP_DISABLED_TOOLS=delete_*,remove_*,MCP_DISABLED_ACTIONS=delete,remove,revoke,destroy,delete_definition,MCP_SESSION_SECRET=524eb2f51ca3b1322330721ce130c6e3cc4fe4a8704a5f1309c08a11a4438218,MCP_ICON_URL=https://phoneware.us/images/phoneware-icon-800x800.png,MCP_PERSISTENCE=firestore,GOOGLE_CLOUD_PROJECT=phoneware-edge,MCP_TOOL_MODE=curated,MCP_READ_ONLY=true"
+            --set-env-vars="MCP_TRANSPORT=http,MCP_PORT=3000,NODE_ENV=production,MCP_BASE_URL=https://mcp-readonly.edge.phoneware.cloud,NETSAPIENS_API_URL=https://edge.phoneware.cloud,NETSAPIENS_OAUTH_CLIENT_ID=phoneware-edge-mcp,MCP_LOGIN_HEADER=Login to Phoneware EDGE (Read-Only),MCP_DISABLED_TOOLS=delete_*,remove_*,MCP_DISABLED_ACTIONS=delete,remove,revoke,destroy,delete_definition,MCP_ICON_URL=https://phoneware.us/images/phoneware-icon-800x800.png,MCP_PERSISTENCE=firestore,GOOGLE_CLOUD_PROJECT=phoneware-edge,MCP_TOOL_MODE=curated,MCP_READ_ONLY=true" \
+            --set-secrets="NETSAPIENS_OAUTH_CLIENT_SECRET=netsapiens-mcp-oauth-client-secret:latest,MCP_SESSION_SECRET=netsapiens-mcp-session-secret:latest"
         else
           echo "Updating netsapiens-mcp-readonly image..."
           gcloud run deploy netsapiens-mcp-readonly \
