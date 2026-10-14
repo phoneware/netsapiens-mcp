@@ -32,7 +32,7 @@ import type {
  OAuthTokens,
  OAuthTokenRevocationRequest,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { Firestore } from '@google-cloud/firestore';
+import { Firestore } from '@google-cloud/firestore';
 import { TokenStore } from './token-store.js';
 import { LoopbackTolerantClientsStore } from './loopback-redirect.js';
 import type { StoredToken, TokenStoreLike } from './token-store.js';
@@ -451,6 +451,7 @@ export interface NetSapiensAuthProviderOptions {
   tokens?: string;
   clients?: string;
   authCodes?: string;
+  resumeTokens?: string;
  };
  /** Optional Firestore instance override */
  firestore?: Firestore;
@@ -478,6 +479,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private _clientsStore: OAuthRegisteredClientsStore;
  private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string>; serverBaseUrl?: string; clientId?: string }>();
  private authCodeStore?: FirestoreAuthCodeStore;
+ private db?: Firestore;
+ private resumeTokensCollection: string = 'mcp_resume_tokens';
+ private consumedResumeTokens = new Set<string>();
  private tokenStore: TokenStoreLike;
  private hooks?: AuthHooks;
  private renderPages?: RenderPagesOptions;
@@ -512,6 +516,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const authCodesCollection = options.collections?.authCodes
    ?? process.env.FIRESTORE_AUTH_CODES_COLLECTION
    ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_auth_codes' : 'mcp_auth_codes');
+  this.resumeTokensCollection = options.collections?.resumeTokens
+   ?? process.env.FIRESTORE_RESUME_TOKENS_COLLECTION
+   ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_resume_tokens' : 'mcp_resume_tokens');
+  if (useFirestore) {
+   this.db = db ?? new Firestore({ projectId, ignoreUndefinedProperties: true });
+  }
 
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
@@ -976,6 +986,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
+  // Atomically consume continuation before minting a code
+  const resumeId = createHash('sha256').update(resumeToken).digest('hex');
+  const consumed = await this.consumeResumeToken(resumeId);
+  if (!consumed) {
+   sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));
+   return;
+  }
+
   await this.completeLogin(
    payload.pending,
    payload.nsTokens,
@@ -984,6 +1002,33 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    extra,
    true,
   );
+ }
+
+ private async consumeResumeToken(resumeId: string): Promise<boolean> {
+  if (this.db) {
+   const docRef = this.db.collection(this.resumeTokensCollection).doc(resumeId);
+   return await this.db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(docRef);
+    if (snap.exists) {
+     return false;
+    }
+    const now = Date.now();
+    const expiresAt = now + 2 * 60 * 60 * 1000;
+    transaction.set(docRef, {
+     consumedAt: now,
+     expiresAt,
+     ttlAt: new Date(expiresAt),
+    });
+    return true;
+   });
+  }
+
+  if (this.consumedResumeTokens.has(resumeId)) {
+   return false;
+  }
+  this.consumedResumeTokens.add(resumeId);
+  setTimeout(() => this.consumedResumeTokens.delete(resumeId), 2 * 60 * 60 * 1000);
+  return true;
  }
 
  // -----------------------------------------------------------------------
