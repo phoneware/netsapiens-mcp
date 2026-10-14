@@ -28,6 +28,7 @@ import { logger } from '../utils/logger.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
+import { scrubSecrets } from '../governance/scrub.js';
 /** Set-equality helper used to detect promotion / demotion changes. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
  if (a.size !== b.size) return false;
@@ -756,14 +757,37 @@ export async function handleToolCall(
 
   const durationMs = Date.now() - startTime;
   let parsedResult: Record<string, unknown> | undefined;
-  if (result && typeof result === 'object' && 'content' in result && Array.isArray((result as { content?: unknown[] }).content)) {
-   const text = (result as { content: Array<{ text?: string }> }).content[0]?.text;
-   if (typeof text === 'string') {
+  if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content)) {
+   const first = result.content[0];
+   if (first && typeof first === 'object' && 'text' in first && typeof first.text === 'string') {
     try {
-     parsedResult = JSON.parse(text);
+     parsedResult = JSON.parse(first.text);
     } catch {
      // Plain text result
     }
+   }
+  }
+
+  let secretsScrubbed = 0;
+  if (parsedResult !== undefined) {
+   const scrubbed = scrubSecrets(parsedResult, curated?.output);
+   secretsScrubbed = scrubbed.count;
+   if (secretsScrubbed > 0) {
+    parsedResult = typeof scrubbed.scrubbed === 'object' && scrubbed.scrubbed !== null
+     ? (scrubbed.scrubbed as Record<string, unknown>)
+     : undefined;
+    if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content)) {
+     const first = result.content[0];
+     if (first && typeof first === 'object' && 'text' in first) {
+      first.text = JSON.stringify(scrubbed.scrubbed, null, 2);
+     }
+    }
+   }
+  } else if (result !== null && result !== undefined && typeof result === 'object' && !('content' in result)) {
+   const scrubbed = scrubSecrets(result, curated?.output);
+   secretsScrubbed = scrubbed.count;
+   if (secretsScrubbed > 0) {
+    result = scrubbed.scrubbed;
    }
   }
 
@@ -803,6 +827,9 @@ export async function handleToolCall(
    logContext.scope = resolvedScope;
   }
 
+  if (secretsScrubbed > 0) {
+   logContext.secretsScrubbed = secretsScrubbed;
+  }
   logger.info('Tool call', logContext);
   return result;
  } catch (err: unknown) {

@@ -35,9 +35,9 @@ export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  /** Explicit read-only flag (overrides prefix-based inference if set). */
  readOnly?: boolean;
  /** Declared output field classifications (for governance and secret scrubbing). */
- output?: OutputDeclaration;
+ output: OutputDeclaration;
  /** Target entity references (for scope checking and governance). */
- targets?: ToolTargets;
+ targets: ToolTargets;
 }
 
 /** Every curated tool emits this shape. */

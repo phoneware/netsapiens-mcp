@@ -23,3 +23,10 @@ export interface ToolTargets {
   breadthArg?: { name: string; selfValue: string };
   selfOnly?: boolean; // always acts on the token owner ('~')
 }
+
+export type NsResourceFields = Record<string, Record<string, FieldClass>>;
+
+export interface ScrubResult<T = unknown> {
+  scrubbed: T;
+  count: number;
+}
