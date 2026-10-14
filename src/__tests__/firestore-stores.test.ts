@@ -21,6 +21,7 @@
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { Timestamp } from '@google-cloud/firestore';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { Request, Response } from 'express';
@@ -769,5 +770,48 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   await provider2.resumeLogin(mockResumeRes2, resumeToken);
   expect(resumeRes2Obj.status).toBe(400);
   expect(resumeRes2Obj.redirectUrl).toBe('');
+ });
+
+ it('after a refresh the stored ttlAt is still a Timestamp', async () => {
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const store = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+
+  const bearerToken = 'mcp-bearer-timestamp-test';
+  await store.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+   ttlAt: new Date(Date.now() + 86400_000),
+  });
+
+  const rawSnapBefore = await (store as unknown as { db: import('@google-cloud/firestore').Firestore; collection: string }).db
+   .collection(collection)
+   .doc(bearerToken)
+   .get();
+  const rawDataBefore = rawSnapBefore.data()!;
+  expect(rawDataBefore.ttlAt).toBeInstanceOf(Timestamp);
+
+  // Perform refresh
+  await store.refreshNsToken(bearerToken, async () => ({
+   access_token: 'new-ns-token',
+   expires_in: 3600,
+  }));
+
+  // Verify stored token in Firestore AFTER refresh STILL has ttlAt as a Timestamp
+  const rawSnapAfter = await (store as unknown as { db: import('@google-cloud/firestore').Firestore; collection: string }).db
+   .collection(collection)
+   .doc(bearerToken)
+   .get();
+  const rawDataAfter = rawSnapAfter.data()!;
+  expect(rawDataAfter.ttlAt).toBeInstanceOf(Timestamp);
  });
 });

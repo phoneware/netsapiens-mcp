@@ -10,7 +10,7 @@
  * - Authorization codes: default mcp_auth_codes
  */
 
-import { Firestore } from '@google-cloud/firestore';
+import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
@@ -23,7 +23,7 @@ function stripUndefined<T>(value: T): T {
  if (Array.isArray(value)) {
   return value.map((v) => stripUndefined(v)) as unknown as T;
  }
- if (value instanceof Date) {
+ if (value instanceof Date || value instanceof Timestamp) {
   return value;
  }
  if (typeof value === 'object') {
