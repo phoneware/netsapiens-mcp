@@ -443,4 +443,106 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   await expect(writableProvider.challengeForAuthorizationCode(client, code)).rejects.toThrow(InvalidGrantError);
   await expect(writableProvider.exchangeAuthorizationCode(client, code)).rejects.toThrow(InvalidGrantError);
  });
+
+ it('a slow winning refresh does not cause the waiter request to delete the token', async () => {
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const store1 = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+  const store2 = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+
+  const bearerToken = 'mcp-bearer-slow-refresh';
+  await store1.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = Promise.withResolvers<unknown>();
+
+  const inst1Promise = store1.refreshNsToken(bearerToken, async () => {
+   await slowRefreshPromise;
+   return {
+    access_token: 'new-ns-token-slow',
+    refresh_token: 'new-ns-refresh-token',
+    expires_in: 3600,
+   };
+  });
+
+  // Give store1 time to acquire the lock
+  await new Promise((r) => setTimeout(r, 100));
+
+  // Store 2 waiter times out rather than waiting forever.
+  // It must fail with a retryable error, NOT return the stale expired token.
+  await expect(
+   store2.refreshNsToken(
+    bearerToken,
+    async () => ({ access_token: 'should-not-run', expires_in: 3600 }),
+    { maxWaitMs: 300, pollIntervalMs: 50 },
+   ),
+  ).rejects.toThrow();
+
+  // The bearer token must NOT have been deleted from Firestore!
+  const surviving = await store1.get(bearerToken);
+  expect(surviving).toBeDefined();
+
+  // Resolve instance 1's refresh
+  resolveSlowRefresh(null);
+  const refreshed = await inst1Promise;
+  expect(refreshed.nsAccessToken).toBe('new-ns-token-slow');
+
+  const finalToken = await store1.get(bearerToken);
+  expect(finalToken?.nsAccessToken).toBe('new-ns-token-slow');
+ });
+
+ it('an abandoned lease becomes acquirable by the next waiter', async () => {
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const store = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+
+  const bearerToken = 'mcp-bearer-abandoned-lease';
+  await store.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  // Simulate an abandoned lease by setting refreshLockUntil in the past
+  await (store as unknown as { db: import('@google-cloud/firestore').Firestore; collection: string }).db
+   .collection(collection)
+   .doc(bearerToken)
+   .update({
+    refreshLockUntil: Date.now() - 1000,
+    refreshLockOwner: 'crashed-instance',
+   });
+
+  const refreshed = await store.refreshNsToken(
+   bearerToken,
+   async () => ({
+    access_token: 'new-ns-token-acquired',
+    expires_in: 3600,
+   }),
+   { maxWaitMs: 1000, pollIntervalMs: 50 },
+  );
+
+  expect(refreshed.nsAccessToken).toBe('new-ns-token-acquired');
+ });
 });

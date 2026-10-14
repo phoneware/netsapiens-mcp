@@ -54,6 +54,13 @@ function delay(ms: number): Promise<void> {
  });
 }
 
+export class RetryableRefreshError extends Error {
+ constructor(message = 'Timed out waiting for upstream token refresh') {
+  super(message);
+  this.name = 'RetryableRefreshError';
+ }
+}
+
 
 // ---------------------------------------------------------------------------
 // FirestoreTokenStore
@@ -174,10 +181,11 @@ export class FirestoreTokenStore {
  async refreshNsToken(
   accessToken: string,
   doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
+  opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number },
  ): Promise<StoredToken> {
   const docRef = this.db.collection(this.collection).doc(accessToken);
-  const MAX_WAIT_MS = 10_000;
-  const POLL_INTERVAL_MS = 150;
+  const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
+  const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
   const startTime = Date.now();
   const NS_REFRESH_SKEW_MS = 60_000;
 
@@ -260,10 +268,13 @@ export class FirestoreTokenStore {
   const snap = await docRef.get();
   if (snap.exists) {
    const data = snap.data() as StoredToken;
-   this.cache.set(accessToken, data);
-   return data;
+   const isExpiring = data.nsExpiresAt && Date.now() > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
+   if (!isExpiring) {
+    this.cache.set(accessToken, data);
+    return data;
+   }
   }
-  throw new Error('Timed out waiting for upstream token refresh');
+  throw new RetryableRefreshError('Timed out waiting for upstream token refresh');
  }
 
  get size(): number {
