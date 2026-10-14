@@ -14,6 +14,8 @@ import {
  SUPPORTED_PROTOCOL_VERSIONS,
 } from '@modelcontextprotocol/sdk/types.js';
 
+const PROTOCOL_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
 export function negotiateProtocolVersion(req: {
  headers: NodeJS.Dict<string | string[]>;
  rawHeaders?: string[];
@@ -22,6 +24,10 @@ export function negotiateProtocolVersion(req: {
  const raw = req.headers[HEADER];
  const requested = Array.isArray(raw) ? raw[0] : raw;
  if (!requested || (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(requested)) {
+  return undefined;
+ }
+
+ if (!PROTOCOL_DATE_REGEX.test(requested) || requested <= LATEST_PROTOCOL_VERSION) {
   return undefined;
  }
 
