@@ -583,4 +583,68 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const surviving = await store.get(bearerToken);
   expect(surviving).toBeUndefined();
  });
+
+ it('an expired lease late completion cannot overwrite newer credentials or clear new owner lease', async () => {
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const store1 = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+  const store2 = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+
+  const bearerToken = 'mcp-bearer-lease-fence';
+  await store1.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'token-v1',
+   nsRefreshToken: 'refresh-v1',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = Promise.withResolvers<unknown>();
+
+  // Store 1 starts refresh with short lease, but its refresh call hangs
+  const store1Promise = store1.refreshNsToken(
+   bearerToken,
+   async () => {
+    await slowRefreshPromise;
+    return {
+     access_token: 'token-late-store1',
+     refresh_token: 'refresh-late-store1',
+     expires_in: 3600,
+    };
+   },
+   { maxWaitMs: 5000, leaseDurationMs: 100 },
+  );
+
+  // Wait for store1's lease to expire and store2 to take over
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Store 2 completes a newer refresh
+  const refreshedStore2 = await store2.refreshNsToken(
+   bearerToken,
+   async () => ({
+    access_token: 'token-newer-store2',
+    refresh_token: 'refresh-newer-store2',
+    expires_in: 3600,
+   }),
+   { maxWaitMs: 5000, leaseDurationMs: 5000 },
+  );
+  expect(refreshedStore2.nsAccessToken).toBe('token-newer-store2');
+
+  // Now let store 1 finish late
+  resolveSlowRefresh(null);
+  await expect(store1Promise).rejects.toThrow();
+
+  // Verify store 1's late completion did NOT overwrite store 2's newer credentials
+  const currentToken = await store2.get(bearerToken);
+  expect(currentToken?.nsAccessToken).toBe('token-newer-store2');
+ });
 });
