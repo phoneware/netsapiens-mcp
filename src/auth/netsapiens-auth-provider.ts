@@ -1475,7 +1475,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     client_secret: this.nsClientSecret,
     refresh_token: nsRefreshToken,
    },
-   { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
+   {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 10_000,
+   },
   );
 
   return {

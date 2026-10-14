@@ -186,19 +186,21 @@ export class FirestoreTokenStore {
   const docRef = this.db.collection(this.collection).doc(accessToken);
   const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
   const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
+  const LEASE_DURATION_MS = opts?.leaseDurationMs ?? 15_000;
   const startTime = Date.now();
   const NS_REFRESH_SKEW_MS = 60_000;
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
    let shouldRefresh = false;
    let tokenToRefresh: StoredToken | undefined;
+   let currentLeaseOwner: string | undefined;
 
    await this.db.runTransaction(async (transaction) => {
     const snap = await transaction.get(docRef);
     if (!snap.exists) {
      throw new Error('Token document not found');
     }
-    const data = snap.data() as StoredToken & { refreshLockUntil?: number };
+    const data = snap.data() as StoredToken & { refreshLockUntil?: number; refreshLockOwner?: string };
     const convertedDate = toDate(data.ttlAt);
     if (convertedDate) {
      data.ttlAt = convertedDate;
@@ -212,14 +214,18 @@ export class FirestoreTokenStore {
      return;
     }
 
-    if (data.refreshLockUntil && data.refreshLockUntil > now) {
+    if (data.refreshLockUntil && data.refreshLockUntil > now && data.refreshLockOwner) {
      shouldRefresh = false;
      return;
     }
 
     shouldRefresh = true;
     tokenToRefresh = data;
-    transaction.update(docRef, { refreshLockUntil: now + 15_000 });
+    currentLeaseOwner = randomUUID();
+    transaction.update(docRef, {
+     refreshLockUntil: now + LEASE_DURATION_MS,
+     refreshLockOwner: currentLeaseOwner,
+    });
    });
 
    if (!shouldRefresh) {
@@ -247,7 +253,14 @@ export class FirestoreTokenStore {
      if (!snap.exists) {
       throw new Error('Token document was deleted/revoked during refresh');
      }
-     const current = snap.data() as StoredToken;
+     const current = snap.data() as StoredToken & { refreshLockOwner?: string };
+     if (current.refreshLockOwner !== currentLeaseOwner) {
+      logger.warn('Refresh lease expired or owned by another instance, aborting late completion', {
+       expectedOwner: currentLeaseOwner,
+       actualOwner: current.refreshLockOwner,
+      });
+      throw new Error('Refresh lease expired or owned by another instance');
+     }
      const updated: StoredToken = {
       ...current,
       nsAccessToken: refreshed.access_token,
@@ -255,6 +268,7 @@ export class FirestoreTokenStore {
       nsExpiresAt: updatedNsExpiresAt,
      };
      delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
+     delete (updated as unknown as Record<string, unknown>).refreshLockOwner;
 
      transaction.set(docRef, stripUndefined(updated));
      resultToken = updated;
@@ -263,7 +277,19 @@ export class FirestoreTokenStore {
     this.cache.set(accessToken, resultToken!);
     return resultToken!;
    } catch (err) {
-    await docRef.update({ refreshLockUntil: null }).catch(() => { });
+    if (currentLeaseOwner) {
+     await this.db.runTransaction(async (transaction) => {
+      const snap = await transaction.get(docRef);
+      if (!snap.exists) return;
+      const current = snap.data() as StoredToken & { refreshLockOwner?: string };
+      if (current.refreshLockOwner === currentLeaseOwner) {
+       transaction.update(docRef, {
+        refreshLockUntil: null,
+        refreshLockOwner: null,
+       });
+      }
+     }).catch(() => { });
+    }
     throw err;
    }
   }
