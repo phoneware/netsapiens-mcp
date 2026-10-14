@@ -100,6 +100,39 @@ describe('protocol version negotiation', () => {
     }
   });
 
+  it('leaves older unsupported versions like 2024-01-01 for SDK rejection', async () => {
+    const t = await bootTransport();
+    try {
+      const answered = await t.toolsList('2024-01-01');
+      expect(answered.status).toBe(400);
+      expect(answered.refusedForVersion).toBe(true);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('leaves malformed versions like garbage for SDK rejection', async () => {
+    const t = await bootTransport();
+    try {
+      const answered = await t.toolsList('garbage');
+      expect(answered.status).toBe(400);
+      expect(answered.refusedForVersion).toBe(true);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('leaves older or malformed headers untouched in negotiateProtocolVersion', () => {
+    for (const invalid of ['2024-01-01', 'garbage', 'invalid-date', '2020-99-99']) {
+      const req = {
+        headers: { 'mcp-protocol-version': invalid } as NodeJS.Dict<string | string[]>,
+        rawHeaders: ['MCP-Protocol-Version', invalid],
+      };
+      expect(negotiateProtocolVersion(req)).toBeUndefined();
+      expect(req.headers['mcp-protocol-version']).toBe(invalid);
+    }
+  });
+
   it('leaves every version the SDK supports untouched, in both representations', () => {
     for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
       const req = {
