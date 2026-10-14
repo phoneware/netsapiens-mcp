@@ -40,6 +40,7 @@ import {
  FirestoreTokenStore,
  FirestoreClientsStore,
  FirestoreAuthCodeStore,
+ RetryableRefreshError,
 } from './firestore-stores.js';
 import { nsScopeToTier, type UserRole } from './roles.js';
 import type {
@@ -1145,6 +1146,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       );
      } catch (err: unknown) {
       logger.warn('Cross-instance NS token refresh failed', { error: String(err) });
+      if (err instanceof RetryableRefreshError || (err as { name?: string })?.name === 'RetryableRefreshError') {
+       throw new InvalidTokenError('Upstream token refresh in progress, please retry');
+      }
      }
     } else {
      let inflight = this.nsRefreshInflight.get(token);
