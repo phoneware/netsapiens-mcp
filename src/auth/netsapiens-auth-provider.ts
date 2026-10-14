@@ -475,7 +475,7 @@ interface MfaChallenge {
 
 export class NetSapiensAuthProvider implements OAuthServerProvider {
  private _clientsStore: OAuthRegisteredClientsStore;
- private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> }>();
+ private authCodes = new Map<string, { pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string>; serverBaseUrl?: string; clientId?: string }>();
  private authCodeStore?: FirestoreAuthCodeStore;
  private tokenStore: TokenStoreLike;
  private hooks?: AuthHooks;
@@ -508,7 +508,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const db = options.firestore;
   const tokensCollection = options.collections?.tokens ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_tokens' : 'mcp_tokens');
   const clientsCollection = options.collections?.clients ?? 'mcp_oauth_clients';
-  const authCodesCollection = options.collections?.authCodes ?? 'mcp_auth_codes';
+  const authCodesCollection = options.collections?.authCodes
+   ?? process.env.FIRESTORE_AUTH_CODES_COLLECTION
+   ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_auth_codes' : 'mcp_auth_codes');
 
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
@@ -933,6 +935,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    pending,
    nsTokens: { ...nsTokens, username, nsUserRole },
    extra: tokenExtra,
+   serverBaseUrl: this.serverBaseUrl,
+   clientId: pending.clientId,
   };
 
   if (this.authCodeStore) {
@@ -986,11 +990,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // -----------------------------------------------------------------------
 
  async challengeForAuthorizationCode(
-  _client: OAuthClientInformationFull,
+  client: OAuthClientInformationFull,
   authorizationCode: string,
  ): Promise<string> {
   if (this.authCodeStore) {
-   const challenge = await this.authCodeStore.getChallenge(authorizationCode);
+   const challenge = await this.authCodeStore.getChallenge(authorizationCode, {
+    serverBaseUrl: this.serverBaseUrl,
+    clientId: client.client_id,
+   });
    if (!challenge) {
     throw new InvalidGrantError('Invalid authorization code');
    }
@@ -1001,15 +1008,26 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (!entry) {
    throw new InvalidGrantError('Invalid authorization code');
   }
+  if (entry.serverBaseUrl || this.serverBaseUrl) {
+   if (!entry.serverBaseUrl || !this.serverBaseUrl || entry.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
+    throw new InvalidGrantError('Invalid authorization code');
+   }
+  }
+  if (client?.client_id && entry.clientId && entry.clientId !== client.client_id) {
+   throw new InvalidGrantError('Invalid authorization code');
+  }
   return entry.pending.codeChallenge;
  }
 
  async exchangeAuthorizationCode(
-  _client: OAuthClientInformationFull,
+  client: OAuthClientInformationFull,
   authorizationCode: string,
  ): Promise<OAuthTokens> {
   if (this.authCodeStore) {
-   const entry = await this.authCodeStore.redeem(authorizationCode);
+   const entry = await this.authCodeStore.redeem(authorizationCode, {
+    serverBaseUrl: this.serverBaseUrl,
+    clientId: client.client_id,
+   });
    if (!entry) {
     throw new InvalidGrantError('Invalid authorization code');
    }
@@ -1018,6 +1036,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   const entry = this.authCodes.get(authorizationCode);
   if (!entry) {
+   throw new InvalidGrantError('Invalid authorization code');
+  }
+  if (entry.serverBaseUrl || this.serverBaseUrl) {
+   if (!entry.serverBaseUrl || !this.serverBaseUrl || entry.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
+    throw new InvalidGrantError('Invalid authorization code');
+   }
+  }
+  if (client?.client_id && entry.clientId && entry.clientId !== client.client_id) {
    throw new InvalidGrantError('Invalid authorization code');
   }
   this.authCodes.delete(authorizationCode);

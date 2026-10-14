@@ -355,6 +355,8 @@ export class FirestoreAuthCodeStore {
    nsTokens: NsTokenResponse;
    extra?: Record<string, string>;
    expiresAt?: number;
+   serverBaseUrl?: string;
+   clientId?: string;
   },
  ): Promise<void> {
   const expiresAt = data.expiresAt ?? Date.now() + 5 * 60 * 1000;
@@ -365,20 +367,43 @@ export class FirestoreAuthCodeStore {
    expiresAt,
    ttlAt: new Date(expiresAt),
    used: false,
+   serverBaseUrl: data.serverBaseUrl,
+   clientId: data.clientId ?? data.pending.clientId,
   };
   await this.db.collection(this.collection).doc(code).set(stripUndefined(docData));
  }
 
- async getChallenge(code: string): Promise<string | undefined> {
+ async getChallenge(
+  code: string,
+  expected?: { serverBaseUrl?: string; clientId?: string },
+ ): Promise<string | undefined> {
   const snap = await this.db.collection(this.collection).doc(code).get();
   if (!snap.exists) return undefined;
   const data = snap.data() as AuthCodeData;
   if (data.used || Date.now() > data.expiresAt) return undefined;
+  if (data.serverBaseUrl || expected?.serverBaseUrl) {
+   if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
+    logger.warn('Auth code challenge rejected: serverBaseUrl mismatch (cross-server auth code)', {
+     codeServer: data.serverBaseUrl,
+     expectedServer: expected?.serverBaseUrl,
+    });
+    return undefined;
+   }
+  }
+  const codeClientId = data.clientId ?? data.pending?.clientId;
+  if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
+   logger.warn('Auth code challenge rejected: clientId mismatch', {
+    codeClientId,
+    expectedClientId: expected.clientId,
+   });
+   return undefined;
+  }
   return data.pending.codeChallenge;
  }
 
  async redeem(
   code: string,
+  expected?: { serverBaseUrl?: string; clientId?: string },
  ): Promise<{ pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> } | undefined> {
   const docRef = this.db.collection(this.collection).doc(code);
   return await this.db.runTransaction(async (transaction) => {
@@ -386,6 +411,23 @@ export class FirestoreAuthCodeStore {
    if (!snap.exists) return undefined;
    const data = snap.data() as AuthCodeData;
    if (data.used || Date.now() > data.expiresAt) {
+    return undefined;
+   }
+   if (data.serverBaseUrl || expected?.serverBaseUrl) {
+    if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
+     logger.warn('Auth code redemption rejected: serverBaseUrl mismatch (cross-server auth code)', {
+      codeServer: data.serverBaseUrl,
+      expectedServer: expected?.serverBaseUrl,
+     });
+     return undefined;
+    }
+   }
+   const codeClientId = data.clientId ?? data.pending?.clientId;
+   if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
+    logger.warn('Auth code redemption rejected: clientId mismatch', {
+     codeClientId,
+     expectedClientId: expected.clientId,
+    });
     return undefined;
    }
    transaction.delete(docRef);

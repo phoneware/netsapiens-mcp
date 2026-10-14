@@ -72,6 +72,8 @@ export interface AuthCodeData {
   expiresAt: number;
   ttlAt: Date;
   used?: boolean;
+  serverBaseUrl?: string;
+  clientId?: string;
 }
 
 export type { StoredToken } from './token-store.js';
