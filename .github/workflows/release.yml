@@ -17,7 +17,17 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # The Firestore store tests skip without an emulator; a release must run them.
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for i in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          docker logs fs-emu; exit 1
       - run: npm test
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
       - run: npm pack
       - name: Create GitHub Release
         env:
