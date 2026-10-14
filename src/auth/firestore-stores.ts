@@ -244,7 +244,10 @@ export class FirestoreTokenStore {
     let resultToken: StoredToken | undefined;
     await this.db.runTransaction(async (transaction) => {
      const snap = await transaction.get(docRef);
-     const current = (snap.exists ? snap.data() : tokenToRefresh) as StoredToken;
+     if (!snap.exists) {
+      throw new Error('Token document was deleted/revoked during refresh');
+     }
+     const current = snap.data() as StoredToken;
      const updated: StoredToken = {
       ...current,
       nsAccessToken: refreshed.access_token,

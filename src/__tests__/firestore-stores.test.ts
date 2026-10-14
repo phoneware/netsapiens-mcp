@@ -545,4 +545,42 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
 
   expect(refreshed.nsAccessToken).toBe('new-ns-token-acquired');
  });
+
+ it('revoke during an in-flight refresh leaves the token revoked', async () => {
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const store = new FirestoreTokenStore({
+   collection,
+   projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  });
+
+  const bearerToken = 'mcp-bearer-revoke-during-refresh';
+  await store.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  // Start refresh and delete/revoke the token while refresh is in flight
+  await expect(
+   store.refreshNsToken(bearerToken, async () => {
+    // Delete/revoke while in flight
+    await store.delete(bearerToken);
+    return {
+     access_token: 'new-ns-token-should-not-resurrect',
+     refresh_token: 'new-ns-refresh-token',
+     expires_in: 3600,
+    };
+   }),
+  ).rejects.toThrow();
+
+  // Deletion must be authoritative: token document must no longer exist!
+  const surviving = await store.get(bearerToken);
+  expect(surviving).toBeUndefined();
+ });
 });
