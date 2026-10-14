@@ -26,6 +26,7 @@
     "clean": "rimraf build",
     "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts",
     "prebuild": "npm run clean && npm run generate",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

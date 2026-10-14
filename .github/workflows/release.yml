@@ -28,6 +28,7 @@ jobs:
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
+      - run: npm run build
       - run: npm pack
       - name: Create GitHub Release
         env:
