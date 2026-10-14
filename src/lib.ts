@@ -7,6 +7,8 @@ export { FirestoreTokenStore, FirestoreClientsStore, FirestoreAuthCodeStore } fr
 export { LoopbackTolerantClientsStore } from './auth/loopback-redirect.js';
 export { negotiateProtocolVersion } from './http/protocol-version.js';
 export { nsScopeToTier, ROLE_HIERARCHY } from './auth/roles.js';
+export { NS_RESOURCE_FIELDS } from './governance/ns-fields.generated.js';
+export { scrubSecrets } from './governance/scrub.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';
