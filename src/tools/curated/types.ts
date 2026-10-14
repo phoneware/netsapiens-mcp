@@ -9,7 +9,7 @@
 
 import type { GenericApiClient, ToolDefinition } from '../../generated/types.js';
 import type { UserRole } from '../../auth/roles.js';
-
+import type { OutputDeclaration, ToolTargets } from '../../governance/types.js';
 export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  /**
   * Curated handlers also receive the caller's NS scope tier. A tool can use
@@ -34,6 +34,10 @@ export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  destructive?: boolean;
  /** Explicit read-only flag (overrides prefix-based inference if set). */
  readOnly?: boolean;
+ /** Declared output field classifications (for governance and secret scrubbing). */
+ output?: OutputDeclaration;
+ /** Target entity references (for scope checking and governance). */
+ targets?: ToolTargets;
 }
 
 /** Every curated tool emits this shape. */
