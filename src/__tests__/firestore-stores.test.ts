@@ -23,6 +23,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import type { Response } from 'express';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import {
  FirestoreTokenStore,
@@ -388,5 +389,58 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   expect(refreshCallCount).toBe(1);
   expect(res1.nsAccessToken).toBe('new-ns-token-from-upstream');
   expect(res2.nsAccessToken).toBe('new-ns-token-from-upstream');
+ });
+
+ it('a code from the read-only server is refused at the writable one', async () => {
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const readOnlyProvider = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'https://mcp-readonly.edge.phoneware.cloud',
+   collections: {
+    authCodes: authCodesCollection,
+    clients: clientsCollection,
+   },
+  });
+
+  const writableProvider = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'https://mcp.edge.phoneware.cloud',
+   collections: {
+    authCodes: authCodesCollection,
+    clients: clientsCollection,
+   },
+  });
+
+  const client: OAuthClientInformationFull = {
+   client_id: 'client-abc',
+   redirect_uris: ['http://localhost/cb'],
+   token_endpoint_auth_method: 'none',
+  };
+
+  let redirectUrl = '';
+  const res = {
+   redirect: (url: string) => { redirectUrl = url; },
+  } as unknown as Response;
+
+  await (readOnlyProvider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+   { clientId: 'client-abc', codeChallenge: 'chal-xyz', redirectUri: 'http://localhost/cb', createdAt: Date.now() },
+   { access_token: 'ns-tok', username: 'user@dom.com', expires_in: 3600 },
+   'user@dom.com',
+   res,
+  );
+
+  const code = new URL(redirectUrl).searchParams.get('code')!;
+  expect(code).toBeTruthy();
+
+  // Challenge and redemption at writable provider must be refused!
+  await expect(writableProvider.challengeForAuthorizationCode(client, code)).rejects.toThrow(InvalidGrantError);
+  await expect(writableProvider.exchangeAuthorizationCode(client, code)).rejects.toThrow(InvalidGrantError);
  });
 });
