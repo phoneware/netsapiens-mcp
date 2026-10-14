@@ -366,4 +366,49 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     );
     expect(res.getHtml()).toBe('<div>CUSTOM LOGIN</div>');
   });
+
+  it('token sign-in as an Office Manager reaches onLogin with scope Office Manager', async () => {
+    let capturedScope: string | undefined;
+    let capturedUser: string | undefined;
+    const provider = createProvider({
+      hooks: {
+        async onLogin(input) {
+          capturedScope = input.who.scope;
+          capturedUser = input.who.user;
+          return { kind: 'continue', tokenExtra: {} };
+        },
+        async onVerify() {
+          return {};
+        },
+      },
+    });
+
+    (provider as unknown as { validateNsToken: unknown }).validateNsToken = vi.fn().mockResolvedValue({
+      username: '1013@acme.com',
+      userRole: 'domain_admin',
+      scope: 'Office Manager',
+      expiresIn: 3600,
+      user: '1013',
+      domain: 'acme.com',
+    });
+
+    const authRes = mockResponse();
+    await provider.authorize(
+      dummyClient as unknown as import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationFull,
+      { codeChallenge: 'c-token', redirectUri: 'http://localhost:8080/cb' } as unknown as import('@modelcontextprotocol/sdk/server/auth/provider.js').AuthorizationParams,
+      authRes as unknown as Response,
+    );
+    const authState = authRes.getHtml().match(/name="auth_state" value="([^"]+)"/)![1];
+
+    const loginRes = mockResponse();
+    await provider.handleTokenLogin(
+      { body: { auth_state: authState }, headers: {} } as unknown as Request,
+      loginRes as unknown as Response,
+      'https://edge.phoneware.cloud',
+      'ns-office-manager-token',
+    );
+
+    expect(capturedScope).toBe('Office Manager');
+    expect(capturedUser).toBe('1013');
+  });
 });
