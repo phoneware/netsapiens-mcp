@@ -287,6 +287,12 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     const redirectUrl = resumeRes.getRedirectUrl();
     expect(redirectUrl).toContain('http://localhost:8080/cb?code=');
 
+    // Second post of the same resume token must be refused!
+    const replayRes = mockResponse();
+    await provider.resumeLogin(replayRes as unknown as Response, resumeToken, { enrolledVia: 'replay' });
+    expect(replayRes.getStatus()).toBe(400);
+    expect(replayRes.getRedirectUrl()).toBe('');
+
     const code = new URL(redirectUrl).searchParams.get('code')!;
     const tokens = await provider.exchangeAuthorizationCode(
       dummyClient as unknown as import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationFull,

@@ -23,7 +23,8 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import {
  FirestoreTokenStore,
@@ -646,5 +647,127 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   // Verify store 1's late completion did NOT overwrite store 2's newer credentials
   const currentToken = await store2.get(bearerToken);
   expect(currentToken?.nsAccessToken).toBe('token-newer-store2');
+ });
+
+ it('second post of the same resume token is refused across instances', async () => {
+  const resumeTokensCollection = `resume_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const provider1 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    resumeTokens: resumeTokensCollection,
+    clients: clientsCollection,
+    authCodes: authCodesCollection,
+   },
+   hooks: {
+    async onLogin() {
+     return {
+      kind: 'interstitial',
+      html: '<form action="/enroll"><input type="hidden" name="resume_token" value="{{RESUME_TOKEN}}"></form>',
+     };
+    },
+   },
+  });
+
+  const provider2 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    resumeTokens: resumeTokensCollection,
+    clients: clientsCollection,
+    authCodes: authCodesCollection,
+   },
+  });
+
+  (provider1 as unknown as { nsPasswordGrant: unknown }).nsPasswordGrant = vi.fn().mockResolvedValue({
+   kind: 'tokens',
+   tokens: { access_token: 'ns-tok', expires_in: 3600, username: 'dan@domain.com' },
+  });
+  (provider1 as unknown as { detectNsUserInfo: unknown }).detectNsUserInfo = vi.fn().mockResolvedValue({
+   user: 'dan',
+   domain: 'domain.com',
+   scope: 'Office Manager',
+   role: 'domain_admin',
+   displayName: 'Dan',
+   email: 'dan@domain.com',
+  });
+
+  const client: OAuthClientInformationFull = {
+   client_id: 'client-abc',
+   redirect_uris: ['http://localhost/cb'],
+   token_endpoint_auth_method: 'none',
+  };
+
+  const authResObj = { html: '', redirectUrl: '', status: 200 };
+  const mockRes = {
+   status(s: number) { authResObj.status = s; return this; },
+   send(h: string) { authResObj.html = h; return this; },
+   redirect(u: string) { authResObj.redirectUrl = u; return this; },
+   set() { return this; },
+   type() { return this; },
+   setHeader() { return this; },
+   getHeader() { return undefined; },
+  } as unknown as Response;
+
+  await provider1.authorize(client, { codeChallenge: 'c1', redirectUri: 'http://localhost/cb' } as unknown as AuthorizationParams, mockRes);
+  const authState = authResObj.html.match(/name="auth_state" value="([^"]+)"/)![1];
+
+  const loginResObj = { html: '', redirectUrl: '', status: 200 };
+  const mockLoginRes = {
+   status(s: number) { loginResObj.status = s; return this; },
+   send(h: string) { loginResObj.html = h; return this; },
+   redirect(u: string) { loginResObj.redirectUrl = u; return this; },
+   set() { return this; },
+   type() { return this; },
+   setHeader() { return this; },
+   getHeader() { return undefined; },
+  } as unknown as Response;
+
+  await provider1.handleLogin(
+   { body: { auth_state: authState }, headers: {} } as unknown as Request,
+   mockLoginRes,
+   'dan@domain.com',
+   'secret',
+  );
+
+  const resumeToken = loginResObj.html.match(/name="resume_token" value="([^"]+)"/)![1];
+  expect(resumeToken).toBeTruthy();
+
+  // First post on provider1 succeeds
+  const resumeRes1Obj = { html: '', redirectUrl: '', status: 200 };
+  const mockResumeRes1 = {
+   status(s: number) { resumeRes1Obj.status = s; return this; },
+   send(h: string) { resumeRes1Obj.html = h; return this; },
+   redirect(u: string) { resumeRes1Obj.redirectUrl = u; return this; },
+   set() { return this; },
+   type() { return this; },
+   setHeader() { return this; },
+   getHeader() { return undefined; },
+  } as unknown as Response;
+  await provider1.resumeLogin(mockResumeRes1, resumeToken);
+  expect(resumeRes1Obj.redirectUrl).toContain('http://localhost/cb?code=');
+
+  // Second post on provider2 (sharing Firestore) must be refused!
+  const resumeRes2Obj = { html: '', redirectUrl: '', status: 200 };
+  const mockResumeRes2 = {
+   status(s: number) { resumeRes2Obj.status = s; return this; },
+   send(h: string) { resumeRes2Obj.html = h; return this; },
+   redirect(u: string) { resumeRes2Obj.redirectUrl = u; return this; },
+   set() { return this; },
+   type() { return this; },
+   setHeader() { return this; },
+   getHeader() { return undefined; },
+  } as unknown as Response;
+  await provider2.resumeLogin(mockResumeRes2, resumeToken);
+  expect(resumeRes2Obj.status).toBe(400);
+  expect(resumeRes2Obj.redirectUrl).toBe('');
  });
 });
