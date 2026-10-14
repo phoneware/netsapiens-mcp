@@ -18,10 +18,10 @@ export type UserRole = 'system_admin' | 'reseller' | 'domain_admin' | 'user';
 // ---------------------------------------------------------------------------
 
 export const ROLE_HIERARCHY: Record<UserRole, number> = {
-  system_admin: 4,
-  reseller: 3,
-  domain_admin: 2,
-  user: 1,
+ system_admin: 4,
+ reseller: 3,
+ domain_admin: 2,
+ user: 1,
 };
 
 /**
@@ -36,7 +36,7 @@ export const TOOL_ROLE_REQUIREMENTS: Record<string, UserRole> = {};
 // ---------------------------------------------------------------------------
 
 export function hasPermission(userRole: UserRole, requiredRole: UserRole): boolean {
-  return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[requiredRole];
+ return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[requiredRole];
 }
 
 // ---------------------------------------------------------------------------
@@ -44,18 +44,43 @@ export function hasPermission(userRole: UserRole, requiredRole: UserRole): boole
 // ---------------------------------------------------------------------------
 
 /**
- * Maps a NetSapiens user scope string to our internal UserRole.
- * Falls back to 'user' for unrecognised values.
+ * Maps an exact NetSapiens user scope string to our internal UserRole tier.
+ *
+ * Exact NetSapiens user-scope mapping:
+ * - Super User -> system_admin
+ * - Reseller -> reseller
+ * - Office Manager, Site Manager, Domain Admin, Call Center Supervisor -> domain_admin
+ * - Call Center Agent, Advanced User, Basic User, Simple User -> user
+ * - No Portal or anything unrecognized -> user
  */
-export function mapNsScope(nsScope: string | undefined | null): UserRole {
-  if (!nsScope) return 'user';
+export function nsScopeToTier(nsScope: string | undefined | null): UserRole {
+ if (!nsScope) return 'user';
 
-  const lower = nsScope.toLowerCase().trim();
+ const clean = nsScope.toLowerCase().trim();
 
-  if (lower.includes('super') || lower.includes('system')) return 'system_admin';
-  if (lower.includes('reseller')) return 'reseller';
-  if (lower.includes('office') || lower.includes('admin') || lower.includes('manager') || lower.includes('site')) {
-    return 'domain_admin';
-  }
+ if (clean === 'super user' || clean === 'superuser' || clean === 'system admin' || clean === 'system_admin') {
+  return 'system_admin';
+ }
+ if (clean === 'reseller') {
+  return 'reseller';
+ }
+ if (
+  clean === 'office manager' ||
+  clean === 'site manager' ||
+  clean === 'domain admin' ||
+  clean === 'domain_admin' ||
+  clean === 'call center supervisor'
+ ) {
+  return 'domain_admin';
+ }
+ if (
+  clean === 'call center agent' ||
+  clean === 'advanced user' ||
+  clean === 'basic user' ||
+  clean === 'simple user' ||
+  clean === 'user'
+ ) {
   return 'user';
+ }
+ return 'user';
 }
