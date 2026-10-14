@@ -725,7 +725,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
-  let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number };
+  let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string };
   try {
    validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
   } catch (err: unknown) {
@@ -742,6 +742,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    expires_in: validated.expiresIn,
    username: validated.username,
    nsUserRole: validated.userRole,
+   scope: validated.scope,
    nsApiUrl: resolvedPlatform.apiUrl,
   };
 
@@ -757,7 +758,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  async validateNsToken(
   apiUrl: string,
   token: string,
- ): Promise<{ username: string; userRole?: UserRole; scope?: string; expiresIn?: number }> {
+ ): Promise<{ username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string }> {
   if (!isPlatformAllowed(apiUrl)) {
    throw new Error(`Platform URL is not allowed: ${apiUrl}`);
   }
@@ -787,8 +788,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const data = userRes.data;
    const scope = data?.['user-scope'] ?? data?.scope ?? data?.type;
    const userRole = nsScopeToTier(scope);
-   const username = data?.login || (data?.domain && data?.user ? `${data.user}@${data.domain}` : undefined) || data?.user || 'token-user';
-   return { username, userRole, scope: typeof scope === 'string' ? scope : undefined, expiresIn };
+   const user = data?.user;
+   const domain = data?.domain;
+   const username = data?.login || (domain && user ? `${user}@${domain}` : undefined) || user || 'token-user';
+   const firstName = data?.['name-first-name'] ?? data?.['first-name'];
+   const lastName = data?.['name-last-name'] ?? data?.['last-name'];
+   const displayName = [firstName, lastName].filter(Boolean).join(' ') || data?.name || data?.description || username;
+   const email = (data?.email || data?.['email-address'] || '') as string;
+   return { username, userRole, scope: typeof scope === 'string' ? scope : undefined, expiresIn, user, domain, displayName, email };
   } catch (err: unknown) {
    const status = (err as { response?: { status?: number; data?: unknown } })?.response?.status;
    if (status === 400) {
@@ -877,15 +884,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   let displayName = username;
   let email = '';
 
-  if (!nsUserRole) {
+  if (!nsUserRole || !whoScope) {
    try {
     const detected = await this.detectNsUserInfo(nsTokens.access_token, nsTokens.nsApiUrl, username);
-    nsUserRole = detected.role;
-    whoUser = detected.user;
-    whoDomain = detected.domain;
-    whoScope = detected.scope;
-    displayName = detected.displayName;
-    email = detected.email;
+    if (!nsUserRole) nsUserRole = detected.role;
+    if (!whoUser || whoUser === username) whoUser = detected.user;
+    if (!whoDomain) whoDomain = detected.domain;
+    if (!whoScope) whoScope = detected.scope;
+    if (!displayName || displayName === username) displayName = detected.displayName;
+    if (!email) email = detected.email;
    } catch (err) {
     logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
    }
