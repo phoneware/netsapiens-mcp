@@ -37,6 +37,8 @@ const find_user: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'User' }] },
  handler: async (args, client) => {
   const query = str(args.query, '');
   const limit = num(args.limit) ?? 10;
@@ -78,6 +80,8 @@ const find_domain: CuratedTool = {
    },
   },
  },
+ targets: {},
+ output: { rules: [{ path: 'data[]', resource: 'Domain' }] },
  handler: async (args, client, userRole) => {
   const query = args.query ? String(args.query) : '';
   const limit = num(args.limit) ?? 25;
@@ -133,6 +137,8 @@ const find_contact: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'Contact' }] },
  handler: async (args, client) => {
   const query = str(args.query, '');
   const limit = num(args.limit) ?? 25;
@@ -170,6 +176,8 @@ const find_phone_number: CuratedTool = {
    required: ['number'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'Phonenumber' }] },
  handler: async (args, client) => {
   const number = String(args.number);
   // /domains/{domain}/phonenumbers has no query filter at all — fetch the
@@ -199,6 +207,8 @@ const find_device: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'Device' }] },
  handler: async (args, client) => {
   const query = String(args.query);
   // /domains/{domain}/devices has no query filter at all — fetch the full
@@ -296,6 +306,8 @@ const recent_calls: CuratedTool = {
    properties: { ...SCOPE_PROPERTIES, limit: { type: 'number', default: 25 } },
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user', breadthArg: { name: 'scope', selfValue: 'mine' } },
+ output: { rules: [{ path: 'data[]', resource: 'CdrD' }] },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
   const scope_note = cdrScopeNote(scope, args, userRole);
@@ -332,6 +344,8 @@ const call_volume: CuratedTool = {
    'so an office manager gets the whole domain by default. The response reports the scope it used.',
   inputSchema: { type: 'object', properties: { ...SCOPE_PROPERTIES } },
  },
+ targets: { domainArg: 'domain', userArg: 'user', breadthArg: { name: 'scope', selfValue: 'mine' } },
+ output: { rules: [{ path: 'data', resource: 'Count' }, { path: 'total', field: { class: 'metadata' } }, { path: 'total-duration', field: { class: 'metadata' } }] },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
   const scope_note = cdrScopeNote(scope, args, userRole);
@@ -364,6 +378,8 @@ const active_calls: CuratedTool = {
    properties: { domain: { type: 'string' }, limit: { type: 'number', default: 50 } },
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'ActiveCall' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -390,6 +406,8 @@ const call_details: CuratedTool = {
    required: ['call_id'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [{ path: 'data', resource: 'CdrD' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -418,6 +436,8 @@ const call_trace: CuratedTool = {
    required: ['call_id'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [{ path: 'data', resource: 'CallTrace' }] },
  handler: async (args, client, userRole) => {
   const callid = String(args.call_id);
   const domain = str(args.domain);
@@ -479,6 +499,8 @@ const place_call: CuratedTool = {
    required: ['to'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'from' },
+ output: { rules: [{ path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'POST',
@@ -507,6 +529,8 @@ const transfer_call: CuratedTool = {
    required: ['call_id', 'to'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [{ path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const isPeer = String(args.type ?? 'blind') === 'peer';
   const pathTemplate = isPeer
@@ -538,6 +562,8 @@ const end_call: CuratedTool = {
    required: ['call_id'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [{ path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'DELETE',
@@ -577,6 +603,8 @@ const my_voicemails: CuratedTool = {
    },
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data[]', resource: 'Voicemail' }] },
  handler: async (args, client) => {
   const limit = num(args.limit) ?? 25;
   const targetFolder = normalizeVoicemailFolder(args.folder);
@@ -630,6 +658,8 @@ const read_voicemail: CuratedTool = {
    required: ['voicemail_id'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data', resource: 'Voicemail' }] },
  handler: async (args, client) => {
   const filename = String(args.voicemail_id);
   const targetFolder = normalizeVoicemailFolder(args.folder);
@@ -678,6 +708,8 @@ const forward_voicemail: CuratedTool = {
    required: ['voicemail_id', 'to'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data', resource: 'Voicemail' }] },
  handler: async (args, client) => {
   const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const r = await client.request({
@@ -701,6 +733,8 @@ const list_message_sessions: CuratedTool = {
   description: 'Your active message sessions (SMS, chat, group chat).',
   inputSchema: { type: 'object', properties: { limit: { type: 'number', default: 25 } } },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data[]', resource: 'Messagesession' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -725,6 +759,8 @@ const read_messages: CuratedTool = {
    required: ['session_id'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data[]', resource: 'Message' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -757,6 +793,8 @@ const send_message: CuratedTool = {
    required: ['to', 'text'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data', resource: 'Message' }] },
  handler: async (args, client) => {
   const dest = Array.isArray(args.to)
    ? args.to.map((t) => String(t).trim())
@@ -812,6 +850,8 @@ const list_queues: CuratedTool = {
   description: 'Call queues in the domain.',
   inputSchema: { type: 'object', properties: { domain: { type: 'string' } } },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data[]', resource: 'CallQueue' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -833,6 +873,8 @@ const queue_status: CuratedTool = {
    required: ['queue'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data', resource: 'CallQueue' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -856,6 +898,8 @@ const agent_login: CuratedTool = {
    },
   },
  },
+ targets: { agentArg: 'agent' },
+ output: { rules: [{ path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'POST',
@@ -879,6 +923,8 @@ const agent_logout: CuratedTool = {
    },
   },
  },
+ targets: { agentArg: 'agent' },
+ output: { rules: [{ path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'POST',
@@ -896,6 +942,8 @@ const agent_status: CuratedTool = {
   description: 'Get an agent\'s current queue status. Defaults to yourself.',
   inputSchema: { type: 'object', properties: { agent: { type: 'string' } } },
  },
+ targets: { agentArg: 'agent' },
+ output: { rules: [{ path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -917,6 +965,8 @@ const my_devices: CuratedTool = {
   description: 'Devices registered to your user.',
   inputSchema: { type: 'object', properties: {} },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data[]', resource: 'Device' }] },
  handler: async (_args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -933,6 +983,8 @@ const my_answer_rules: CuratedTool = {
   description: 'Your answer rules (call routing decisions per time-frame).',
   inputSchema: { type: 'object', properties: {} },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data[]', resource: 'Answerrule' }] },
  handler: async (_args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -956,6 +1008,8 @@ const update_my_answer_rule: CuratedTool = {
    required: ['timeframe', 'update'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [{ path: 'data', resource: 'Answerrule' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'PUT',
@@ -985,6 +1039,8 @@ const call_statistics: CuratedTool = {
    },
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [{ path: 'data', resource: 'QueueStat' }] },
  handler: async (args, client) => {
   const pathTemplate = args.queue
    ? '/domains/{domain}/statistics/callqueues/{queue}'
@@ -1021,6 +1077,8 @@ const agent_statistics: CuratedTool = {
    },
   },
  },
+ targets: { domainArg: 'domain', agentArg: 'agent' },
+ output: { rules: [{ path: 'data', resource: 'QueueStat' }] },
  handler: async (args, client) => {
   const pathTemplate = args.agent
    ? '/domains/{domain}/statistics/agent/{agent}'

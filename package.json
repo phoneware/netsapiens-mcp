@@ -1,6 +1,6 @@
 {
   "name": "netsapiens-mcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -24,7 +24,8 @@
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",
     "clean": "rimraf build",
-    "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts",
+    "generate:governance": "tsx scripts/generate-governance.ts",
+    "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts && tsx scripts/generate-governance.ts",
     "prebuild": "npm run clean && npm run generate",
     "prepack": "npm run build",
     "test": "vitest run",
