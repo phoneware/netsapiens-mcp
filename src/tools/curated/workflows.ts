@@ -239,7 +239,7 @@ const diagnose_call: CuratedTool = {
   name: 'diagnose_call',
   description:
    'Diagnose a specific call: pulls the call detail record, SIP trace, and any associated queue context in a single response. ' +
-   'Reading SIP traces on /sipflow requires Super User access (Reseller is unverified), but call records are returned for domain administrators. ' +
+   'Some portal roles cannot read SIP traces; Super User access is confirmed and Reseller access is unverified, but call records are returned for domain administrators. ' +
    'Use when investigating "why did this call do X" rather than running CDR + sipflow + queue lookups separately.',
   inputSchema: {
    type: 'object',
@@ -329,10 +329,10 @@ const diagnose_call: CuratedTool = {
   ]);
 
   const isRoleDenied = (res: { ok: boolean; error?: string }) =>
-   !res.ok && Boolean(res.error && (res.error.includes('401') || res.error.includes('403') || res.error.toLowerCase().includes('invalid scope')));
+   !res.ok && Boolean(res.error && /invalid scope|permission denied|insufficient permission|forbidden/i.test(res.error));
 
   const roleReason =
-   'Your portal role cannot read SIP traces. Reading SIP traces on /sipflow requires Super User access (Reseller is unverified).';
+   'Your portal role cannot read SIP traces. Super User access is confirmed; Reseller access is unverified.';
 
   const sipflowResult = isRoleDenied(sipflow)
    ? { ok: false, error: sipflow.error, detail: roleReason }
@@ -342,7 +342,7 @@ const diagnose_call: CuratedTool = {
    : cradle;
 
   const topDetail = isRoleDenied(sipflow)
-   ? 'Call record found, but your portal role cannot read SIP traces (requires Super User access; Reseller is unverified).'
+   ? 'Call record found, but your portal role cannot read SIP traces (Super User access is confirmed; Reseller access is unverified).'
    : undefined;
 
   return textResult({
@@ -632,10 +632,6 @@ const switch_queue: CuratedTool = {
     to: { type: 'string', description: 'Queue to join' },
     agent: { type: 'string', default: '~', description: 'Agent extension. Defaults to you.' },
     domain: { type: 'string' },
-    since: { type: 'string', description: 'Start of statistics window' },
-    until: { type: 'string', description: 'End of statistics window' },
-    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
    },
    required: ['from', 'to'],
   },
