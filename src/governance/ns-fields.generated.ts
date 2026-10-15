@@ -1201,7 +1201,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "rmoh": {"class":"metadata"},
     "smtp_host": {"class":"metadata"},
     "smtp_port": {"class":"metadata"},
-    "smtp_pwd": {"class":"metadata"},
+    "smtp_pwd": {"class":"secret"},
     "smtp_uid": {"class":"metadata"},
     "sso": {"class":"metadata"},
     "sub_count": {"class":"metadata"},
@@ -1675,6 +1675,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "email-send-smtp-port": {"class":"metadata"},
     "email-send-smtp-username": {"class":"metadata"},
     "reseller": {"class":"metadata"},
+    "smtp_pwd": {"class":"secret"},
     "users-total": {"class":"metadata"},
   },
   "Restore": {
