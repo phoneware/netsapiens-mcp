@@ -19,12 +19,15 @@
  * Without an emulator the suite skips cleanly with a hint.
  */
 
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import express, { type Request, type Response } from 'express';
+import request from 'supertest';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { randomBytes } from 'node:crypto';
 import { Timestamp } from '@google-cloud/firestore';
-import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { NetSapiensAuthProvider, UpstreamGrantRejectedError } from '../auth/netsapiens-auth-provider.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import type { Request, Response } from 'express';
 import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import {
@@ -841,4 +844,219 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const rawDataAfter = rawSnapAfter.data()!;
   expect(rawDataAfter.ttlAt).toBeInstanceOf(Timestamp);
  });
+
+ it('lease-loss during verifyAccessToken does not delete a bearer that was refreshed by another instance', async () => {
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+
+  const provider1 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const provider2 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const app1 = express();
+  const bearerAuth1 = requireBearerAuth({
+   verifier: provider1,
+   resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp')),
+  });
+  app1.post('/mcp', bearerAuth1, (_req, res) => res.json({ ok: true }));
+
+  const bearerToken = 'mcp-bearer-lease-loss-verifier';
+  await provider1.tokenStore.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
+  const { promise: inst1StartedPromise, resolve: resolveInst1Started } = deferred<unknown>();
+
+  const origRefreshNsToken1 = (provider1.tokenStore as FirestoreTokenStore).refreshNsToken.bind(provider1.tokenStore);
+  (provider1.tokenStore as FirestoreTokenStore).refreshNsToken = (tok, doRefresh) =>
+   origRefreshNsToken1(tok, doRefresh, { maxWaitMs: 5000, leaseDurationMs: 100 });
+
+  (provider1 as unknown as { nsRefreshGrant: (...args: unknown[]) => Promise<unknown> }).nsRefreshGrant = async () => {
+   resolveInst1Started(null);
+   await slowRefreshPromise;
+   return {
+    access_token: 'late-ns-token-provider1',
+    refresh_token: 'late-refresh-provider1',
+    expires_in: 3600,
+    username: 'shared@domain.com',
+   };
+  };
+
+  const req1Promise = (async () =>
+   request(app1)
+    .post('/mcp')
+    .set('Authorization', `Bearer ${bearerToken}`)
+  )();
+  await inst1StartedPromise;
+  // Wait for provider1's 100ms lease to expire
+  await new Promise((r) => setTimeout(r, 150));
+
+  // Provider2 now refreshes the token successfully
+  (provider2 as unknown as { nsRefreshGrant: (...args: unknown[]) => Promise<unknown> }).nsRefreshGrant = async () => ({
+   access_token: 'fresh-ns-token-provider2',
+   refresh_token: 'fresh-refresh-provider2',
+   expires_in: 3600,
+   username: 'shared@domain.com',
+  });
+
+  const refreshedBy2 = await (provider2.tokenStore as FirestoreTokenStore).refreshNsToken(
+   bearerToken,
+   (current) => (provider2 as unknown as { nsRefreshGrant: (r: string, u?: string) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }> }).nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
+  );
+  expect(refreshedBy2.nsAccessToken).toBe('fresh-ns-token-provider2');
+
+  // Release provider1 to attempt late commit after losing lease
+  resolveSlowRefresh(null);
+  const res1 = await req1Promise;
+
+  // Verify Firestore itself (bypass local in-memory cache)
+  (provider2.tokenStore as FirestoreTokenStore).clearCache();
+  const surviving = await provider2.tokenStore.get(bearerToken);
+  expect(surviving).toBeDefined();
+  expect(surviving?.nsAccessToken).toBe('fresh-ns-token-provider2');
+  expect(res1.status).toBe(200);
+ });
+
+ it('upstream timeout during verifyAccessToken does not delete bearer token and returns 500', async () => {
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+
+  const provider = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const app = express();
+  const bearerAuth = requireBearerAuth({
+   verifier: provider,
+   resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp')),
+  });
+  app.post('/mcp', bearerAuth, (_req, res) => res.json({ ok: true }));
+
+  const bearerToken = 'mcp-bearer-upstream-timeout';
+  await provider.tokenStore.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  const timeoutError = Object.assign(new Error('timeout of 10000ms exceeded'), {
+   code: 'ECONNABORTED',
+   isAxiosError: true,
+  });
+  vi.spyOn(provider as unknown as { nsRefreshGrant: () => Promise<unknown> }, 'nsRefreshGrant').mockRejectedValueOnce(timeoutError);
+
+  const res = await request(app)
+   .post('/mcp')
+   .set('Authorization', `Bearer ${bearerToken}`)
+   .send();
+
+  expect(res.status).toBe(500);
+  expect(res.headers['www-authenticate']).toBeUndefined();
+
+  const surviving = await provider.tokenStore.get(bearerToken);
+  expect(surviving).toBeDefined();
+  expect(surviving?.accessToken).toBe(bearerToken);
+ });
+
+ it('definitive upstream refresh grant rejection (400 or 401) deletes bearer token and returns 401 invalid_token', async () => {
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+
+  const provider = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const app = express();
+  const bearerAuth = requireBearerAuth({
+   verifier: provider,
+   resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp')),
+  });
+  app.post('/mcp', bearerAuth, (_req, res) => res.json({ ok: true }));
+
+  const bearerToken = 'mcp-bearer-grant-rejection';
+  await provider.tokenStore.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  vi.spyOn(provider as unknown as { nsRefreshGrant: () => Promise<unknown> }, 'nsRefreshGrant').mockRejectedValueOnce(
+   new UpstreamGrantRejectedError('invalid_grant', 400),
+  );
+  const res = await request(app)
+   .post('/mcp')
+   .set('Authorization', `Bearer ${bearerToken}`)
+   .send();
+
+  expect(res.status).toBe(401);
+  expect(res.headers['www-authenticate']).toContain('invalid_token');
+
+  (provider.tokenStore as FirestoreTokenStore).clearCache();
+  const surviving = await provider.tokenStore.get(bearerToken);
+  expect(surviving).toBeUndefined();
+ });
+
 });
