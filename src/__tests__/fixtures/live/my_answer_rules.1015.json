@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "data": [
+    {
+      "time-frame": "s",
+      "domain": "s",
+      "user": "s",
+      "is-active": true,
+      "ordinal-priority": 0,
+      "enabled": "s",
+      "simultaneous-ring": {
+        "parameters": [
+          "s"
+        ],
+        "enabled": "s"
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "data": {
+    "filename": "s",
+    "file-duration-seconds": 0,
+    "file-size-kilobytes": "s",
+    "created-datetime": "s",
+    "file-access-url": "s",
+    "file-script-text": "s",
+    "file-source": "s",
+    "text-to-speech-voice-id": "s",
+    "text-to-speech-language": "s",
+    "voicemail-from-name": "s",
+    "voicemail-from-user": "s",
+    "voicemail-from-host": "s",
+    "voicemail-from-caller-id-number": "s",
+    "recorded-datetime": "s",
+    "voicemail-recording-started-datetime": "s",
+    "timezone": "s"
+  }
+}
