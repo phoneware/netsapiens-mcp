@@ -277,6 +277,20 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     expect((scrubbedChart as Record<string, unknown>).name).toBe('CallVolumeChart');
   });
 
+  it('removes legacy smtp_pwd password as a secret', () => {
+    expect(NS_RESOURCE_FIELDS.DomainLegacy?.smtp_pwd).toEqual({ class: 'secret' });
+
+    const payload = {
+      domain: 'legacy.domain',
+      description: 'Legacy Domain',
+      smtp_pwd: 'legacy-smtp-password',
+    };
+    const { scrubbed, count } = scrubSecrets(payload);
+    expect(count).toBe(1);
+    expect((scrubbed as Record<string, unknown>).smtp_pwd).toBeUndefined();
+    expect((scrubbed as Record<string, unknown>).domain).toBe('legacy.domain');
+  });
+
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');

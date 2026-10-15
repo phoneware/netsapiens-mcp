@@ -77,8 +77,12 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
     domain: { class: 'record_id', recordType: 'domain' },
     'email-send-smtp-password': { class: 'secret' },
   },
+  DomainLegacy: {
+    smtp_pwd: { class: 'secret' },
+  },
   Reseller: {
     'email-send-smtp-password': { class: 'secret' },
+    smtp_pwd: { class: 'secret' },
   },
   AuthRequest: {
     client_secret: { class: 'secret' },

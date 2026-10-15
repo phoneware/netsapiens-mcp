@@ -10,6 +10,7 @@ const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
  'device-provisioning-password': true,
  'voicemail-login-pin': true,
  'email-send-smtp-password': true,
+ 'smtp_pwd': true,
  client_secret: true,
  'client-secret': true,
  password: true,
