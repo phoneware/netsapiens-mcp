@@ -56,10 +56,19 @@ function generate(): string {
    ...Object.keys(FIELD_OVERRIDES[schemaName] ?? {}),
   ]);
 
+  function isCredentialKeyName(name: string): boolean {
+    if (/key-id|can-create-keys|no-key-press|unassigned-key-press|language-token|token-endpoint|token_type|dtmf-mapping|-enabled/i.test(name)) {
+      return false;
+    }
+    return /(?:^|[-_])(?:password|pin|secret|token|passcode)(?:$|[-_])/i.test(name);
+  }
+
   for (const propName of Array.from(propNames).sort()) {
    const override = FIELD_OVERRIDES[schemaName]?.[propName];
    if (override) {
     fieldTable[propName] = override;
+   } else if (isCredentialKeyName(propName)) {
+    fieldTable[propName] = { class: 'secret' };
    } else {
     fieldTable[propName] = { class: 'metadata' };
    }

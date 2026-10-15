@@ -9,10 +9,11 @@
  */
 
 import type { CuratedTool } from './types.js';
-import { textResult } from './types.js';
+import { textResult, STANDARD_WRAPPER_RULES } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
 import { fieldsMatch, isOnOrAfter, numbersMatch } from './matching.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
+import { matchesCallId, nsDateWindow, resolveSelfUser } from './catalog.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -27,20 +28,7 @@ async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<
  }
 }
 
-function matchesCallId(record: Record<string, unknown>, callId: string): boolean {
- return (
-  record['id'] === callId ||
-  record['call-orig-call-id'] === callId ||
-  record['call-term-call-id'] === callId ||
-  record['call-parent-call-id'] === callId ||
-  record['call-through-call-id'] === callId ||
-  record['orig_callid'] === callId ||
-  record['term_callid'] === callId ||
-  record['by_callid'] === callId ||
-  record['servedCallId'] === callId ||
-  record['cdr_id'] === callId
- );
-}
+
 
 export interface CallLookupOptions {
  callId: string;
@@ -264,7 +252,26 @@ const diagnose_call: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
- output: { rules: [{ path: 'cdr', resource: 'CdrD' }, { path: 'sip_trace.data', resource: 'CallTrace' }, { path: 'cradle_to_grave.data', resource: 'CallTrace' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'call_id', field: { class: 'metadata' } },
+   { path: 'server_used', field: { class: 'metadata' } },
+   { path: 'searched_window', field: { class: 'metadata' } },
+   { path: 'searched_window.start', field: { class: 'metadata' } },
+   { path: 'searched_window.end', field: { class: 'metadata' } },
+   { path: 'detail', field: { class: 'metadata' } },
+   { path: 'sip_trace.ok', field: { class: 'metadata' } },
+   { path: 'sip_trace.error', field: { class: 'metadata' } },
+   { path: 'sip_trace.data', resource: 'CallTrace' },
+   { path: 'cradle_to_grave.ok', field: { class: 'metadata' } },
+   { path: 'cradle_to_grave.error', field: { class: 'metadata' } },
+   { path: 'cradle_to_grave.data', resource: 'CallTrace' },
+   { path: 'cdr', resource: 'CdrD' },
+   { path: 'active', resource: 'ActiveCall' },
+   { path: 'trace', resource: 'CallTrace' },
+  ],
+ },
  handler: async (args, client, userRole) => {
   const callid = String(args.call_id);
   const domain = str(args.domain);
@@ -348,7 +355,29 @@ const user_profile: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
- output: { rules: [{ path: 'details.data', resource: 'User' }, { path: 'devices.data[]', resource: 'Device' }, { path: 'answer_rules.data[]', resource: 'Answerrule' }, { path: 'recent_calls.data[]', resource: 'CdrD' }, { path: 'voicemails.data[]', resource: 'Voicemail' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'user', field: { class: 'metadata' } },
+   { path: 'domain', field: { class: 'metadata' } },
+   { path: 'voicemail_count', field: { class: 'metadata' } },
+   { path: 'details.ok', field: { class: 'metadata' } },
+   { path: 'details.error', field: { class: 'metadata' } },
+   { path: 'details.data', resource: 'User' },
+   { path: 'devices.ok', field: { class: 'metadata' } },
+   { path: 'devices.error', field: { class: 'metadata' } },
+   { path: 'devices.data[]', resource: 'Device' },
+   { path: 'answer_rules.ok', field: { class: 'metadata' } },
+   { path: 'answer_rules.error', field: { class: 'metadata' } },
+   { path: 'answer_rules.data[]', resource: 'Answerrule' },
+   { path: 'recent_calls.ok', field: { class: 'metadata' } },
+   { path: 'recent_calls.error', field: { class: 'metadata' } },
+   { path: 'recent_calls.data[]', resource: 'CdrD' },
+   { path: 'voicemails.ok', field: { class: 'metadata' } },
+   { path: 'voicemails.error', field: { class: 'metadata' } },
+   { path: 'voicemails.data[]', resource: 'Voicemail' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const user = str(args.user);
@@ -369,7 +398,7 @@ const user_profile: CuratedTool = {
    answer_rules: answerRules,
    recent_calls: recentCalls,
    voicemail_count: voicemailCount,
-   voicemails: voicemails.ok ? undefined : voicemails, // surface error if it failed
+   voicemails: voicemails.ok ? undefined : voicemails,
   });
  },
 };
@@ -394,7 +423,21 @@ const queue_health: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain' },
- output: { rules: [{ path: 'queues[].queue', resource: 'CallQueue' }, { path: 'queues[].status.data', resource: 'QueueStat' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'domain', field: { class: 'metadata' } },
+   { path: 'queue_count', field: { class: 'metadata' } },
+   { path: 'returned', field: { class: 'metadata' } },
+   { path: 'truncated', field: { class: 'metadata' } },
+   { path: 'queues[].queue_id', field: { class: 'metadata' } },
+   { path: 'queues[].queue', resource: 'CallQueue' },
+   { path: 'queues[].status.ok', field: { class: 'metadata' } },
+   { path: 'queues[].status.error', field: { class: 'metadata' } },
+   { path: 'queues[].status.data', resource: 'QueueStat' },
+   { path: 'queues[].status.data[]', resource: 'QueueStat' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const cap = typeof args.max_queues === 'number' ? args.max_queues : 25;
@@ -404,12 +447,20 @@ const queue_health: CuratedTool = {
   if (!queuesResp.ok) return textResult({ error: 'Failed to list queues', detail: queuesResp.error });
   const queues = Array.isArray(queuesResp.data) ? queuesResp.data : [];
   const limited = queues.slice(0, cap);
+
+  const window = nsDateWindow();
+
   const annotated = await Promise.all(
    limited.map(async (q) => {
     const queueId = String(q['callqueue'] ?? q['queue'] ?? q['name'] ?? '');
     if (!queueId) return { queue: q, status: { ok: false, error: 'no queue id in record' } };
     const status = await safe(
-     client.request({ method: 'GET', pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}', pathParams: { domain, queue: queueId } }),
+     client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
+      pathParams: { domain, queue: queueId },
+      queryParams: { start_date: window.start, end_date: window.end },
+     }),
     );
     return { queue: q, queue_id: queueId, status };
    }),
@@ -433,7 +484,7 @@ const agent_dashboard: CuratedTool = {
  schema: {
   name: 'agent_dashboard',
   description:
-   'A snapshot of an agent\'s day: current queue status (logged in to which queues), today\'s call activity, and agent statistics. ' +
+   'A snapshot of an agent\'s last 24 hours: current queue status (logged in to which queues), recent call activity, and agent statistics. ' +
    'Defaults to the authenticated user.',
   inputSchema: {
    type: 'object',
@@ -444,18 +495,88 @@ const agent_dashboard: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', agentArg: 'agent' },
- output: { rules: [{ path: 'status.data', resource: 'Agent' }, { path: 'recent_calls.data[]', resource: 'CdrD' }, { path: 'statistics.data', resource: 'QueueStat' }] },
- handler: async (args, client) => {
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'agent', field: { class: 'metadata' } },
+   { path: 'domain', field: { class: 'metadata' } },
+   { path: 'status.ok', field: { class: 'metadata' } },
+   { path: 'status.error', field: { class: 'metadata' } },
+   { path: 'status.data', resource: 'Agent' },
+   { path: 'status.data[]', resource: 'Agent' },
+   { path: 'recent_calls.ok', field: { class: 'metadata' } },
+   { path: 'recent_calls.error', field: { class: 'metadata' } },
+   { path: 'recent_calls.data[]', resource: 'CdrD' },
+   { path: 'statistics.ok', field: { class: 'metadata' } },
+   { path: 'statistics.error', field: { class: 'metadata' } },
+   { path: 'statistics.data', resource: 'QueueStat' },
+   { path: 'statistics.data[]', resource: 'QueueStat' },
+   { path: 'statistics.data.*', resource: 'QueueStat' },
+  ],
+ },
+ handler: async (args, client, userRole) => {
   const domain = str(args.domain);
-  const agent = str(args.agent);
-  // Compute "today" from a passed-in timestamp would be cleaner, but for now
-  // ask NS for today by passing the start-of-day ISO derived elsewhere.
-  // Without Date.now access here we keep it spec-aligned: fetch last 25 calls
-  // and a per-agent stats summary; let the model filter by date if needed.
-  const [status, recentCalls, stats] = await Promise.all([
-   safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/callqueues/all/agents/{agent}', pathParams: { domain, agent } })),
+  // One agent, always: "~" or nothing is the signed-in user, resolved here or the call fails.
+  // Every part below (status, statistics, calls) asks about that agent only.
+  const agent = args.agent == null || args.agent === '' || args.agent === '~' ? await resolveSelfUser(client) : String(args.agent);
+  const isBasicUser = userRole != null && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
+  const window = nsDateWindow();
+
+  let statusPromise: Promise<{ ok: boolean; data?: unknown; error?: string }>;
+  if (!isBasicUser) {
+   statusPromise = (async () => {
+    const r = await safe(client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/agents',
+     pathParams: { domain },
+    }));
+    if (r.ok && Array.isArray(r.data)) {
+     const matched = (r.data as Array<Record<string, unknown>>).filter((a) => {
+      const aid = String(a['callqueue-agent-id'] ?? '');
+      const login = String(a['login-username'] ?? '');
+      return aid === agent || aid.startsWith(`${agent}@`) || login === agent || login.startsWith(`${agent}@`);
+     });
+     if (matched.length > 0) return { ok: true, data: matched.length === 1 ? matched[0] : matched };
+     return { ok: false, error: 'Agent not found' };
+    }
+    return r;
+   })();
+  } else {
+   statusPromise = (async () => {
+    const qList = await safe(client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/list',
+     pathParams: { domain },
+    }));
+    if (qList.ok && Array.isArray(qList.data)) {
+     const queues = qList.data as Array<Record<string, unknown>>;
+     const results: Array<Record<string, unknown>> = [];
+     for (const q of queues) {
+      const qId = String(q['callqueue'] ?? q['queue'] ?? '');
+      if (!qId) continue;
+      const aRes = await safe(client.request({
+       method: 'GET',
+       pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}',
+       pathParams: { domain, queue: qId, agent },
+      }));
+      if (aRes.ok && aRes.data) results.push(aRes.data as Record<string, unknown>);
+     }
+     return { ok: true, data: results.length === 1 ? results[0] : results };
+    }
+    return qList;
+   })();
+  }
+
+  const stats = await safe(client.request({
+   method: 'GET',
+   pathTemplate: '/domains/{domain}/statistics/agent/{agent}',
+   pathParams: { domain, agent },
+   queryParams: { start_date: window.start, end_date: window.end },
+  }));
+
+  const [status, recentCalls] = await Promise.all([
+   statusPromise,
    safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/cdrs', pathParams: { domain, user: agent }, queryParams: { limit: 25 } })),
-   safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/statistics/agent/{agent}', pathParams: { domain, agent } })),
   ]);
   return textResult({ agent, domain, status, recent_calls: recentCalls, statistics: stats });
  },
@@ -484,7 +605,21 @@ const switch_queue: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', agentArg: 'agent' },
- output: { rules: [{ path: 'logout.data', resource: 'Agent' }, { path: 'login.data', resource: 'Agent' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'step', field: { class: 'metadata' } },
+   { path: 'from', field: { class: 'metadata' } },
+   { path: 'to', field: { class: 'metadata' } },
+   { path: 'agent', field: { class: 'metadata' } },
+   { path: 'logout.ok', field: { class: 'metadata' } },
+   { path: 'logout.error', field: { class: 'metadata' } },
+   { path: 'logout.data', resource: 'Agent' },
+   { path: 'login.ok', field: { class: 'metadata' } },
+   { path: 'login.error', field: { class: 'metadata' } },
+   { path: 'login.data', resource: 'Agent' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const agent = str(args.agent);
@@ -538,7 +673,26 @@ const find_and_call: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'from' },
- output: { rules: [{ path: 'matches[].record', resource: 'Contact' }, { path: 'match.record', resource: 'Contact' }, { path: 'call.data', resource: 'CallRequest' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'query', field: { class: 'metadata' } },
+   { path: 'dialed', field: { class: 'metadata' } },
+   { path: 'matches[].source', field: { class: 'metadata' } },
+   { path: 'matches[].extension', field: { class: 'metadata' } },
+   { path: 'matches[].record.user', field: { class: 'record_id', recordType: 'user' } },
+   { path: 'matches[].record', resource: 'Contact' },
+   { path: 'matches[].record', resource: 'User' },
+   { path: 'match.source', field: { class: 'metadata' } },
+   { path: 'match.extension', field: { class: 'metadata' } },
+   { path: 'match.record.user', field: { class: 'record_id', recordType: 'user' } },
+   { path: 'match.record', resource: 'Contact' },
+   { path: 'match.record', resource: 'User' },
+   { path: 'call.ok', field: { class: 'metadata' } },
+   { path: 'call.error', field: { class: 'metadata' } },
+   { path: 'call.data', resource: 'CallRequest' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const from = str(args.from);
@@ -623,7 +777,20 @@ const recent_activity_for_number: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain' },
- output: { rules: [{ path: 'calls.data[]', resource: 'CdrD' }, { path: 'message_sessions.data[]', resource: 'Messagesession' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'number', field: { class: 'metadata' } },
+   { path: 'domain', field: { class: 'metadata' } },
+   { path: 'since', field: { class: 'metadata' } },
+   { path: 'calls.ok', field: { class: 'metadata' } },
+   { path: 'calls.error', field: { class: 'metadata' } },
+   { path: 'calls.data[]', resource: 'CdrD' },
+   { path: 'message_sessions.ok', field: { class: 'metadata' } },
+   { path: 'message_sessions.error', field: { class: 'metadata' } },
+   { path: 'message_sessions.data[]', resource: 'Messagesession' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const number = String(args.number);
@@ -663,6 +830,7 @@ const recent_activity_for_number: CuratedTool = {
     }),
    ),
   ]);
+
   const callsById = new Map<unknown, Record<string, unknown>>();
   for (const batch of [callsAsCaller, callsAsDialled]) {
    if (!batch.ok || !Array.isArray(batch.data)) continue;
@@ -678,9 +846,7 @@ const recent_activity_for_number: CuratedTool = {
    error: callsAsCaller.ok || callsAsDialled.ok ? undefined : (callsAsCaller.error ?? callsAsDialled.error),
    data: Array.from(callsById.values()).slice(0, limit),
   };
-  // The domain-wide messagesessions endpoint has no server-side "involving
-  // this number" filter (or date filter at all), so filter client-side
-  // against the fields the API does return.
+
   const matchesNumber = (session: Record<string, unknown>) => {
    const haystack = [session['messagesession-remote'], session['messagesession-sms-number'], session['messagesession-participants']]
     .filter((v) => v != null)
@@ -733,7 +899,19 @@ const voicemail_inbox_summary: CuratedTool = {
   },
  },
  targets: { selfOnly: true },
- output: { rules: [{ path: 'voicemails[].transcript', field: { class: 'content', kind: 'transcript', media: 'text' } }, { path: 'voicemails[]', resource: 'Voicemail' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'folder', field: { class: 'metadata' } },
+   { path: 'count', field: { class: 'metadata' } },
+   { path: 'voicemails[].from', field: { class: 'metadata' } },
+   { path: 'voicemails[].at', field: { class: 'metadata' } },
+   { path: 'voicemails[].duration', field: { class: 'metadata' } },
+   { path: 'voicemails[].id', field: { class: 'record_id', recordType: 'voicemail' } },
+   { path: 'voicemails[].transcript', field: { class: 'content', kind: 'transcript', media: 'text' } },
+   { path: 'voicemails[]', resource: 'Voicemail' },
+  ],
+ },
  handler: async (args, client) => {
   const limit = typeof args.limit === 'number' ? args.limit : 25;
   const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
@@ -771,8 +949,8 @@ const voicemail_inbox_summary: CuratedTool = {
 
 /**
  * NS timeframes take compact dates and times: `YYYYMMDD` and `HHMM`. Models
- * write ISO, so accept both and normalise. Returns null on anything we cannot
- * confidently read rather than silently scheduling the wrong window.
+ * typically emit ISO strings, "YYYY-MM-DD", or natural-ish combinations.
+ * Accepts ISO, "YYYY-MM-DD", or "YYYY-MM-DD HH:MM".
  */
 export function toNsDateTime(
  value: unknown,
@@ -786,7 +964,6 @@ export function toNsDateTime(
  return { date: `${y}${mo}${d}`, time: hh ? `${hh}${mm}` : defaultTime };
 }
 
-/** The answer-rule payload NS actually reads (see `$forwards` in SubscribersController). */
 function forwardAlways(destination: string | undefined, enabled: boolean) {
  return {
   'forward-always': {
@@ -817,7 +994,21 @@ const schedule_forwarding: CuratedTool = {
   },
  },
  targets: { selfOnly: true },
- output: { rules: [{ path: 'result.data', resource: 'Answerrule' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'timeframe', field: { class: 'metadata' } },
+   { path: 'destination', field: { class: 'metadata' } },
+   { path: 'window.from', field: { class: 'metadata' } },
+   { path: 'window.until', field: { class: 'metadata' } },
+   { path: 'steps[].step', field: { class: 'metadata' } },
+   { path: 'steps[].ok', field: { class: 'metadata' } },
+   { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'result.ok', field: { class: 'metadata' } },
+   { path: 'result.error', field: { class: 'metadata' } },
+   { path: 'result.data', resource: 'Answerrule' },
+  ],
+ },
  handler: async (args, client) => {
   const disable = args.disable === true;
   const destination = args.destination ? String(args.destination) : undefined;
@@ -912,12 +1103,6 @@ const schedule_forwarding: CuratedTool = {
 
 // ---------------------------------------------------------------------------
 // 10. provision_user — the "add a user" chain, not just the subscriber row
-//
-// SubscribersController::create() writes the subscriber and nothing else: no
-// device, no DID. In OMP that is one screen but several writes, so a tool that
-// only creates the subscriber leaves a user who cannot register a phone or
-// receive an outside call. This runs the whole chain, in order, and stops at
-// the first failure rather than leaving a half-built user behind.
 // ---------------------------------------------------------------------------
 
 const provision_user: CuratedTool = {
@@ -953,7 +1138,24 @@ const provision_user: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
- output: { rules: [{ path: 'user_record', resource: 'User' }, { path: 'steps[].detail', resource: 'User' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'user', field: { class: 'metadata' } },
+   { path: 'still_unconfigured[]', field: { class: 'metadata' } },
+   { path: 'steps[].step', field: { class: 'metadata' } },
+   { path: 'steps[].ok', field: { class: 'metadata' } },
+   { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'steps[].detail.device', field: { class: 'record_id', recordType: 'device' } },
+   { path: 'steps[].detail.phonenumber', field: { class: 'record_id', recordType: 'phonenumber' } },
+   { path: 'steps[].detail.user', field: { class: 'record_id', recordType: 'user' } },
+   { path: 'steps[].detail', resource: 'User' },
+   { path: 'steps[].detail', resource: 'Device' },
+   { path: 'steps[].detail', resource: 'Phonenumber' },
+   { path: 'user_record', resource: 'User' },
+   { path: 'user_record.error', field: { class: 'metadata' } },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const user = String(args.user);
@@ -1003,9 +1205,6 @@ const provision_user: CuratedTool = {
   }
 
   if (args.phone_number) {
-   // Phone numbers are dialrules under the hood, so this endpoint takes the
-   // destination user rather than a nested path. It does not accept
-   // `synchronous`, so it is last and its result is read back below.
    const did = await safe(client.request({
     method: 'POST',
     pathTemplate: '/domains/{domain}/phonenumbers',
@@ -1041,12 +1240,6 @@ const provision_user: CuratedTool = {
 
 // ---------------------------------------------------------------------------
 // 11. deprovision_user — delete, then clean up what the platform leaves behind
-//
-// SubscribersController::delete() cascades to devices, contacts, addresses,
-// timeframes, voicemail nags, cdrschedules, and MFA. It never touches
-// dialrules/DIDs pointed at the user, or their call queue agent rows. So a
-// deleted user leaves DIDs routing at a destination that no longer exists.
-// This inventories those first, deletes the user, then removes the leftovers.
 // ---------------------------------------------------------------------------
 
 const deprovision_user: CuratedTool = {
@@ -1070,14 +1263,30 @@ const deprovision_user: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
- output: { rules: [{ path: 'cascaded_by_netsapiens[]', field: { class: 'metadata' } }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'dry_run', field: { class: 'metadata' } },
+   { path: 'user', field: { class: 'metadata' } },
+   { path: 'cascaded_by_netsapiens[]', field: { class: 'metadata' } },
+   { path: 'inventory_warnings[]', field: { class: 'metadata' } },
+   { path: 'steps[].step', field: { class: 'metadata' } },
+   { path: 'steps[].ok', field: { class: 'metadata' } },
+   { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'plan.user', field: { class: 'metadata' } },
+   { path: 'plan.deletes_user', field: { class: 'metadata' } },
+   { path: 'plan.cascaded_by_netsapiens[]', field: { class: 'metadata' } },
+   { path: 'plan.phone_numbers_to_release[]', field: { class: 'metadata' } },
+   { path: 'plan.queue_memberships_to_remove[].queue', field: { class: 'metadata' } },
+   { path: 'plan.queue_memberships_to_remove[].agent_id', field: { class: 'metadata' } },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const user = String(args.user);
   const uid = `${user}@${domain}`;
   const dryRun = args.dry_run === true;
 
-  // Inventory first: after the user is gone these are harder to attribute.
   const [numbers, agents] = await Promise.all([
    safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/phonenumbers', pathParams: { domain } })),
    safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/agents', pathParams: { domain } })),
@@ -1090,7 +1299,6 @@ const deprovision_user: CuratedTool = {
   });
 
   const agentRows = Array.isArray(agents.data) ? (agents.data as Array<Record<string, unknown>>) : [];
-  // Agent ids are `user@domain`, sometimes with a `:device` suffix.
   const agentMemberships = agentRows.filter((a) => {
    const id = String(a['callqueue-agent-id'] ?? '');
    return id === uid || id.startsWith(`${uid}:`);
@@ -1117,8 +1325,6 @@ const deprovision_user: CuratedTool = {
   }));
   steps.push({ step: `delete user ${uid}`, ok: deleted.ok, error: deleted.error });
 
-  // Clean up regardless of the delete result: a half-deleted user with live
-  // DIDs pointed at them is the worst of both states.
   for (const n of orphanNumbers) {
    const phonenumber = String(n.phonenumber);
    const r = await safe(client.request({
@@ -1155,13 +1361,8 @@ const deprovision_user: CuratedTool = {
 
 // ---------------------------------------------------------------------------
 // 12. provision_call_queue — a queue with nobody in it answers nothing
-//
-// CallqueuesController::create() writes the callqueue and its huntgroup, then
-// stops. Agents are a separate endpoint, one call each, and a DID is a third.
-// A queue created on its own is invisible to callers and staffed by no one.
 // ---------------------------------------------------------------------------
 
-/** Normalise "1001" or "1001@acme.com" to a fully-qualified agent id. */
 function toUid(value: unknown, domain: string): string {
  const raw = String(value);
  return raw.includes('@') ? raw : `${raw}@${domain}`;
@@ -1192,7 +1393,18 @@ const provision_call_queue: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain' },
- output: { rules: [{ path: 'steps[].detail', resource: 'CallQueue' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'callqueue', field: { class: 'metadata' } },
+   { path: 'agents_added[]', field: { class: 'metadata' } },
+   { path: 'still_unconfigured[]', field: { class: 'metadata' } },
+   { path: 'steps[].step', field: { class: 'metadata' } },
+   { path: 'steps[].ok', field: { class: 'metadata' } },
+   { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'steps[].detail', resource: 'CallQueue' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const callqueue = String(args.callqueue);
@@ -1207,9 +1419,6 @@ const provision_call_queue: CuratedTool = {
     synchronous: 'yes',
     callqueue,
     domain,
-    // CallqueuesController::create validates domain, queue AND description.
-    // The spec marks only the first two required, so a create without a
-    // description is a 400 nothing in the schema warns you about.
     description: args.description ? String(args.description) : callqueue,
    },
   }));
@@ -1224,8 +1433,6 @@ const provision_call_queue: CuratedTool = {
    });
   }
 
-  // Agents are added one call each. Sequential so a failure part-way through
-  // is attributable to a specific agent rather than lost in a race.
   for (const a of agents) {
    const agentId = toUid(a, domain);
    const r = await safe(client.request({
@@ -1267,11 +1474,6 @@ const provision_call_queue: CuratedTool = {
 
 // ---------------------------------------------------------------------------
 // 13. deprovision_call_queue — same orphan problem as users
-//
-// CallqueuesController::delete_callqueue() removes the callqueue and huntgroup
-// rows and contains zero references to agents. Deleting a queue therefore
-// leaves every agent membership behind, and any DID pointed at the queue keeps
-// routing to something that no longer exists.
 // ---------------------------------------------------------------------------
 
 const deprovision_call_queue: CuratedTool = {
@@ -1294,7 +1496,21 @@ const deprovision_call_queue: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain' },
- output: { rules: [{ path: 'agents_to_remove[]', field: { class: 'metadata' } }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'dry_run', field: { class: 'metadata' } },
+   { path: 'callqueue', field: { class: 'metadata' } },
+   { path: 'inventory_warnings[]', field: { class: 'metadata' } },
+   { path: 'steps[].step', field: { class: 'metadata' } },
+   { path: 'steps[].ok', field: { class: 'metadata' } },
+   { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'plan.callqueue', field: { class: 'metadata' } },
+   { path: 'plan.deletes_queue', field: { class: 'metadata' } },
+   { path: 'plan.agents_to_remove[]', field: { class: 'metadata' } },
+   { path: 'plan.phone_numbers_to_release[]', field: { class: 'metadata' } },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const callqueue = String(args.callqueue);
@@ -1327,8 +1543,6 @@ const deprovision_call_queue: CuratedTool = {
 
   const steps: Array<{ step: string; ok: boolean; error?: string }> = [];
 
-  // Agents first: once the queue row is gone the membership endpoint has no
-  // queue to address, so the rows become unreachable through the API.
   for (const a of agentRows) {
    const agentId = String(a['callqueue-agent-id']);
    const r = await safe(client.request({
@@ -1369,13 +1583,7 @@ const deprovision_call_queue: CuratedTool = {
 };
 
 // ---------------------------------------------------------------------------
-// 14. set_hold_message — the one media family with no upload-free path
-//
-// Greetings and music-on-hold both offer a text-to-speech variant and a
-// base64-in-JSON variant, so the model can set them without ever sending a
-// file. Hold messages offer neither: POST and PUT on /msg accept nothing but
-// multipart/form-data. Reading and deleting them works; creating one was
-// simply unreachable from here until the client learned to send multipart.
+// 14. set_hold_message: upload audio for hold message
 // ---------------------------------------------------------------------------
 
 const set_hold_message: CuratedTool = {
@@ -1400,7 +1608,17 @@ const set_hold_message: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
- output: { rules: [{ path: 'result.data', resource: 'Audiofile' }] },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'scope', field: { class: 'metadata' } },
+   { path: 'action', field: { class: 'metadata' } },
+   { path: 'filename', field: { class: 'metadata' } },
+   { path: 'result.ok', field: { class: 'metadata' } },
+   { path: 'result.error', field: { class: 'metadata' } },
+   { path: 'result.data', resource: 'Audiofile' },
+  ],
+ },
  handler: async (args, client) => {
   const domain = str(args.domain);
   const audio = String(args.audio_base64 ?? '');
