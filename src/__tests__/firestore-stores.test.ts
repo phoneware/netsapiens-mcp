@@ -44,6 +44,16 @@ if (!emulatorRunning) {
   'and export FIRESTORE_EMULATOR_HOST=localhost:8080 to run these tests.',
  );
 }
+function deferred<T = unknown>() {
+ let resolve!: (value: T | PromiseLike<T>) => void;
+ let reject!: (reason?: unknown) => void;
+ const promise = new Promise<T>((res, rej) => {
+  resolve = res;
+  reject = rej;
+ });
+ return { promise, resolve, reject };
+}
+
 
 describe.skipIf(!emulatorRunning)('FirestoreTokenStore (emulator)', () => {
  let store: import('../auth/firestore-token-store.js').FirestoreTokenStore;
@@ -470,7 +480,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    nsUserRole: 'domain_admin',
   });
 
-  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = Promise.withResolvers<unknown>();
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
 
   const inst1Promise = store1.refreshNsToken(bearerToken, async () => {
    await slowRefreshPromise;
@@ -610,7 +620,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    nsUserRole: 'domain_admin',
   });
 
-  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = Promise.withResolvers<unknown>();
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
 
   // Store 1 starts refresh with short lease, but its refresh call hangs
   const store1Promise = store1.refreshNsToken(
