@@ -26,6 +26,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { randomBytes } from 'node:crypto';
 import { Timestamp } from '@google-cloud/firestore';
+import type { Firestore } from '@google-cloud/firestore';
 import { NetSapiensAuthProvider, UpstreamGrantRejectedError } from '../auth/netsapiens-auth-provider.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
@@ -34,6 +35,7 @@ import {
  FirestoreTokenStore,
  FirestoreClientsStore,
  FirestoreAuthCodeStore,
+ LeaseLostError,
 } from '../auth/firestore-stores.js';
 const emulatorRunning = !!process.env.FIRESTORE_EMULATOR_HOST;
 
@@ -895,56 +897,54 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    nsUserRole: 'domain_admin',
   });
 
-  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
-  const { promise: inst1StartedPromise, resolve: resolveInst1Started } = deferred<unknown>();
+  const store1 = provider1.tokenStore as FirestoreTokenStore;
+  const store2 = provider2.tokenStore as FirestoreTokenStore;
+  const store1WithDb = store1 as unknown as { db: Firestore };
+  const tokenRef = store1WithDb.db.collection(collection).doc(bearerToken);
 
-  const origRefreshNsToken1 = (provider1.tokenStore as FirestoreTokenStore).refreshNsToken.bind(provider1.tokenStore);
-  (provider1.tokenStore as FirestoreTokenStore).refreshNsToken = (tok, doRefresh) =>
-   origRefreshNsToken1(tok, doRefresh, { maxWaitMs: 5000, leaseDurationMs: 100 });
+  const refresh1 = vi.spyOn(store1, 'refreshNsToken');
+  const newerGrant = vi.fn(async () => ({
+   access_token: 'fresh-ns-token-provider2',
+   refresh_token: 'fresh-refresh-provider2',
+   expires_in: 3600,
+  }));
+  const firstGrant = vi.fn(async () => {
+   // This callback runs only after provider 1's acquisition transaction commits.
+   // Make takeover eligible without waiting for wall-clock expiry.
+   await tokenRef.update({ refreshLockUntil: 0 });
 
-  (provider1 as unknown as { nsRefreshGrant: (...args: unknown[]) => Promise<unknown> }).nsRefreshGrant = async () => {
-   resolveInst1Started(null);
-   await slowRefreshPromise;
+   // Complete the real second-instance refresh before provider 1 returns.
+   await store2.refreshNsToken(bearerToken, newerGrant);
+
    return {
     access_token: 'late-ns-token-provider1',
     refresh_token: 'late-refresh-provider1',
     expires_in: 3600,
     username: 'shared@domain.com',
    };
-  };
-
-  const req1Promise = (async () =>
-   request(app1)
-    .post('/mcp')
-    .set('Authorization', `Bearer ${bearerToken}`)
-  )();
-  await inst1StartedPromise;
-  // Wait for provider1's 100ms lease to expire
-  await new Promise((r) => setTimeout(r, 150));
-
-  // Provider2 now refreshes the token successfully
-  (provider2 as unknown as { nsRefreshGrant: (...args: unknown[]) => Promise<unknown> }).nsRefreshGrant = async () => ({
-   access_token: 'fresh-ns-token-provider2',
-   refresh_token: 'fresh-refresh-provider2',
-   expires_in: 3600,
-   username: 'shared@domain.com',
   });
 
-  const refreshedBy2 = await (provider2.tokenStore as FirestoreTokenStore).refreshNsToken(
-   bearerToken,
-   (current) => (provider2 as unknown as { nsRefreshGrant: (r: string, u?: string) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }> }).nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
-  );
-  expect(refreshedBy2.nsAccessToken).toBe('fresh-ns-token-provider2');
+  const mutableProvider1 = provider1 as unknown as {
+   nsRefreshGrant: (...args: unknown[]) => Promise<unknown>;
+  };
+  mutableProvider1.nsRefreshGrant = firstGrant;
 
-  // Release provider1 to attempt late commit after losing lease
-  resolveSlowRefresh(null);
-  const res1 = await req1Promise;
+  const res1 = await request(app1)
+   .post('/mcp')
+   .set('Authorization', `Bearer ${bearerToken}`)
+   .send();
 
-  // Verify Firestore itself (bypass local in-memory cache)
-  (provider2.tokenStore as FirestoreTokenStore).clearCache();
-  const surviving = await provider2.tokenStore.get(bearerToken);
-  expect(surviving).toBeDefined();
-  expect(surviving?.nsAccessToken).toBe('fresh-ns-token-provider2');
+  expect(firstGrant).toHaveBeenCalledOnce();
+  expect(newerGrant).toHaveBeenCalledOnce();
+  expect(refresh1).toHaveBeenCalledOnce();
+  await expect(refresh1.mock.results[0].value).rejects.toBeInstanceOf(LeaseLostError);
+
+  store2.clearCache();
+  const surviving = await store2.get(bearerToken);
+  expect(surviving).toMatchObject({
+   nsAccessToken: 'fresh-ns-token-provider2',
+   nsRefreshToken: 'fresh-refresh-provider2',
+  });
   expect(res1.status).toBe(200);
  });
 
