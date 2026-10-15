@@ -121,9 +121,20 @@ describe('protocol version negotiation', () => {
       await t.close();
     }
   });
+  it('leaves impossible calendar dates like 2026-02-31 for SDK rejection', async () => {
+    const t = await bootTransport();
+    try {
+      const answered = await t.toolsList('2026-02-31');
+      expect(answered.status).toBe(400);
+      expect(answered.refusedForVersion).toBe(true);
+    } finally {
+      await t.close();
+    }
+  });
+
 
   it('leaves older or malformed headers untouched in negotiateProtocolVersion', () => {
-    for (const invalid of ['2024-01-01', 'garbage', 'invalid-date', '2020-99-99']) {
+    for (const invalid of ['2024-01-01', 'garbage', 'invalid-date', '2020-99-99', '2026-02-31', '2025-02-29', '2026-04-31', '2026-13-01', '2026-00-10']) {
       const req = {
         headers: { 'mcp-protocol-version': invalid } as NodeJS.Dict<string | string[]>,
         rawHeaders: ['MCP-Protocol-Version', invalid],
