@@ -13,7 +13,7 @@ import { textResult, STANDARD_WRAPPER_RULES } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
 import { fieldsMatch, isOnOrAfter, numbersMatch } from './matching.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
-import { getDomainTimeZone, getSensibleDateWindow } from './catalog.js';
+import { getSensibleDateWindow } from './catalog.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -461,8 +461,7 @@ const queue_health: CuratedTool = {
   const queues = Array.isArray(queuesResp.data) ? queuesResp.data : [];
   const limited = queues.slice(0, cap);
 
-  const tz = await getDomainTimeZone(client, domain);
-  const window = getSensibleDateWindow(tz);
+  const window = getSensibleDateWindow();
 
   const annotated = await Promise.all(
    limited.map(async (q) => {
@@ -533,8 +532,7 @@ const agent_dashboard: CuratedTool = {
   const agent = str(args.agent);
   const isBasicUser = userRole != null && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
 
-  const tz = await getDomainTimeZone(client, domain);
-  const window = getSensibleDateWindow(tz);
+  const window = getSensibleDateWindow();
 
   let statusPromise: Promise<{ ok: boolean; data?: unknown; error?: string }>;
   if (!isBasicUser) {
@@ -589,15 +587,28 @@ const agent_dashboard: CuratedTool = {
   const statsParams: Record<string, string> = { domain };
   if (statsAgent) statsParams.agent = statsAgent;
 
-  const [status, recentCalls, stats] = await Promise.all([
+  const rawStats = await safe(client.request({
+   method: 'GET',
+   pathTemplate: statsTemplate,
+   pathParams: statsParams,
+   queryParams: { start_date: window.startDate, end_date: window.endDate },
+  }));
+  let normalizedStatsData = rawStats.data;
+  if (rawStats.ok && rawStats.data && typeof rawStats.data === 'object' && !Array.isArray(rawStats.data)) {
+   const obj = rawStats.data as Record<string, unknown>;
+   const isMultiAgent = Object.values(obj).some((v) => typeof v === 'object' && v !== null && 'queue-calls-answered-count' in (v as Record<string, unknown>));
+   if (isMultiAgent) {
+    normalizedStatsData = Object.entries(obj).map(([agentId, s]) => ({
+     agent: agentId,
+     ...(typeof s === 'object' && s !== null ? (s as Record<string, unknown>) : {}),
+    }));
+   }
+  }
+  const stats = { ok: rawStats.ok, error: rawStats.error, data: normalizedStatsData };
+
+  const [status, recentCalls] = await Promise.all([
    statusPromise,
    safe(client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}/cdrs', pathParams: { domain, user: agent }, queryParams: { limit: 25 } })),
-   safe(client.request({
-    method: 'GET',
-    pathTemplate: statsTemplate,
-    pathParams: statsParams,
-    queryParams: { start_date: window.startDate, end_date: window.endDate },
-   })),
   ]);
   return textResult({ agent, domain, status, recent_calls: recentCalls, statistics: stats });
  },
@@ -701,10 +712,12 @@ const find_and_call: CuratedTool = {
    { path: 'dialed', field: { class: 'metadata' } },
    { path: 'matches[].source', field: { class: 'metadata' } },
    { path: 'matches[].extension', field: { class: 'metadata' } },
+   { path: 'matches[].record.user', field: { class: 'record_id', recordType: 'user' } },
    { path: 'matches[].record', resource: 'Contact' },
    { path: 'matches[].record', resource: 'User' },
    { path: 'match.source', field: { class: 'metadata' } },
    { path: 'match.extension', field: { class: 'metadata' } },
+   { path: 'match.record.user', field: { class: 'record_id', recordType: 'user' } },
    { path: 'match.record', resource: 'Contact' },
    { path: 'match.record', resource: 'User' },
    { path: 'call.ok', field: { class: 'metadata' } },
@@ -827,17 +840,17 @@ const recent_activity_for_number: CuratedTool = {
    safe<Array<Record<string, unknown>>>(
     client.request({
      method: 'GET',
-     pathTemplate: '/domains/{domain}/cdrs#2',
+     pathTemplate: '/domains/{domain}/cdrs',
      pathParams: { domain },
-     queryParams: { caller: number, 'datetime-start': since, 'datetime-end': until, limit },
+     queryParams: { caller: number, limit, 'datetime-start': since, 'datetime-end': until },
     }),
    ),
    safe<Array<Record<string, unknown>>>(
     client.request({
      method: 'GET',
-     pathTemplate: '/domains/{domain}/cdrs#2',
+     pathTemplate: '/domains/{domain}/cdrs',
      pathParams: { domain },
-     queryParams: { dialled: number, 'datetime-start': since, 'datetime-end': until, limit },
+     queryParams: { dialled: number, limit, 'datetime-start': since, 'datetime-end': until },
     }),
    ),
    safe<Array<Record<string, unknown>>>(
@@ -845,42 +858,37 @@ const recent_activity_for_number: CuratedTool = {
      method: 'GET',
      pathTemplate: '/domains/{domain}/messagesessions',
      pathParams: { domain },
+     queryParams: { limit: Math.max(limit * 4, 100) },
     }),
    ),
   ]);
 
-  const callsList = [
-   ...(Array.isArray(callsAsCaller.data) ? callsAsCaller.data : []),
-   ...(Array.isArray(callsAsDialled.data) ? callsAsDialled.data : []),
-  ];
-  // Dedupe by id (a call can appear in both if dialed and caller both match)
-  const seenCallIds = new Set<string>();
-  const uniqueCalls: Array<Record<string, unknown>> = [];
-  for (const c of callsList) {
-   const id = String(c['id'] ?? '');
-   if (id && seenCallIds.has(id)) continue;
-   if (id) seenCallIds.add(id);
-   uniqueCalls.push(c);
+  const callsById = new Map<unknown, Record<string, unknown>>();
+  for (const batch of [callsAsCaller, callsAsDialled]) {
+   if (!batch.ok || !Array.isArray(batch.data)) continue;
+   for (const call of batch.data) {
+    // Client-side backstop on top of the server-side datetime-start/end
+    // bound (see note above on why the server side alone isn't trusted).
+    if (since && !isOnOrAfter(call['call-start-datetime'] ?? call['call-answer-datetime'], since)) continue;
+    callsById.set(call.id ?? JSON.stringify(call), call);
+   }
   }
-  // Sort descending by call-start-datetime
-  uniqueCalls.sort((a, b) => {
-   const ta = String(a['call-start-datetime'] ?? '');
-   const tb = String(b['call-start-datetime'] ?? '');
-   return tb.localeCompare(ta);
-  });
-  const callsOk = callsAsCaller.ok || callsAsDialled.ok;
   const calls = {
-   ok: callsOk,
-   error: callsOk ? undefined : callsAsCaller.error ?? callsAsDialled.error,
-   data: uniqueCalls.slice(0, limit),
+   ok: callsAsCaller.ok || callsAsDialled.ok,
+   error: callsAsCaller.ok || callsAsDialled.ok ? undefined : (callsAsCaller.error ?? callsAsDialled.error),
+   data: Array.from(callsById.values()).slice(0, limit),
   };
 
+  const matchesNumber = (session: Record<string, unknown>) => {
+   const haystack = [session['messagesession-remote'], session['messagesession-sms-number'], session['messagesession-participants']]
+    .filter((v) => v != null)
+    .map(String)
+    .join(',');
+   return numbersMatch(haystack, number);
+  };
   const filteredSessions = messageSessions.ok && Array.isArray(messageSessions.data)
    ? messageSessions.data
-    .filter((s) => {
-     const p = String(s['messagesession-participant-number'] ?? s['messagesession-with-number'] ?? '');
-     return numbersMatch(p, number);
-    })
+    .filter(matchesNumber)
     .filter((s) => !since || isOnOrAfter(s['messagesession-last-timestamp'] ?? s['messagesession-start-timestamp'], since))
     .slice(0, limit)
    : messageSessions.data;
@@ -976,29 +984,23 @@ const voicemail_inbox_summary: CuratedTool = {
  * typically emit ISO strings, "YYYY-MM-DD", or natural-ish combinations.
  * Accepts ISO, "YYYY-MM-DD", or "YYYY-MM-DD HH:MM".
  */
-function toNsDateTime(raw: unknown, defaultTime: string): { date: string; time: string } | undefined {
- if (!raw) return undefined;
- const s = String(raw).trim();
- const m = s.match(/^(\d{4})-?(\d{2})-?(\d{2})(?:[T ](\d{2}):?(\d{2}))?/);
- if (!m) return undefined;
- const date = `${m[1]}${m[2]}${m[3]}`;
- const time = m[4] && m[5] ? `${m[4]}${m[5]}` : defaultTime;
- return { date, time };
+export function toNsDateTime(
+ value: unknown,
+ defaultTime: string,
+): { date: string; time: string } | null {
+ const raw = String(value ?? '').trim();
+ if (!raw) return null;
+ const m = raw.match(/^(\d{4})-?(\d{2})-?(\d{2})(?:[T\s]+(\d{2}):?(\d{2}))?/);
+ if (!m) return null;
+ const [, y, mo, d, hh, mm] = m;
+ return { date: `${y}${mo}${d}`, time: hh ? `${hh}${mm}` : defaultTime };
 }
 
-function forwardAlways(destination: string | undefined, enabled: boolean): Record<string, unknown> {
- if (!enabled || !destination) {
-  return {
-   'forward-always': {
-    enabled: 'no',
-    destination: '',
-   },
-  };
- }
+function forwardAlways(destination: string | undefined, enabled: boolean) {
  return {
   'forward-always': {
-   enabled: 'yes',
-   destination,
+   enabled: enabled ? 'yes' : 'no',
+   parameters: enabled && destination ? [destination] : [],
   },
  };
 }
@@ -1176,6 +1178,9 @@ const provision_user: CuratedTool = {
    { path: 'steps[].step', field: { class: 'metadata' } },
    { path: 'steps[].ok', field: { class: 'metadata' } },
    { path: 'steps[].error', field: { class: 'metadata' } },
+   { path: 'steps[].detail.device', field: { class: 'record_id', recordType: 'device' } },
+   { path: 'steps[].detail.phonenumber', field: { class: 'record_id', recordType: 'phonenumber' } },
+   { path: 'steps[].detail.user', field: { class: 'record_id', recordType: 'user' } },
    { path: 'steps[].detail', resource: 'User' },
    { path: 'steps[].detail', resource: 'Device' },
    { path: 'steps[].detail', resource: 'Phonenumber' },

@@ -19,23 +19,6 @@ import type { GenericApiClient } from '../../generated/types.js';
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
 
-export async function getDomainTimeZone(client: GenericApiClient, domain: string): Promise<string | undefined> {
- try {
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/{domain}',
-   pathParams: { domain },
-  });
-  if (r.success && r.data && typeof r.data === 'object') {
-   const tz = (r.data as Record<string, unknown>)['time-zone'];
-   if (typeof tz === 'string' && tz) return tz;
-  }
- } catch {
-  // Ignore error; fallback to UTC/last 24h
- }
- return undefined;
-}
-
 export function getSensibleDateWindow(tz?: string): {
  startDate: string;
  endDate: string;
@@ -43,36 +26,34 @@ export function getSensibleDateWindow(tz?: string): {
  endDateTime: string;
 } {
  const now = new Date();
- if (tz) {
-  try {
-   const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-   });
-   const dateStr = formatter.format(now); // "YYYY-MM-DD"
-   return {
-    startDate: dateStr,
-    endDate: dateStr,
-    startDateTime: `${dateStr} 00:00:00`,
-    endDateTime: `${dateStr} 23:59:59`,
-   };
-  } catch {
-   // Fallback below
-  }
+ const timeZone = tz || 'America/Phoenix';
+ try {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+   timeZone,
+   year: 'numeric',
+   month: '2-digit',
+   day: '2-digit',
+  });
+  const dateStr = formatter.format(now); // "YYYY-MM-DD"
+  return {
+   startDate: dateStr,
+   endDate: dateStr,
+   startDateTime: `${dateStr} 00:00:00`,
+   endDateTime: `${dateStr} 23:59:59`,
+  };
+ } catch {
+  const past24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const toDate = (d: Date) =>
+   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  const toDateTime = (d: Date) =>
+   `${toDate(d)} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+  return {
+   startDate: toDate(past24h),
+   endDate: toDate(now),
+   startDateTime: toDateTime(past24h),
+   endDateTime: toDateTime(now),
+  };
  }
- const past24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
- const toDate = (d: Date) =>
-  `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
- const toDateTime = (d: Date) =>
-  `${toDate(d)} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
- return {
-  startDate: toDate(past24h),
-  endDate: toDate(now),
-  startDateTime: toDateTime(past24h),
-  endDateTime: toDateTime(now),
- };
 }
 
 // ---------------------------------------------------------------------------
@@ -96,24 +77,9 @@ const find_user: CuratedTool = {
  },
  targets: { domainArg: 'domain' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'User' }] },
- handler: async (args, client, userRole) => {
+ handler: async (args, client) => {
   const query = str(args.query, '');
   const limit = num(args.limit) ?? 10;
-  const isBasicUser = userRole != null && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
-
-  if (isBasicUser) {
-   const selfRes = await client.request({
-    method: 'GET',
-    pathTemplate: '/domains/{domain}/users/~',
-    pathParams: { domain: str(args.domain) },
-   });
-   if (!selfRes.success || !selfRes.data || typeof selfRes.data !== 'object') {
-    return textResult({ success: true, data: [], note: 'Basic users can only view their own user profile.' });
-   }
-   const self = selfRes.data as Record<string, unknown>;
-   const matches = fieldsMatch(self, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], query) ? [self] : [];
-   return textResult({ success: true, data: matches, note: 'Basic users can only view their own user profile.' });
-  }
 
   // /domains/{domain}/users has no server-side name/login/email/extension
   // filter (only limit/start) — the API silently ignores an unrecognized
@@ -125,7 +91,7 @@ const find_user: CuratedTool = {
    queryParams: { limit: 1000 },
   });
   if (!r.success) {
-   if (r.error && /invalid scope/i.test(r.error)) {
+   if (r.error && /invalid scope|401/i.test(r.error)) {
     const selfRes = await client.request({
      method: 'GET',
      pathTemplate: '/domains/{domain}/users/~',
@@ -530,16 +496,17 @@ const call_volume: CuratedTool = {
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
   const scope_note = cdrScopeNote(scope, args, userRole);
-  const tz = await getDomainTimeZone(client, str(args.domain));
-  const window = getSensibleDateWindow(tz);
   const since = args.since ? String(args.since) : undefined;
-  const until = args.until ? String(args.until) : undefined;
-  const startParam = since
-   ? (/^\d{4}-\d{2}-\d{2}$/.test(since) ? `${since} 00:00:00` : since)
-   : window.startDateTime;
-  const endParam = until
-   ? (/^\d{4}-\d{2}-\d{2}$/.test(until) ? `${until} 23:59:59` : until)
-   : window.endDateTime;
+  let startParam: string;
+  let endParam: string;
+  if (since) {
+   startParam = since;
+   endParam = args.until ? String(args.until) : new Date().toISOString();
+  } else {
+   const window = getSensibleDateWindow();
+   startParam = window.startDateTime;
+   endParam = window.endDateTime;
+  }
   const queryParams: Record<string, unknown> = {
    'datetime-start': startParam,
    'datetime-end': endParam,
@@ -1191,10 +1158,17 @@ const queue_status: CuratedTool = {
   ],
  },
  handler: async (args, client) => {
-  const tz = await getDomainTimeZone(client, str(args.domain));
-  const window = getSensibleDateWindow(tz);
-  const startDate = args.start_date ? String(args.start_date) : args.since ? String(args.since) : window.startDate;
-  const endDate = args.end_date ? String(args.end_date) : args.until ? String(args.until) : window.endDate;
+  const since = args.since ? String(args.since) : args.start_date ? String(args.start_date) : undefined;
+  let startDate: string;
+  let endDate: string;
+  if (since) {
+   startDate = since;
+   endDate = args.until ? String(args.until) : args.end_date ? String(args.end_date) : new Date().toISOString();
+  } else {
+   const window = getSensibleDateWindow();
+   startDate = window.startDate;
+   endDate = window.endDate;
+  }
   const r = await client.request({
    method: 'GET',
    pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
@@ -1376,7 +1350,7 @@ const my_devices: CuratedTool = {
    method: 'GET',
    pathTemplate: '/domains/~/users/~/devices',
   });
-  if (!r.success && r.error && /invalid scope/i.test(r.error)) {
+  if (!r.success && r.error && /invalid scope|401/i.test(r.error)) {
    return textResult({
     success: true,
     data: [],
@@ -1462,15 +1436,22 @@ const call_statistics: CuratedTool = {
   ],
  },
  handler: async (args, client) => {
-  const tz = await getDomainTimeZone(client, str(args.domain));
-  const window = getSensibleDateWindow(tz);
   const pathTemplate = args.queue
    ? '/domains/{domain}/statistics/callqueues/{queue}'
    : '/domains/{domain}/statistics/callqueues/aggregate';
   const pathParams: Record<string, string> = { domain: str(args.domain) };
   if (args.queue) pathParams.queue = String(args.queue);
-  const startDate = args.start_date ? String(args.start_date) : args.since ? String(args.since) : window.startDate;
-  const endDate = args.end_date ? String(args.end_date) : args.until ? String(args.until) : window.endDate;
+  const since = args.since ? String(args.since) : args.start_date ? String(args.start_date) : undefined;
+  let startDate: string;
+  let endDate: string;
+  if (since) {
+   startDate = since;
+   endDate = args.until ? String(args.until) : args.end_date ? String(args.end_date) : new Date().toISOString();
+  } else {
+   const window = getSensibleDateWindow();
+   startDate = window.startDate;
+   endDate = window.endDate;
+  }
   const r = await client.request({
    method: 'GET',
    pathTemplate,
@@ -1513,16 +1494,23 @@ const agent_statistics: CuratedTool = {
   ],
  },
  handler: async (args, client) => {
-  const tz = await getDomainTimeZone(client, str(args.domain));
-  const window = getSensibleDateWindow(tz);
   const agent = args.agent && args.agent !== '~' ? String(args.agent) : undefined;
   const pathTemplate = agent
    ? '/domains/{domain}/statistics/agent/{agent}'
    : '/domains/{domain}/statistics/agent';
   const pathParams: Record<string, string> = { domain: str(args.domain) };
   if (agent) pathParams.agent = agent;
-  const startDate = args.start_date ? String(args.start_date) : args.since ? String(args.since) : window.startDate;
-  const endDate = args.end_date ? String(args.end_date) : args.until ? String(args.until) : window.endDate;
+  const since = args.since ? String(args.since) : args.start_date ? String(args.start_date) : undefined;
+  let startDate: string;
+  let endDate: string;
+  if (since) {
+   startDate = since;
+   endDate = args.until ? String(args.until) : args.end_date ? String(args.end_date) : new Date().toISOString();
+  } else {
+   const window = getSensibleDateWindow();
+   startDate = window.startDate;
+   endDate = window.endDate;
+  }
   const r = await client.request({
    method: 'GET',
    pathTemplate,
@@ -1530,8 +1518,17 @@ const agent_statistics: CuratedTool = {
    queryParams: {
     start_date: startDate,
     end_date: endDate,
+    'datetime-start': startDate,
+    'datetime-end': endDate,
    },
   });
+  if (r.success && r.data && typeof r.data === 'object' && !Array.isArray(r.data)) {
+   const items = Object.entries(r.data as Record<string, unknown>).map(([agentId, stats]) => ({
+    agent: agentId,
+    ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
+   }));
+   return textResult({ ...r, data: items });
+  }
   return textResult(r);
  },
 };

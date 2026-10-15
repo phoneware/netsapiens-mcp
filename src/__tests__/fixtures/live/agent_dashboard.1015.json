@@ -1,0 +1,132 @@
+{
+  "agent": "~",
+  "domain": "~",
+  "status": {
+    "ok": true,
+    "data": [
+      {
+        "domain": "PhonewareLab",
+        "callqueue": "1099",
+        "callqueue-agent-id": "1002@PhonewareLab",
+        "name-full-name": "Jane Doe",
+        "callqueue-agent-availability-type": "automatic",
+        "callqueue-agent-availability-for-dispatch": "unavailable",
+        "callqueue-agent-wrap-up-allowance-seconds": 0,
+        "callqueue-agent-has-registered-devices": "dnd",
+        "callqueue-agent-dispatch-queue-priority-ordinal": 0,
+        "sub_portal_status": "",
+        "active-calls-total-current": 0,
+        "agent-department": "",
+        "auto_ans": "no",
+        "callqueue-agent-answer-confirmation-enabled": "no",
+        "callqueue-agent-entry-type": "user",
+        "callqueue-agent-max-concurrent-sms-conversations": 0,
+        "last-callqueue-dispatch-datetime": null,
+        "last-modified-datetime": "2026-10-13T22:50:01+00:00",
+        "limits-max-active-calls-total": 1,
+        "login-username": "1002@PhonewareLab",
+        "name-first-name": "Jane",
+        "name-last-name": "Doe",
+        "ordinal-order": 0,
+        "queue_list": 1099,
+        "queue_list_status": "immediate",
+        "sub_scope": "Basic User",
+        "sub_site": ""
+      },
+      {
+        "domain": "PhonewareLab",
+        "callqueue": "1099",
+        "callqueue-agent-id": "1011@PhonewareLab",
+        "name-full-name": "Jane Doe",
+        "callqueue-agent-availability-type": "automatic",
+        "callqueue-agent-availability-for-dispatch": "available",
+        "callqueue-agent-wrap-up-allowance-seconds": 0,
+        "callqueue-agent-has-registered-devices": "offnet",
+        "callqueue-agent-dispatch-queue-priority-ordinal": 0,
+        "active-calls-total-current": 0,
+        "agent-department": "",
+        "auto_ans": "no",
+        "callqueue-agent-answer-confirmation-enabled": "no",
+        "callqueue-agent-entry-type": "user",
+        "callqueue-agent-max-concurrent-sms-conversations": 0,
+        "last-callqueue-dispatch-datetime": null,
+        "last-modified-datetime": "2026-10-14T23:05:10+00:00",
+        "limits-max-active-calls-total": 1,
+        "login-username": "1011@PhonewareLab",
+        "name-first-name": "Jane",
+        "name-last-name": "Doe",
+        "ordinal-order": 0,
+        "queue_list": 1099,
+        "queue_list_status": "immediate",
+        "sub_portal_status": null,
+        "sub_scope": "Basic User",
+        "sub_site": ""
+      },
+      {
+        "domain": "PhonewareLab",
+        "callqueue": "1099",
+        "callqueue-agent-id": "1015@PhonewareLab",
+        "name-full-name": "Jane Doe",
+        "callqueue-agent-availability-type": "automatic",
+        "callqueue-agent-availability-for-dispatch": "unavailable",
+        "callqueue-agent-wrap-up-allowance-seconds": 0,
+        "callqueue-agent-has-registered-devices": "no",
+        "callqueue-agent-dispatch-queue-priority-ordinal": 0,
+        "active-calls-total-current": 0,
+        "agent-department": "",
+        "auto_ans": "no",
+        "callqueue-agent-answer-confirmation-enabled": "no",
+        "callqueue-agent-entry-type": "user",
+        "callqueue-agent-max-concurrent-sms-conversations": 0,
+        "last-callqueue-dispatch-datetime": null,
+        "last-modified-datetime": "2026-10-14T22:56:43+00:00",
+        "limits-max-active-calls-total": 1,
+        "login-username": "1015@PhonewareLab",
+        "name-first-name": "Jane",
+        "name-last-name": "Doe",
+        "ordinal-order": 0,
+        "queue_list": 1099,
+        "queue_list_status": "immediate",
+        "sub_portal_status": null,
+        "sub_scope": "Call Center Supervisor",
+        "sub_site": ""
+      }
+    ]
+  },
+  "recent_calls": {
+    "ok": true,
+    "data": []
+  },
+  "statistics": {
+    "ok": true,
+    "data": [
+      {
+        "agent": "1002",
+        "agent-name": "FarEnd Voicemail",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      },
+      {
+        "agent": "1011",
+        "agent-name": "Front Desk Proof",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      },
+      {
+        "agent": "1015",
+        "agent-name": "Supervisor Proof",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      }
+    ]
+  }
+}

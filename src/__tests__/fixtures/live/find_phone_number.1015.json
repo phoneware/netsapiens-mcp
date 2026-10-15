@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "data": [
+    {
+      "domain": "PhonewareLab",
+      "phonenumber": "16022226368",
+      "dial-rule-application": "to-user",
+      "dial-rule-description": "PhonewareLab main number",
+      "dial-rule-parameter": "",
+      "dial-rule-translation-destination-host": "PhonewareLab",
+      "dial-rule-translation-destination-user": "1002",
+      "dial-rule-translation-source-name": "[*]",
+      "enabled": "yes"
+    }
+  ]
+}

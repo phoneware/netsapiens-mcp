@@ -36,7 +36,7 @@ const ACTION_KEYWORDS: Record<string, true> = {
  * Action keywords cannot match wildcard parameter segments.
  */
 export function findSpecPath(pathTemplate: string): string[] {
- const want = pathTemplate.split('/').filter(Boolean);
+ const want = pathTemplate.replace(/#\d+$/, '').split('/').filter(Boolean);
  return Object.keys(spec.paths).filter((candidate) => {
   const got = candidate.replace(/#\d+$/, '').split('/').filter(Boolean);
   if (got.length !== want.length) return false;
@@ -111,7 +111,6 @@ function mockArgs(schema: ToolSchema | undefined, mode: 'full' | 'minimal') {
  }
  return args;
 }
-
 
 const ALL_TOOLS = [...CURATED_CATALOG, ...WORKFLOW_TOOLS];
 
@@ -343,6 +342,7 @@ describe('request paths gate', () => {
    expect(traceCall?.queryParams?.type).toBe('call_trace');
    expect(traceCall?.queryParams?.servers).toBe('core1.netsapiens.com');
   });
+
   it('completed call as domain_admin falls from active 404 to /domains/{domain}/cdrs and calls /sipflow with servers from CDR', async () => {
    const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
    expect(tool).toBeTruthy();
@@ -533,6 +533,206 @@ describe('request paths gate', () => {
    }
    const pathTemplates = recorded.map((r) => r.pathTemplate);
    expect(pathTemplates).toContain('/domains/{domain}/phones');
+  });
+ });
+
+ describe('defect fixes: request paths and scoping', () => {
+  it('call_details searches user CDRs for basic user when active call 404s', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_details');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: '404 Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/users/{user}/cdrs') {
+      return { success: true, data: [{ id: 'cdr-123', domain: 'test' }] };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'cdr-123' }, mockClient, 'user');
+   const templates = recorded.map((r) => r.pathTemplate);
+   expect(templates).toContain('/domains/{domain}/users/{user}/calls/{callid}');
+   expect(templates).toContain('/domains/{domain}/users/{user}/cdrs');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(true);
+   expect(parsed.data.id).toBe('cdr-123');
+  });
+
+  it('call_details searches domain CDRs for domain_admin when active call 404s', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_details');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: '404 Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return { success: true, data: [{ id: 'cdr-456', domain: 'test' }] };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'cdr-456' }, mockClient, 'domain_admin');
+   const templates = recorded.map((r) => r.pathTemplate);
+   expect(templates).toContain('/domains/{domain}/users/{user}/calls/{callid}');
+   expect(templates).toContain('/domains/{domain}/cdrs');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(true);
+   expect(parsed.data.id).toBe('cdr-456');
+  });
+
+  it('find_user falls back to /domains/{domain}/users/~ when /domains/{domain}/users 401s for basic user', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'find_user');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate === '/domains/{domain}/users') {
+      return { success: false, error: '401 Invalid Scope [APP001]' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/users/~') {
+      return { success: true, data: { user: '1011', 'name-first-name': 'Alice' } };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ query: '1011' }, mockClient, 'user');
+   const templates = recorded.map((r) => r.pathTemplate);
+   expect(templates).toContain('/domains/{domain}/users');
+   expect(templates).toContain('/domains/{domain}/users/~');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(true);
+   expect(parsed.data.length).toBe(1);
+  });
+
+  it('my_devices returns not available note when NS answers 401 for basic user', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'my_devices');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: false, error: '401 Invalid Scope [APP001]' };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({}, mockClient, 'user');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(true);
+   expect(parsed.note).toContain('not available');
+  });
+
+  it('agent_status calls /domains/{domain}/agents for domain_admin', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'agent_status');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: true, data: [{ 'callqueue-agent-id': '1011@dom' }] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({}, mockClient, 'domain_admin');
+   const templates = recorded.map((r) => r.pathTemplate);
+   expect(templates).toContain('/domains/{domain}/agents');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(true);
+  });
+
+  it('call_volume defaults to sensible window in Y-m-d H:i:s format when since is omitted', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_volume');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: true, data: { total: 5, minutes: 2, seconds: 120 } };
+    },
+   } as unknown as GenericApiClient;
+
+   await tool!.handler({}, mockClient, 'domain_admin');
+   const countCall = recorded.find((r) => r.pathTemplate.includes('/count'));
+   expect(countCall).toBeDefined();
+   const qp = countCall?.queryParams as Record<string, string>;
+   expect(qp['datetime-start']).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+   expect(qp['datetime-end']).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  });
+
+  it('queue_status defaults start_date and end_date when omitted', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'queue_status');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   await tool!.handler({ queue: '1099' }, mockClient, 'domain_admin');
+   const statusCall = recorded.find((r) => r.pathTemplate.includes('/statistics/callqueues/'));
+   expect(statusCall).toBeDefined();
+   const qp = statusCall?.queryParams as Record<string, string>;
+   expect(qp.start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+   expect(qp.end_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('call_statistics defaults start_date and end_date when omitted', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_statistics');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   await tool!.handler({}, mockClient, 'domain_admin');
+   const statsCall = recorded.find((r) => r.pathTemplate.includes('/statistics/callqueues/'));
+   expect(statsCall).toBeDefined();
+   const qp = statsCall?.queryParams as Record<string, string>;
+   expect(qp.start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+   expect(qp.end_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('agent_statistics defaults start_date and end_date when omitted', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'agent_statistics');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     return { success: true, data: {} };
+    },
+   } as unknown as GenericApiClient;
+
+   await tool!.handler({}, mockClient, 'domain_admin');
+   const statsCall = recorded.find((r) => r.pathTemplate.includes('/statistics/agent'));
+   expect(statsCall).toBeDefined();
+   const qp = statsCall?.queryParams as Record<string, string>;
+   expect(qp.start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+   expect(qp.end_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
  });
 });

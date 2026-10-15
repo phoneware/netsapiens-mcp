@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "data": [
+    {
+      "filename": "vm-20261014230240002772-1060dbaaf1b6b354dbede99e21161b2e.wav",
+      "file-duration-seconds": 18,
+      "file-size-kilobytes": "123.17 KB",
+      "created-datetime": "2026-10-14T23:03:11+00:00",
+      "file-access-url": "https://edge.phoneware.cloud/ns-api/?object=audio&action=play&domain=PhonewareLab&user=1011&type=vmail&time=20261015061121&auth=b22becf0341e2504a002d369abb5d6ac&file=vm-20261014230240002772-1060dbaaf1b6b354dbede99e21161b2e.wav",
+      "file-script-text": "This is a sanitized test message.",
+      "file-source": "",
+      "text-to-speech-voice-id": "",
+      "text-to-speech-language": "",
+      "voicemail-from-name": "Jane Doe",
+      "voicemail-from-user": "1001",
+      "voicemail-from-host": "PhonewareLab",
+      "voicemail-from-caller-id-number": "1001ctjwaldrip",
+      "recorded-datetime": "2026-10-14T23:03:11+00:00",
+      "voicemail-recording-started-datetime": "2026-10-14T23:02:49+00:00",
+      "timezone": "America/Phoenix",
+      "folder": "new"
+    }
+  ]
+}

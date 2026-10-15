@@ -1,0 +1,30 @@
+{
+  "success": true,
+  "data": {
+    "domain": "PhonewareLab",
+    "callqueue": "1099",
+    "callqueue-agent-id": "1011@PhonewareLab",
+    "name-full-name": "Jane Doe",
+    "callqueue-agent-availability-type": "automatic",
+    "callqueue-agent-availability-for-dispatch": "available",
+    "callqueue-agent-wrap-up-allowance-seconds": 0,
+    "callqueue-agent-has-registered-devices": "offnet",
+    "callqueue-agent-dispatch-queue-priority-ordinal": 0,
+    "active-calls-total-current": 0,
+    "agent-department": "",
+    "auto_ans": "no",
+    "callqueue-agent-answer-confirmation-enabled": "no",
+    "callqueue-agent-entry-type": "user",
+    "callqueue-agent-max-concurrent-sms-conversations": 0,
+    "last-callqueue-dispatch-datetime": null,
+    "last-modified-datetime": "2026-10-14T23:05:10+00:00",
+    "limits-max-active-calls-total": 1,
+    "login-username": "1011@PhonewareLab",
+    "name-first-name": "Jane",
+    "name-last-name": "Doe",
+    "ordinal-order": 0,
+    "sub_portal_status": null,
+    "sub_scope": "Basic User",
+    "sub_site": ""
+  }
+}

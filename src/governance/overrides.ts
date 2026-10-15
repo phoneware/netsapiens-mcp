@@ -67,6 +67,16 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   'call-term-uri': { class: 'internal' },
  },
 
+ // Call Requests
+ CallRequest: {
+  'call-id': { class: 'record_id', recordType: 'call' },
+  'call-session-id': { class: 'record_id', recordType: 'call' },
+  'call-orig-call-id': { class: 'record_id', recordType: 'call' },
+  'call-term-call-id': { class: 'record_id', recordType: 'call' },
+  destination: { class: 'metadata' },
+  status: { class: 'metadata' },
+ },
+
  // Call Intelligence Transcriptions
  Transcription: {
   'call-id': { class: 'record_id', recordType: 'call' },
@@ -105,6 +115,8 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
  },
  Audiofile: {
   transcription: { class: 'content', kind: 'transcript', media: 'text' },
+  file: { class: 'content', kind: 'call_recording', media: 'audio_url' },
+  url: { class: 'content', kind: 'call_recording', media: 'audio_url' },
  },
 
  // Credentials and Secrets (Scrubbed on every deployment)
@@ -139,6 +151,16 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
  Domain: {
   domain: { class: 'record_id', recordType: 'domain' },
   'email-send-smtp-password': { class: 'secret' },
+  'count-users-configured': { class: 'metadata' },
+  'iotum-default-add-ons': { class: 'internal' },
+  'iotum-default-plan': { class: 'internal' },
+  'iotum-video-status': { class: 'internal' },
+  iotum_company_id: { class: 'internal' },
+  iotum_domain: { class: 'internal' },
+  'limits-max-subscriber-resources-total': { class: 'metadata' },
+  maxCallMinute: { class: 'metadata' },
+  vmailType: { class: 'metadata' },
+  'voicemail-user-control-enabled': { class: 'metadata' },
  },
  DomainLegacy: {
   smtp_pwd: { class: 'secret' },
@@ -229,6 +251,9 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
  },
  Contact: {
   'unique-id': { class: 'record_id', recordType: 'contact' },
+  user: { class: 'record_id', recordType: 'user' },
+  domain: { class: 'metadata' },
+  'login-username': { class: 'metadata' },
  },
  Answerrule: {
   'time-frame': { class: 'record_id', recordType: 'timeframe' },
@@ -255,6 +280,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   success: { class: 'metadata' },
  },
  QueueStat: {
+  agent: { class: 'metadata' },
   'agent-name': { class: 'metadata' },
   'queue-calls-answered-count': { class: 'metadata' },
   'queue-calls-talking-avg-duration-minutes': { class: 'metadata' },

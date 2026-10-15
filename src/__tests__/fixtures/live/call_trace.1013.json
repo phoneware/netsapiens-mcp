@@ -1,0 +1,9 @@
+{
+  "call_id": "17920189603fbd66a39410012ded2d6cb48773ca46",
+  "error": "Call trace is not available for this call",
+  "detail": "Log retention has elapsed (is-trace-expected: \"true\"). Detailed SIP logs are no longer available on core1-phx.phoneware.zone.",
+  "searched_window": {
+    "start": "2026-10-14T06:11:25.200Z",
+    "end": "2026-10-15T06:11:25.200Z"
+  }
+}

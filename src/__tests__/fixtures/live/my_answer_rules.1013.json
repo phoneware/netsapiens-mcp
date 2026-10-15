@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "data": [
+    {
+      "time-frame": "*",
+      "domain": "PhonewareLab",
+      "user": "1013",
+      "is-active": true,
+      "ordinal-priority": 99,
+      "enabled": "yes",
+      "simultaneous-ring": {
+        "parameters": [
+          "<OwnDevices>"
+        ],
+        "enabled": "yes"
+      }
+    }
+  ]
+}

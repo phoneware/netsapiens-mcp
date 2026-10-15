@@ -1,0 +1,28 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": "m-6ad0093aa5a20",
+      "timestamp": "2026-10-14 22:59:06",
+      "type": "chat",
+      "domain": "PhonewareLab",
+      "direction": "",
+      "dialed": "",
+      "text": "This is a sanitized test message.",
+      "status": "sending",
+      "messagesession-receiver-hostname": "core1-phx.phoneware.zone",
+      "from-number": "",
+      "from-user-id": "1013@PhonewareLab",
+      "from-video-attendee-id": null,
+      "from-user-agent": "Python-urllib/3.14",
+      "terminating-user-id": "1011@PhonewareLab",
+      "terminating-number": "",
+      "messagesession-id": "c1919a5ed63f289545f6304a14f2314e",
+      "meeting-instance-id": null,
+      "media-type": "",
+      "media-size": 0,
+      "messagesession-participants": null,
+      "deleted-datetime": ""
+    }
+  ]
+}
