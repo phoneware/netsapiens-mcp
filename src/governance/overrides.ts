@@ -118,6 +118,10 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   },
   JwtRequestSuccess: {
     token: { class: 'secret' },
+    refresh: { class: 'secret' },
+  },
+  Chart: {
+    data_token: { class: 'secret' },
   },
   IotumHost: {
     password: { class: 'secret' },
