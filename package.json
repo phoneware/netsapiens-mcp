@@ -27,6 +27,7 @@
     "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts",
     "prebuild": "npm run clean && npm run generate",
     "prepack": "npm run build",
+    "postinstall": "node -e \"const fs=require('fs'),path=require('path');for(const d of ['dist/esm','dist/cjs']){const p=path.join('node_modules/@modelcontextprotocol/sdk',d);if(fs.existsSync(p)&&!fs.existsSync(path.join(p,'index.js'))){fs.writeFileSync(path.join(p,'index.js'),d.includes('esm')?'export * from \\\"./server/index.js\\\";\\nexport * from \\\"./types.js\\\";\\n':'module.exports=Object.assign({},require(\\\"./server/index.js\\\"),require(\\\"./types.js\\\"));\\n');}}\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
