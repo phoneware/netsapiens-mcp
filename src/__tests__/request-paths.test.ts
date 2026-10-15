@@ -495,4 +495,44 @@ describe('request paths gate', () => {
    expect(parsed.error).toContain('trace');
   });
  });
+
+ describe('device tool paths', () => {
+  it('find_device calls /domains/{domain}/phones and not /domains/{domain}/devices', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'find_device');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const client = recordingClient(recorded);
+
+   await tool!.handler({ query: '1001' }, client, 'domain_admin');
+
+   expect(recorded.length).toBeGreaterThan(0);
+   for (const r of recorded) {
+    expect(r.pathTemplate).not.toBe('/domains/{domain}/devices');
+    const matches = findSpecPath(r.pathTemplate);
+    expect(matches.length, `no spec path matches ${r.pathTemplate}`).toBeGreaterThan(0);
+   }
+   const pathTemplates = recorded.map((r) => r.pathTemplate);
+   expect(pathTemplates).toContain('/domains/{domain}/phones');
+  });
+
+  it('find_device with a MAC address calls /domains/{domain}/phones and not /domains/{domain}/devices', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'find_device');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const client = recordingClient(recorded);
+
+   await tool!.handler({ query: '0004f2112233' }, client, 'domain_admin');
+
+   expect(recorded.length).toBeGreaterThan(0);
+   for (const r of recorded) {
+    expect(r.pathTemplate).not.toBe('/domains/{domain}/devices');
+    const matches = findSpecPath(r.pathTemplate);
+    expect(matches.length, `no spec path matches ${r.pathTemplate}`).toBeGreaterThan(0);
+   }
+   const pathTemplates = recorded.map((r) => r.pathTemplate);
+   expect(pathTemplates).toContain('/domains/{domain}/phones');
+  });
+ });
 });

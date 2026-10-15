@@ -169,6 +169,35 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     }
   });
 
+  it('find_device drops password fields through scrubSecrets', async () => {
+    const findDeviceTool = CURATED_CATALOG.find((t) => t.schema.name === 'find_device');
+    expect(findDeviceTool).toBeDefined();
+
+    const mockPhone = {
+      device: '0004f2112233',
+      user: '1001',
+      'device-provisioning-password': 'super-secret-prov-pass',
+      'device-sip-registration-password': 'super-secret-sip-pass',
+      'global-one-time-pass': 'otp-secret-pass',
+      'device-models-brand-and-model': 'Polycom VVX 450',
+    };
+
+    const payload = {
+      success: true,
+      data: [mockPhone],
+    };
+
+    const { scrubbed, count } = scrubSecrets(payload, findDeviceTool?.output);
+    expect(count).toBe(3);
+
+    const scrubbedPayload = scrubbed as typeof payload;
+    const scrubbedDevices = scrubbedPayload.data;
+    expect(scrubbedDevices[0].device).toBe('0004f2112233');
+    expect(scrubbedDevices[0]['device-provisioning-password']).toBeUndefined();
+    expect(scrubbedDevices[0]['device-sip-registration-password']).toBeUndefined();
+    expect(scrubbedDevices[0]['global-one-time-pass']).toBeUndefined();
+  });
+
   it('scrubSecrets removes secret fields at any depth without leaking values', () => {
     const deepPayload = {
       level1: {

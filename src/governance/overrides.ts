@@ -114,6 +114,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   },
   NdpPhone: {
     'device-provisioning-password': { class: 'secret' },
+    'device-sip-registration-password': { class: 'secret' },
     'global-one-time-pass': { class: 'secret' },
   },
   Meeting: {
@@ -227,5 +228,28 @@ export const CUSTOM_RESOURCES: Record<string, Record<string, FieldClass>> = {
     data: { class: 'metadata' },
     sql: { class: 'metadata' },
     svg: { class: 'metadata' },
+  },
+
+  // Handset provisioned phone from /domains/{domain}/phones
+  Phone: {
+    device: { class: 'record_id', recordType: 'device' },
+    mac: { class: 'record_id', recordType: 'device' },
+    'device-provisioning-mac-address': { class: 'record_id', recordType: 'device' },
+    'device-provisioning-password': { class: 'secret' },
+    'device-sip-registration-password': { class: 'secret' },
+    'global-one-time-pass': { class: 'secret' },
+    auth_pass: { class: 'secret' },
+    authentication_key: { class: 'secret' },
+    user: { class: 'metadata' },
+    domain: { class: 'metadata' },
+    reseller: { class: 'metadata' },
+    notes: { class: 'metadata' },
+    'device-models-brand-and-model': { class: 'metadata' },
+    'device-models-model': { class: 'metadata' },
+    'device-sip-registration-user-agent': { class: 'metadata' },
+    'device-sip-registration-state': { class: 'metadata' },
+    'device-sip-registration-uri': { class: 'metadata' },
+    'device-provisioning-line-1-extensions': { class: 'metadata' },
+    'device-provisioning-username': { class: 'metadata' },
   },
 };
