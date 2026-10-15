@@ -1228,9 +1228,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        await this.tokenStore.delete(token);
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
-      if (err instanceof RetryableRefreshError || (err as { name?: string })?.name === 'RetryableRefreshError') {
-       throw new InvalidTokenError('Upstream token refresh in progress, please retry');
-      }
       logger.warn('Cross-instance NS token refresh failed with non-fatal error', { error: String(err) });
       if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
        this.tokenStore.clearCache();
