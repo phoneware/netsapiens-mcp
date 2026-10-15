@@ -1,0 +1,63 @@
+{
+  "agent": "s",
+  "domain": "s",
+  "status": {
+    "ok": true,
+    "data": {
+      "domain": "s",
+      "callqueue": "s",
+      "callqueue-agent-id": "s",
+      "name-full-name": "s",
+      "callqueue-agent-availability-type": "s",
+      "callqueue-agent-availability-for-dispatch": "s",
+      "callqueue-agent-wrap-up-allowance-seconds": 0,
+      "callqueue-agent-has-registered-devices": "s",
+      "callqueue-agent-dispatch-queue-priority-ordinal": 0,
+      "active-calls-total-current": 0,
+      "agent-department": "s",
+      "auto_ans": "s",
+      "callqueue-agent-answer-confirmation-enabled": "s",
+      "callqueue-agent-entry-type": "s",
+      "callqueue-agent-max-concurrent-sms-conversations": 0,
+      "last-callqueue-dispatch-datetime": null,
+      "last-modified-datetime": "s",
+      "limits-max-active-calls-total": 0,
+      "login-username": "s",
+      "name-first-name": "s",
+      "name-last-name": "s",
+      "ordinal-order": 0,
+      "queue_list": 0,
+      "queue_list_status": "s",
+      "sub_portal_status": null,
+      "sub_scope": "s",
+      "sub_site": "s"
+    }
+  },
+  "recent_calls": {
+    "ok": true,
+    "data": []
+  },
+  "statistics": {
+    "ok": true,
+    "data": [
+      {
+        "agent": "s",
+        "agent-name": "s",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      },
+      {
+        "agent": "s",
+        "agent-name": "s",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      }
+    ]
+  }
+}

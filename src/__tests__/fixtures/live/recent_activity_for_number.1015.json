@@ -1,0 +1,12 @@
+{
+  "number": "s",
+  "domain": "s",
+  "calls": {
+    "ok": true,
+    "data": []
+  },
+  "message_sessions": {
+    "ok": true,
+    "data": []
+  }
+}

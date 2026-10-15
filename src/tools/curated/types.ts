@@ -9,7 +9,16 @@
 
 import type { GenericApiClient, ToolDefinition } from '../../generated/types.js';
 import type { UserRole } from '../../auth/roles.js';
-import type { OutputDeclaration, ToolTargets } from '../../governance/types.js';
+import type { FieldRule, OutputDeclaration, ToolTargets } from '../../governance/types.js';
+
+export const STANDARD_WRAPPER_RULES: readonly FieldRule[] = [
+ { path: 'success', field: { class: 'metadata' } },
+ { path: 'error', field: { class: 'metadata' } },
+ { path: 'message', field: { class: 'metadata' } },
+ { path: 'note', field: { class: 'metadata' } },
+ { path: 'ok', field: { class: 'metadata' } },
+];
+
 export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  /**
   * Curated handlers also receive the caller's NS scope tier. A tool can use

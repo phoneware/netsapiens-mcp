@@ -1,0 +1,35 @@
+{
+  "agent": "s",
+  "domain": "s",
+  "status": {
+    "ok": false,
+    "error": "s"
+  },
+  "recent_calls": {
+    "ok": true,
+    "data": []
+  },
+  "statistics": {
+    "ok": true,
+    "data": [
+      {
+        "agent": "s",
+        "agent-name": "s",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      },
+      {
+        "agent": "s",
+        "agent-name": "s",
+        "queue-calls-answered-count": 0,
+        "queue-calls-talking-avg-duration-minutes": 0,
+        "queue-calls-holding-avg-duration-seconds": 0,
+        "queue-calls-handling-avg-duration-minutes": 0,
+        "queue-calls-talking-duration-minutes": 0
+      }
+    ]
+  }
+}

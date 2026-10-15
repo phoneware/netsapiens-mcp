@@ -10,11 +10,14 @@ const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
  'device-provisioning-password': true,
  'voicemail-login-pin': true,
  'email-send-smtp-password': true,
- 'smtp_pwd': true,
+ smtp_pwd: true,
  client_secret: true,
  'client-secret': true,
  password: true,
  passcode: true,
+ pin: true,
+ secret: true,
+ mfa: true,
  subscriber_pin: true,
  pwd_hash: true,
  pwd: true,
@@ -31,15 +34,18 @@ const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
  refresh_token: true,
  data_token: true,
  idtoken: true,
+ api_key: true,
+ 'api-key': true,
+ auth_token: true,
+ 'auth-token': true,
 };
 
 /**
- * Matches a current path (like "data[].device-sip-registration-password" or "data.items[].pin")
- * against a rule path pattern (like "data[]" or "data[].*" or "data[].password").
+ * Matches a current path against a rule path pattern.
  */
 function pathMatches(rulePath: string, currentPath: string): boolean {
  if (rulePath === currentPath) return true;
- if (!rulePath) return false;
+ if (!rulePath || !currentPath) return false;
 
  const ruleSegments = rulePath.split('.');
  const currentSegments = currentPath.split('.');
@@ -56,6 +62,18 @@ function pathMatches(rulePath: string, currentPath: string): boolean {
 }
 
 /**
+ * Handles container prefixes and array shorthand between rules and walk paths.
+ */
+function pathMatchesRule(rulePath: string, currentPath: string): boolean {
+ if (pathMatches(rulePath, currentPath)) return true;
+ if (!currentPath && (rulePath === 'data' || rulePath === '')) return true;
+ if (rulePath === 'data[]' && (currentPath === '[]' || currentPath === 'data[]')) return true;
+ if (rulePath.startsWith('data.') && pathMatches(rulePath, `data.${currentPath}`)) return true;
+ if (rulePath.startsWith('data[]') && pathMatches(rulePath, `data${currentPath}`)) return true;
+ return false;
+}
+
+/**
  * Finds the resource context applicable at the given path based on OutputDeclaration rules.
  */
 function findResourceForPath(
@@ -64,23 +82,24 @@ function findResourceForPath(
 ): string | undefined {
  if (!rules) return undefined;
  for (const rule of rules) {
-  if ('resource' in rule && pathMatches(rule.path, path)) {
+  if ('resource' in rule && pathMatchesRule(rule.path, path)) {
    return rule.resource;
   }
  }
  return undefined;
 }
 
-
 /**
  * Recursively removes secret-class fields at any depth from a tool result payload.
  *
  * A field is scrubbed if:
- * 1. An OutputDeclaration rule explicitly marks its path as secret (`{ class: 'secret' }`).
+ * 1. An OutputDeclaration rule explicitly marks its path as secret ({ class: 'secret' }).
  * 2. An OutputDeclaration rule maps its parent to an NS resource where the field is classified as secret.
- * 3. The field name matches a known secret field from NetSapiens schemas (defense-in-depth).
+ * 3. The field name matches a known secret field from NetSapiens schemas (defense in depth).
+ * 4. The field name matches credential-shaped keys (password, pin, secret, token, passcode, key)
+ *    regardless of value type (string, number, object).
  *
- * Returns `{ scrubbed, count }` where `count` is the total number of secret fields removed.
+ * Returns { scrubbed, count } where count is the total number of secret fields removed.
  * Never logs or returns secret values.
  */
 export function scrubSecrets<T = unknown>(
@@ -105,7 +124,8 @@ export function scrubSecrets<T = unknown>(
    const result: Record<string, unknown> = {};
 
    // Check if current object path maps to a resource
-   const objResource = (currentPath ? findResourceForPath(output?.rules, currentPath) : undefined) ?? activeResource;
+   const objResource =
+    (currentPath ? findResourceForPath(output?.rules, currentPath) : undefined) ?? activeResource;
 
    for (const [key, value] of Object.entries(obj)) {
     const propPath = currentPath ? `${currentPath}.${key}` : key;
@@ -116,7 +136,7 @@ export function scrubSecrets<T = unknown>(
     // 1. Direct field rule match
     if (output?.rules) {
      for (const rule of output.rules) {
-      if ('field' in rule && pathMatches(rule.path, propPath) && rule.field.class === 'secret') {
+      if ('field' in rule && pathMatchesRule(rule.path, propPath) && rule.field.class === 'secret') {
        isSecret = true;
        break;
       }
@@ -133,51 +153,58 @@ export function scrubSecrets<T = unknown>(
      isSecret = true;
     }
 
-    // 4. Contextual secret rules (no false positives on generic keys)
+    // 4. Contextual and credential-shaped secret rules (regardless of value type)
     if (!isSecret) {
-     if (key === 'key' && ('key-id' in obj || 'can-create-keys' in obj)) {
+     if (/^(?:password|pin|secret|passcode|token)$/i.test(key)) {
       isSecret = true;
-     } else if (key === 'token' && ('refresh' in obj || 'expires_in' in obj)) {
+     } else if (
+      /(?:^|[-_])(?:password|pin|secret|passcode)(?:$|[-_])/i.test(key) &&
+      // Same exclusions as the generator (scripts/generate-governance.ts): a setting such as
+      // meeting-join-require-passcode-enabled describes a credential, it is not one.
+      !/timeframe|status|-enabled$|dtmf-mapping|language-token/i.test(key)
+     ) {
       isSecret = true;
-     } else if (key === 'refresh' && 'token' in obj) {
+     } else if (key === 'key') {
+      if ('key-id' in obj || 'can-create-keys' in obj || 'key_id' in obj || 'api_key' in obj) {
+       isSecret = true;
+      }
+     } else if (key === 'refresh' && ('token' in obj || 'access_token' in obj)) {
       isSecret = true;
      }
     }
 
     if (isSecret) {
      count++;
-     // Drop secret field: do not include in result
+     // Drop secret field regardless of value type (string, number, object)
      continue;
     }
 
     // Recurse into non-secret fields
-    const childResource = findResourceForPath(output?.rules, propPath) ?? (
-     // If property itself is an object, check if it has a resource mapping
-     undefined
-    );
+    const childResource = findResourceForPath(output?.rules, propPath) ?? undefined;
     result[key] = scrub(value, propPath, childResource);
    }
 
    return result;
   }
-    if (typeof val === 'string') {
-      const trimmed = val.trim();
-      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed && typeof parsed === 'object') {
-            const initialCount = count;
-            const scrubbedParsed = scrub(parsed, currentPath, activeResource);
-            if (count > initialCount) {
-              return JSON.stringify(scrubbedParsed);
-            }
-          }
-        } catch {
-          // Plain text string
-        }
+
+  if (typeof val === 'string') {
+   const trimmed = val.trim();
+   if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+     const parsed = JSON.parse(trimmed);
+     if (parsed && typeof parsed === 'object') {
+      const initialCount = count;
+      const scrubbedParsed = scrub(parsed, currentPath, activeResource);
+      if (count > initialCount) {
+       return JSON.stringify(scrubbedParsed);
       }
-      return val;
+     }
+    } catch {
+     // Plain text string
     }
+   }
+   return val;
+  }
 
   return val;
  }

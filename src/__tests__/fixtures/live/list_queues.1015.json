@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "data": [
+    {
+      "domain": "s",
+      "callqueue": "s",
+      "description": "s",
+      "callqueue-dispatch-type": "s",
+      "callqueue-calculate-statistics": "s",
+      "active-queued-calls-total-current": 0,
+      "agent_loggedin_count": 0,
+      "callqueue-agent-auto-logout-after-missed": "s",
+      "callqueue-agent-dispatch-timeout-seconds": 0,
+      "callqueue-count-agents-available": 0,
+      "callqueue-count-agents-total": 0,
+      "callqueue-debug": "s",
+      "callqueue-force-full-intro-playback": "s",
+      "callqueue-max-callback-queueing-hours": 0,
+      "callqueue-max-current-callers-to-accept-new-callers": 0,
+      "callqueue-max-current-wait-to-accept-new-callers-seconds": 0,
+      "callqueue-max-wait-timeout-minutes": 0,
+      "callqueue-require-available-agents-to-accept-new-callers": "s",
+      "callqueue-sim-ring-1st-round": 0,
+      "callqueue-sim-ring-increment": 0,
+      "callqueue-sms-enable": "s",
+      "callqueue-source-match": null
+    }
+  ]
+}
