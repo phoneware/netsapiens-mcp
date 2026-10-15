@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   hasPermission,
-  mapNsScope,
+  nsScopeToTier,
   ROLE_HIERARCHY,
   TOOL_ROLE_REQUIREMENTS,
 } from '../auth/roles.js';
@@ -77,55 +77,69 @@ describe('RBAC roles', () => {
   });
 
   // -----------------------------------------------------------------------
-  // mapNsScope
+  // nsScopeToTier
   // -----------------------------------------------------------------------
 
-  describe('mapNsScope()', () => {
+  describe('nsScopeToTier()', () => {
     it('maps Super User to system_admin', () => {
-      expect(mapNsScope('Super User')).toBe('system_admin');
+      expect(nsScopeToTier('Super User')).toBe('system_admin');
     });
 
     it('maps System Admin to system_admin', () => {
-      expect(mapNsScope('System Admin')).toBe('system_admin');
+      expect(nsScopeToTier('System Admin')).toBe('system_admin');
     });
 
     it('maps Reseller to reseller', () => {
-      expect(mapNsScope('Reseller')).toBe('reseller');
+      expect(nsScopeToTier('Reseller')).toBe('reseller');
     });
 
     it('maps Office Manager to domain_admin', () => {
-      expect(mapNsScope('Office Manager')).toBe('domain_admin');
+      expect(nsScopeToTier('Office Manager')).toBe('domain_admin');
     });
 
     it('maps Site Manager to domain_admin', () => {
-      expect(mapNsScope('Site Manager')).toBe('domain_admin');
+      expect(nsScopeToTier('Site Manager')).toBe('domain_admin');
     });
 
     it('maps Domain Admin to domain_admin', () => {
-      expect(mapNsScope('Domain Admin')).toBe('domain_admin');
+      expect(nsScopeToTier('Domain Admin')).toBe('domain_admin');
+    });
+    it('maps Call Center Supervisor to domain_admin', () => {
+      expect(nsScopeToTier('Call Center Supervisor')).toBe('domain_admin');
+    });
+
+    it('maps Call Center Agent, Advanced User, Simple User to user', () => {
+      expect(nsScopeToTier('Call Center Agent')).toBe('user');
+      expect(nsScopeToTier('Advanced User')).toBe('user');
+      expect(nsScopeToTier('Simple User')).toBe('user');
+    });
+
+    it('maps No Portal to user', () => {
+      expect(nsScopeToTier('No Portal')).toBe('user');
     });
 
     it('maps Basic User to user', () => {
-      expect(mapNsScope('Basic User')).toBe('user');
+      expect(nsScopeToTier('Basic User')).toBe('user');
     });
 
     it('maps unknown values to user', () => {
-      expect(mapNsScope('SomeRandomRole')).toBe('user');
+      expect(nsScopeToTier('SomeRandomRole')).toBe('user');
     });
 
     it('handles null/undefined gracefully', () => {
-      expect(mapNsScope(null)).toBe('user');
-      expect(mapNsScope(undefined)).toBe('user');
+      expect(nsScopeToTier(null)).toBe('user');
+      expect(nsScopeToTier(undefined)).toBe('user');
     });
 
     it('handles empty string', () => {
-      expect(mapNsScope('')).toBe('user');
+      expect(nsScopeToTier('')).toBe('user');
     });
 
     it('is case-insensitive', () => {
-      expect(mapNsScope('SUPER USER')).toBe('system_admin');
-      expect(mapNsScope('reseller')).toBe('reseller');
-      expect(mapNsScope('office manager')).toBe('domain_admin');
+      expect(nsScopeToTier('SUPER USER')).toBe('system_admin');
+      expect(nsScopeToTier('reseller')).toBe('reseller');
+      expect(nsScopeToTier('office manager')).toBe('domain_admin');
+      expect(nsScopeToTier('CALL CENTER SUPERVISOR')).toBe('domain_admin');
     });
   });
 });

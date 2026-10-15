@@ -1,8 +1,19 @@
 {
   "name": "netsapiens-mcp",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./lib": {
+      "types": "./build/lib.d.ts",
+      "default": "./build/lib.js"
+    }
+  },
   "bin": {
     "netsapiens-mcp": "build/index.js"
   },
@@ -15,6 +26,7 @@
     "clean": "rimraf build",
     "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts",
     "prebuild": "npm run clean && npm run generate",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -32,8 +44,10 @@
   "license": "MIT",
   "dependencies": {
     "@google-cloud/firestore": "^8.6.0",
-    "@modelcontextprotocol/sdk": "^1.27.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "axios": "^1.6.0",
+    "express": "^5.0.0",
+    "express-rate-limit": "^8.2.1",
     "zod": "^3.22.0"
   },
   "devDependencies": {

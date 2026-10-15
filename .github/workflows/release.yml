@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+      - run: npm ci
+      # The Firestore store tests skip without an emulator; a release must run them.
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for i in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          docker logs fs-emu; exit 1
+      - run: npm test
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
+      - run: npm run build
+      - run: npm pack
+      - name: Verify package contents
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="netsapiens-mcp-${VERSION}.tgz"
+          tar -tzf "$TARBALL" | grep -q "^package/build/lib.js$"
+          tar -tzf "$TARBALL" | grep -q "^package/build/index.js$"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="netsapiens-mcp-${VERSION}.tgz"
+          gh release create "$GITHUB_REF_NAME" "$TARBALL" --title "$GITHUB_REF_NAME" --generate-notes
