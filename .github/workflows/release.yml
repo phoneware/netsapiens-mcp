@@ -30,6 +30,12 @@ jobs:
           GOOGLE_CLOUD_PROJECT: firestore-test
       - run: npm run build
       - run: npm pack
+      - name: Verify package contents
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="netsapiens-mcp-${VERSION}.tgz"
+          tar -tzf "$TARBALL" | grep -q "^package/build/lib.js$"
+          tar -tzf "$TARBALL" | grep -q "^package/build/index.js$"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
