@@ -914,8 +914,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   };
 
   if (!skipHooks && this.hooks?.onLogin) {
+   const nonce = randomBytes(16).toString('hex');
    const resumeToken = sealValue(
     {
+     nonce,
      pending,
      nsTokens: { ...nsTokens, username, nsUserRole },
      username,
@@ -981,6 +983,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   extra?: Record<string, string>,
  ): Promise<void> {
   const payload = openSealed<{
+   nonce?: string;
    pending: PendingAuthorization;
    nsTokens: NsTokenResponse;
    username: string;
@@ -993,8 +996,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
-  // Atomically consume continuation before minting a code
-  const resumeId = createHash('sha256').update(resumeToken).digest('hex');
+  // Atomically consume continuation before minting a code.
+  // Key by the canonical authenticated payload nonce, or the hash of decoded envelope
+  // bytes for fallback, so equivalent base64/base64url re-encodings cannot replay.
+  const parts = resumeToken.split('.');
+  const canonicalDecodedBytes = Buffer.concat(parts.map((p) => Buffer.from(p, 'base64url')));
+  const resumeId = payload.nonce
+   ? createHash('sha256').update(`nonce:${payload.nonce}`).digest('hex')
+   : createHash('sha256').update(canonicalDecodedBytes).digest('hex');
   const consumed = await this.consumeResumeToken(resumeId);
   if (!consumed) {
    sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));

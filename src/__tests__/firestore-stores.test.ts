@@ -780,6 +780,23 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   await provider2.resumeLogin(mockResumeRes2, resumeToken);
   expect(resumeRes2Obj.status).toBe(400);
   expect(resumeRes2Obj.redirectUrl).toBe('');
+
+  // Third post with equivalent padded base64 continuation must also be refused
+  const parts = resumeToken.split('.');
+  const paddedResumeToken = `${parts[0]}.${parts[1]}.${parts[2]}==`;
+  const resumeRes3Obj = { html: '', redirectUrl: '', status: 200 };
+  const mockResumeRes3 = {
+   status(s: number) { resumeRes3Obj.status = s; return this; },
+   send(h: string) { resumeRes3Obj.html = h; return this; },
+   redirect(u: string) { resumeRes3Obj.redirectUrl = u; return this; },
+   set() { return this; },
+   type() { return this; },
+   setHeader() { return this; },
+   getHeader() { return undefined; },
+  } as unknown as Response;
+  await provider2.resumeLogin(mockResumeRes3, paddedResumeToken);
+  expect(resumeRes3Obj.status).toBe(400);
+  expect(resumeRes3Obj.redirectUrl).toBe('');
  });
 
  it('after a refresh the stored ttlAt is still a Timestamp', async () => {
