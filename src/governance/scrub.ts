@@ -145,6 +145,24 @@ export function scrubSecrets<T = unknown>(
 
    return result;
   }
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object') {
+            const initialCount = count;
+            const scrubbedParsed = scrub(parsed, currentPath, activeResource);
+            if (count > initialCount) {
+              return JSON.stringify(scrubbedParsed);
+            }
+          }
+        } catch {
+          // Plain text string
+        }
+      }
+      return val;
+    }
 
   return val;
  }
