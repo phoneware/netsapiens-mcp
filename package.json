@@ -1,6 +1,6 @@
 {
   "name": "netsapiens-mcp",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
   "types": "build/index.d.ts",
