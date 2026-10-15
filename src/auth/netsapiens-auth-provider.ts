@@ -26,7 +26,7 @@ import axios from 'axios';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { InvalidTokenError, InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidTokenError, InvalidGrantError, ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type {
  OAuthClientInformationFull,
  OAuthTokens,
@@ -41,6 +41,7 @@ import {
  FirestoreClientsStore,
  FirestoreAuthCodeStore,
  RetryableRefreshError,
+ LeaseLostError,
 } from './firestore-stores.js';
 import { nsScopeToTier, type UserRole } from './roles.js';
 import type {
@@ -53,6 +54,22 @@ import type {
 import { getAllowedPlatforms, getPlatform, isPlatformAllowed } from './platforms.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
+
+export class UpstreamTimeoutError extends Error {
+ constructor(message = 'Upstream refresh request timed out') {
+  super(message);
+  this.name = 'UpstreamTimeoutError';
+ }
+}
+
+export class UpstreamGrantRejectedError extends Error {
+ readonly status: number;
+ constructor(message = 'Upstream refresh grant rejected', status = 400) {
+  super(message);
+  this.name = 'UpstreamGrantRejectedError';
+  this.status = status;
+ }
+}
 
 // ---------------------------------------------------------------------------
 // Signed state helpers.
@@ -1206,9 +1223,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
       );
      } catch (err: unknown) {
-      logger.warn('Cross-instance NS token refresh failed', { error: String(err) });
+      if (err instanceof UpstreamGrantRejectedError) {
+       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
+       await this.tokenStore.delete(token);
+       throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
+      }
       if (err instanceof RetryableRefreshError || (err as { name?: string })?.name === 'RetryableRefreshError') {
        throw new InvalidTokenError('Upstream token refresh in progress, please retry');
+      }
+      logger.warn('Cross-instance NS token refresh failed with non-fatal error', { error: String(err) });
+      if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
+       this.tokenStore.clearCache();
+      }
+      const latest = await this.tokenStore.get(token);
+      if (latest && (!latest.nsExpiresAt || Date.now() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
+       stored = latest;
+      } else {
+       throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
       }
      }
     } else {
@@ -1218,8 +1249,26 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        .finally(() => this.nsRefreshInflight.delete(token));
       this.nsRefreshInflight.set(token, inflight);
      }
-     await inflight;
-     stored = (await this.tokenStore.get(token)) ?? stored;
+     try {
+      await inflight;
+      stored = (await this.tokenStore.get(token)) ?? stored;
+     } catch (err: unknown) {
+      if (err instanceof UpstreamGrantRejectedError) {
+       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
+       await this.tokenStore.delete(token);
+       throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
+      }
+      logger.warn('In-memory NS token refresh failed with non-fatal error', { error: String(err) });
+      if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
+       this.tokenStore.clearCache();
+      }
+      const latest = await this.tokenStore.get(token);
+      if (latest && (!latest.nsExpiresAt || Date.now() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
+       stored = latest;
+      } else {
+       throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
+      }
+     }
     }
     if (stored.nsExpiresAt && Date.now() > stored.nsExpiresAt) {
      await this.tokenStore.delete(token);
@@ -1262,22 +1311,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  }
 
  private async refreshUpstreamNsToken(token: string, stored: StoredToken): Promise<void> {
-  try {
-   const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken!, stored.nsApiUrl);
-   await this.tokenStore.update(token, {
-    nsAccessToken: refreshed.access_token,
-    nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
-    nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
-   });
-   logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
-  } catch (err) {
-   logger.warn('Upstream NS token refresh failed during verify; client will need to re-auth', {
-    error: String(err),
-    username: stored.nsUsername,
-   });
-   // Fall through and let the API call fail with a 401, which will trigger
-   // the MCP client to use its refresh token (which in turn re-tries the NS refresh).
-  }
+  const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken!, stored.nsApiUrl);
+  await this.tokenStore.update(token, {
+   nsAccessToken: refreshed.access_token,
+   nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+   nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined,
+  });
+  logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
  }
 
  // -----------------------------------------------------------------------
@@ -1528,27 +1568,41 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  private async nsRefreshGrant(nsRefreshToken: string, targetApiUrl?: string): Promise<NsTokenResponse> {
   const url = targetApiUrl || this.nsApiUrl;
-  const response = await axios.post(
-   `${url}/ns-api/v2/tokens`,
-   {
-    grant_type: 'refresh_token',
-    client_id: this.nsClientId,
-    client_secret: this.nsClientSecret,
-    refresh_token: nsRefreshToken,
-   },
-   {
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    timeout: 10_000,
-   },
-  );
+  try {
+   const response = await axios.post(
+    `${url}/ns-api/v2/tokens`,
+    {
+     grant_type: 'refresh_token',
+     client_id: this.nsClientId,
+     client_secret: this.nsClientSecret,
+     refresh_token: nsRefreshToken,
+    },
+    {
+     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+     timeout: 10_000,
+    },
+   );
 
-  return {
-   access_token: response.data.access_token,
-   refresh_token: response.data.refresh_token,
-   expires_in: response.data.expires_in,
-   username: '', // caller fills this in
-   nsApiUrl: targetApiUrl,
-  };
+   return {
+    access_token: response.data.access_token,
+    refresh_token: response.data.refresh_token,
+    expires_in: response.data.expires_in,
+    username: '', // caller fills this in
+    nsApiUrl: targetApiUrl,
+   };
+  } catch (err: unknown) {
+   if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    if (status === 400 || status === 401) {
+     const desc = err.response?.data?.error_description || err.response?.data?.error || err.message;
+     throw new UpstreamGrantRejectedError(`Upstream refresh grant rejected (${status}): ${desc}`, status);
+    }
+    if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.message?.toLowerCase().includes('timeout')) {
+     throw new UpstreamTimeoutError(`Upstream refresh request timed out: ${err.message}`);
+    }
+   }
+   throw err;
+  }
  }
 
  async invalidateToken(mcpToken: string): Promise<void> {

@@ -60,6 +60,13 @@ export class RetryableRefreshError extends Error {
   this.name = 'RetryableRefreshError';
  }
 }
+export class LeaseLostError extends Error {
+ constructor(message = 'Refresh lease expired or owned by another instance') {
+  super(message);
+  this.name = 'LeaseLostError';
+ }
+}
+
 
 
 // ---------------------------------------------------------------------------
@@ -259,7 +266,7 @@ export class FirestoreTokenStore {
        expectedOwner: currentLeaseOwner,
        actualOwner: current.refreshLockOwner,
       });
-      throw new Error('Refresh lease expired or owned by another instance');
+      throw new LeaseLostError('Refresh lease expired or owned by another instance');
      }
      const updated: StoredToken = {
       ...current,
@@ -277,6 +284,7 @@ export class FirestoreTokenStore {
     this.cache.set(accessToken, resultToken!);
     return resultToken!;
    } catch (err) {
+    this.cache.delete(accessToken);
     if (currentLeaseOwner) {
      await this.db.runTransaction(async (transaction) => {
       const snap = await transaction.get(docRef);
