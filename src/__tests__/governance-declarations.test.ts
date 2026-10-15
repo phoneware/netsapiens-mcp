@@ -23,6 +23,10 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
         Array.isArray(tool.output.rules),
         `Tool '${tool.schema.name}' output must have rules array`,
       ).toBe(true);
+      expect(
+        tool.output.rules.length,
+        `Tool '${tool.schema.name}' output rules must be non-empty`,
+      ).toBeGreaterThan(0);
 
       expect(
         tool.targets,
@@ -42,6 +46,14 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
         `Workflow tool '${tool.schema.name}' must declare required 'output'`,
       ).toBeDefined();
       expect(
+        Array.isArray(tool.output.rules),
+        `Workflow tool '${tool.schema.name}' output must have rules array`,
+      ).toBe(true);
+      expect(
+        tool.output.rules.length,
+        `Workflow tool '${tool.schema.name}' output rules must be non-empty`,
+      ).toBeGreaterThan(0);
+      expect(
         tool.targets,
         `Workflow tool '${tool.schema.name}' must declare required 'targets'`,
       ).toBeDefined();
@@ -55,6 +67,19 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
         tool.output,
         `Meta tool '${tool.schema.name}' must declare required 'output'`,
       ).toBeDefined();
+      expect(
+        Array.isArray(tool.output.rules),
+        `Meta tool '${tool.schema.name}' output must have rules array`,
+      ).toBe(true);
+      if (tool.schema.name === 'call_api') {
+        // explicit, tested exception for the opaque escape hatch
+        expect(tool.output.rules.length).toBe(0);
+      } else {
+        expect(
+          tool.output.rules.length,
+          `Meta tool '${tool.schema.name}' output rules must be non-empty`,
+        ).toBeGreaterThan(0);
+      }
       expect(
         tool.targets,
         `Meta tool '${tool.schema.name}' must declare required 'targets'`,
