@@ -15,6 +15,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 const PROTOCOL_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+function isValidCalendarDate(dateStr: string): boolean {
+ if (!PROTOCOL_DATE_REGEX.test(dateStr)) return false;
+ const [y, m, d] = dateStr.split('-').map(Number);
+ if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+ const date = new Date(Date.UTC(y, m - 1, d));
+ return (
+  date.getUTCFullYear() === y &&
+  date.getUTCMonth() === m - 1 &&
+  date.getUTCDate() === d
+ );
+}
+
 
 export function negotiateProtocolVersion(req: {
  headers: NodeJS.Dict<string | string[]>;
@@ -27,7 +39,7 @@ export function negotiateProtocolVersion(req: {
   return undefined;
  }
 
- if (!PROTOCOL_DATE_REGEX.test(requested) || requested <= LATEST_PROTOCOL_VERSION) {
+ if (!isValidCalendarDate(requested) || requested <= LATEST_PROTOCOL_VERSION) {
   return undefined;
  }
 
