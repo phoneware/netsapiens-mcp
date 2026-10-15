@@ -211,6 +211,7 @@ const TIER_RULES: Array<{ role: UserRole; patterns: RegExp[] }> = [
    // system-wide dial policy (domain-scoped variants contain "domain")
    /^(get|post|put|delete|read|create|update)_dialpolicy/i,
    /v1_(configuration|template|image|route|connection|firebase|backup|restore|accesslog|auditlog|sfu|insight|uiconfigdef)/i,
+   /(^|_)sipflow(_|$)|(^|_)cradle2grave(_|$)|get_sip_flow|get_call_trace/i,
   ],
  },
  {

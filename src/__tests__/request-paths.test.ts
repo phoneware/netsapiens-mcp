@@ -494,6 +494,121 @@ describe('request paths gate', () => {
    const parsed = JSON.parse(result.content[0].text);
    expect(parsed.error).toContain('trace');
   });
+
+  it('completed call where is-trace-expected is boolean true calls /sipflow with servers from CDR', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core-phx.netsapiens.com',
+         'is-trace-expected': true,
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: true, data: { trace: 'ladder' } };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'ACMELAW' }, mockClient, 'domain_admin');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).toContain('/sipflow');
+
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.data).toEqual({ trace: 'ladder' });
+  });
+
+  it('completed call where /sipflow returns 401 explains portal role cannot read traces instead of retention elapsed', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core-phx.netsapiens.com',
+         'is-trace-expected': true,
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: false, error: '401 Invalid Scope [APP001]' };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'ACMELAW' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(false);
+   expect(parsed.error).toContain('401');
+   expect(parsed.detail).toContain('portal role cannot read SIP traces');
+   expect(parsed.detail).not.toContain('retention has elapsed');
+  });
+
+  it('diagnose_call on completed call where is-trace-expected is boolean true and /sipflow returns 401 returns cdr and explains role restriction', async () => {
+   const tool = WORKFLOW_TOOLS.find((t) => t.schema.name === 'diagnose_call');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core-phx.netsapiens.com',
+         'is-trace-expected': true,
+         'call-start-datetime': '2026-10-15T12:00:00Z',
+         'call-disconnect-datetime': '2026-10-15T12:05:00Z',
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: false, error: '401 Invalid Scope [APP001]' };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'ACMELAW' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.call_id).toBe('c-bool-true');
+   expect(parsed.cdr).toBeDefined();
+   expect(parsed.cdr['core-server']).toBe('core-phx.netsapiens.com');
+   expect(parsed.server_used).toBe('core-phx.netsapiens.com');
+   expect(parsed.detail).toContain('portal role cannot read SIP traces');
+   expect(parsed.sip_trace.ok).toBe(false);
+   expect(parsed.sip_trace.detail).toContain('portal role cannot read SIP traces');
+  });
  });
 
  describe('device tool paths', () => {
