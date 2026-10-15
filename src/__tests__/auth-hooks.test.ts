@@ -293,6 +293,14 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     expect(replayRes.getStatus()).toBe(400);
     expect(replayRes.getRedirectUrl()).toBe('');
 
+    // Continuation re-encoded with padded base64 must also be refused after first use
+    const parts = resumeToken.split('.');
+    const paddedResumeToken = `${parts[0]}.${parts[1]}.${parts[2]}==`;
+    const replayPaddedRes = mockResponse();
+    await provider.resumeLogin(replayPaddedRes as unknown as Response, paddedResumeToken, { enrolledVia: 'replay-padded' });
+    expect(replayPaddedRes.getStatus()).toBe(400);
+    expect(replayPaddedRes.getRedirectUrl()).toBe('');
+
     const code = new URL(redirectUrl).searchParams.get('code')!;
     const tokens = await provider.exchangeAuthorizationCode(
       dummyClient as unknown as import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationFull,
