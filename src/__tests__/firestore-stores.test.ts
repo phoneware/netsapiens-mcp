@@ -1059,4 +1059,90 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   expect(surviving).toBeUndefined();
  });
 
+ it('refresh-wait timeout returns 500 without invalid_token challenge and preserves bearer token', async () => {
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
+  const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
+
+  const provider1 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const provider2 = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://edge.phoneware.cloud',
+   nsClientId: 'cid',
+   nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: {
+    authCodes: authCodesCollection,
+    tokens: collection,
+    clients: clientsCollection,
+   },
+  });
+
+  const app2 = express();
+  const bearerAuth2 = requireBearerAuth({
+   verifier: provider2,
+   resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp')),
+  });
+  app2.post('/mcp', bearerAuth2, (_req, res) => res.json({ ok: true }));
+
+  const bearerToken = 'mcp-bearer-wait-timeout';
+  await provider1.tokenStore.set({
+   accessToken: bearerToken,
+   refreshToken: 'mcp-refresh',
+   clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'ns-refresh-token',
+   nsExpiresAt: Date.now() - 5_000,
+   nsUsername: 'shared@domain.com',
+   nsUserRole: 'domain_admin',
+  });
+
+  const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
+
+  const store1 = provider1.tokenStore as FirestoreTokenStore;
+  const store2 = provider2.tokenStore as FirestoreTokenStore;
+
+  const inst1Promise = store1.refreshNsToken(bearerToken, async () => {
+   await slowRefreshPromise;
+   return {
+    access_token: 'new-ns-token-slow',
+    refresh_token: 'new-ns-refresh-token',
+    expires_in: 3600,
+   };
+  });
+
+  await new Promise((r) => setTimeout(r, 100));
+
+  const origRefreshNsToken2 = store2.refreshNsToken.bind(store2);
+  store2.refreshNsToken = (tok, doRefresh) =>
+   origRefreshNsToken2(tok, doRefresh, { maxWaitMs: 250, pollIntervalMs: 50 });
+
+  const res2 = await request(app2)
+   .post('/mcp')
+   .set('Authorization', `Bearer ${bearerToken}`)
+   .send();
+
+  expect(res2.status).not.toBe(401);
+  expect(res2.status).toBe(500);
+  expect(res2.headers['www-authenticate']).toBeUndefined();
+
+  const surviving = await store1.get(bearerToken);
+  expect(surviving).toBeDefined();
+
+  resolveSlowRefresh(null);
+  await inst1Promise;
+ });
+
 });
