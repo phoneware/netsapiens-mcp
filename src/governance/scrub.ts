@@ -27,6 +27,10 @@ const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
  speaker_pin: true,
  participants_pin: true,
  SipSipAuthKey: true,
+ access_token: true,
+ refresh_token: true,
+ data_token: true,
+ idtoken: true,
 };
 
 /**
@@ -127,6 +131,17 @@ export function scrubSecrets<T = unknown>(
     // 3. Known unambiguous secret name check (any depth)
     if (!isSecret && UNAMBIGUOUS_SECRET_NAMES[key]) {
      isSecret = true;
+    }
+
+    // 4. Contextual secret rules (no false positives on generic keys)
+    if (!isSecret) {
+     if (key === 'key' && ('key-id' in obj || 'can-create-keys' in obj)) {
+      isSecret = true;
+     } else if (key === 'token' && ('refresh' in obj || 'expires_in' in obj)) {
+      isSecret = true;
+     } else if (key === 'refresh' && 'token' in obj) {
+      isSecret = true;
+     }
     }
 
     if (isSecret) {
