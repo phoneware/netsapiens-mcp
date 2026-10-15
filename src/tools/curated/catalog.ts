@@ -638,7 +638,7 @@ const call_trace: CuratedTool = {
  schema: {
   name: 'call_trace',
   description:
-   'SIP flow / call trace for a specific call. Reading SIP traces on /sipflow requires Super User access (Reseller is unverified). ' +
+   'SIP flow / call trace for a specific call. Some portal roles cannot read SIP traces; Super User is confirmed and Reseller is unverified. ' +
    'Useful for diagnosing why a call did what it did.',
   inputSchema: {
    type: 'object',
@@ -709,15 +709,13 @@ const call_trace: CuratedTool = {
   });
 
   if (!r.success) {
-   const isRoleDenied = Boolean(
-    r.error && (r.error.includes('401') || r.error.includes('403') || r.error.toLowerCase().includes('invalid scope')),
-   );
+   const isRoleDenied = Boolean(r.error && /invalid scope|permission denied|insufficient permission|forbidden/i.test(r.error));
    if (isRoleDenied) {
     return textResult({
      call_id: callid,
      success: false,
      error: r.error,
-     detail: 'Your portal role cannot read SIP traces. Reading SIP traces on /sipflow requires Super User access (Reseller is unverified).',
+     detail: 'Your portal role cannot read SIP traces. Super User access is confirmed; Reseller access is unverified.',
      searched_window: lookup.searchedWindow,
     });
    }
