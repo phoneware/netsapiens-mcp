@@ -175,6 +175,14 @@ The catalog is **scope-aware**: a basic NS user sees ~25 self-service tools; a d
 
 Set `MCP_TOOL_MODE=full` to expose the entire 727-tool generated registry instead (legacy behavior).
 
+
+### Trace and queue-statistics behavior in v2.2.1
+
+- `call_trace` and `diagnose_call` accept CDR `is-trace-expected` values as boolean `true`/`false`, strings `true`/`false` and `yes`/`no`, or `1`/`0`. A missing value remains trace-expected.
+- When `/sipflow` explicitly refuses the caller's scope or permissions, trace tools return the CDR findings and say that the portal role cannot read SIP traces. Invalid or expired token errors remain authentication failures, not role refusals.
+- Basic User, Office Manager, and Call Center Supervisor were measured as refused by `/sipflow`; Super User was measured as allowed. Reseller availability is unverified.
+- `queue_health` and `agent_dashboard` accept `since`, `until`, `start_date`, and `end_date`. They forward the resulting UTC statistics window to NetSapiens.
+
 Every tool (curated, workflow, or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.
