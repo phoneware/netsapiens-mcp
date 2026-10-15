@@ -11,11 +11,13 @@
 import type { CuratedTool } from './types.js';
 import { textResult, STANDARD_WRAPPER_RULES } from './types.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
-import { fieldsMatch, isOnOrAfter, numbersMatch } from './matching.js';
+import { fieldsMatch, isOnOrAfter, numbersMatch, parseNsBoolean, isNsTraceExpected } from './matching.js';
+export { parseNsBoolean, isNsTraceExpected };
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { matchesCallId, nsDateWindow, resolveSelfUser } from './catalog.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
+
 
 /** Settle a request and surface failures as a `{ error }` field instead of throwing. */
 async function safe<T = unknown>(p: Promise<NetSapiensApiResponse<T>>): Promise<{ ok: boolean; data?: T; error?: string }> {
@@ -196,7 +198,7 @@ export async function lookupCallForTrace(
  }
 
  const traceExpectedRaw = matchedCdr['is-trace-expected'] ?? matchedCdr['expected_trace'];
- const isTraceExpected = traceExpectedRaw == null || String(traceExpectedRaw).toLowerCase() === 'yes';
+ const isTraceExpected = isNsTraceExpected(traceExpectedRaw);
 
  if (!isTraceExpected) {
   return {
@@ -237,6 +239,7 @@ const diagnose_call: CuratedTool = {
   name: 'diagnose_call',
   description:
    'Diagnose a specific call: pulls the call detail record, SIP trace, and any associated queue context in a single response. ' +
+   'Some portal roles cannot read SIP traces; Super User access is confirmed and Reseller access is unverified, but call records are returned for domain administrators. ' +
    'Use when investigating "why did this call do X" rather than running CDR + sipflow + queue lookups separately.',
   inputSchema: {
    type: 'object',
@@ -263,9 +266,11 @@ const diagnose_call: CuratedTool = {
    { path: 'detail', field: { class: 'metadata' } },
    { path: 'sip_trace.ok', field: { class: 'metadata' } },
    { path: 'sip_trace.error', field: { class: 'metadata' } },
+   { path: 'sip_trace.detail', field: { class: 'metadata' } },
    { path: 'sip_trace.data', resource: 'CallTrace' },
    { path: 'cradle_to_grave.ok', field: { class: 'metadata' } },
    { path: 'cradle_to_grave.error', field: { class: 'metadata' } },
+   { path: 'cradle_to_grave.detail', field: { class: 'metadata' } },
    { path: 'cradle_to_grave.data', resource: 'CallTrace' },
    { path: 'cdr', resource: 'CdrD' },
    { path: 'active', resource: 'ActiveCall' },
@@ -323,13 +328,31 @@ const diagnose_call: CuratedTool = {
    safe(client.request({ method: 'GET', pathTemplate: '/sipflow', queryParams: cradleParams })),
   ]);
 
+  const isRoleDenied = (res: { ok: boolean; error?: string }) =>
+   !res.ok && Boolean(res.error && /invalid scope|permission denied|insufficient permission|forbidden/i.test(res.error));
+
+  const roleReason =
+   'Your portal role cannot read SIP traces. Super User access is confirmed; Reseller access is unverified.';
+
+  const sipflowResult = isRoleDenied(sipflow)
+   ? { ok: false, error: sipflow.error, detail: roleReason }
+   : sipflow;
+  const cradleResult = isRoleDenied(cradle)
+   ? { ok: false, error: cradle.error, detail: roleReason }
+   : cradle;
+
+  const topDetail = isRoleDenied(sipflow)
+   ? 'Call record found, but your portal role cannot read SIP traces (Super User access is confirmed; Reseller access is unverified).'
+   : undefined;
+
   return textResult({
    call_id: callid,
    cdr: callData,
    server_used: server,
    searched_window: lookup.searchedWindow,
-   sip_trace: sipflow,
-   cradle_to_grave: cradle,
+   detail: topDetail,
+   sip_trace: sipflowResult,
+   cradle_to_grave: cradleResult,
   });
  },
 };
@@ -419,6 +442,10 @@ const queue_health: CuratedTool = {
    properties: {
     domain: { type: 'string' },
     max_queues: { type: 'number', default: 25, description: 'Cap the per-queue status fan-out to avoid huge responses.' },
+    since: { type: 'string', description: 'Start of statistics window' },
+    until: { type: 'string', description: 'End of statistics window' },
+    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
    },
   },
  },
@@ -448,17 +475,18 @@ const queue_health: CuratedTool = {
   const queues = Array.isArray(queuesResp.data) ? queuesResp.data : [];
   const limited = queues.slice(0, cap);
 
-  const window = nsDateWindow();
+  const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
 
   const annotated = await Promise.all(
    limited.map(async (q) => {
     const queueId = String(q['callqueue'] ?? q['queue'] ?? q['name'] ?? '');
     if (!queueId) return { queue: q, status: { ok: false, error: 'no queue id in record' } };
+    const queueDomain = domain === '~' && typeof q['domain'] === 'string' ? q['domain'] : domain;
     const status = await safe(
      client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
-      pathParams: { domain, queue: queueId },
+      pathParams: { domain: queueDomain, queue: queueId },
       queryParams: { start_date: window.start, end_date: window.end },
      }),
     );
@@ -491,6 +519,10 @@ const agent_dashboard: CuratedTool = {
    properties: {
     agent: { type: 'string', default: '~', description: 'Agent extension. Defaults to you.' },
     domain: { type: 'string' },
+    since: { type: 'string', description: 'Start of statistics window' },
+    until: { type: 'string', description: 'End of statistics window' },
+    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
    },
   },
  },
@@ -520,7 +552,7 @@ const agent_dashboard: CuratedTool = {
   // Every part below (status, statistics, calls) asks about that agent only.
   const agent = args.agent == null || args.agent === '' || args.agent === '~' ? await resolveSelfUser(client) : String(args.agent);
   const isBasicUser = userRole != null && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
-  const window = nsDateWindow();
+  const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
 
   let statusPromise: Promise<{ ok: boolean; data?: unknown; error?: string }>;
   if (!isBasicUser) {
@@ -1459,8 +1491,8 @@ const provision_call_queue: CuratedTool = {
   }
 
   const missing: string[] = [];
-  if (agents.length === 0) missing.push('no agents — calls will queue with nobody to answer them');
-  if (!args.phone_number) missing.push('no DID — outside callers cannot reach this queue directly');
+  if (agents.length === 0) missing.push('no agents: calls will queue with nobody to answer them');
+  if (!args.phone_number) missing.push('no DID: outside callers cannot reach this queue directly');
 
   return textResult({
    ok: steps.every((s) => s.ok),

@@ -48,3 +48,32 @@ export function isOnOrAfter(dateValue: unknown, since: string): boolean {
   if (Number.isNaN(t) || Number.isNaN(s)) return true;
   return t >= s;
 }
+
+/**
+ * Parse a NetSapiens boolean or yes/no field.
+ * NetSapiens APIs return boolean true/false in v2 JSON, legacy strings 'yes'/'no',
+ * strings 'true'/'false', numbers 1/0, or omit the field entirely.
+ */
+export function parseNsBoolean(raw: unknown, defaultValue = false): boolean {
+ if (raw == null || raw === '') return defaultValue;
+ if (typeof raw === 'boolean') return raw;
+ if (typeof raw === 'number') {
+  if (raw === 1) return true;
+  if (raw === 0) return false;
+  return false;
+ }
+ const s = String(raw).toLowerCase().trim();
+ if (s === 'yes' || s === 'true' || s === '1') return true;
+ if (s === 'no' || s === 'false' || s === '0') return false;
+ return false;
+}
+
+/**
+ * NetSapiens CDR trace expectation helper.
+ * Boolean true, 'true', 'yes', and 1 mean expected.
+ * Boolean false, 'false', 'no', and 0 mean not expected.
+ * Missing (null, undefined, empty string) defaults to true.
+ */
+export function isNsTraceExpected(raw: unknown): boolean {
+ return parseNsBoolean(raw, true);
+}
