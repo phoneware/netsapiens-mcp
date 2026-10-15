@@ -308,6 +308,30 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     expect((scrubbed as Record<string, unknown>).time_frame).toBe('Default');
   });
 
+  it('scrubs credential fields inside JSON-encoded strings', () => {
+    const payload = {
+      raw_json: JSON.stringify({
+        device: 'mac-1',
+        'device-sip-registration-password': 'secret-sip-pass',
+        nested: {
+          'voicemail-login-pin': '9999',
+        },
+      }),
+      plain_text: 'This is just a regular string with { brackets }',
+    };
+
+    const { scrubbed, count } = scrubSecrets(payload);
+    expect(count).toBe(2);
+
+    const parsedRaw = JSON.parse((scrubbed as { raw_json: string }).raw_json);
+    expect(parsedRaw.device).toBe('mac-1');
+    expect(parsedRaw['device-sip-registration-password']).toBeUndefined();
+    expect(parsedRaw.nested['voicemail-login-pin']).toBeUndefined();
+    expect((scrubbed as { plain_text: string }).plain_text).toBe(
+      'This is just a regular string with { brackets }',
+    );
+  });
+
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');
