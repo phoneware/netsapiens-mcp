@@ -672,7 +672,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "subject-alternative-name": {"class":"metadata"},
   },
   "Chart": {
-    "data_token": {"class":"metadata"},
+    "data_token": {"class":"secret"},
     "id": {"class":"metadata"},
     "name": {"class":"metadata"},
     "type": {"class":"metadata"},
@@ -1268,7 +1268,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "role": {"class":"metadata"},
   },
   "JwtRequestSuccess": {
-    "refresh": {"class":"metadata"},
+    "refresh": {"class":"secret"},
     "token": {"class":"secret"},
   },
   "JwtResponse": {

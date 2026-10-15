@@ -253,6 +253,30 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     }
   });
 
+  it('classifies JwtRequestSuccess.refresh and Chart.data_token as secrets', () => {
+    expect(NS_RESOURCE_FIELDS.JwtRequestSuccess?.refresh).toEqual({ class: 'secret' });
+    expect(NS_RESOURCE_FIELDS.Chart?.data_token).toEqual({ class: 'secret' });
+
+    const jwtPayload = { token: 'jwt-access-token', refresh: 'jwt-refresh-token' };
+    const { scrubbed: scrubbedJwt, count: jwtCount } = scrubSecrets(jwtPayload, {
+      rules: [{ path: '', resource: 'JwtRequestSuccess' }],
+    });
+    expect(jwtCount).toBe(2);
+    expect(scrubbedJwt).toEqual({});
+
+    const chartPayload = {
+      id: 1,
+      name: 'CallVolumeChart',
+      data_token: { access_token: 'secret-chart-token' },
+    };
+    const { scrubbed: scrubbedChart, count: chartCount } = scrubSecrets(chartPayload, {
+      rules: [{ path: '', resource: 'Chart' }],
+    });
+    expect(chartCount).toBe(1);
+    expect((scrubbedChart as Record<string, unknown>).data_token).toBeUndefined();
+    expect((scrubbedChart as Record<string, unknown>).name).toBe('CallVolumeChart');
+  });
+
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');
