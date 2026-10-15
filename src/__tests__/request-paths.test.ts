@@ -361,7 +361,7 @@ describe('request paths gate', () => {
        data: [
         {
          id: 'c-100',
-         'core-server': 'core-phx.netsapiens.com',
+         'core-server': 'core.example.net',
          'call-start-datetime': '2026-09-23T22:50:00Z',
          'call-disconnect-datetime': '2026-09-23T22:55:00Z',
          'is-trace-expected': 'yes',
@@ -376,14 +376,14 @@ describe('request paths gate', () => {
     },
    } as unknown as GenericApiClient;
 
-   const result = await tool!.handler({ call_id: 'c-100', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const result = await tool!.handler({ call_id: 'c-100', domain: 'example.test' }, mockClient, 'domain_admin');
    const paths = recorded.map((r) => r.pathTemplate);
    expect(paths).toContain('/domains/{domain}/users/{user}/calls/{callid}');
    expect(paths).toContain('/domains/{domain}/cdrs');
    expect(paths).toContain('/sipflow');
 
    const sipflowCall = recorded.find((r) => r.pathTemplate === '/sipflow');
-   expect(sipflowCall?.queryParams?.servers).toBe('core-phx.netsapiens.com');
+   expect(sipflowCall?.queryParams?.servers).toBe('core.example.net');
    expect(sipflowCall?.queryParams?.callids).toBe('c-100');
    expect(result.content[0].text).toBeDefined();
   });
@@ -449,7 +449,7 @@ describe('request paths gate', () => {
     },
    } as unknown as GenericApiClient;
 
-   const result = await tool!.handler({ call_id: 'c-missing', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const result = await tool!.handler({ call_id: 'c-missing', domain: 'example.test' }, mockClient, 'domain_admin');
    const paths = recorded.map((r) => r.pathTemplate);
    expect(paths).not.toContain('/sipflow');
 
@@ -493,6 +493,165 @@ describe('request paths gate', () => {
 
    const parsed = JSON.parse(result.content[0].text);
    expect(parsed.error).toContain('trace');
+  });
+
+  it('completed call where is-trace-expected is boolean true calls /sipflow with servers from CDR', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const recorded: Recorded[] = [];
+   const mockClient = {
+    request: async (o: Recorded) => {
+     recorded.push(o);
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core.example.net',
+         'is-trace-expected': true,
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: true, data: { trace: 'ladder' } };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'example.test' }, mockClient, 'domain_admin');
+   const paths = recorded.map((r) => r.pathTemplate);
+   expect(paths).toContain('/sipflow');
+
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.data).toEqual({ trace: 'ladder' });
+  });
+
+  it('completed call where /sipflow returns 401 explains portal role cannot read traces instead of retention elapsed', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core.example.net',
+         'is-trace-expected': true,
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: false, error: '401 Invalid Scope [APP001]' };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'example.test' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.success).toBe(false);
+   expect(parsed.error).toContain('401');
+   expect(parsed.detail).toContain('portal role cannot read SIP traces');
+   expect(parsed.detail).not.toContain('retention has elapsed');
+  });
+
+  it('call_trace preserves an invalid-token authentication failure', async () => {
+   const tool = CURATED_CATALOG.find((t) => t.schema.name === 'call_trace');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) return { success: false, error: 'Resource not found' };
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return { success: true, data: [{ id: 'c-auth-failure', 'core-server': 'core.example.net', 'is-trace-expected': true }] };
+     }
+     if (o.pathTemplate === '/sipflow') return { success: false, error: '401 Invalid Token' };
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-auth-failure', domain: 'example.test' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.error).toBe('401 Invalid Token');
+   expect(parsed.detail).toBeUndefined();
+  });
+
+  it('diagnose_call preserves an invalid-token authentication failure', async () => {
+   const tool = WORKFLOW_TOOLS.find((t) => t.schema.name === 'diagnose_call');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) return { success: false, error: 'Resource not found' };
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return { success: true, data: [{ id: 'c-auth-failure', 'core-server': 'core.example.net', 'is-trace-expected': true }] };
+     }
+     if (o.pathTemplate === '/sipflow') return { success: false, error: '401 Invalid Token' };
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-auth-failure', domain: 'example.test' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.cdr).toBeDefined();
+   expect(parsed.detail).toBeUndefined();
+   expect(parsed.sip_trace.error).toBe('401 Invalid Token');
+   expect(parsed.sip_trace.detail).toBeUndefined();
+  });
+
+  it('diagnose_call on completed call where is-trace-expected is boolean true and /sipflow returns 401 returns cdr and explains role restriction', async () => {
+   const tool = WORKFLOW_TOOLS.find((t) => t.schema.name === 'diagnose_call');
+   expect(tool).toBeTruthy();
+
+   const mockClient = {
+    request: async (o: Recorded) => {
+     if (o.pathTemplate.includes('/calls/')) {
+      return { success: false, error: 'Resource not found' };
+     }
+     if (o.pathTemplate === '/domains/{domain}/cdrs') {
+      return {
+       success: true,
+       data: [
+        {
+         id: 'c-bool-true',
+         'core-server': 'core.example.net',
+         'is-trace-expected': true,
+         'call-start-datetime': '2026-10-15T12:00:00Z',
+         'call-disconnect-datetime': '2026-10-15T12:05:00Z',
+        },
+       ],
+      };
+     }
+     if (o.pathTemplate === '/sipflow') {
+      return { success: false, error: '401 Invalid Scope [APP001]' };
+     }
+     return { success: true, data: [] };
+    },
+   } as unknown as GenericApiClient;
+
+   const result = await tool!.handler({ call_id: 'c-bool-true', domain: 'example.test' }, mockClient, 'domain_admin');
+   const parsed = JSON.parse(result.content[0].text);
+   expect(parsed.call_id).toBe('c-bool-true');
+   expect(parsed.cdr).toBeDefined();
+   expect(parsed.cdr['core-server']).toBe('core.example.net');
+   expect(parsed.server_used).toBe('core.example.net');
+   expect(parsed.detail).toContain('portal role cannot read SIP traces');
+   expect(parsed.sip_trace.ok).toBe(false);
+   expect(parsed.sip_trace.detail).toContain('portal role cannot read SIP traces');
   });
  });
 

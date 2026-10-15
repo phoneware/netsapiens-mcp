@@ -217,6 +217,7 @@ const TIER_RULES: Array<{ role: UserRole; patterns: RegExp[] }> = [
   role: 'reseller',
   patterns: [
    /reseller/i,
+   /(^|_)sipflow(_|$)|(^|_)cradle2grave(_|$)|get_sip_flow|get_call_trace/i,
    /^create_domain$|^delete_domain$|^domain_billing$|^count_domains$/i,
    /v1_reseller/i,
   ],
