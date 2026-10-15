@@ -208,21 +208,95 @@ const find_device: CuratedTool = {
   },
  },
  targets: { domainArg: 'domain' },
- output: { rules: [{ path: 'data[]', resource: 'Device' }] },
+ output: {
+  rules: [
+   { path: 'data[].device-provisioning-password', field: { class: 'secret' } },
+   { path: 'data[].device-sip-registration-password', field: { class: 'secret' } },
+   { path: 'data[].global-one-time-pass', field: { class: 'secret' } },
+   { path: 'data[]', resource: 'Phone' },
+   { path: 'data[]', resource: 'Device' },
+  ],
+ },
  handler: async (args, client) => {
-  const query = String(args.query);
-  // /domains/{domain}/devices has no query filter at all — fetch the full
-  // domain device list and match client-side.
-  const r = await client.request({
+  const query = String(args.query ?? '').trim();
+  const domain = str(args.domain);
+
+  // NetSapiens v2 answers 404 No Route Found to /domains/{domain}/devices.
+  // 1. Handset-provisioned hardware phones (by MAC, model, line extension) live at /domains/{domain}/phones.
+  const phonesPromise = client.request({
    method: 'GET',
-   pathTemplate: '/domains/{domain}/devices',
-   pathParams: { domain: str(args.domain) },
+   pathTemplate: '/domains/{domain}/phones',
+   pathParams: { domain },
   });
-  if (!r.success || !Array.isArray(r.data)) return textResult(r);
-  const matches = (r.data as Array<Record<string, unknown>>).filter((d) =>
-   fieldsMatch(d, ['device', 'user', 'device-sip-registration-user-agent', 'device-models-model'], query),
+
+  // 2. Per-user SIP device registrations live at /domains/{domain}/users/{user}/devices.
+  // When query is an extension or username, query the user's devices.
+  const isCandidateUser = query.length > 0 && !/[\s/]/.test(query);
+  const userDevicesPromise = isCandidateUser
+   ? client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/devices',
+      pathParams: { domain, user: query },
+     })
+   : Promise.resolve({ success: true, data: [] });
+
+  const [phonesRes, userDevRes] = await Promise.all([phonesPromise, userDevicesPromise]);
+
+  if (!phonesRes.success && !userDevRes.success) {
+   return textResult(phonesRes);
+  }
+
+  const rawPhones = Array.isArray(phonesRes.data)
+   ? (phonesRes.data as Array<Record<string, unknown>>).map((p) => {
+      const mapped: Record<string, unknown> = { ...p };
+      if (!mapped.device && (p['device-provisioning-mac-address'] || p.mac)) {
+       mapped.device = p['device-provisioning-mac-address'] || p.mac;
+      }
+      if (!mapped.user && (p['device-provisioning-line-1-extensions'] || p['device-provisioning-username'])) {
+       mapped.user = p['device-provisioning-line-1-extensions'] || p['device-provisioning-username'];
+      }
+      if (!mapped['device-models-model'] && (p['device-models-brand-and-model'] || p.model)) {
+       mapped['device-models-model'] = p['device-models-brand-and-model'] || p.model;
+      }
+      if (!mapped['device-sip-registration-user-agent'] && (p['device-models-brand-and-model'] || p.model)) {
+       mapped['device-sip-registration-user-agent'] = p['device-models-brand-and-model'] || p.model;
+      }
+      return mapped;
+     })
+   : [];
+
+  const rawUserDevices = Array.isArray(userDevRes.data)
+   ? (userDevRes.data as Array<Record<string, unknown>>)
+   : [];
+
+  const combined: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  for (const item of [...rawPhones, ...rawUserDevices]) {
+   const key = item.device ?? item['device-provisioning-mac-address'] ?? item.mac;
+   if (key && seen.has(key)) continue;
+   if (key) seen.add(key);
+   combined.push(item);
+  }
+
+  const matches = combined.filter((d) =>
+   fieldsMatch(
+    d,
+    [
+     'device',
+     'user',
+     'mac',
+     'device-provisioning-mac-address',
+     'device-models-brand-and-model',
+     'device-models-model',
+     'device-sip-registration-user-agent',
+     'device-sip-allowed-user-agent',
+     'device-provisioning-line-1-extensions',
+     'device-provisioning-username',
+    ],
+    query,
+   ),
   );
-  return textResult({ ...r, data: matches });
+  return textResult({ success: true, data: matches });
  },
 };
 
