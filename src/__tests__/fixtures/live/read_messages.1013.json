@@ -1,0 +1,28 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": "s",
+      "timestamp": "s",
+      "type": "s",
+      "domain": "s",
+      "direction": "s",
+      "dialed": "s",
+      "text": "s",
+      "status": "s",
+      "messagesession-receiver-hostname": "s",
+      "from-number": "s",
+      "from-user-id": "s",
+      "from-video-attendee-id": null,
+      "from-user-agent": "s",
+      "terminating-user-id": "s",
+      "terminating-number": "s",
+      "messagesession-id": "s",
+      "meeting-instance-id": null,
+      "media-type": "s",
+      "media-size": 0,
+      "messagesession-participants": null,
+      "deleted-datetime": "s"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "call_id": "s",
+  "error": "s",
+  "detail": "s",
+  "searched_window": {
+    "start": "s",
+    "end": "s"
+  }
+}

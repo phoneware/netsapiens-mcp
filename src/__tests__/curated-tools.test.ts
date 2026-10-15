@@ -777,11 +777,11 @@ describe('composite handlers translate args correctly', () => {
 		expect(modelParsed.data[0]['device-models-model']).toBe('Yealink T46S');
 	});
 
- it('recent_calls, call_statistics, and agent_statistics send `datetime-start` + `datetime-end` (not the nonexistent `start-time-after`) for `since`', async () => {
-  // `datetime-start`/`datetime-end` are a required pair on these endpoints —
+ it('recent_calls sends the `datetime-start` + `datetime-end` pair, and the statistics routes send `start_date` + `end_date` as UTC "YYYY-MM-DD HH:MM:SS", for `since`', async () => {
+  // `datetime-start`/`datetime-end` are a required pair on the CDR endpoint —
   // sending `datetime-start` alone is silently ignored by the live API
-  // (confirmed against production data), so `datetime-end` must always be
-  // sent alongside it.
+  // (confirmed against production data). The statistics routes instead require
+  // start_date (measured 2026-10-15: "Missing parameter 'start_date'" without it).
   const { handleToolCall } = await importTools();
   const calls: Array<{ queryParams?: Record<string, unknown> }> = [];
   const fakeClient = {
@@ -790,20 +790,24 @@ describe('composite handlers translate args correctly', () => {
     return { success: true, data: [] };
    },
   };
-  const before = Date.now();
+  const before = Date.now() - 1000;
   await handleToolCall(fakeClient as never, 'recent_calls', { since: '2026-01-01T00:00:00Z' }, 'user');
   await handleToolCall(fakeClient as never, 'call_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
   await handleToolCall(fakeClient as never, 'agent_statistics', { since: '2026-01-01T00:00:00Z' }, 'domain_admin');
-  const after = Date.now();
+  const after = Date.now() + 1000;
   expect(calls.length).toBe(3);
-  for (const c of calls) {
-   expect(c.queryParams).toHaveProperty('datetime-start', '2026-01-01T00:00:00Z');
-   expect(c.queryParams).not.toHaveProperty('start-time-after');
-   const until = c.queryParams?.['datetime-end'] as string;
-   expect(until).toBeTruthy();
-   const untilMs = Date.parse(until);
-   expect(untilMs).toBeGreaterThanOrEqual(before);
-   expect(untilMs).toBeLessThanOrEqual(after);
+  const [cdr, ...stats] = calls;
+  expect(cdr.queryParams).toHaveProperty('datetime-start', '2026-01-01T00:00:00Z');
+  expect(cdr.queryParams).not.toHaveProperty('start-time-after');
+  const cdrUntil = Date.parse(cdr.queryParams?.['datetime-end'] as string);
+  expect(cdrUntil).toBeGreaterThanOrEqual(before);
+  expect(cdrUntil).toBeLessThanOrEqual(after);
+  for (const c of stats) {
+   expect(c.queryParams).toHaveProperty('start_date', '2026-01-01 00:00:00');
+   expect(c.queryParams).not.toHaveProperty('datetime-start');
+   const end = Date.parse(`${String(c.queryParams?.end_date).replace(' ', 'T')}Z`);
+   expect(end).toBeGreaterThanOrEqual(before);
+   expect(end).toBeLessThanOrEqual(after);
   }
  });
 
