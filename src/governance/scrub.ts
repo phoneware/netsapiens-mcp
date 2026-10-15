@@ -17,6 +17,7 @@ const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
  passcode: true,
  subscriber_pin: true,
  pwd_hash: true,
+ pwd: true,
  auth_pass: true,
  authentication_key: true,
  'connection-sip-registration-password': true,

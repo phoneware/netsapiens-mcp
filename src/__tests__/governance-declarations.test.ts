@@ -291,6 +291,23 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     expect((scrubbed as Record<string, unknown>).domain).toBe('legacy.domain');
   });
 
+  it('removes legacy pwd password as a secret', () => {
+    expect(NS_RESOURCE_FIELDS.AnswerruleLegacy?.pwd).toEqual({ class: 'secret' });
+
+    const payload = {
+      user: '1001',
+      domain: 'test.com',
+      time_frame: 'Default',
+      pwd: 'legacy-answerrule-password',
+      pwd_hash: 'hash123',
+    };
+    const { scrubbed, count } = scrubSecrets(payload);
+    expect(count).toBe(2);
+    expect((scrubbed as Record<string, unknown>).pwd).toBeUndefined();
+    expect((scrubbed as Record<string, unknown>).pwd_hash).toBeUndefined();
+    expect((scrubbed as Record<string, unknown>).time_frame).toBe('Default');
+  });
+
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');

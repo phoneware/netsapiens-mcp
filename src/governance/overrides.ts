@@ -72,6 +72,11 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   UserLegacy: {
     subscriber_pin: { class: 'secret' },
     pwd_hash: { class: 'secret' },
+    pwd: { class: 'secret' },
+  },
+  AnswerruleLegacy: {
+    pwd: { class: 'secret' },
+    pwd_hash: { class: 'secret' },
   },
   Domain: {
     domain: { class: 'record_id', recordType: 'domain' },
