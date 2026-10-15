@@ -1,0 +1,39 @@
+{
+  "domain": "~",
+  "queue_count": 1,
+  "returned": 1,
+  "truncated": false,
+  "queues": [
+    {
+      "queue": {
+        "domain": "PhonewareLab",
+        "callqueue": "1099",
+        "description": "Test Queue for Native Disclaimer",
+        "callqueue-dispatch-type": "Ring All",
+        "callqueue-calculate-statistics": "",
+        "active-queued-calls-total-current": 0,
+        "agent_loggedin_count": 3,
+        "callqueue-agent-auto-logout-after-missed": "no",
+        "callqueue-agent-dispatch-timeout-seconds": 15,
+        "callqueue-count-agents-available": 1,
+        "callqueue-count-agents-total": 3,
+        "callqueue-debug": "no",
+        "callqueue-force-full-intro-playback": "no",
+        "callqueue-max-callback-queueing-hours": 0,
+        "callqueue-max-current-callers-to-accept-new-callers": 0,
+        "callqueue-max-current-wait-to-accept-new-callers-seconds": 0,
+        "callqueue-max-wait-timeout-minutes": 1,
+        "callqueue-require-available-agents-to-accept-new-callers": "no",
+        "callqueue-sim-ring-1st-round": 0,
+        "callqueue-sim-ring-increment": 0,
+        "callqueue-sms-enable": "no",
+        "callqueue-source-match": null
+      },
+      "queue_id": "1099",
+      "status": {
+        "ok": true,
+        "data": []
+      }
+    }
+  ]
+}

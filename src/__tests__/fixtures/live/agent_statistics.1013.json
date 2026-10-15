@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "data": [
+    {
+      "agent": "1002",
+      "agent-name": "FarEnd Voicemail",
+      "queue-calls-answered-count": 0,
+      "queue-calls-talking-avg-duration-minutes": 0,
+      "queue-calls-holding-avg-duration-seconds": 0,
+      "queue-calls-handling-avg-duration-minutes": 0,
+      "queue-calls-talking-duration-minutes": 0
+    },
+    {
+      "agent": "1011",
+      "agent-name": "Front Desk Proof",
+      "queue-calls-answered-count": 0,
+      "queue-calls-talking-avg-duration-minutes": 0,
+      "queue-calls-holding-avg-duration-seconds": 0,
+      "queue-calls-handling-avg-duration-minutes": 0,
+      "queue-calls-talking-duration-minutes": 0
+    },
+    {
+      "agent": "1015",
+      "agent-name": "Supervisor Proof",
+      "queue-calls-answered-count": 0,
+      "queue-calls-talking-avg-duration-minutes": 0,
+      "queue-calls-holding-avg-duration-seconds": 0,
+      "queue-calls-handling-avg-duration-minutes": 0,
+      "queue-calls-talking-duration-minutes": 0
+    }
+  ]
+}

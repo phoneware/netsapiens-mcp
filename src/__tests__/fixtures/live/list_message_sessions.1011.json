@@ -1,0 +1,30 @@
+{
+  "success": true,
+  "data": [
+    {
+      "user": "1011",
+      "domain": "PhonewareLab",
+      "messagesession-id": "c1919a5ed63f289545f6304a14f2314e",
+      "messagesession-remote": "1013@PhonewareLab",
+      "messagesession-sms-number": "",
+      "messagesession-last-datetime": "2026-10-14T22:59:06+00:00",
+      "messagesession-start-datetime": null,
+      "messagesession-last-message": "Hi Front Desk, this is Maria. Please note that Dana Whitfield (303-555-0142) called earlier regarding the proof testing.",
+      "messagesession-last-sender": "1013@PhonewareLab",
+      "messagesession-last-status": "unread",
+      "messagesession-muted": "no",
+      "messagesession-last-email-reminder-datetime": "2026-10-14T22:59:06+00:00",
+      "messagesession-receiver-hostname": "core1.ns.example.net",
+      "messagesession-queue-termination": null,
+      "messagesession-queue-status": null,
+      "messagesession-queue-session-id": null,
+      "messagesession-agent-start-datetime": null,
+      "messagesession-last-type": "chat",
+      "messagesession-last-media-type": "",
+      "messagesession-last-media-size": 0,
+      "messagesession-type": "",
+      "session-name": "",
+      "messagesession-participants": null
+    }
+  ]
+}

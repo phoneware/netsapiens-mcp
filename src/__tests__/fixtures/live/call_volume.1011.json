@@ -1,0 +1,10 @@
+{
+  "scope": "mine",
+  "scope_note": "only the signed-in user's calls",
+  "success": true,
+  "data": {
+    "total": 2,
+    "minutes": 1,
+    "seconds": 60
+  }
+}

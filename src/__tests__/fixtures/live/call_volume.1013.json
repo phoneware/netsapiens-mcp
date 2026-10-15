@@ -1,0 +1,10 @@
+{
+  "scope": "domain",
+  "scope_note": "every call in the domain, not just yours; pass scope=\"mine\" or user=\"<extension>\" to narrow",
+  "success": true,
+  "data": {
+    "total": 4,
+    "minutes": 3,
+    "seconds": 174
+  }
+}
