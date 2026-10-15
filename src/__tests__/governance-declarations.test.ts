@@ -332,6 +332,54 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
     );
   });
 
+  it('scrubs resource-specific secrets in generated tools and call_api without false positives', async () => {
+    // 1. ApiKey.key via call_api / generated response
+    const apiKeyPayload = {
+      success: true,
+      data: {
+        'key-id': 'k-999',
+        key: 'secret-api-key-val',
+        description: 'Test API Key',
+      },
+    };
+    const { scrubbed: scrubbedKey, count: keyCount } = scrubSecrets(apiKeyPayload);
+    expect(keyCount).toBe(1);
+    const keyData = (scrubbedKey as typeof apiKeyPayload).data;
+    expect(keyData.key).toBeUndefined();
+    expect(keyData['key-id']).toBe('k-999');
+    expect(keyData.description).toBe('Test API Key');
+
+    // 2. AccessToken via generated response
+    const tokenPayload = {
+      success: true,
+      data: {
+        access_token: 'secret-access-token-val',
+        refresh_token: 'secret-refresh-token-val',
+        token_type: 'Bearer',
+      },
+    };
+    const { scrubbed: scrubbedToken, count: tokenCount } = scrubSecrets(tokenPayload);
+    expect(tokenCount).toBe(2);
+    const tokenData = (scrubbedToken as typeof tokenPayload).data;
+    expect(tokenData.access_token).toBeUndefined();
+    expect(tokenData.refresh_token).toBeUndefined();
+    expect(tokenData.token_type).toBe('Bearer');
+
+    // 3. No false positives on non-secret fields containing token, pin, or key
+    const nonSecretPayload = {
+      success: true,
+      data: {
+        'language-token': 'en_US',
+        'directory-name-number-dtmf-mapping': 764,
+        'unassigned-key-press': '1',
+        generic_pair: { key: 'status', value: 'active' },
+      },
+    };
+    const { scrubbed: scrubbedNonSecret, count: nonSecretCount } = scrubSecrets(nonSecretPayload);
+    expect(nonSecretCount).toBe(0);
+    expect((scrubbedNonSecret as typeof nonSecretPayload).data).toEqual(nonSecretPayload.data);
+  });
+
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');

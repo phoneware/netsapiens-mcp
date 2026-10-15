@@ -29,6 +29,8 @@ import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js'
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
 import { scrubSecrets } from '../governance/scrub.js';
+import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
+import type { OutputDeclaration } from '../governance/types.js';
 /** Set-equality helper used to detect promotion / demotion changes. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
  if (a.size !== b.size) return false;
@@ -650,6 +652,38 @@ export function paginateTools(
  return end < tools.length ? { tools: page, nextCursor: encodeCursor(end) } : { tools: page };
 }
 
+/** Resolve the target resource for a generated tool name when no curated declaration exists. */
+function resolveGeneratedToolOutput(name: string): OutputDeclaration | undefined {
+  const lower = name.toLowerCase();
+  let resource: string | undefined;
+
+  if (lower.includes('apikey')) resource = 'ApiKey';
+  else if (lower.includes('jwt')) resource = 'JwtRequestSuccess';
+  else if (lower.startsWith('post_tokens') || lower.startsWith('get_tokens')) resource = 'AccessToken';
+  else if (lower.includes('chart')) resource = 'Chart';
+  else if (lower.includes('device')) resource = lower.startsWith('v1_') ? 'DeviceLegacy' : 'Device';
+  else if (lower.includes('domain')) resource = lower.startsWith('v1_') ? 'DomainLegacy' : 'Domain';
+  else if (lower.includes('reseller')) resource = 'Reseller';
+  else if (lower.includes('subscriber') || lower.includes('user')) resource = lower.startsWith('v1_') ? 'UserLegacy' : 'User';
+  else if (lower.includes('answerrule')) resource = lower.startsWith('v1_') ? 'AnswerruleLegacy' : 'Answerrule';
+  else if (lower.includes('callqueue')) resource = 'CallQueue';
+  else if (lower.includes('phonenumber')) resource = 'Phonenumber';
+  else if (lower.includes('cdr')) resource = 'CdrD';
+  else if (lower.includes('recording')) resource = 'Recording';
+  else if (lower.includes('voicemail')) resource = 'Voicemail';
+
+  if (resource && NS_RESOURCE_FIELDS[resource]) {
+    return {
+      rules: [
+        { path: 'data[]', resource },
+        { path: 'data', resource },
+        { path: '', resource },
+      ],
+    };
+  }
+  return undefined;
+}
+
 /**
  * Dispatches a tool call. In curated mode tries the curated/meta tools first
  * (so `call_api` is intercepted here too); falls through to the generated
@@ -768,9 +802,10 @@ export async function handleToolCall(
    }
   }
 
+  const outputDecl = curated?.output ?? resolveGeneratedToolOutput(registryKey);
   let secretsScrubbed = 0;
   if (parsedResult !== undefined) {
-   const scrubbed = scrubSecrets(parsedResult, curated?.output);
+   const scrubbed = scrubSecrets(parsedResult, outputDecl);
    secretsScrubbed = scrubbed.count;
    if (secretsScrubbed > 0) {
     parsedResult = typeof scrubbed.scrubbed === 'object' && scrubbed.scrubbed !== null
@@ -784,7 +819,7 @@ export async function handleToolCall(
     }
    }
   } else if (result !== null && result !== undefined && typeof result === 'object' && !('content' in result)) {
-   const scrubbed = scrubSecrets(result, curated?.output);
+   const scrubbed = scrubSecrets(result, outputDecl);
    secretsScrubbed = scrubbed.count;
    if (secretsScrubbed > 0) {
     result = scrubbed.scrubbed;
