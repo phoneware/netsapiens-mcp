@@ -637,7 +637,9 @@ const call_trace: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'call_trace',
-  description: 'SIP flow / call trace for a specific call. Useful for diagnosing why a call did what it did.',
+  description:
+   'SIP flow / call trace for a specific call. Reading SIP traces on /sipflow requires Super User access (Reseller is unverified). ' +
+   'Useful for diagnosing why a call did what it did.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -705,6 +707,22 @@ const call_trace: CuratedTool = {
    pathTemplate: '/sipflow',
    queryParams,
   });
+
+  if (!r.success) {
+   const isRoleDenied = Boolean(
+    r.error && (r.error.includes('401') || r.error.includes('403') || r.error.toLowerCase().includes('invalid scope')),
+   );
+   if (isRoleDenied) {
+    return textResult({
+     call_id: callid,
+     success: false,
+     error: r.error,
+     detail: 'Your portal role cannot read SIP traces. Reading SIP traces on /sipflow requires Super User access (Reseller is unverified).',
+     searched_window: lookup.searchedWindow,
+    });
+   }
+  }
+
   return textResult(r);
  },
 };

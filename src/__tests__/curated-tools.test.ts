@@ -281,11 +281,11 @@ describe('workflow tools (multi-call composites)', () => {
   expect(paths.has('/domains/{domain}/users/{user}/voicemails/{folder}')).toBe(true);
  });
 
- it('queue_health lists queues then fans out per-queue status', async () => {
+ it('queue_health lists queues then fans out per-queue status with required start_date and end_date', async () => {
   const { handleToolCall } = await importTools();
-  const calls: Array<{ method: string; pathTemplate: string }> = [];
+  const calls: Array<{ method: string; pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
   const client = {
-   request: async (o: { method: string; pathTemplate: string }) => {
+   request: async (o: { method: string; pathTemplate: string; queryParams?: Record<string, unknown> }) => {
     calls.push(o);
     if (o.pathTemplate === '/domains/{domain}/callqueues') {
      return { success: true, data: [{ callqueue: 'support' }, { callqueue: 'sales' }] };
@@ -298,6 +298,32 @@ describe('workflow tools (multi-call composites)', () => {
   expect(calls.length).toBe(3);
   expect(calls[0].pathTemplate).toBe('/domains/{domain}/callqueues');
   expect(calls.slice(1).every((c) => c.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}')).toBe(true);
+  expect(
+   calls.slice(1).every(
+    (c) =>
+     typeof c.queryParams?.start_date === 'string' &&
+     typeof c.queryParams?.end_date === 'string',
+   ),
+  ).toBe(true);
+ });
+
+ it('queue_health forwards explicit since and until date bounds to statistics queryParams', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; queryParams?: Record<string, unknown> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+    calls.push(o);
+    if (o.pathTemplate === '/domains/{domain}/callqueues') {
+     return { success: true, data: [{ callqueue: 'support' }] };
+    }
+    return { success: true, data: {} };
+   },
+  };
+  await handleToolCall(client as never, 'queue_health', { since: '2026-10-10', until: '2026-10-12' }, 'domain_admin');
+  expect(calls.length).toBe(2);
+  const statCall = calls[1];
+  expect(statCall.queryParams?.start_date).toContain('2026-10-10');
+  expect(statCall.queryParams?.end_date).toContain('2026-10-12');
  });
 
  it('switch_queue does logout then login and reports partial-failure clearly', async () => {
