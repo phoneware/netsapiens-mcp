@@ -10,14 +10,12 @@
       "enabled": "s",
       "forward-always": {
         "parameters": [
-          0
+          "s"
         ],
         "enabled": "s"
       },
       "simultaneous-ring": {
-        "parameters": [
-          "s"
-        ],
+        "parameters": [],
         "enabled": "s"
       }
     }

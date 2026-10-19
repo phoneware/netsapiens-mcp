@@ -1,30 +1,4 @@
 {
   "success": true,
-  "data": [
-    {
-      "user": "s",
-      "domain": "s",
-      "messagesession-id": "s",
-      "messagesession-remote": "s",
-      "messagesession-sms-number": "s",
-      "messagesession-last-datetime": "s",
-      "messagesession-start-datetime": null,
-      "messagesession-last-message": "s",
-      "messagesession-last-sender": "s",
-      "messagesession-last-status": "s",
-      "messagesession-muted": "s",
-      "messagesession-last-email-reminder-datetime": null,
-      "messagesession-receiver-hostname": "s",
-      "messagesession-queue-termination": null,
-      "messagesession-queue-status": null,
-      "messagesession-queue-session-id": null,
-      "messagesession-agent-start-datetime": null,
-      "messagesession-last-type": "s",
-      "messagesession-last-media-type": "s",
-      "messagesession-last-media-size": 0,
-      "messagesession-type": "s",
-      "session-name": "s",
-      "messagesession-participants": null
-    }
-  ]
+  "data": []
 }

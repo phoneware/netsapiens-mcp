@@ -14,7 +14,9 @@ import { textResult, STANDARD_WRAPPER_RULES } from './types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
-import type { GenericApiClient } from '../../generated/types.js';
+import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
+import { resolveQueueAgent } from './queue-agent.js';
+import { attachVoicemailTranscripts } from './voicemail-transcripts.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
@@ -835,7 +837,7 @@ const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
+  description: 'List your voicemails (with transcripts and caller details). Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -846,7 +848,7 @@ const my_voicemails: CuratedTool = {
  },
  targets: { selfOnly: true },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Voicemail' }] },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const limit = num(args.limit) ?? 25;
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -857,7 +859,9 @@ const my_voicemails: CuratedTool = {
     queryParams: { limit },
    });
    if (r && Array.isArray(r.data)) {
-    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+    const items = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder })).slice(0, limit);
+    await attachVoicemailTranscripts(client, items, userRole);
+    r.data = items;
    }
    return textResult(r);
   }
@@ -878,9 +882,11 @@ const my_voicemails: CuratedTool = {
    }),
   );
   const merged = responses.flat();
+  const slice = merged.slice(0, limit);
+  await attachVoicemailTranscripts(client, slice, userRole);
   return textResult({
    success: true,
-   data: merged.slice(0, limit),
+   data: slice,
   });
  },
 };
@@ -889,7 +895,7 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  description: 'Open a specific voicemail (metadata + transcript and download URL if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -907,7 +913,7 @@ const read_voicemail: CuratedTool = {
    { path: 'data[]', resource: 'Voicemail' },
   ],
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const filename = String(args.voicemail_id);
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -916,6 +922,9 @@ const read_voicemail: CuratedTool = {
     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
     pathParams: { folder: targetFolder, filename },
    });
+   if (r?.success !== false && r?.data) {
+    await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
+   }
    return textResult(r);
   }
   for (const folder of VOICEMAIL_FOLDERS) {
@@ -929,6 +938,7 @@ const read_voicemail: CuratedTool = {
      if (Array.isArray(r.data) && r.data.length === 0) {
       continue;
      }
+     await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
      return textResult(r);
     }
    } catch {
@@ -1109,11 +1119,24 @@ const list_queues: CuratedTool = {
  },
 };
 
+async function safe<T = unknown>(
+ p: Promise<NetSapiensApiResponse<T>>,
+): Promise<{ ok: boolean; data?: T; error?: string }> {
+ try {
+  const r = await p;
+  if (r.success) return { ok: true, data: r.data };
+  return { ok: false, error: r.error || 'request failed' };
+ } catch (err: unknown) {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+ }
+}
+
 const queue_status: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'queue_status',
-  description: 'Statistics for one queue over a window: waiting calls, available/busy agents, longest wait. With no dates it covers the last 24 hours; with only an end, the 24 hours before it. Bounds without an offset are UTC.',
+  description:
+   'Live state now (waiting callers with waits, longest wait; agents with callqueue-agent-availability-type, where automatic means logged in and manual means logged out, plus active-calls-total-current), and statistics for a window (the last 24 hours by default, empty when NetSapiens has none).',
   inputSchema: {
    type: 'object',
    properties: {
@@ -1131,24 +1154,166 @@ const queue_status: CuratedTool = {
  output: {
   rules: [
    ...STANDARD_WRAPPER_RULES,
-   { path: 'data', resource: 'CallQueue' },
-   { path: 'data[]', resource: 'CallQueue' },
+   { path: 'queue_id', field: { class: 'metadata' } },
+   { path: 'queue', resource: 'CallQueue' },
+   { path: 'waiting.ok', field: { class: 'metadata' } },
+   { path: 'waiting.error', field: { class: 'metadata' } },
+   { path: 'waiting.count', field: { class: 'metadata' } },
+   { path: 'waiting.longest_wait_seconds', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].caller', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].queued_at', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].wait_seconds', field: { class: 'metadata' } },
+   { path: 'agents.ok', field: { class: 'metadata' } },
+   { path: 'agents.error', field: { class: 'metadata' } },
+   { path: 'agents.data[]', resource: 'Agent' },
+   { path: 'statistics.ok', field: { class: 'metadata' } },
+   { path: 'statistics.error', field: { class: 'metadata' } },
+   { path: 'statistics.start', field: { class: 'metadata' } },
+   { path: 'statistics.end', field: { class: 'metadata' } },
    { path: 'data', resource: 'QueueStat' },
    { path: 'data[]', resource: 'QueueStat' },
+   { path: 'statistics.data', resource: 'QueueStat' },
+   { path: 'statistics.data[]', resource: 'QueueStat' },
   ],
  },
  handler: async (args, client) => {
   const domain = str(args.domain);
+  const queueId = String(args.queue);
   const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
   const startDate = window.start;
   const endDate = window.end;
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
-   pathParams: { domain, queue: String(args.queue) },
-   queryParams: { start_date: startDate, end_date: endDate },
+
+  const [queueRes, waitingRes, agentsRes, statsRes] = await Promise.all([
+   safe<Record<string, unknown> | Array<Record<string, unknown>>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/{queue}',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/queuedcall/{queue}',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/{queue}/agents',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
+     pathParams: { domain, queue: queueId },
+     queryParams: { start_date: startDate, end_date: endDate },
+    }),
+   ),
+  ]);
+
+  if (!queueRes.ok && !waitingRes.ok && !agentsRes.ok) {
+   const error = queueRes.error || waitingRes.error || agentsRes.error || 'Failed to read queue';
+   return textResult({ success: false, error });
+  }
+
+  const queue = queueRes.ok
+   ? Array.isArray(queueRes.data)
+     ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
+     : ((queueRes.data as Record<string, unknown>) ?? null)
+   : null;
+
+  let waiting:
+   | {
+      ok: true;
+      count: number;
+      longest_wait_seconds: number;
+      callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
+     }
+   | { ok: false; error: string };
+
+  if (waitingRes.ok) {
+   const rawCallers = Array.isArray(waitingRes.data)
+    ? waitingRes.data
+    : waitingRes.data
+      ? [waitingRes.data]
+      : [];
+   const callers = rawCallers.map((row) => {
+    const caller = String(row['dial-rule-translation-source-name'] ?? row['from_uri'] ?? '');
+    const queued_at = String(row['time_queued'] ?? '');
+    const wait = Number(row['mysql_dura']);
+    const wait_seconds = Number.isFinite(wait) ? wait : 0;
+    return { caller, queued_at, wait_seconds };
+   });
+   callers.sort((a, b) => b.wait_seconds - a.wait_seconds);
+   const longest_wait_seconds = callers.length > 0 ? callers[0].wait_seconds : 0;
+   waiting = {
+    ok: true,
+    count: callers.length,
+    longest_wait_seconds,
+    callers,
+   };
+  } else {
+   waiting = {
+    ok: false,
+    error: waitingRes.error ?? 'Failed to read queued calls',
+   };
+  }
+
+  let agents:
+   | { ok: true; data: Array<Record<string, unknown>> }
+   | { ok: false; error: string };
+
+  if (agentsRes.ok) {
+   const agentList = Array.isArray(agentsRes.data)
+    ? agentsRes.data
+    : agentsRes.data
+      ? [agentsRes.data]
+      : [];
+   agents = {
+    ok: true,
+    data: agentList,
+   };
+  } else {
+   agents = {
+    ok: false,
+    error: agentsRes.error ?? 'Failed to read agents',
+   };
+  }
+
+  let statistics:
+   | {
+      ok: true;
+      start: string;
+      end: string;
+      data: Array<Record<string, unknown>> | Record<string, unknown>;
+     }
+   | { ok: false; error: string };
+
+  if (statsRes.ok) {
+   statistics = {
+    ok: true,
+    start: startDate,
+    end: endDate,
+    data: (statsRes.data as Array<Record<string, unknown>> | Record<string, unknown>) ?? [],
+   };
+  } else {
+   statistics = {
+    ok: false,
+    error: statsRes.error ?? 'Failed to read statistics',
+   };
+  }
+
+  return textResult({
+   queue_id: queueId,
+   queue,
+   waiting,
+   agents,
+   statistics,
   });
-  return textResult(r);
  },
 };
 
@@ -1156,7 +1321,8 @@ const agent_login: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_login',
-  description: 'Log an agent into a queue (or all queues with queue="all").',
+  description:
+   'Log an agent into one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -1168,12 +1334,63 @@ const agent_login: CuratedTool = {
  targets: { agentArg: 'agent' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/login',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged in to all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'automatic') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged in to ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 
@@ -1181,24 +1398,76 @@ const agent_logout: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_logout',
-  description: 'Log an agent out of a queue (or all with queue="all").',
+  description:
+   'Log an agent out of one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
     queue: { type: 'string', default: 'all' },
-    agent: { type: 'string' },
+    agent: { type: 'string', description: 'Agent extension; defaults to you' },
    },
   },
  },
  targets: { agentArg: 'agent' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/logout',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged out of all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'manual') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged out of ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 

@@ -337,6 +337,8 @@ export const CUSTOM_RESOURCES: Record<string, Record<string, FieldClass>> = {
   'voicemail-transcription': { class: 'content', kind: 'transcript', media: 'text' },
   'vmail-transcription': { class: 'content', kind: 'transcript', media: 'text' },
   transcription_text: { class: 'content', kind: 'transcript', media: 'text' },
+  'transcription-status': { class: 'metadata' },
+  transcription_status: { class: 'metadata' },
   'file-access-url': { class: 'content', kind: 'voicemail', media: 'audio_url' },
   url: { class: 'content', kind: 'voicemail', media: 'audio_url' },
   file: { class: 'content', kind: 'voicemail', media: 'audio_url' },

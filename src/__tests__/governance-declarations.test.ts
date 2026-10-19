@@ -965,6 +965,220 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             data: { 'callqueue-agent-id': '1011@dom' },
           },
         },
+        {
+          tool: 'agent_login',
+          branch: 'refusal',
+          payload: {
+            success: false,
+            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+          },
+        },
+        {
+          tool: 'agent_logout',
+          branch: 'refusal',
+          payload: {
+            success: false,
+            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'readback_success',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'automatic' },
+            note: 'Kim Nguyen is logged in to the Appointments queue (2090).',
+          },
+        },
+        {
+          tool: 'agent_logout',
+          branch: 'readback_success',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'manual' },
+            note: 'Kim Nguyen is logged out of the Appointments queue (2090).',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'readback_pending',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab' },
+            note: 'NetSapiens accepted the change; the agent record does not show it yet.',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'all_queues',
+          payload: {
+            success: true,
+            note: 'Kim Nguyen is logged in to all queues.',
+          },
+        },
+        {
+          tool: 'switch_queue',
+          branch: 'resolve failed',
+          payload: {
+            ok: false,
+            step: 'resolve',
+            from: '2090',
+            to: '2099',
+            agent: '2007@PhonewareLab',
+            note: 'Kim Nguyen is not an agent in the Billing queue (2099), so nothing was changed.',
+          },
+        },
+        // queue_status: live state success
+        {
+          tool: 'queue_status',
+          branch: 'success with live callers, agents, and statistics',
+          payload: {
+            queue_id: '2090',
+            queue: {
+              callqueue: '2090',
+              description: 'Appointments',
+            },
+            waiting: {
+              ok: true,
+              count: 3,
+              longest_wait_seconds: 11,
+              callers: [
+                {
+                  caller: 'Carol White',
+                  queued_at: '2026-10-19 16:09:12',
+                  wait_seconds: 11,
+                },
+                {
+                  caller: 'Bob Jones',
+                  queued_at: '2026-10-19 16:09:16',
+                  wait_seconds: 7,
+                },
+                {
+                  caller: 'Alice Smith',
+                  queued_at: '2026-10-19 16:09:20',
+                  wait_seconds: 3,
+                },
+              ],
+            },
+            agents: {
+              ok: true,
+              data: [
+                {
+                  'callqueue-agent-id': '2006@PhonewareLab',
+                  'name-full-name': 'Miguel Torres',
+                  'callqueue-agent-availability-type': 'automatic',
+                  'active-calls-total-current': 1,
+                },
+                {
+                  'callqueue-agent-id': '2007@PhonewareLab',
+                  'name-full-name': 'Kim Nguyen',
+                  'callqueue-agent-availability-type': 'manual',
+                  'active-calls-total-current': 0,
+                },
+              ],
+            },
+            statistics: {
+              ok: true,
+              start: '2026-10-18 16:09:20',
+              end: '2026-10-19 16:09:20',
+              data: [],
+            },
+          },
+        },
+        // queue_status: partial failure (waiting 403)
+        {
+          tool: 'queue_status',
+          branch: 'partial failure: waiting 403',
+          payload: {
+            queue_id: '2090',
+            queue: null,
+            waiting: {
+              ok: false,
+              error: '403 Forbidden',
+            },
+            agents: {
+              ok: true,
+              data: [],
+            },
+            statistics: {
+              ok: true,
+              start: '2026-10-18 16:09:20',
+              end: '2026-10-19 16:09:20',
+              data: [],
+            },
+          },
+        },
+        // queue_status: partial failure (agents failed)
+        {
+          tool: 'queue_status',
+          branch: 'partial failure: agents failed',
+          payload: {
+            queue_id: '2090',
+            queue: {
+              callqueue: '2090',
+              description: 'Appointments',
+            },
+            waiting: {
+              ok: true,
+              count: 0,
+              longest_wait_seconds: 0,
+              callers: [],
+            },
+            agents: {
+              ok: false,
+              error: '500 Server Error',
+            },
+            statistics: {
+              ok: false,
+              error: '500 Server Error',
+            },
+          },
+        },
+        // queue_status: all fail
+        {
+          tool: 'queue_status',
+          branch: 'all fail',
+          payload: {
+            success: false,
+            error: '404 Queue not found',
+          },
+        },
+        // voicemail_inbox_summary
+        {
+          tool: 'voicemail_inbox_summary',
+          branch: 'success with transcripts',
+          payload: {
+            folder: 'new',
+            count: 1,
+            voicemails: [
+              {
+                from: 'Alice Smith <15551112222>',
+                at: '2026-10-19 12:00:00',
+                duration: 30,
+                transcript: 'Hey it is Alice, please call me back.',
+                transcription_status: 'finished',
+                id: 'vm-20261019120000-call1.wav',
+              },
+            ],
+          },
+        },
+        {
+          tool: 'voicemail_inbox_summary',
+          branch: 'success unavailable transcript',
+          payload: {
+            folder: 'new',
+            count: 1,
+            voicemails: [
+              {
+                from: '15553334444',
+                at: '2026-10-19 12:30:00',
+                duration: 12,
+                transcription_status: 'unavailable',
+                id: 'vm-20261019123000-call2.wav',
+              },
+            ],
+          },
+        },
       ];
 
     for (const check of stubbedChecks) {
