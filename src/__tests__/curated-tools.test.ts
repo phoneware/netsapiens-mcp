@@ -330,9 +330,13 @@ describe('workflow tools (multi-call composites)', () => {
   const { handleToolCall } = await importTools();
   const seq: string[] = [];
   const client = {
-   request: async (o: { pathTemplate: string }) => {
+   request: async (o: { method?: string; pathTemplate: string }) => {
     seq.push(o.pathTemplate);
     if (o.pathTemplate.endsWith('/login')) return { success: false, error: 'queue full' };
+    if (o.pathTemplate.includes('/users/')) return { success: true, data: { user: '1001', domain: 'dom' } };
+    if (o.pathTemplate.includes('/callqueues/') && !o.pathTemplate.endsWith('/logout')) {
+     return { success: true, data: { 'callqueue-agent-id': '1001@dom', description: 'queue' } };
+    }
     return { success: true };
    },
   };
@@ -342,8 +346,9 @@ describe('workflow tools (multi-call composites)', () => {
    { from: 'support', to: 'sales' },
    'user',
   )) as { content: Array<{ text: string }> };
-  expect(seq[0]).toContain('logout');
-  expect(seq[1]).toContain('login');
+  const writes = seq.filter((p) => p.endsWith('/logout') || p.endsWith('/login'));
+  expect(writes[0]).toContain('logout');
+  expect(writes[1]).toContain('login');
   const parsed = JSON.parse(result.content[0].text);
   expect(parsed.ok).toBe(false);
   expect(parsed.step).toBe('login');
@@ -1570,10 +1575,10 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
      return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents/{agent}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      const hasPatched = calls.some((c) => c.method === 'PATCH');
      return {
       success: true,
@@ -1610,13 +1615,13 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
      return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents/{agent}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      return { success: false, error: '404 Not Found' };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents')) {
      return {
       success: true,
       data: [
@@ -1648,10 +1653,10 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
      return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents/{agent}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      return {
       success: true,
       data: {
@@ -1711,17 +1716,17 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
      return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      if (o.pathParams?.queue === '2090') return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
      if (o.pathParams?.queue === '2099') return { success: true, data: { callqueue: '2099', description: 'Billing' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents/{agent}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      if (o.pathParams?.queue === '2090') {
       return { success: true, data: { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
      }
      return { success: false, error: '404 Not Found' };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents')) {
      return { success: true, data: [] };
     }
     return { success: true, data: {} };
@@ -1749,10 +1754,10 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
      return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
     }
-    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents/{agent}') {
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      readCount++;
      const avail = readCount >= 3 ? 'automatic' : 'manual';
      return {
