@@ -965,6 +965,42 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             data: { 'callqueue-agent-id': '1011@dom' },
           },
         },
+        // voicemail_inbox_summary
+        {
+          tool: 'voicemail_inbox_summary',
+          branch: 'success with transcripts',
+          payload: {
+            folder: 'new',
+            count: 1,
+            voicemails: [
+              {
+                from: 'Alice Smith <15551112222>',
+                at: '2026-10-19 12:00:00',
+                duration: 30,
+                transcript: 'Hey it is Alice, please call me back.',
+                transcription_status: 'finished',
+                id: 'vm-20261019120000-call1.wav',
+              },
+            ],
+          },
+        },
+        {
+          tool: 'voicemail_inbox_summary',
+          branch: 'success unavailable transcript',
+          payload: {
+            folder: 'new',
+            count: 1,
+            voicemails: [
+              {
+                from: '15553334444',
+                at: '2026-10-19 12:30:00',
+                duration: 12,
+                transcription_status: 'unavailable',
+                id: 'vm-20261019123000-call2.wav',
+              },
+            ],
+          },
+        },
       ];
 
     for (const check of stubbedChecks) {
