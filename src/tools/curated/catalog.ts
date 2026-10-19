@@ -15,6 +15,7 @@ import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 import type { GenericApiClient } from '../../generated/types.js';
+import { resolveQueueAgent } from './queue-agent.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
@@ -1156,7 +1157,8 @@ const agent_login: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_login',
-  description: 'Log an agent into a queue (or all queues with queue="all").',
+  description:
+   'Log an agent into one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -1168,12 +1170,63 @@ const agent_login: CuratedTool = {
  targets: { agentArg: 'agent' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/login',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged in to all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'automatic') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged in to ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 
@@ -1181,24 +1234,76 @@ const agent_logout: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_logout',
-  description: 'Log an agent out of a queue (or all with queue="all").',
+  description:
+   'Log an agent out of one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
     queue: { type: 'string', default: 'all' },
-    agent: { type: 'string' },
+    agent: { type: 'string', description: 'Agent extension; defaults to you' },
    },
   },
  },
  targets: { agentArg: 'agent' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/logout',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged out of all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'manual') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged out of ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 

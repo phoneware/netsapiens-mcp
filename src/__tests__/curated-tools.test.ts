@@ -330,9 +330,13 @@ describe('workflow tools (multi-call composites)', () => {
   const { handleToolCall } = await importTools();
   const seq: string[] = [];
   const client = {
-   request: async (o: { pathTemplate: string }) => {
+   request: async (o: { method?: string; pathTemplate: string }) => {
     seq.push(o.pathTemplate);
     if (o.pathTemplate.endsWith('/login')) return { success: false, error: 'queue full' };
+    if (o.pathTemplate.includes('/users/')) return { success: true, data: { user: '1001', domain: 'dom' } };
+    if (o.pathTemplate.includes('/callqueues/') && !o.pathTemplate.endsWith('/logout')) {
+     return { success: true, data: { 'callqueue-agent-id': '1001@dom', description: 'queue' } };
+    }
     return { success: true };
    },
   };
@@ -342,8 +346,9 @@ describe('workflow tools (multi-call composites)', () => {
    { from: 'support', to: 'sales' },
    'user',
   )) as { content: Array<{ text: string }> };
-  expect(seq[0]).toContain('logout');
-  expect(seq[1]).toContain('login');
+  const writes = seq.filter((p) => p.endsWith('/logout') || p.endsWith('/login'));
+  expect(writes[0]).toContain('logout');
+  expect(writes[1]).toContain('login');
   const parsed = JSON.parse(result.content[0].text);
   expect(parsed.ok).toBe(false);
   expect(parsed.step).toBe('login');
@@ -1555,5 +1560,226 @@ describe('provision_call_queue sends the description NetSapiens requires', () =>
   await handleToolCall(client as never, 'provision_call_queue', { callqueue: 'support' }, 'domain_admin');
   // CallqueuesController::create validates domain, queue AND description.
   expect(calls[0].body?.description).toBe('support');
+ });
+});
+
+describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => {
+ beforeEach(clearEnv);
+
+ it('self member: resolves self, verifies membership, and PATCHes login', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
+     return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
+     const hasPatched = calls.some((c) => c.method === 'PATCH');
+     return {
+      success: true,
+      data: {
+       'callqueue-agent-id': '2007@PhonewareLab',
+       'name-full-name': 'Kim Nguyen',
+       'callqueue-agent-availability-type': hasPatched ? 'automatic' : 'manual',
+      },
+     };
+    }
+    if (o.method === 'PATCH') {
+     return { success: true, data: { status: 'ok' } };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'agent_login', { queue: '2090' }, 'user');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.success).toBe(true);
+  expect(parsed.note).toBe('Kim Nguyen is logged in to the Appointments queue (2090).');
+  const patchWrites = calls.filter((c) => c.method === 'PATCH');
+  expect(patchWrites.length).toBe(1);
+  expect(patchWrites[0].pathTemplate).toBe('/domains/~/callqueues/{queue}/agents/{agent}/login');
+  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@PhonewareLab' });
+ });
+
+ it('self non-member: refuses with C1 message and zero writes', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
+     return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
+     return { success: false, error: '404 Not Found' };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents')) {
+     return {
+      success: true,
+      data: [
+       { 'callqueue-agent-id': '2006@PhonewareLab', 'name-full-name': 'Miguel Torres', 'login-username': '2006@PhonewareLab' },
+       { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Kim Nguyen', 'login-username': '2007@PhonewareLab' },
+      ],
+     };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'agent_login', { queue: '2090' }, 'user');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.success).toBe(false);
+  expect(parsed.error).toBe(
+   'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).'
+  );
+  const writes = calls.filter((c) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.method));
+  expect(writes.length).toBe(0);
+ });
+
+ it('bare extension: resolves extension to agentId with domain and PATCHes', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
+     return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
+     return {
+      success: true,
+      data: {
+       'callqueue-agent-id': '2007@PhonewareLab',
+       'name-full-name': 'Kim Nguyen',
+       'callqueue-agent-availability-type': 'automatic',
+      },
+     };
+    }
+    if (o.method === 'PATCH') {
+     return { success: true, data: { status: 'ok' } };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'agent_login', { queue: '2090', agent: '2007' }, 'domain_admin');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.success).toBe(true);
+  const patchWrites = calls.filter((c) => c.method === 'PATCH');
+  expect(patchWrites.length).toBe(1);
+  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@PhonewareLab' });
+ });
+
+ it('all: resolves immediately without membership read and PATCHes', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+    }
+    if (o.method === 'PATCH') {
+     return { success: true, data: { status: 'ok' } };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'agent_login', { queue: 'all' }, 'user');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.success).toBe(true);
+  expect(parsed.note).toBe('Kim Nguyen is logged in to all queues.');
+  const patchWrites = calls.filter((c) => c.method === 'PATCH');
+  expect(patchWrites.length).toBe(1);
+  expect(patchWrites[0].pathParams).toEqual({ queue: 'all', agent: '2007@PhonewareLab' });
+  expect(calls.some((c) => c.pathTemplate.includes('/callqueues/all/agents'))).toBe(false);
+ });
+
+ it('switch_queue non-member in to: aborts before any write', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
+     if (o.pathParams?.queue === '2090') return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
+     if (o.pathParams?.queue === '2099') return { success: true, data: { callqueue: '2099', description: 'Billing' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
+     if (o.pathParams?.queue === '2090') {
+      return { success: true, data: { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+     }
+     return { success: false, error: '404 Not Found' };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents')) {
+     return { success: true, data: [] };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'switch_queue', { from: '2090', to: '2099' }, 'user');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.ok).toBe(false);
+  expect(parsed.step).toBe('resolve');
+  expect(parsed.from).toBe('2090');
+  expect(parsed.to).toBe('2099');
+  expect(parsed.agent).toBe('2007@PhonewareLab');
+  const writes = calls.filter((c) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.method));
+  expect(writes.length).toBe(0);
+ });
+
+ it('readback: polls up to 3 times for availability type update', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  let readCount = 0;
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(o);
+    if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
+     return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
+    }
+    if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
+     readCount++;
+     const avail = readCount >= 3 ? 'automatic' : 'manual';
+     return {
+      success: true,
+      data: {
+       'callqueue-agent-id': '2007@PhonewareLab',
+       'name-full-name': 'Kim Nguyen',
+       'callqueue-agent-availability-type': avail,
+      },
+     };
+    }
+    if (o.method === 'PATCH') {
+     return { success: true, data: { status: 'ok' } };
+    }
+    return { success: true, data: {} };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'agent_login', { queue: '2090' }, 'user');
+  const parsed = JSON.parse(res.content[0].text);
+  expect(parsed.success).toBe(true);
+  expect(parsed.data['callqueue-agent-availability-type']).toBe('automatic');
+  expect(parsed.note).toBe('Kim Nguyen is logged in to the Appointments queue (2090).');
  });
 });

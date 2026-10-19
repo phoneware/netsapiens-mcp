@@ -9,6 +9,7 @@ export { negotiateProtocolVersion } from './http/protocol-version.js';
 export { nsScopeToTier, ROLE_HIERARCHY } from './auth/roles.js';
 export { NS_RESOURCE_FIELDS } from './governance/ns-fields.generated.js';
 export { scrubSecrets } from './governance/scrub.js';
+export { resolveQueueAgent, resolveSelfIdentity } from './tools/curated/queue-agent.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';
@@ -16,3 +17,4 @@ export type { CuratedTool, CuratedResult } from './tools/curated/types.js';
 export type { UserRole } from './auth/roles.js';
 export type { StoredToken, NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot } from './auth/types.js';
 export type { ContentKind, FieldClass, FieldRule, OutputDeclaration, ToolTargets, NsResourceName } from './governance/types.js';
+export type { SelfIdentity, QueueAgentResolution } from './tools/curated/queue-agent.js';
