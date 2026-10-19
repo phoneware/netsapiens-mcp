@@ -81,14 +81,12 @@
         "enabled": "s",
         "forward-always": {
           "parameters": [
-            0
+            "s"
           ],
           "enabled": "s"
         },
         "simultaneous-ring": {
-          "parameters": [
-            "s"
-          ],
+          "parameters": [],
           "enabled": "s"
         }
       }
@@ -159,8 +157,8 @@
         "call-parent-cdr-id": "s",
         "call-record-creation-datetime": "s",
         "call-ringing-datetime": null,
-        "call-routing-class": 0,
-        "call-routing-match-uri": "s",
+        "call-routing-class": null,
+        "call-routing-match-uri": null,
         "call-server-mac-address": "s",
         "call-start-datetime": "s",
         "call-tag": "s",
@@ -245,7 +243,7 @@
         "call-orig-department": null,
         "call-orig-domain": "s",
         "call-orig-from-host": "s",
-        "call-orig-from-name": "s",
+        "call-orig-from-name": 0,
         "call-orig-from-uri": "s",
         "call-orig-from-user": "s",
         "call-orig-ip-address": "s",
@@ -301,7 +299,7 @@
         "ending_sentiment": 0,
         "hide-from-results": 0,
         "is-trace-expected": true,
-        "name": "s",
+        "name": 0,
         "number": "s",
         "onnet": 0,
         "prefilled-trace-api": "s",
