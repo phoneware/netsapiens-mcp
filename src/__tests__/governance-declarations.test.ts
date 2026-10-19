@@ -965,6 +965,69 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             data: { 'callqueue-agent-id': '1011@dom' },
           },
         },
+        {
+          tool: 'agent_login',
+          branch: 'refusal',
+          payload: {
+            success: false,
+            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+          },
+        },
+        {
+          tool: 'agent_logout',
+          branch: 'refusal',
+          payload: {
+            success: false,
+            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'readback_success',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'automatic' },
+            note: 'Kim Nguyen is logged in to the Appointments queue (2090).',
+          },
+        },
+        {
+          tool: 'agent_logout',
+          branch: 'readback_success',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'manual' },
+            note: 'Kim Nguyen is logged out of the Appointments queue (2090).',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'readback_pending',
+          payload: {
+            success: true,
+            data: { 'callqueue-agent-id': '2007@PhonewareLab' },
+            note: 'NetSapiens accepted the change; the agent record does not show it yet.',
+          },
+        },
+        {
+          tool: 'agent_login',
+          branch: 'all_queues',
+          payload: {
+            success: true,
+            note: 'Kim Nguyen is logged in to all queues.',
+          },
+        },
+        {
+          tool: 'switch_queue',
+          branch: 'resolve failed',
+          payload: {
+            ok: false,
+            step: 'resolve',
+            from: '2090',
+            to: '2099',
+            agent: '2007@PhonewareLab',
+            note: 'Kim Nguyen is not an agent in the Billing queue (2099), so nothing was changed.',
+          },
+        },
       ];
 
     for (const check of stubbedChecks) {
