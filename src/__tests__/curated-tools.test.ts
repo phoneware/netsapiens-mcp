@@ -407,16 +407,88 @@ describe('workflow tools (multi-call composites)', () => {
   expect((placed[0].body as { destination: string }).destination).toBe('1001');
  });
 
- it('voicemail_inbox_summary shapes the list into a condensed structure', async () => {
+ it('voicemail_inbox_summary shapes the list into a condensed structure with live-shaped fixtures', async () => {
   const { handleToolCall } = await importTools();
   const client = {
-   request: async () => ({
-    success: true,
-    data: [
-     { 'caller-id-number': '15551112222', 'caller-id-name': 'Alice', datetime: '2026-06-12T10:00', duration: 30, 'transcription-text': 'Hey it is Alice', filename: 'vm1' },
-     { 'caller-id-number': '15553334444', datetime: '2026-06-12T11:00', duration: 12, filename: 'vm2' },
-    ],
-   }),
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string>; queryParams?: Record<string, unknown> }) => {
+    if (o.pathTemplate === '/domains/~/users/~/voicemails/{folder}') {
+     return {
+      success: true,
+      data: [
+       {
+        filename: 'vm-20261019120000-call1.wav',
+        'file-duration-seconds': 30,
+        'file-size-kilobytes': '480',
+        'created-datetime': '2026-10-19 12:00:30',
+        'file-access-url': 'https://storage.invalid/vm1.wav',
+        'file-script-text': '',
+        'file-source': 'voicemail',
+        'text-to-speech-voice-id': '',
+        'text-to-speech-language': '',
+        'voicemail-from-name': 'Alice Smith',
+        'voicemail-from-user': '2021',
+        'voicemail-from-host': 'PhonewareLab',
+        'voicemail-from-caller-id-number': '15551112222',
+        'recorded-datetime': '2026-10-19 12:00:00',
+        'voicemail-recording-started-datetime': '2026-10-19 12:00:00',
+        timezone: 'America/Denver',
+        folder: 'new',
+       },
+       {
+        filename: 'vm-20261019123000-call2.wav',
+        'file-duration-seconds': 12,
+        'file-size-kilobytes': '192',
+        'created-datetime': '2026-10-19 12:30:12',
+        'file-access-url': 'https://storage.invalid/vm2.wav',
+        'file-script-text': '',
+        'file-source': 'voicemail',
+        'text-to-speech-voice-id': '',
+        'text-to-speech-language': '',
+        'voicemail-from-name': '',
+        'voicemail-from-user': '2022',
+        'voicemail-from-host': 'PhonewareLab',
+        'voicemail-from-caller-id-number': '15553334444',
+        'recorded-datetime': '2026-10-19 12:30:00',
+        'voicemail-recording-started-datetime': '2026-10-19 12:30:00',
+        timezone: 'America/Denver',
+        folder: 'new',
+       },
+      ],
+     };
+    }
+    if (o.pathTemplate === '/domains/~/users/~/cdrs') {
+     return {
+      success: true,
+      data: [
+       {
+        id: 'cdr-1',
+        'call-term-call-id': '20261019120000-call1',
+        'call-term-user': '2001',
+        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+       },
+      ],
+     };
+    }
+    if (o.pathTemplate === '/domains/{domain}/transcriptions') {
+     return {
+      success: true,
+      data: {
+       'call-intelligence-processing-status': 'finished',
+       'call-intelligence-segments': [
+        {
+         speaker: '2001@PhonewareLab',
+         comment: '2 0 0 1 is unavailable. Please leave a message.',
+        },
+        {
+         speaker: 'sip:2021ct@PhonewareLab',
+         comment: 'Hey it is Alice, please call me back.',
+        },
+       ],
+      },
+     };
+    }
+    return { success: true, data: [] };
+   },
   };
   const result = (await handleToolCall(
    client as never,
@@ -426,9 +498,180 @@ describe('workflow tools (multi-call composites)', () => {
   )) as { content: Array<{ text: string }> };
   const parsed = JSON.parse(result.content[0].text);
   expect(parsed.count).toBe(2);
-  expect(parsed.voicemails[0].from).toContain('Alice');
-  expect(parsed.voicemails[0].transcript).toBe('Hey it is Alice');
+  expect(parsed.voicemails[0].from).toBe('Alice Smith <15551112222>');
+  expect(parsed.voicemails[0].at).toBe('2026-10-19 12:00:00');
+  expect(parsed.voicemails[0].duration).toBe(30);
+  expect(parsed.voicemails[0].transcript).toBe('Hey it is Alice, please call me back.');
+  expect(parsed.voicemails[0].transcription_status).toBe('finished');
+  expect(parsed.voicemails[0].id).toBe('vm-20261019120000-call1.wav');
+
+  expect(parsed.voicemails[1].from).toBe('15553334444');
+  expect(parsed.voicemails[1].at).toBe('2026-10-19 12:30:00');
+  expect(parsed.voicemails[1].duration).toBe(12);
   expect(parsed.voicemails[1].transcript).toBeUndefined();
+  expect(parsed.voicemails[1].transcription_status).toBe('unavailable');
+  expect(parsed.voicemails[1].id).toBe('vm-20261019123000-call2.wav');
+ });
+
+ it('my_voicemails and read_voicemail attach caller words and transcription-status', async () => {
+  const { handleToolCall } = await importTools();
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string>; queryParams?: Record<string, unknown> }) => {
+    if (o.pathTemplate === '/domains/~/users/~/voicemails/{folder}' || o.pathTemplate === '/domains/~/users/~/voicemails/{folder}/{filename}') {
+     const vm = {
+      filename: 'vm-20261019120000-call1.wav',
+      'file-duration-seconds': 30,
+      'file-size-kilobytes': '480',
+      'created-datetime': '2026-10-19 12:00:30',
+      'file-access-url': 'https://storage.invalid/vm1.wav',
+      'file-script-text': '',
+      'file-source': 'voicemail',
+      'text-to-speech-voice-id': '',
+      'text-to-speech-language': '',
+      'voicemail-from-name': 'Alice Smith',
+      'voicemail-from-user': '2021',
+      'voicemail-from-host': 'PhonewareLab',
+      'voicemail-from-caller-id-number': '15551112222',
+      'recorded-datetime': '2026-10-19 12:00:00',
+      'voicemail-recording-started-datetime': '2026-10-19 12:00:00',
+      timezone: 'America/Denver',
+      folder: 'new',
+     };
+     return {
+      success: true,
+      data: o.pathTemplate.includes('{filename}') ? vm : [vm],
+     };
+    }
+    if (o.pathTemplate === '/domains/~/users/~/cdrs') {
+     return {
+      success: true,
+      data: [
+       {
+        id: 'cdr-1',
+        'call-term-call-id': '20261019120000-call1',
+        'call-term-user': '2001',
+        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+       },
+      ],
+     };
+    }
+    if (o.pathTemplate === '/domains/{domain}/transcriptions') {
+     return {
+      success: true,
+      data: {
+       'call-intelligence-processing-status': 'finished',
+       'call-intelligence-segments': [
+        {
+         speaker: '2001@PhonewareLab',
+         comment: '2 0 0 1 is unavailable. Please leave a message.',
+        },
+        {
+         speaker: 'sip:2021ct@PhonewareLab',
+         comment: 'Hey it is Alice, please call me back.',
+        },
+       ],
+      },
+     };
+    }
+    return { success: true, data: [] };
+   },
+  };
+
+  // Test my_voicemails
+  const listRes = (await handleToolCall(client as never, 'my_voicemails', { folder: 'new' }, 'user')) as { content: Array<{ text: string }> };
+  const listParsed = JSON.parse(listRes.content[0].text);
+  expect(listParsed.success).toBe(true);
+  expect(listParsed.data[0].transcription).toBe('Hey it is Alice, please call me back.');
+  expect(listParsed.data[0]['transcription-status']).toBe('finished');
+
+  // Test read_voicemail
+  const readRes = (await handleToolCall(client as never, 'read_voicemail', { voicemail_id: 'vm-20261019120000-call1.wav' }, 'user')) as { content: Array<{ text: string }> };
+  const readParsed = JSON.parse(readRes.content[0].text);
+  expect(readParsed.success).toBe(true);
+  expect(readParsed.data.transcription).toBe('Hey it is Alice, please call me back.');
+  expect(readParsed.data['transcription-status']).toBe('finished');
+ });
+
+ it('attachVoicemailTranscripts adds user parameter for user role and preserves query params', async () => {
+  const { handleToolCall } = await importTools();
+  const capturedParams: Record<string, unknown>[] = [];
+  const client = {
+   request: async (o: { method: string; pathTemplate: string; queryParams?: Record<string, unknown> }) => {
+    if (o.pathTemplate === '/domains/~/users/~/voicemails/{folder}/{filename}') {
+     return {
+      success: true,
+      data: {
+       filename: 'vm-20261019120000-call1.wav',
+       folder: 'new',
+      },
+     };
+    }
+    if (o.pathTemplate === '/domains/~/users/~/cdrs') {
+     return {
+      success: true,
+      data: [
+       {
+        'call-term-call-id': '20261019120000-call1',
+        'call-term-user': '2001',
+        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+       },
+      ],
+     };
+    }
+    if (o.pathTemplate === '/domains/{domain}/transcriptions') {
+     capturedParams.push(o.queryParams ?? {});
+     return {
+      success: true,
+      data: {
+       'call-intelligence-processing-status': 'finished',
+       'call-intelligence-segments': [{ speaker: 'caller@other', comment: 'Hi' }],
+      },
+     };
+    }
+    return { success: true, data: [] };
+   },
+  };
+
+  // userRole = 'user' -> should add user=2001
+  await handleToolCall(client as never, 'read_voicemail', { voicemail_id: 'vm-20261019120000-call1.wav' }, 'user');
+  expect(capturedParams.length).toBe(1);
+  expect(capturedParams[0].id).toBe('179133950');
+  expect(capturedParams[0].user).toBe('2001');
+
+  // userRole = 'domain_admin' -> should NOT add user param
+  capturedParams.length = 0;
+  await handleToolCall(client as never, 'read_voicemail', { voicemail_id: 'vm-20261019120000-call1.wav' }, 'domain_admin');
+  expect(capturedParams.length).toBe(1);
+  expect(capturedParams[0].id).toBe('179133950');
+  expect(capturedParams[0].user).toBeUndefined();
+ });
+
+ it('missing CDR marks transcription-status as unavailable while tool succeeds', async () => {
+  const { handleToolCall } = await importTools();
+  const client = {
+   request: async (o: { method: string; pathTemplate: string }) => {
+    if (o.pathTemplate === '/domains/~/users/~/voicemails/{folder}/{filename}') {
+     return {
+      success: true,
+      data: {
+       filename: 'vm-20261019120000-call1.wav',
+       folder: 'new',
+      },
+     };
+    }
+    if (o.pathTemplate === '/domains/~/users/~/cdrs') {
+     // No CDR matching
+     return { success: true, data: [] };
+    }
+    return { success: true, data: [] };
+   },
+  };
+
+  const readRes = (await handleToolCall(client as never, 'read_voicemail', { voicemail_id: 'vm-20261019120000-call1.wav' }, 'user')) as { content: Array<{ text: string }> };
+  const readParsed = JSON.parse(readRes.content[0].text);
+  expect(readParsed.success).toBe(true);
+  expect(readParsed.data['transcription-status']).toBe('unavailable');
+  expect(readParsed.data.transcription).toBeUndefined();
  });
 
  it('schedule_forwarding PUTs an answer rule for the default time-frame', async () => {
