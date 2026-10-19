@@ -1783,3 +1783,155 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   expect(parsed.note).toBe('Kim Nguyen is logged in to the Appointments queue (2090).');
  });
 });
+
+describe('queue_status live state (C2)', () => {
+ beforeEach(clearEnv);
+
+ it('returns live state: queue record, waiting callers sorted longest-first, agents, and statistics', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ method: string; pathTemplate: string; pathParams?: Record<string, string> }> = [];
+  const client = {
+   request: async (opts: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
+    calls.push(opts);
+    if (opts.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+     return {
+      success: true,
+      data: {
+       callqueue: '2090',
+       domain: 'PhonewareLab',
+       description: 'Appointments',
+      },
+     };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/queuedcall/{queue}') {
+     return {
+      success: true,
+      data: [
+       {
+        'dial-rule-translation-source-name': 'Alice Smith',
+        from_uri: 'sip:1001@PhonewareLab',
+        time_queued: '2026-10-19 16:09:20',
+        mysql_dura: '3',
+       },
+       {
+        'dial-rule-translation-source-name': 'Bob Jones',
+        from_uri: 'sip:1002@PhonewareLab',
+        time_queued: '2026-10-19 16:09:16',
+        mysql_dura: '7',
+       },
+       {
+        'dial-rule-translation-source-name': 'Carol White',
+        from_uri: 'sip:1003@PhonewareLab',
+        time_queued: '2026-10-19 16:09:12',
+        mysql_dura: '11',
+       },
+      ],
+     };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents') {
+     return {
+      success: true,
+      data: [
+       {
+        'callqueue-agent-id': '2006@PhonewareLab',
+        'name-full-name': 'Miguel Torres',
+        'callqueue-agent-availability-type': 'automatic',
+        'active-calls-total-current': 1,
+       },
+       {
+        'callqueue-agent-id': '2007@PhonewareLab',
+        'name-full-name': 'Kim Nguyen',
+        'callqueue-agent-availability-type': 'manual',
+        'active-calls-total-current': 0,
+       },
+      ],
+     };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}') {
+     return {
+      success: true,
+      data: [],
+     };
+    }
+    return { success: false, error: 'not found' };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'queue_status', { queue: '2090', domain: 'PhonewareLab' }, 'domain_admin');
+  const payload = JSON.parse(res.content[0].text);
+
+  expect(payload.queue_id).toBe('2090');
+  expect(payload.queue).toMatchObject({ callqueue: '2090', description: 'Appointments' });
+  expect(payload.waiting).toMatchObject({
+   ok: true,
+   count: 3,
+   longest_wait_seconds: 11,
+   callers: [
+    { caller: 'Carol White', queued_at: '2026-10-19 16:09:12', wait_seconds: 11 },
+    { caller: 'Bob Jones', queued_at: '2026-10-19 16:09:16', wait_seconds: 7 },
+    { caller: 'Alice Smith', queued_at: '2026-10-19 16:09:20', wait_seconds: 3 },
+   ],
+  });
+  expect(payload.agents).toMatchObject({
+   ok: true,
+   data: [
+    expect.objectContaining({ 'name-full-name': 'Miguel Torres' }),
+    expect.objectContaining({ 'name-full-name': 'Kim Nguyen' }),
+   ],
+  });
+  expect(payload.statistics).toMatchObject({
+   ok: true,
+   data: [],
+  });
+ });
+
+ it('handles partial failure: queuedcall 403 shows waiting.ok:false while agents and statistics succeed', async () => {
+  const { handleToolCall } = await importTools();
+  const client = {
+   request: async (opts: { pathTemplate: string }) => {
+    if (opts.pathTemplate === '/domains/{domain}/callqueues/{queue}') {
+     return { success: true, data: { callqueue: '2090' } };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/queuedcall/{queue}') {
+     return { success: false, error: '403 Forbidden' };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents') {
+     return { success: true, data: [{ 'callqueue-agent-id': '2006@dom', 'name-full-name': 'Miguel Torres' }] };
+    }
+    if (opts.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}') {
+     return { success: true, data: [] };
+    }
+    return { success: false, error: 'unexpected' };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'queue_status', { queue: '2090' }, 'domain_admin');
+  const payload = JSON.parse(res.content[0].text);
+
+  expect(payload.queue_id).toBe('2090');
+  expect(payload.queue).toMatchObject({ callqueue: '2090' });
+  expect(payload.waiting).toMatchObject({ ok: false, error: '403 Forbidden' });
+  expect(payload.agents.ok).toBe(true);
+  expect(payload.statistics.ok).toBe(true);
+ });
+
+ it('returns success:false when queue, waiting, and agents reads all fail', async () => {
+  const { handleToolCall } = await importTools();
+  const client = {
+   request: async (opts: { pathTemplate: string }) => {
+    if (opts.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}') {
+     return { success: true, data: [] };
+    }
+    return { success: false, error: '404 Queue not found' };
+   },
+  };
+
+  const res = await handleToolCall(client as never, 'queue_status', { queue: 'nonexistent' }, 'domain_admin');
+  const payload = JSON.parse(res.content[0].text);
+
+  expect(payload).toMatchObject({
+   success: false,
+   error: expect.stringContaining('404 Queue not found'),
+  });
+ });
+});

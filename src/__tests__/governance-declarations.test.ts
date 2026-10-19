@@ -1028,6 +1028,121 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             note: 'Kim Nguyen is not an agent in the Billing queue (2099), so nothing was changed.',
           },
         },
+        // queue_status: live state success
+        {
+          tool: 'queue_status',
+          branch: 'success with live callers, agents, and statistics',
+          payload: {
+            queue_id: '2090',
+            queue: {
+              callqueue: '2090',
+              description: 'Appointments',
+            },
+            waiting: {
+              ok: true,
+              count: 3,
+              longest_wait_seconds: 11,
+              callers: [
+                {
+                  caller: 'Carol White',
+                  queued_at: '2026-10-19 16:09:12',
+                  wait_seconds: 11,
+                },
+                {
+                  caller: 'Bob Jones',
+                  queued_at: '2026-10-19 16:09:16',
+                  wait_seconds: 7,
+                },
+                {
+                  caller: 'Alice Smith',
+                  queued_at: '2026-10-19 16:09:20',
+                  wait_seconds: 3,
+                },
+              ],
+            },
+            agents: {
+              ok: true,
+              data: [
+                {
+                  'callqueue-agent-id': '2006@PhonewareLab',
+                  'name-full-name': 'Miguel Torres',
+                  'callqueue-agent-availability-type': 'automatic',
+                  'active-calls-total-current': 1,
+                },
+                {
+                  'callqueue-agent-id': '2007@PhonewareLab',
+                  'name-full-name': 'Kim Nguyen',
+                  'callqueue-agent-availability-type': 'manual',
+                  'active-calls-total-current': 0,
+                },
+              ],
+            },
+            statistics: {
+              ok: true,
+              start: '2026-10-18 16:09:20',
+              end: '2026-10-19 16:09:20',
+              data: [],
+            },
+          },
+        },
+        // queue_status: partial failure (waiting 403)
+        {
+          tool: 'queue_status',
+          branch: 'partial failure: waiting 403',
+          payload: {
+            queue_id: '2090',
+            queue: null,
+            waiting: {
+              ok: false,
+              error: '403 Forbidden',
+            },
+            agents: {
+              ok: true,
+              data: [],
+            },
+            statistics: {
+              ok: true,
+              start: '2026-10-18 16:09:20',
+              end: '2026-10-19 16:09:20',
+              data: [],
+            },
+          },
+        },
+        // queue_status: partial failure (agents failed)
+        {
+          tool: 'queue_status',
+          branch: 'partial failure: agents failed',
+          payload: {
+            queue_id: '2090',
+            queue: {
+              callqueue: '2090',
+              description: 'Appointments',
+            },
+            waiting: {
+              ok: true,
+              count: 0,
+              longest_wait_seconds: 0,
+              callers: [],
+            },
+            agents: {
+              ok: false,
+              error: '500 Server Error',
+            },
+            statistics: {
+              ok: false,
+              error: '500 Server Error',
+            },
+          },
+        },
+        // queue_status: all fail
+        {
+          tool: 'queue_status',
+          branch: 'all fail',
+          payload: {
+            success: false,
+            error: '404 Queue not found',
+          },
+        },
       ];
 
     for (const check of stubbedChecks) {
