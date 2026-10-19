@@ -89,6 +89,12 @@ function recordingClient(recorded: Recorded[]): GenericApiClient {
   return {
     request: async (o: Recorded) => {
       recorded.push(o);
+      if (o.method === "GET" && o.pathTemplate.includes("/users/")) {
+        return { success: true, data: { user: "1001", domain: "dom", "name-full-name": "Test User" } };
+      }
+      if (o.method === "GET" && o.pathTemplate.includes("/callqueues/")) {
+        return { success: true, data: [{ "callqueue-agent-id": "1001@dom", description: "queue", "login-username": "1001@dom" }] };
+      }
       return { success: true, data: [] };
     },
   } as unknown as GenericApiClient;
