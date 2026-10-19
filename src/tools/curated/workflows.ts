@@ -15,6 +15,7 @@ import { fieldsMatch, isOnOrAfter, numbersMatch, parseNsBoolean, isNsTraceExpect
 export { parseNsBoolean, isNsTraceExpected };
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { matchesCallId, nsDateWindow, resolveSelfUser } from './catalog.js';
+import { resolveQueueAgent } from './queue-agent.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -654,17 +655,31 @@ const switch_queue: CuratedTool = {
  },
  handler: async (args, client) => {
   const domain = str(args.domain);
-  const agent = str(args.agent);
   const from = String(args.from);
   const to = String(args.to);
+
+  const fromRes = await resolveQueueAgent(client, { queue: from, agent: args.agent });
+  if (!fromRes.ok) {
+   const candidate = (fromRes as any).candidate ?? (fromRes as any).agentId ?? (args.agent ? String(args.agent) : '~');
+   return textResult({ ok: false, step: 'resolve', from, to, agent: candidate, note: fromRes.message });
+  }
+
+  const toRes = await resolveQueueAgent(client, { queue: to, agent: args.agent });
+  if (!toRes.ok) {
+   const candidate = (toRes as any).candidate ?? fromRes.agentId ?? (args.agent ? String(args.agent) : '~');
+   return textResult({ ok: false, step: 'resolve', from, to, agent: candidate, note: toRes.message });
+  }
+
+  const agent = fromRes.agentId;
+
   const logout = await safe(
-   client.request({ method: 'POST', pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}/logout', pathParams: { domain, queue: from, agent } }),
+   client.request({ method: 'PATCH', pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}/logout', pathParams: { domain, queue: from, agent } }),
   );
   if (!logout.ok) {
    return textResult({ ok: false, step: 'logout', from, to, agent, logout, note: 'logout from source queue failed; no login attempted' });
   }
   const login = await safe(
-   client.request({ method: 'POST', pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}/login', pathParams: { domain, queue: to, agent } }),
+   client.request({ method: 'PATCH', pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}/login', pathParams: { domain, queue: to, agent } }),
   );
   if (!login.ok) {
    return textResult({
