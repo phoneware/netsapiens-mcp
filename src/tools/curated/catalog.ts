@@ -16,6 +16,7 @@ import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
 import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
 import { resolveQueueAgent } from './queue-agent.js';
+import { attachVoicemailTranscripts } from './voicemail-transcripts.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
@@ -836,7 +837,7 @@ const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
+  description: 'List your voicemails (with transcripts and caller details). Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -847,7 +848,7 @@ const my_voicemails: CuratedTool = {
  },
  targets: { selfOnly: true },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Voicemail' }] },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const limit = num(args.limit) ?? 25;
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -858,7 +859,9 @@ const my_voicemails: CuratedTool = {
     queryParams: { limit },
    });
    if (r && Array.isArray(r.data)) {
-    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+    const items = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder })).slice(0, limit);
+    await attachVoicemailTranscripts(client, items, userRole);
+    r.data = items;
    }
    return textResult(r);
   }
@@ -879,9 +882,11 @@ const my_voicemails: CuratedTool = {
    }),
   );
   const merged = responses.flat();
+  const slice = merged.slice(0, limit);
+  await attachVoicemailTranscripts(client, slice, userRole);
   return textResult({
    success: true,
-   data: merged.slice(0, limit),
+   data: slice,
   });
  },
 };
@@ -890,7 +895,7 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  description: 'Open a specific voicemail (metadata + transcript and download URL if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -908,7 +913,7 @@ const read_voicemail: CuratedTool = {
    { path: 'data[]', resource: 'Voicemail' },
   ],
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const filename = String(args.voicemail_id);
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -917,6 +922,9 @@ const read_voicemail: CuratedTool = {
     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
     pathParams: { folder: targetFolder, filename },
    });
+   if (r?.success !== false && r?.data) {
+    await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
+   }
    return textResult(r);
   }
   for (const folder of VOICEMAIL_FOLDERS) {
@@ -930,6 +938,7 @@ const read_voicemail: CuratedTool = {
      if (Array.isArray(r.data) && r.data.length === 0) {
       continue;
      }
+     await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
      return textResult(r);
     }
    } catch {
