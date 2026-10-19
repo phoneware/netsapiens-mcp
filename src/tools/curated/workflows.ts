@@ -16,6 +16,7 @@ export { parseNsBoolean, isNsTraceExpected };
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { matchesCallId, nsDateWindow, resolveSelfUser } from './catalog.js';
 import { resolveQueueAgent } from './queue-agent.js';
+import { attachVoicemailTranscripts } from './voicemail-transcripts.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 
@@ -935,7 +936,7 @@ const voicemail_inbox_summary: CuratedTool = {
  schema: {
   name: 'voicemail_inbox_summary',
   description:
-   'Condensed summary of new voicemails: one line per VM with caller, time, duration, and transcript snippet (when available). ' +
+   'Condensed summary of new voicemails: one line per VM with caller, time, duration, transcript snippet (when available), and transcription status. ' +
    'Far less noise than listing the full voicemail records.',
   inputSchema: {
    type: 'object',
@@ -956,10 +957,11 @@ const voicemail_inbox_summary: CuratedTool = {
    { path: 'voicemails[].duration', field: { class: 'metadata' } },
    { path: 'voicemails[].id', field: { class: 'record_id', recordType: 'voicemail' } },
    { path: 'voicemails[].transcript', field: { class: 'content', kind: 'transcript', media: 'text' } },
+   { path: 'voicemails[].transcription_status', field: { class: 'metadata' } },
    { path: 'voicemails[]', resource: 'Voicemail' },
   ],
  },
- handler: async (args, client) => {
+ handler: async (args, client, userRole) => {
   const limit = typeof args.limit === 'number' ? args.limit : 25;
   const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const list = await safe<Array<Record<string, unknown>>>(
@@ -971,18 +973,23 @@ const voicemail_inbox_summary: CuratedTool = {
    }),
   );
   if (!list.ok) return textResult({ error: 'Failed to list voicemails', detail: list.error });
-  const items = Array.isArray(list.data) ? list.data : [];
+  const rawItems = Array.isArray(list.data) ? list.data : [];
+  const items = rawItems.slice(0, limit);
+  await attachVoicemailTranscripts(client, items, userRole);
   const summary = items.map((vm) => {
-   const caller = String(vm['caller-id-number'] ?? vm['from'] ?? vm['caller'] ?? '');
-   const callerName = String(vm['caller-id-name'] ?? vm['from-name'] ?? '');
-   const at = String(vm['datetime'] ?? vm['time-received'] ?? vm['received'] ?? '');
-   const dur = vm['duration'] ?? vm['length'] ?? '';
-   const transcript = String(vm['transcription-text'] ?? vm['transcription'] ?? vm['transcript'] ?? '');
+   const caller = String(vm['voicemail-from-caller-id-number'] ?? vm['caller-id-number'] ?? vm['from'] ?? vm['caller'] ?? '');
+   const callerName = String(vm['voicemail-from-name'] ?? vm['caller-id-name'] ?? vm['from-name'] ?? '');
+   const at = String(vm['recorded-datetime'] ?? vm['created-datetime'] ?? vm['datetime'] ?? vm['time-received'] ?? vm['received'] ?? '');
+   const dur = vm['file-duration-seconds'] ?? vm['duration'] ?? vm['length'] ?? '';
+   const transcriptRaw = String(vm['transcription'] ?? vm['transcription-text'] ?? vm['transcript'] ?? '');
+   const transcript = transcriptRaw ? (transcriptRaw.length > 200 ? transcriptRaw.slice(0, 200) + '…' : transcriptRaw) : undefined;
+   const transcription_status = (vm['transcription-status'] as string) ?? (transcript ? 'finished' : 'unavailable');
    return {
-    from: callerName ? `${callerName} <${caller}>` : caller,
+    from: callerName ? (caller ? `${callerName} <${caller}>` : callerName) : caller,
     at,
     duration: dur,
-    transcript: transcript ? (transcript.length > 200 ? transcript.slice(0, 200) + '…' : transcript) : undefined,
+    transcript,
+    transcription_status,
     id: vm['filename'] ?? vm['id'] ?? vm['message-id'],
    };
   });
