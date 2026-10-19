@@ -16,6 +16,8 @@
     "voicemail-from-caller-id-number": "s",
     "recorded-datetime": "s",
     "voicemail-recording-started-datetime": "s",
-    "timezone": "s"
+    "timezone": "s",
+    "transcription": "s",
+    "transcription-status": "s"
   }
 }
