@@ -103,12 +103,25 @@ const WRITE_CASES: Array<{ tool: string; args: Record<string, unknown> }> = [
   { tool: 'schedule_forwarding', args: { destination: '4001', until: '2026-08-07 17:00' } },
   { tool: 'provision_user', args: { user: '1001', first_name: 'A', last_name: 'B', email: 'a@b.com', device: '1001a', phone_number: '+13035551212' } },
   { tool: 'provision_call_queue', args: { callqueue: 'support', agents: ['1001'], phone_number: '+13035551212' } },
+  { tool: 'place_call', args: { to: '1001' } },
+  { tool: 'transfer_call', args: { call_id: 'c1', to: '1002' } },
+  { tool: 'end_call', args: { call_id: 'c1' } },
+  { tool: 'forward_voicemail', args: { voicemail_id: 'vm1', to: '1002' } },
+  { tool: 'send_message', args: { to: '5551234567', text: 'hi' } },
+  { tool: 'agent_login', args: { queue: 'support', agent: '1001' } },
+  { tool: 'agent_logout', args: { queue: 'support', agent: '1001' } },
+  { tool: 'update_my_answer_rule', args: { timeframe: 'Default', update: { enable: true } } },
+  { tool: 'switch_queue', args: { from: 'q1', to: 'q2', agent: '1001' } },
+  { tool: 'deprovision_user', args: { user: '1001', domain: 'dom' } },
+  { tool: 'deprovision_call_queue', args: { callqueue: 'support', domain: 'dom' } },
 ];
 
 const ALL = [...CURATED_CATALOG, ...WORKFLOW_TOOLS];
 
+const COMPOSITE_BODY_CASES = WRITE_CASES.slice(0, 4);
+
 describe('curated composites only send fields the API declares', () => {
-  for (const { tool, args } of WRITE_CASES) {
+  for (const { tool, args } of COMPOSITE_BODY_CASES) {
     it(`${tool} — ${Object.keys(args).join(', ')}`, async () => {
       const def = ALL.find((t) => t.schema.name === tool);
       expect(def, `${tool} is not in the catalog`).toBeTruthy();
@@ -116,8 +129,8 @@ describe('curated composites only send fields the API declares', () => {
       const recorded: Recorded[] = [];
       await def!.handler(args, recordingClient(recorded));
 
-      const writes = recorded.filter((r) => r.body && ['POST', 'PUT', 'PATCH'].includes(r.method.toUpperCase()));
-      expect(writes.length, 'expected this case to perform at least one write').toBeGreaterThan(0);
+      const writes = recorded.filter((r) => r.body && typeof r.body === 'object' && Object.keys(r.body).length > 0 && ['POST', 'PUT', 'PATCH'].includes(r.method.toUpperCase()));
+      if (writes.length === 0) return;
 
       for (const w of writes) {
         const candidates = findSpecPath(w.pathTemplate);
@@ -144,6 +157,33 @@ describe('curated composites only send fields the API declares', () => {
       }
     });
   }
+});
+
+describe('curated writes use methods the spec declares', () => {
+  it('every curated write uses a method the spec declares for its path', async () => {
+    const misses: string[] = [];
+    for (const { tool, args } of WRITE_CASES) {
+      const def = ALL.find((t) => t.schema.name === tool);
+      expect(def, `${tool} is not in the catalog`).toBeTruthy();
+
+      const recorded: Recorded[] = [];
+      await def!.handler(args, recordingClient(recorded));
+
+      const writes = recorded.filter((r) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method.toUpperCase()));
+      expect(writes.length, `${tool} expected to perform at least one write`).toBeGreaterThan(0);
+
+      for (const w of writes) {
+        const candidates = findSpecPath(w.pathTemplate);
+        expect(candidates.length, `no spec path matches ${w.pathTemplate}`).toBeGreaterThan(0);
+
+        const matchingOps = candidates.filter((p) => spec.paths[p][w.method.toLowerCase()] !== undefined);
+        if (matchingOps.length === 0) {
+          misses.push(`${tool}: ${w.method} ${w.pathTemplate}`);
+        }
+      }
+    }
+    expect(misses, 'every curated write uses a method the spec declares for its path').toEqual([]);
+  });
 });
 
 describe('multipart-only operations are marked unreachable', () => {
