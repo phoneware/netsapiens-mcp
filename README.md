@@ -175,6 +175,21 @@ The catalog is **scope-aware**: a basic NS user sees ~25 self-service tools; a d
 
 Set `MCP_TOOL_MODE=full` to expose the entire 727-tool generated registry instead (legacy behavior).
 
+
+### Behavior in v2.3.0
+
+- `agent_login`, `agent_logout`, and `switch_queue` send `PATCH` requests against `/domains/{domain}/callqueues/{queue}/agents/{agent}/login` (or logout) with the resolved `callqueue-agent-id`. A pre-write membership check verifies the agent belongs to the queue before issuing any mutation; non-members are refused cleanly without writes and the response lists current queue agents. `queue: 'all'` resolves agent identity directly without fetching individual queue rosters. `switch_queue` verifies membership in both source and target queues before modifying state. Tool executions poll availability status up to 3 times to confirm updates.
+- `queue_status` returns live operational state alongside statistics: queue configuration, waiting callers sorted longest-wait first (`waiting.callers`, `waiting.count`, `waiting.longest_wait_seconds`), and agent roster with live availability and active call count. Partial failures degrade gracefully (for example, a 403 on queued calls still returns queue, agent, and statistics data).
+- `my_voicemails` and `read_voicemail` attach `transcription` (caller transcript text) and `transcription-status` (`finished`, `pending`, or `unavailable`). `voicemail_inbox_summary` populates `from`, `at`, `duration`, `transcript`, and `transcription_status`. Transcripts are fetched concurrently in bounded batches (up to 5 records) without throwing on missing transcription records.
+- `netsapiens-mcp/lib` exports `resolveQueueAgent` for connector preview and membership checks.
+
+### Trace and queue-statistics behavior in v2.2.1
+
+- `call_trace` and `diagnose_call` accept CDR `is-trace-expected` values as boolean `true`/`false`, strings `true`/`false` and `yes`/`no`, or `1`/`0`. A missing value remains trace-expected.
+- When `/sipflow` explicitly refuses the caller's scope or permissions, trace tools return the CDR findings and say that the portal role cannot read SIP traces. Invalid or expired token errors remain authentication failures, not role refusals.
+- Basic User, Office Manager, and Call Center Supervisor were measured as refused by `/sipflow`; Super User was measured as allowed. Reseller availability is unverified.
+- `queue_health` and `agent_dashboard` accept `since`, `until`, `start_date`, and `end_date`. They forward the resulting UTC statistics window to NetSapiens.
+
 Every tool (curated, workflow, or generated) carries:
 
 - `annotations.readOnlyHint` — `true` for GETs/lookups, `false` for mutations.

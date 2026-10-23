@@ -10,13 +10,81 @@
  */
 
 import type { CuratedTool } from './types.js';
-import { textResult } from './types.js';
+import { textResult, STANDARD_WRAPPER_RULES } from './types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../../auth/roles.js';
 import { WORKFLOW_TOOLS, lookupCallForTrace } from './workflows.js';
 import { fieldsMatch, numbersMatch } from './matching.js';
+import type { GenericApiClient, NetSapiensApiResponse } from '../../generated/types.js';
+import { resolveQueueAgent } from './queue-agent.js';
+import { attachVoicemailTranscripts } from './voicemail-transcripts.js';
 
 const str = (v: unknown, dflt = '~') => (v == null || v === '' ? dflt : String(v));
 const num = (v: unknown) => (typeof v === 'number' ? v : v == null ? undefined : Number(v));
+
+export function matchesCallId(record: Record<string, unknown>, callId: string): boolean {
+ return (
+  record['id'] === callId ||
+  record['call-orig-call-id'] === callId ||
+  record['call-term-call-id'] === callId ||
+  record['call-parent-call-id'] === callId ||
+  record['call-through-call-id'] === callId ||
+  record['orig_callid'] === callId ||
+  record['term_callid'] === callId ||
+  record['by_callid'] === callId ||
+  record['servedCallId'] === callId ||
+  record['cdr_id'] === callId
+ );
+}
+
+// NetSapiens reads every date bound as UTC wall time and ignores any offset. Measured on
+// /domains/{d}/users/{u}/cdrs/count (2026-10-15): "2026-10-14 23:00:00" and
+// "2026-10-14T23:00:00Z" both found a call at 23:02Z; "2026-10-14T16:00:00-07:00", the same
+// instant, found nothing. So every bound is converted to its UTC instant before sending.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+export function toNsDateTime(d: Date): string {
+ return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+}
+
+/** A caller's bound. A bare date is the first second of that UTC day, or its last second for an end. */
+export function parseNsBound(value: string, edge: 'start' | 'end'): Date {
+ const s = value.trim();
+ const bare = /^(\d{4}-\d{2}-\d{2})$/.exec(s);
+ const wall = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(:\d{2})?$/.exec(s);
+ const parsed = bare
+  ? new Date(`${bare[1]}T${edge === 'start' ? '00:00:00' : '23:59:59'}Z`)
+  : wall
+   ? new Date(`${wall[1]}T${wall[2]}${wall[3] ?? ':00'}Z`)
+   : new Date(s);
+ if (isNaN(parsed.getTime())) {
+  throw new Error(`Could not read the date "${value}". Use YYYY-MM-DD, YYYY-MM-DD HH:MM:SS (UTC) or an ISO timestamp with an offset.`);
+    }
+ return parsed;
+}
+
+/**
+ * The window a date-bounded tool sends. Caller bounds win, and each missing bound defaults on
+ * its own: the end to now, the start to 24 hours before the end, so an end-only question about
+ * the past still asks about the day before that end.
+ */
+export function nsDateWindow(since?: unknown, until?: unknown, now = new Date()): { start: string; end: string } {
+ const given = (v: unknown) => (v == null || v === '' ? undefined : String(v));
+ const endAt = given(until) ? parseNsBound(given(until)!, 'end') : now;
+ const startAt = given(since) ? parseNsBound(given(since)!, 'start') : new Date(endAt.getTime() - DAY_MS);
+ return { start: toNsDateTime(startAt), end: toNsDateTime(endAt) };
+ }
+
+/** The signed-in user's extension, for tools whose `~` means "me". Throws rather than widen. */
+export async function resolveSelfUser(client: GenericApiClient): Promise<string> {
+ const r = await client.request({ method: 'GET', pathTemplate: '/domains/{domain}/users/{user}', pathParams: { domain: '~', user: '~' } });
+ const row = (Array.isArray(r.data) ? r.data[0] : r.data) as Record<string, unknown> | undefined;
+ const user = r.success && row ? row.user : undefined;
+ if (typeof user !== 'string' && typeof user !== 'number') {
+  throw new Error('Could not resolve your own extension, so nothing was looked up.');
+ }
+ return String(user);
+}
 
 // ---------------------------------------------------------------------------
 // FIND / LOOKUP
@@ -37,9 +105,12 @@ const find_user: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'User' }] },
  handler: async (args, client) => {
   const query = str(args.query, '');
   const limit = num(args.limit) ?? 10;
+
   // /domains/{domain}/users has no server-side name/login/email/extension
   // filter (only limit/start) — the API silently ignores an unrecognized
   // filter param, so fetch broadly and match client-side.
@@ -49,7 +120,22 @@ const find_user: CuratedTool = {
    pathParams: { domain: str(args.domain) },
    queryParams: { limit: 1000 },
   });
-  if (!r.success || !Array.isArray(r.data)) return textResult(r);
+  if (!r.success) {
+   if (r.error && /invalid scope|401/i.test(r.error)) {
+    const selfRes = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/users/~',
+     pathParams: { domain: str(args.domain) },
+    });
+    if (selfRes.success && selfRes.data && typeof selfRes.data === 'object') {
+     const self = selfRes.data as Record<string, unknown>;
+     const matches = fieldsMatch(self, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], query) ? [self] : [];
+     return textResult({ success: true, data: matches, note: 'Basic users can only view their own user profile.' });
+    }
+   }
+   return textResult(r);
+  }
+  if (!Array.isArray(r.data)) return textResult(r);
   const matches = (r.data as Array<Record<string, unknown>>).filter((u) =>
    fieldsMatch(u, ['user', 'name-first-name', 'name-last-name', 'login-username', 'email'], query),
   );
@@ -78,6 +164,8 @@ const find_domain: CuratedTool = {
    },
   },
  },
+ targets: {},
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Domain' }] },
  handler: async (args, client, userRole) => {
   const query = args.query ? String(args.query) : '';
   const limit = num(args.limit) ?? 25;
@@ -133,6 +221,8 @@ const find_contact: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Contact' }] },
  handler: async (args, client) => {
   const query = str(args.query, '');
   const limit = num(args.limit) ?? 25;
@@ -170,6 +260,8 @@ const find_phone_number: CuratedTool = {
    required: ['number'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Phonenumber' }] },
  handler: async (args, client) => {
   const number = String(args.number);
   // /domains/{domain}/phonenumbers has no query filter at all — fetch the
@@ -199,20 +291,97 @@ const find_device: CuratedTool = {
    required: ['query'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data[].device-provisioning-password', field: { class: 'secret' } },
+   { path: 'data[].device-sip-registration-password', field: { class: 'secret' } },
+   { path: 'data[].global-one-time-pass', field: { class: 'secret' } },
+   { path: 'data[]', resource: 'Phone' },
+   { path: 'data[]', resource: 'Device' },
+  ],
+ },
  handler: async (args, client) => {
-  const query = String(args.query);
-  // /domains/{domain}/devices has no query filter at all — fetch the full
-  // domain device list and match client-side.
-  const r = await client.request({
+  const query = String(args.query ?? '').trim();
+  const domain = str(args.domain);
+
+  // NetSapiens v2 answers 404 No Route Found to /domains/{domain}/devices.
+  // 1. Handset-provisioned hardware phones (by MAC, model, line extension) live at /domains/{domain}/phones.
+  const phonesPromise = client.request({
    method: 'GET',
-   pathTemplate: '/domains/{domain}/devices',
-   pathParams: { domain: str(args.domain) },
+   pathTemplate: '/domains/{domain}/phones',
+   pathParams: { domain },
   });
-  if (!r.success || !Array.isArray(r.data)) return textResult(r);
-  const matches = (r.data as Array<Record<string, unknown>>).filter((d) =>
-   fieldsMatch(d, ['device', 'user', 'device-sip-registration-user-agent', 'device-models-model'], query),
+
+  // 2. Per-user SIP device registrations live at /domains/{domain}/users/{user}/devices.
+  // When query is an extension or username, query the user's devices.
+  const isCandidateUser = query.length > 0 && !/[\s/]/.test(query);
+  const userDevicesPromise = isCandidateUser
+   ? client.request({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}/users/{user}/devices',
+    pathParams: { domain, user: query },
+   })
+   : Promise.resolve({ success: true, data: [] });
+
+  const [phonesRes, userDevRes] = await Promise.all([phonesPromise, userDevicesPromise]);
+
+  if (!phonesRes.success && !userDevRes.success) {
+   return textResult(phonesRes);
+  }
+
+  const rawPhones = Array.isArray(phonesRes.data)
+   ? (phonesRes.data as Array<Record<string, unknown>>).map((p) => {
+    const mapped: Record<string, unknown> = { ...p };
+    if (!mapped.device && (p['device-provisioning-mac-address'] || p.mac)) {
+     mapped.device = p['device-provisioning-mac-address'] || p.mac;
+    }
+    if (!mapped.user && (p['device-provisioning-line-1-extensions'] || p['device-provisioning-username'])) {
+     mapped.user = p['device-provisioning-line-1-extensions'] || p['device-provisioning-username'];
+    }
+    if (!mapped['device-models-model'] && (p['device-models-brand-and-model'] || p.model)) {
+     mapped['device-models-model'] = p['device-models-brand-and-model'] || p.model;
+    }
+    if (!mapped['device-sip-registration-user-agent'] && (p['device-models-brand-and-model'] || p.model)) {
+     mapped['device-sip-registration-user-agent'] = p['device-models-brand-and-model'] || p.model;
+    }
+    return mapped;
+   })
+   : [];
+
+  const rawUserDevices = Array.isArray(userDevRes.data)
+   ? (userDevRes.data as Array<Record<string, unknown>>)
+   : [];
+
+  const combined: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  for (const item of [...rawPhones, ...rawUserDevices]) {
+   const key = item.device ?? item['device-provisioning-mac-address'] ?? item.mac;
+   if (key && seen.has(key)) continue;
+   if (key) seen.add(key);
+   combined.push(item);
+  }
+
+  const matches = combined.filter((d) =>
+   fieldsMatch(
+    d,
+    [
+     'device',
+     'user',
+     'mac',
+     'device-provisioning-mac-address',
+     'device-models-brand-and-model',
+     'device-models-model',
+     'device-sip-registration-user-agent',
+     'device-sip-allowed-user-agent',
+     'device-provisioning-line-1-extensions',
+     'device-provisioning-username',
+    ],
+    query,
+   ),
   );
-  return textResult({ ...r, data: matches });
+  return textResult({ success: true, data: matches });
  },
 };
 
@@ -296,6 +465,15 @@ const recent_calls: CuratedTool = {
    properties: { ...SCOPE_PROPERTIES, limit: { type: 'number', default: 25 } },
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user', breadthArg: { name: 'scope', selfValue: 'mine' } },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'scope', field: { class: 'metadata' } },
+   { path: 'scope_note', field: { class: 'metadata' } },
+   { path: 'data[]', resource: 'CdrD' },
+  ],
+ },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
   const scope_note = cdrScopeNote(scope, args, userRole);
@@ -327,15 +505,33 @@ const call_volume: CuratedTool = {
  schema: {
   name: 'call_volume',
   description:
-   'Count calls and sum minutes over a time window. Use this for "how many calls" questions: ' +
-   '`recent_calls` is capped by `limit` and cannot produce a count. Same scope rules as `recent_calls`, ' +
+   'Count calls and sum minutes over a time window. With no dates it covers the last 24 hours; with only `until`, the 24 hours before it. Bounds without an offset are UTC. ' +
+   'Use this for "how many calls" questions: `recent_calls` is capped by `limit` and cannot produce a count. Same scope rules as `recent_calls`, ' +
    'so an office manager gets the whole domain by default. The response reports the scope it used.',
   inputSchema: { type: 'object', properties: { ...SCOPE_PROPERTIES } },
+ },
+ targets: { domainArg: 'domain', userArg: 'user', breadthArg: { name: 'scope', selfValue: 'mine' } },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'scope', field: { class: 'metadata' } },
+   { path: 'scope_note', field: { class: 'metadata' } },
+   { path: 'data', resource: 'Count' },
+   { path: 'total', field: { class: 'metadata' } },
+   { path: 'total-duration', field: { class: 'metadata' } },
+   { path: 'minutes', field: { class: 'metadata' } },
+   { path: 'seconds', field: { class: 'metadata' } },
+  ],
  },
  handler: async (args, client, userRole) => {
   const scope = cdrScope(args, userRole);
   const scope_note = cdrScopeNote(scope, args, userRole);
-  const queryParams = { ...cdrWindow(args), type: args.type ? String(args.type) : undefined };
+  const window = nsDateWindow(args.since, args.until);
+  const queryParams: Record<string, unknown> = {
+   'datetime-start': window.start,
+   'datetime-end': window.end,
+   type: args.type ? String(args.type) : undefined,
+  };
   const r =
    scope === 'domain'
     ? await client.request({
@@ -364,6 +560,8 @@ const active_calls: CuratedTool = {
    properties: { domain: { type: 'string' }, limit: { type: 'number', default: 50 } },
   },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'ActiveCall' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -379,7 +577,7 @@ const call_details: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'call_details',
-  description: 'Details for a specific call by call_id.',
+  description: 'Details for a specific call by call_id. Accepts active call IDs, CDR IDs from recent_calls, or SIP call IDs.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -390,13 +588,50 @@ const call_details: CuratedTool = {
    required: ['call_id'],
   },
  },
- handler: async (args, client) => {
-  const r = await client.request({
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data', resource: 'CdrD' },
+   { path: 'data', resource: 'ActiveCall' },
+  ],
+ },
+ handler: async (args, client, userRole) => {
+  const callid = String(args.call_id);
+  const domain = str(args.domain);
+  const user = str(args.user);
+  const notFound = (res: { success: boolean; error?: string }) => !res.success && /\b404\b|not found/i.test(res.error ?? '');
+
+  // 1. A live call. Only "not found" moves on to the CDRs; any other refusal is the answer.
+  const activeRes = await client.request({
    method: 'GET',
    pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
-   pathParams: { domain: str(args.domain), user: str(args.user), callid: String(args.call_id) },
+   pathParams: { domain, user, callid },
   });
-  return textResult(r);
+  if (activeRes.success && activeRes.data && typeof activeRes.data === 'object' && !Array.isArray(activeRes.data)) {
+   return textResult(activeRes);
+  }
+  if (!activeRes.success && !notFound(activeRes)) return textResult(activeRes);
+
+  // 2. The CDRs. An office manager searches the domain; a basic user, or a login the domain
+  // route refuses with Invalid Scope, searches their own. A row counts only if its own ids
+  // match, because a route may ignore a filter it does not support and return other calls.
+  const isBasicUser = userRole == null || ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
+  const ownCdrs = { pathTemplate: '/domains/{domain}/users/{user}/cdrs', pathParams: { domain, user } as Record<string, string> };
+  let cdrRoute = isBasicUser ? ownCdrs : { pathTemplate: '/domains/{domain}/cdrs', pathParams: { domain } as Record<string, string> };
+  for (const filter of [{ orig_callid: callid, limit: 10 }, { term_callid: callid, limit: 10 }, { limit: 50 }]) {
+   let r = await client.request({ method: 'GET', ...cdrRoute, queryParams: filter });
+   if (!r.success && cdrRoute !== ownCdrs && /invalid scope/i.test(r.error ?? '')) {
+    cdrRoute = ownCdrs;
+    r = await client.request({ method: 'GET', ...cdrRoute, queryParams: filter });
+   }
+   if (!r.success) return textResult(r);
+   const matched = Array.isArray(r.data)
+    ? (r.data as Array<Record<string, unknown>>).find((row) => matchesCallId(row, callid))
+    : undefined;
+    if (matched) return textResult({ success: true, data: matched });
+   }
+  return textResult({ success: false, error: 'Call not found' });
  },
 };
 
@@ -404,7 +639,9 @@ const call_trace: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'call_trace',
-  description: 'SIP flow / call trace for a specific call. Useful for diagnosing why a call did what it did.',
+  description:
+   'SIP flow / call trace for a specific call. Some portal roles cannot read SIP traces; Super User is confirmed and Reseller is unverified. ' +
+   'Useful for diagnosing why a call did what it did.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -417,6 +654,18 @@ const call_trace: CuratedTool = {
    },
    required: ['call_id'],
   },
+ },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'call_id', field: { class: 'metadata' } },
+   { path: 'detail', field: { class: 'metadata' } },
+   { path: 'searched_window', field: { class: 'metadata' } },
+   { path: 'searched_window.start', field: { class: 'metadata' } },
+   { path: 'searched_window.end', field: { class: 'metadata' } },
+   { path: 'data', resource: 'CallTrace' },
+  ],
  },
  handler: async (args, client, userRole) => {
   const callid = String(args.call_id);
@@ -460,6 +709,20 @@ const call_trace: CuratedTool = {
    pathTemplate: '/sipflow',
    queryParams,
   });
+
+  if (!r.success) {
+   const isRoleDenied = Boolean(r.error && /invalid scope|permission denied|insufficient permission|forbidden/i.test(r.error));
+   if (isRoleDenied) {
+    return textResult({
+     call_id: callid,
+     success: false,
+     error: r.error,
+     detail: 'Your portal role cannot read SIP traces. Super User access is confirmed; Reseller access is unverified.',
+     searched_window: lookup.searchedWindow,
+    });
+   }
+  }
+
   return textResult(r);
  },
 };
@@ -479,6 +742,8 @@ const place_call: CuratedTool = {
    required: ['to'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'from' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'POST',
@@ -507,6 +772,8 @@ const transfer_call: CuratedTool = {
    required: ['call_id', 'to'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const isPeer = String(args.type ?? 'blind') === 'peer';
   const pathTemplate = isPeer
@@ -538,6 +805,8 @@ const end_call: CuratedTool = {
    required: ['call_id'],
   },
  },
+ targets: { domainArg: 'domain', userArg: 'user' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'DELETE',
@@ -568,7 +837,7 @@ const my_voicemails: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'my_voicemails',
-  description: 'List your voicemails. Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
+  description: 'List your voicemails (with transcripts and caller details). Pass folder ("new" or "inbox", "save" or "saved", "trash") to filter, or omit to list across all folders.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -577,7 +846,9 @@ const my_voicemails: CuratedTool = {
    },
   },
  },
- handler: async (args, client) => {
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Voicemail' }] },
+ handler: async (args, client, userRole) => {
   const limit = num(args.limit) ?? 25;
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -588,7 +859,9 @@ const my_voicemails: CuratedTool = {
     queryParams: { limit },
    });
    if (r && Array.isArray(r.data)) {
-    r.data = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder }));
+    const items = r.data.map((item: Record<string, unknown>) => ({ ...item, folder: targetFolder })).slice(0, limit);
+    await attachVoicemailTranscripts(client, items, userRole);
+    r.data = items;
    }
    return textResult(r);
   }
@@ -609,9 +882,11 @@ const my_voicemails: CuratedTool = {
    }),
   );
   const merged = responses.flat();
+  const slice = merged.slice(0, limit);
+  await attachVoicemailTranscripts(client, slice, userRole);
   return textResult({
    success: true,
-   data: merged.slice(0, limit),
+   data: slice,
   });
  },
 };
@@ -620,7 +895,7 @@ const read_voicemail: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'read_voicemail',
-  description: 'Open a specific voicemail (metadata + download URL/transcript if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
+  description: 'Open a specific voicemail (metadata + transcript and download URL if available). Pass folder ("new", "save", "trash") if known, or omit to search.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -630,7 +905,15 @@ const read_voicemail: CuratedTool = {
    required: ['voicemail_id'],
   },
  },
- handler: async (args, client) => {
+ targets: { selfOnly: true },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data', resource: 'Voicemail' },
+   { path: 'data[]', resource: 'Voicemail' },
+  ],
+ },
+ handler: async (args, client, userRole) => {
   const filename = String(args.voicemail_id);
   const targetFolder = normalizeVoicemailFolder(args.folder);
   if (targetFolder) {
@@ -639,6 +922,9 @@ const read_voicemail: CuratedTool = {
     pathTemplate: '/domains/~/users/~/voicemails/{folder}/{filename}',
     pathParams: { folder: targetFolder, filename },
    });
+   if (r?.success !== false && r?.data) {
+    await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
+   }
    return textResult(r);
   }
   for (const folder of VOICEMAIL_FOLDERS) {
@@ -652,6 +938,7 @@ const read_voicemail: CuratedTool = {
      if (Array.isArray(r.data) && r.data.length === 0) {
       continue;
      }
+     await attachVoicemailTranscripts(client, r.data as Record<string, unknown> | Array<Record<string, unknown>>, userRole);
      return textResult(r);
     }
    } catch {
@@ -678,6 +965,8 @@ const forward_voicemail: CuratedTool = {
    required: ['voicemail_id', 'to'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Voicemail' }] },
  handler: async (args, client) => {
   const folder = normalizeVoicemailFolder(args.folder) ?? 'new';
   const r = await client.request({
@@ -701,6 +990,8 @@ const list_message_sessions: CuratedTool = {
   description: 'Your active message sessions (SMS, chat, group chat).',
   inputSchema: { type: 'object', properties: { limit: { type: 'number', default: 25 } } },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Messagesession' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -725,6 +1016,8 @@ const read_messages: CuratedTool = {
    required: ['session_id'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Message' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -757,6 +1050,8 @@ const send_message: CuratedTool = {
    required: ['to', 'text'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Message' }] },
  handler: async (args, client) => {
   const dest = Array.isArray(args.to)
    ? args.to.map((t) => String(t).trim())
@@ -812,6 +1107,8 @@ const list_queues: CuratedTool = {
   description: 'Call queues in the domain.',
   inputSchema: { type: 'object', properties: { domain: { type: 'string' } } },
  },
+ targets: { domainArg: 'domain' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'CallQueue' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -822,24 +1119,201 @@ const list_queues: CuratedTool = {
  },
 };
 
+async function safe<T = unknown>(
+ p: Promise<NetSapiensApiResponse<T>>,
+): Promise<{ ok: boolean; data?: T; error?: string }> {
+ try {
+  const r = await p;
+  if (r.success) return { ok: true, data: r.data };
+  return { ok: false, error: r.error || 'request failed' };
+ } catch (err: unknown) {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+ }
+}
+
 const queue_status: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'queue_status',
-  description: 'Live status of a queue — waiting calls, available/busy agents, longest wait.',
+  description:
+   'Live state now (waiting callers with waits, longest wait; agents with callqueue-agent-availability-type, where automatic means logged in and manual means logged out, plus active-calls-total-current), and statistics for a window (the last 24 hours by default, empty when NetSapiens has none).',
   inputSchema: {
    type: 'object',
-   properties: { queue: { type: 'string' }, domain: { type: 'string' } },
+   properties: {
+    queue: { type: 'string' },
+    domain: { type: 'string' },
+    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+    since: { type: 'string', description: 'Start of window' },
+    until: { type: 'string', description: 'End of window' },
+   },
    required: ['queue'],
   },
  },
+ targets: { domainArg: 'domain' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'queue_id', field: { class: 'metadata' } },
+   { path: 'queue', resource: 'CallQueue' },
+   { path: 'waiting.ok', field: { class: 'metadata' } },
+   { path: 'waiting.error', field: { class: 'metadata' } },
+   { path: 'waiting.count', field: { class: 'metadata' } },
+   { path: 'waiting.longest_wait_seconds', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].caller', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].queued_at', field: { class: 'metadata' } },
+   { path: 'waiting.callers[].wait_seconds', field: { class: 'metadata' } },
+   { path: 'agents.ok', field: { class: 'metadata' } },
+   { path: 'agents.error', field: { class: 'metadata' } },
+   { path: 'agents.data[]', resource: 'Agent' },
+   { path: 'statistics.ok', field: { class: 'metadata' } },
+   { path: 'statistics.error', field: { class: 'metadata' } },
+   { path: 'statistics.start', field: { class: 'metadata' } },
+   { path: 'statistics.end', field: { class: 'metadata' } },
+   { path: 'data', resource: 'QueueStat' },
+   { path: 'data[]', resource: 'QueueStat' },
+   { path: 'statistics.data', resource: 'QueueStat' },
+   { path: 'statistics.data[]', resource: 'QueueStat' },
+  ],
+ },
  handler: async (args, client) => {
-  const r = await client.request({
-   method: 'GET',
-   pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
-   pathParams: { domain: str(args.domain), queue: String(args.queue) },
+  const domain = str(args.domain);
+  const queueId = String(args.queue);
+  const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
+  const startDate = window.start;
+  const endDate = window.end;
+
+  const [queueRes, waitingRes, agentsRes, statsRes] = await Promise.all([
+   safe<Record<string, unknown> | Array<Record<string, unknown>>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/{queue}',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/queuedcall/{queue}',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/{queue}/agents',
+     pathParams: { domain, queue: queueId },
+    }),
+   ),
+   safe<Array<Record<string, unknown>> | Record<string, unknown>>(
+    client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/statistics/callqueues/{queue}',
+     pathParams: { domain, queue: queueId },
+     queryParams: { start_date: startDate, end_date: endDate },
+    }),
+   ),
+  ]);
+
+  if (!queueRes.ok && !waitingRes.ok && !agentsRes.ok) {
+   const error = queueRes.error || waitingRes.error || agentsRes.error || 'Failed to read queue';
+   return textResult({ success: false, error });
+  }
+
+  const queue = queueRes.ok
+   ? Array.isArray(queueRes.data)
+     ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
+     : ((queueRes.data as Record<string, unknown>) ?? null)
+   : null;
+
+  let waiting:
+   | {
+      ok: true;
+      count: number;
+      longest_wait_seconds: number;
+      callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
+     }
+   | { ok: false; error: string };
+
+  if (waitingRes.ok) {
+   const rawCallers = Array.isArray(waitingRes.data)
+    ? waitingRes.data
+    : waitingRes.data
+      ? [waitingRes.data]
+      : [];
+   const callers = rawCallers.map((row) => {
+    const caller = String(row['dial-rule-translation-source-name'] ?? row['from_uri'] ?? '');
+    const queued_at = String(row['time_queued'] ?? '');
+    const wait = Number(row['mysql_dura']);
+    const wait_seconds = Number.isFinite(wait) ? wait : 0;
+    return { caller, queued_at, wait_seconds };
+   });
+   callers.sort((a, b) => b.wait_seconds - a.wait_seconds);
+   const longest_wait_seconds = callers.length > 0 ? callers[0].wait_seconds : 0;
+   waiting = {
+    ok: true,
+    count: callers.length,
+    longest_wait_seconds,
+    callers,
+   };
+  } else {
+   waiting = {
+    ok: false,
+    error: waitingRes.error ?? 'Failed to read queued calls',
+   };
+  }
+
+  let agents:
+   | { ok: true; data: Array<Record<string, unknown>> }
+   | { ok: false; error: string };
+
+  if (agentsRes.ok) {
+   const agentList = Array.isArray(agentsRes.data)
+    ? agentsRes.data
+    : agentsRes.data
+      ? [agentsRes.data]
+      : [];
+   agents = {
+    ok: true,
+    data: agentList,
+   };
+  } else {
+   agents = {
+    ok: false,
+    error: agentsRes.error ?? 'Failed to read agents',
+   };
+  }
+
+  let statistics:
+   | {
+      ok: true;
+      start: string;
+      end: string;
+      data: Array<Record<string, unknown>> | Record<string, unknown>;
+     }
+   | { ok: false; error: string };
+
+  if (statsRes.ok) {
+   statistics = {
+    ok: true,
+    start: startDate,
+    end: endDate,
+    data: (statsRes.data as Array<Record<string, unknown>> | Record<string, unknown>) ?? [],
+   };
+  } else {
+   statistics = {
+    ok: false,
+    error: statsRes.error ?? 'Failed to read statistics',
+   };
+  }
+
+  return textResult({
+   queue_id: queueId,
+   queue,
+   waiting,
+   agents,
+   statistics,
   });
-  return textResult(r);
  },
 };
 
@@ -847,7 +1321,8 @@ const agent_login: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_login',
-  description: 'Log an agent into a queue (or all queues with queue="all").',
+  description:
+   'Log an agent into one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -856,13 +1331,66 @@ const agent_login: CuratedTool = {
    },
   },
  },
+ targets: { agentArg: 'agent' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/login',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged in to all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'automatic') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged in to ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 
@@ -870,22 +1398,76 @@ const agent_logout: CuratedTool = {
  minRole: 'user',
  schema: {
   name: 'agent_logout',
-  description: 'Log an agent out of a queue (or all with queue="all").',
+  description:
+   'Log an agent out of one call queue, or every queue they belong to with queue="all". Defaults to you; pass an extension or user@domain for someone else. Refuses without changing anything when that agent is not in the queue.',
   inputSchema: {
    type: 'object',
    properties: {
     queue: { type: 'string', default: 'all' },
-    agent: { type: 'string' },
+    agent: { type: 'string', description: 'Agent extension; defaults to you' },
    },
   },
  },
+ targets: { agentArg: 'agent' },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Agent' }] },
  handler: async (args, client) => {
+  const resolved = await resolveQueueAgent(client, { queue: args.queue, agent: args.agent });
+  if (!resolved.ok) {
+   return textResult({ success: false, error: resolved.message });
+  }
+
   const r = await client.request({
-   method: 'POST',
+   method: 'PATCH',
    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}/logout',
-   pathParams: { queue: str(args.queue, 'all'), agent: str(args.agent) },
+   pathParams: { queue: resolved.queue, agent: resolved.agentId },
   });
-  return textResult(r);
+  if (!r.success) {
+   return textResult(r);
+  }
+
+  const name = resolved.agentName ?? (resolved.record && (resolved.record['name-full-name'] as string)) ?? resolved.agentId;
+
+  if (resolved.queue === 'all') {
+   return textResult({
+    success: true,
+    note: `${name} is logged out of all queues.`,
+   });
+  }
+
+  const where = resolved.queueName ? `the ${resolved.queueName} queue (${resolved.queue})` : `queue ${resolved.queue}`;
+  let latestRecord = resolved.record;
+  let reachedState = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+   if (attempt > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+   }
+   const readRes = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/~/callqueues/{queue}/agents/{agent}',
+    pathParams: { queue: resolved.queue, agent: resolved.agentId },
+   });
+   if (readRes.success && readRes.data) {
+    const rec = (Array.isArray(readRes.data) ? readRes.data[0] : readRes.data) as Record<string, unknown>;
+    if (rec && typeof rec === 'object') {
+     latestRecord = rec;
+     if (rec['callqueue-agent-availability-type'] === 'manual') {
+      reachedState = true;
+      break;
+     }
+    }
+   }
+  }
+
+  const note = reachedState
+   ? `${name} is logged out of ${where}.`
+   : 'NetSapiens accepted the change; the agent record does not show it yet.';
+
+  return textResult({
+   success: true,
+   data: latestRecord,
+   note,
+  });
  },
 };
 
@@ -894,15 +1476,101 @@ const agent_status: CuratedTool = {
  schema: {
   name: 'agent_status',
   description: 'Get an agent\'s current queue status. Defaults to yourself.',
-  inputSchema: { type: 'object', properties: { agent: { type: 'string' } } },
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent: { type: 'string', description: 'Agent extension or user@domain. Defaults to yourself.' },
+    queue: { type: 'string', description: 'Call queue name or extension. Optional.' },
+    domain: { type: 'string' },
+   },
+  },
  },
- handler: async (args, client) => {
-  const r = await client.request({
+ targets: { domainArg: 'domain', agentArg: 'agent' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data', resource: 'Agent' },
+   { path: 'data[]', resource: 'Agent' },
+  ],
+ },
+ handler: async (args, client, userRole) => {
+  const domain = str(args.domain);
+  const agent = args.agent ? String(args.agent) : '~';
+  const queue = args.queue ? String(args.queue) : undefined;
+  const isBasicUser = userRole == null || ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
+
+  if (!isBasicUser) {
+   // Domain admin or above: /domains/{domain}/agents returns all agents in the domain
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}/agents',
+    pathParams: { domain },
+   });
+   if (r.success && Array.isArray(r.data)) {
+    let agents = r.data as Array<Record<string, unknown>>;
+    if (queue) {
+     agents = agents.filter((a) => a['callqueue'] === queue);
+    }
+    // "~" is the signed-in agent: resolve it or fail, never fall through to the whole roster.
+    const targetAgent = agent === '~' ? await resolveSelfUser(client) : agent;
+     agents = agents.filter((a) => {
+      const aid = String(a['callqueue-agent-id'] ?? '');
+      const login = String(a['login-username'] ?? '');
+      return (
+       aid === targetAgent ||
+       aid.startsWith(`${targetAgent}@`) ||
+       login === targetAgent ||
+       login.startsWith(`${targetAgent}@`)
+      );
+     });
+    if (agents.length === 0) {
+     return textResult({ success: false, error: 'Agent not found' });
+    }
+    if (agents.length === 1) {
+     return textResult({ success: true, data: agents[0] });
+    }
+    return textResult({ success: true, data: agents });
+   }
+  }
+
+  // Basic User or fallback when /agents is unavailable:
+  if (queue) {
+   const r = await client.request({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}',
+    pathParams: { domain, queue, agent },
+   });
+   return textResult(r);
+  }
+
+  // Queue omitted: list visible queues from /callqueues/list and query agent status
+  const qList = await client.request({
    method: 'GET',
-   pathTemplate: '/domains/~/callqueues/all/agents/{agent}',
-   pathParams: { agent: str(args.agent) },
+   pathTemplate: '/domains/{domain}/callqueues/list',
+   pathParams: { domain },
   });
-  return textResult(r);
+  if (qList.success && Array.isArray(qList.data)) {
+   const queues = qList.data as Array<Record<string, unknown>>;
+   const results: Array<Record<string, unknown>> = [];
+   for (const q of queues) {
+    const qId = String(q['callqueue'] ?? q['queue'] ?? '');
+    if (!qId) continue;
+    const aRes = await client.request({
+     method: 'GET',
+     pathTemplate: '/domains/{domain}/callqueues/{queue}/agents/{agent}',
+     pathParams: { domain, queue: qId, agent },
+    });
+    if (aRes.success && aRes.data && typeof aRes.data === 'object' && !Array.isArray(aRes.data)) {
+     results.push(aRes.data as Record<string, unknown>);
+    }
+   }
+   if (results.length === 1) {
+    return textResult({ success: true, data: results[0] });
+   }
+   return textResult({ success: true, data: results });
+  }
+
+  return textResult({ success: false, error: 'Could not determine agent queue status' });
  },
 };
 
@@ -917,11 +1585,28 @@ const my_devices: CuratedTool = {
   description: 'Devices registered to your user.',
   inputSchema: { type: 'object', properties: {} },
  },
- handler: async (_args, client) => {
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Device' }] },
+ handler: async (_args, client, userRole) => {
+  const isBasicUser = userRole != null && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY.domain_admin;
+  if (isBasicUser) {
+   return textResult({
+    success: true,
+    data: [],
+    note: 'Device list is not available for your login scope.',
+   });
+  }
   const r = await client.request({
    method: 'GET',
    pathTemplate: '/domains/~/users/~/devices',
   });
+  if (!r.success && r.error && /invalid scope|401/i.test(r.error)) {
+   return textResult({
+    success: true,
+    data: [],
+    note: 'Device list is not available for your login scope.',
+   });
+  }
   return textResult(r);
  },
 };
@@ -933,6 +1618,8 @@ const my_answer_rules: CuratedTool = {
   description: 'Your answer rules (call routing decisions per time-frame).',
   inputSchema: { type: 'object', properties: {} },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data[]', resource: 'Answerrule' }] },
  handler: async (_args, client) => {
   const r = await client.request({
    method: 'GET',
@@ -956,6 +1643,8 @@ const update_my_answer_rule: CuratedTool = {
    required: ['timeframe', 'update'],
   },
  },
+ targets: { selfOnly: true },
+ output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'Answerrule' }] },
  handler: async (args, client) => {
   const r = await client.request({
    method: 'PUT',
@@ -975,33 +1664,41 @@ const call_statistics: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'call_statistics',
-  description: 'Aggregate call-queue statistics for a domain or specific queue.',
+  description: 'Aggregate call-queue statistics for a domain or specific queue. With no dates it covers the last 24 hours; with only an end, the 24 hours before it. Bounds without an offset are UTC.',
   inputSchema: {
    type: 'object',
    properties: {
     domain: { type: 'string' },
     queue: { type: 'string', description: 'Specific queue, or omit for aggregate' },
     since: { type: 'string', description: 'ISO date' },
+    until: { type: 'string', description: 'ISO date' },
+    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
    },
   },
  },
+ targets: { domainArg: 'domain' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data', resource: 'QueueStat' },
+   { path: 'data[]', resource: 'QueueStat' },
+  ],
+ },
  handler: async (args, client) => {
+  const domain = str(args.domain);
   const pathTemplate = args.queue
    ? '/domains/{domain}/statistics/callqueues/{queue}'
    : '/domains/{domain}/statistics/callqueues/aggregate';
-  const pathParams: Record<string, string> = { domain: str(args.domain) };
+  const pathParams: Record<string, string> = { domain };
   if (args.queue) pathParams.queue = String(args.queue);
-  // `datetime-start` is the real param — `start-time-after` doesn't exist on
-  // this endpoint. It's also a REQUIRED PAIR with `datetime-end`: sending
-  // `datetime-start` alone is silently ignored by the API (confirmed against
-  // live data), so bound the other end at "now" whenever `since` is given.
-  const since = args.since ? String(args.since) : undefined;
-  const until = since ? new Date().toISOString() : undefined;
+  // Measured 2026-10-15: the statistics routes take start_date/end_date as "YYYY-MM-DD HH:MM:SS".
+  const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
   const r = await client.request({
    method: 'GET',
    pathTemplate,
    pathParams,
-   queryParams: { 'datetime-start': since, 'datetime-end': until },
+   queryParams: { start_date: window.start, end_date: window.end },
   });
   return textResult(r);
  },
@@ -1011,34 +1708,52 @@ const agent_statistics: CuratedTool = {
  minRole: 'domain_admin',
  schema: {
   name: 'agent_statistics',
-  description: 'Agent performance stats — calls handled, talk time, etc.',
+  description: 'Agent performance stats: calls handled, talk time, etc. Omit `agent` for every agent in the domain; `agent: "~"` is you. With no dates it covers the last 24 hours; with only an end, the 24 hours before it. Bounds without an offset are UTC.',
   inputSchema: {
    type: 'object',
    properties: {
     domain: { type: 'string' },
-    agent: { type: 'string' },
+    agent: { type: 'string', description: 'Agent extension, "~" for yourself, or omit for every agent.' },
     since: { type: 'string' },
+    until: { type: 'string' },
+    start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+    end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
    },
   },
  },
+ targets: { domainArg: 'domain', agentArg: 'agent' },
+ output: {
+  rules: [
+   ...STANDARD_WRAPPER_RULES,
+   { path: 'data', resource: 'QueueStat' },
+   { path: 'data[]', resource: 'QueueStat' },
+   { path: 'data.*', resource: 'QueueStat' },
+  ],
+ },
  handler: async (args, client) => {
-  const pathTemplate = args.agent
+  // "~" is the signed-in agent, never "everyone": resolve it, or fail rather than widen.
+  const agent = args.agent == null || args.agent === '' ? undefined : args.agent === '~' ? await resolveSelfUser(client) : String(args.agent);
+  const domain = str(args.domain);
+  const pathTemplate = agent
    ? '/domains/{domain}/statistics/agent/{agent}'
    : '/domains/{domain}/statistics/agent';
-  const pathParams: Record<string, string> = { domain: str(args.domain) };
-  if (args.agent) pathParams.agent = String(args.agent);
-  // `datetime-start` is the real param — `start-time-after` doesn't exist on
-  // this endpoint. It's also a REQUIRED PAIR with `datetime-end`: sending
-  // `datetime-start` alone is silently ignored by the API (confirmed against
-  // live data), so bound the other end at "now" whenever `since` is given.
-  const since = args.since ? String(args.since) : undefined;
-  const until = since ? new Date().toISOString() : undefined;
+  const pathParams: Record<string, string> = { domain };
+  if (agent) pathParams.agent = agent;
+  const window = nsDateWindow(args.since ?? args.start_date, args.until ?? args.end_date);
   const r = await client.request({
    method: 'GET',
    pathTemplate,
    pathParams,
-   queryParams: { 'datetime-start': since, 'datetime-end': until },
+   queryParams: { start_date: window.start, end_date: window.end },
   });
+  // Only the every-agent route answers with a dictionary keyed by agent; one agent is a flat object.
+  if (!agent && r.success && r.data && typeof r.data === 'object' && !Array.isArray(r.data)) {
+   const items = Object.entries(r.data as Record<string, unknown>).map(([agentId, stats]) => ({
+     agent: agentId,
+     ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
+    }));
+    return textResult({ ...r, data: items });
+  }
   return textResult(r);
  },
 };

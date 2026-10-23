@@ -9,6 +9,15 @@
 
 import type { GenericApiClient, ToolDefinition } from '../../generated/types.js';
 import type { UserRole } from '../../auth/roles.js';
+import type { FieldRule, OutputDeclaration, ToolTargets } from '../../governance/types.js';
+
+export const STANDARD_WRAPPER_RULES: readonly FieldRule[] = [
+ { path: 'success', field: { class: 'metadata' } },
+ { path: 'error', field: { class: 'metadata' } },
+ { path: 'message', field: { class: 'metadata' } },
+ { path: 'note', field: { class: 'metadata' } },
+ { path: 'ok', field: { class: 'metadata' } },
+];
 
 export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  /**
@@ -34,6 +43,10 @@ export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
  destructive?: boolean;
  /** Explicit read-only flag (overrides prefix-based inference if set). */
  readOnly?: boolean;
+ /** Declared output field classifications (for governance and secret scrubbing). */
+ output: OutputDeclaration;
+ /** Target entity references (for scope checking and governance). */
+ targets: ToolTargets;
 }
 
 /** Every curated tool emits this shape. */

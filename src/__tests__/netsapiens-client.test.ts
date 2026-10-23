@@ -29,6 +29,9 @@ function createMockAxios() {
   const mockInstance = {
     get: vi.fn(),
     post: vi.fn(),
+    patch: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
     request: vi.fn(),
     interceptors: {
       request: {
@@ -333,23 +336,23 @@ describe('NetSapiensClient', () => {
       expect(result).toEqual({ success: true, data: MOCK_AGENTS });
     });
 
-    it('loginAgent should POST to the agent login endpoint', async () => {
-      vi.mocked(mockAxios.mockInstance.post).mockResolvedValue({ data: { status: 'ok' } });
+    it('loginAgent should PATCH to the agent login endpoint', async () => {
+      vi.mocked(mockAxios.mockInstance.patch).mockResolvedValue({ data: { status: 'ok' } });
 
       const result = await client.loginAgent('example.com', 'q1', 'agent1');
 
-      expect(mockAxios.mockInstance.post).toHaveBeenCalledWith(
+      expect(mockAxios.mockInstance.patch).toHaveBeenCalledWith(
         '/domains/example.com/callqueues/q1/agents/agent1/login',
       );
       expect(result).toEqual({ success: true, data: { status: 'ok' }, message: 'Agent logged in successfully' });
     });
 
-    it('logoutAgent should POST to the agent logout endpoint', async () => {
-      vi.mocked(mockAxios.mockInstance.post).mockResolvedValue({ data: { status: 'ok' } });
+    it('logoutAgent should PATCH to the agent logout endpoint', async () => {
+      vi.mocked(mockAxios.mockInstance.patch).mockResolvedValue({ data: { status: 'ok' } });
 
       const result = await client.logoutAgent('example.com', 'q1', 'agent1');
 
-      expect(mockAxios.mockInstance.post).toHaveBeenCalledWith(
+      expect(mockAxios.mockInstance.patch).toHaveBeenCalledWith(
         '/domains/example.com/callqueues/q1/agents/agent1/logout',
       );
       expect(result).toEqual({ success: true, data: { status: 'ok' }, message: 'Agent logged out successfully' });
@@ -507,7 +510,7 @@ describe('NetSapiensClient', () => {
     });
 
     it('loginAgent should return success:false on failure', async () => {
-      vi.mocked(mockAxios.mockInstance.post).mockRejectedValue(new Error('Agent not found'));
+      vi.mocked(mockAxios.mockInstance.patch).mockRejectedValue(new Error('Agent not found'));
 
       const result = await client.loginAgent('example.com', 'q1', 'badagent');
 

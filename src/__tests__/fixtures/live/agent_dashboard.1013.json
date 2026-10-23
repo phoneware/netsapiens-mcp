@@ -1,0 +1,16 @@
+{
+  "agent": "s",
+  "domain": "s",
+  "status": {
+    "ok": false,
+    "error": "s"
+  },
+  "recent_calls": {
+    "ok": true,
+    "data": []
+  },
+  "statistics": {
+    "ok": false,
+    "error": "s"
+  }
+}
