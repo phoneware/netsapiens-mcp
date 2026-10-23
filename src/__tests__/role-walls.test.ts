@@ -122,6 +122,7 @@ const REPRESENTATIVE_ARGS: Record<string, Record<string, unknown>> = {
  agent_login: { queue: 'support', agent: '1001' },
  agent_logout: { queue: 'support', agent: '1001' },
  agent_status: { agent: '1001' },
+ agent_dashboard: { agent: '1001' },
  update_my_answer_rule: { timeframe: 'Default', update: { enable: true } },
  find_phone_number: { number: '1001' },
  find_device: { query: 'poly' },

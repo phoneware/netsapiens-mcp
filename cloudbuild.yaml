@@ -91,7 +91,7 @@ steps:
       - '--session-affinity'
       - '--remove-env-vars=NETSAPIENS_OAUTH_CLIENT_SECRET,MCP_SESSION_SECRET'
       - '--update-env-vars=^;;^MCP_TRANSPORT=http;;MCP_PORT=3000;;NODE_ENV=production;;MCP_BASE_URL=https://mcp-readonly.edge.phoneware.cloud;;NETSAPIENS_API_URL=https://edge.phoneware.cloud;;NETSAPIENS_OAUTH_CLIENT_ID=${_NETSAPIENS_OAUTH_CLIENT_ID};;MCP_LOGIN_HEADER=Login to Phoneware EDGE (Read-Only);;MCP_DISABLED_TOOLS=delete_*,remove_*;;MCP_DISABLED_ACTIONS=delete,remove,revoke,destroy,delete_definition;;MCP_ICON_URL=https://phoneware.us/images/phoneware-icon-800x800.png;;MCP_PERSISTENCE=firestore;;GOOGLE_CLOUD_PROJECT=phoneware-edge;;MCP_TOOL_MODE=curated;;NETSAPIENS_PLATFORMS=Edge=https://edge.phoneware.cloud,Viirtue=https://vps.phoneware.us,MCU=https://mars.phoneware.cloud;;MCP_READ_ONLY=true'
-      - '--update-secrets=MCP_SESSION_SECRET=netsapiens-mcp-readonly-session-secret:latest,NETSAPIENS_OAUTH_CLIENT_SECRET=netsapiens-mcp-oauth-client-secret:latest'
+      - '--update-secrets=MCP_SESSION_SECRET=netsapiens-mcp-session-secret:latest,NETSAPIENS_OAUTH_CLIENT_SECRET=netsapiens-mcp-oauth-client-secret:latest'
 
 substitutions:
   _REGION: us-central1

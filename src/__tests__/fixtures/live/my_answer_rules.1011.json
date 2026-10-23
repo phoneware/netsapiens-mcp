@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "data": [
+    {
+      "time-frame": "s",
+      "domain": "s",
+      "user": "s",
+      "is-active": true,
+      "ordinal-priority": 0,
+      "enabled": "s",
+      "forward-always": {
+        "parameters": [
+          "s"
+        ],
+        "enabled": "s"
+      },
+      "simultaneous-ring": {
+        "parameters": [],
+        "enabled": "s"
+      }
+    }
+  ]
+}

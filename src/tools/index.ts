@@ -28,6 +28,9 @@ import { logger } from '../utils/logger.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
+import { scrubSecrets } from '../governance/scrub.js';
+import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
+import type { OutputDeclaration } from '../governance/types.js';
 /** Set-equality helper used to detect promotion / demotion changes. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
  if (a.size !== b.size) return false;
@@ -214,6 +217,7 @@ const TIER_RULES: Array<{ role: UserRole; patterns: RegExp[] }> = [
   role: 'reseller',
   patterns: [
    /reseller/i,
+   /(^|_)sipflow(_|$)|(^|_)cradle2grave(_|$)|get_sip_flow|get_call_trace/i,
    /^create_domain$|^delete_domain$|^domain_billing$|^count_domains$/i,
    /v1_reseller/i,
   ],
@@ -649,6 +653,38 @@ export function paginateTools(
  return end < tools.length ? { tools: page, nextCursor: encodeCursor(end) } : { tools: page };
 }
 
+/** Resolve the target resource for a generated tool name when no curated declaration exists. */
+function resolveGeneratedToolOutput(name: string): OutputDeclaration | undefined {
+  const lower = name.toLowerCase();
+  let resource: string | undefined;
+
+  if (lower.includes('apikey')) resource = 'ApiKey';
+  else if (lower.includes('jwt')) resource = 'JwtRequestSuccess';
+  else if (lower.startsWith('post_tokens') || lower.startsWith('get_tokens')) resource = 'AccessToken';
+  else if (lower.includes('chart')) resource = 'Chart';
+  else if (lower.includes('device')) resource = lower.startsWith('v1_') ? 'DeviceLegacy' : 'Device';
+  else if (lower.includes('domain')) resource = lower.startsWith('v1_') ? 'DomainLegacy' : 'Domain';
+  else if (lower.includes('reseller')) resource = 'Reseller';
+  else if (lower.includes('subscriber') || lower.includes('user')) resource = lower.startsWith('v1_') ? 'UserLegacy' : 'User';
+  else if (lower.includes('answerrule')) resource = lower.startsWith('v1_') ? 'AnswerruleLegacy' : 'Answerrule';
+  else if (lower.includes('callqueue')) resource = 'CallQueue';
+  else if (lower.includes('phonenumber')) resource = 'Phonenumber';
+  else if (lower.includes('cdr')) resource = 'CdrD';
+  else if (lower.includes('recording')) resource = 'Recording';
+  else if (lower.includes('voicemail')) resource = 'Voicemail';
+
+  if (resource && NS_RESOURCE_FIELDS[resource]) {
+    return {
+      rules: [
+        { path: 'data[]', resource },
+        { path: 'data', resource },
+        { path: '', resource },
+      ],
+    };
+  }
+  return undefined;
+}
+
 /**
  * Dispatches a tool call. In curated mode tries the curated/meta tools first
  * (so `call_api` is intercepted here too); falls through to the generated
@@ -756,14 +792,38 @@ export async function handleToolCall(
 
   const durationMs = Date.now() - startTime;
   let parsedResult: Record<string, unknown> | undefined;
-  if (result && typeof result === 'object' && 'content' in result && Array.isArray((result as { content?: unknown[] }).content)) {
-   const text = (result as { content: Array<{ text?: string }> }).content[0]?.text;
-   if (typeof text === 'string') {
+  if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content)) {
+   const first = result.content[0];
+   if (first && typeof first === 'object' && 'text' in first && typeof first.text === 'string') {
     try {
-     parsedResult = JSON.parse(text);
+     parsedResult = JSON.parse(first.text);
     } catch {
      // Plain text result
     }
+   }
+  }
+
+  const outputDecl = curated?.output ?? resolveGeneratedToolOutput(registryKey);
+  let secretsScrubbed = 0;
+  if (parsedResult !== undefined) {
+   const scrubbed = scrubSecrets(parsedResult, outputDecl);
+   secretsScrubbed = scrubbed.count;
+   if (secretsScrubbed > 0) {
+    parsedResult = typeof scrubbed.scrubbed === 'object' && scrubbed.scrubbed !== null
+     ? (scrubbed.scrubbed as Record<string, unknown>)
+     : undefined;
+    if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content)) {
+     const first = result.content[0];
+     if (first && typeof first === 'object' && 'text' in first) {
+      first.text = JSON.stringify(scrubbed.scrubbed, null, 2);
+     }
+    }
+   }
+  } else if (result !== null && result !== undefined && typeof result === 'object' && !('content' in result)) {
+   const scrubbed = scrubSecrets(result, outputDecl);
+   secretsScrubbed = scrubbed.count;
+   if (secretsScrubbed > 0) {
+    result = scrubbed.scrubbed;
    }
   }
 
@@ -803,6 +863,9 @@ export async function handleToolCall(
    logContext.scope = resolvedScope;
   }
 
+  if (secretsScrubbed > 0) {
+   logContext.secretsScrubbed = secretsScrubbed;
+  }
   logger.info('Tool call', logContext);
   return result;
  } catch (err: unknown) {

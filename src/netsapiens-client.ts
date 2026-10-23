@@ -608,7 +608,7 @@ export class NetSapiensClient {
    */
   async loginAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<any>> {
     try {
-      const response: AxiosResponse = await this.client.post(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/login`);
+      const response: AxiosResponse = await this.client.patch(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/login`);
 
       return {
         success: true,
@@ -629,7 +629,7 @@ export class NetSapiensClient {
    */
   async logoutAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<any>> {
     try {
-      const response: AxiosResponse = await this.client.post(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/logout`);
+      const response: AxiosResponse = await this.client.patch(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/logout`);
 
       return {
         success: true,

@@ -15,28 +15,32 @@ import { logger } from '../utils/logger.js';
 // ---------------------------------------------------------------------------
 
 export interface StoredToken {
-  /** Our issued access token (opaque string) */
-  accessToken: string;
-  /** Our issued refresh token */
-  refreshToken: string;
-  /** Client that owns this token */
-  clientId: string;
-  /** When our token expires (epoch ms) */
-  expiresAt: number;
-  /** Upstream NS access token for API calls */
-  nsAccessToken: string;
-  /** Upstream NS refresh token */
-  nsRefreshToken?: string;
-  /** When the upstream NS access token expires (epoch ms) */
-  nsExpiresAt?: number;
-  /** NS username (for identifying the user session) */
-  nsUsername: string;
-  /** Detected NS user role */
-  nsUserRole?: string;
+ /** Our issued access token (opaque string) */
+ accessToken: string;
+ /** Our issued refresh token */
+ refreshToken: string;
+ /** Client that owns this token */
+ clientId: string;
+ /** When our token expires (epoch ms) */
+ expiresAt: number;
+ /** Upstream NS access token for API calls */
+ nsAccessToken: string;
+ /** Upstream NS refresh token */
+ nsRefreshToken?: string;
+ /** When the upstream NS access token expires (epoch ms) */
+ nsExpiresAt?: number;
+ /** NS username (for identifying the user session) */
+ nsUsername: string;
+ /** Detected NS user role */
+ nsUserRole?: string;
  /** Upstream NetSapiens platform API URL (e.g. https://edge.phoneware.cloud) */
-  nsApiUrl?: string;
-  /** MCP Server base URL this token was issued for (cross-server isolation) */
-  serverBaseUrl?: string;
+ nsApiUrl?: string;
+ /** MCP Server base URL this token was issued for (cross-server isolation) */
+ serverBaseUrl?: string;
+ /** Extra metadata stored with the token */
+ extra?: Record<string, string>;
+ /** Firestore TTL timestamp */
+ ttlAt?: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +48,7 @@ export interface StoredToken {
 // ---------------------------------------------------------------------------
 
 interface TokenStoreData {
-  tokens: Record<string, StoredToken>;
+ tokens: Record<string, StoredToken>;
 }
 
 /**
@@ -52,13 +56,18 @@ interface TokenStoreData {
  * store and the Firestore-backed one. Auth provider code only sees this.
  */
 export interface TokenStoreLike {
-  get(accessToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
-  getByRefreshToken(refreshToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
-  set(token: StoredToken): void | Promise<void>;
-  update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined | Promise<StoredToken | undefined>;
-  delete(accessToken: string): void | Promise<void>;
-  deleteByRefreshToken(refreshToken: string): void | Promise<void>;
-  readonly size: number;
+ get(accessToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
+ getByRefreshToken(refreshToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
+ set(token: StoredToken): void | Promise<void>;
+ update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined | Promise<StoredToken | undefined>;
+ delete(accessToken: string): void | Promise<void>;
+ deleteByRefreshToken(refreshToken: string): void | Promise<void>;
+ refreshNsToken?(
+  accessToken: string,
+  doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
+ ): Promise<StoredToken>;
+ clearCache?(): void;
+ readonly size: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,125 +75,125 @@ export interface TokenStoreLike {
 // ---------------------------------------------------------------------------
 
 export class TokenStore {
-  private tokens = new Map<string, StoredToken>();
-  private refreshIdx = new Map<string, StoredToken>();
-  private readonly filePath: string;
+ private tokens = new Map<string, StoredToken>();
+ private refreshIdx = new Map<string, StoredToken>();
+ private readonly filePath: string;
 
-  constructor(filePath?: string) {
-    const defaultFileName = process.env.MCP_READ_ONLY === 'true'
-      ? 'http-tokens-readonly.json'
-      : 'http-tokens.json';
-    this.filePath =
-      filePath ??
-      process.env.MCP_TOKEN_STORE_PATH ??
-      join(homedir(), '.netsapiens-mcp', defaultFileName);
-    this.load();
+ constructor(filePath?: string) {
+  const defaultFileName = process.env.MCP_READ_ONLY === 'true'
+   ? 'http-tokens-readonly.json'
+   : 'http-tokens.json';
+  this.filePath =
+   filePath ??
+   process.env.MCP_TOKEN_STORE_PATH ??
+   join(homedir(), '.netsapiens-mcp', defaultFileName);
+  this.load();
+ }
+
+ /** Get a token by its access token string. */
+ get(accessToken: string): StoredToken | undefined {
+  return this.tokens.get(accessToken);
+ }
+
+ /** Get a token by its refresh token string. */
+ getByRefreshToken(refreshToken: string): StoredToken | undefined {
+  return this.refreshIdx.get(refreshToken);
+ }
+
+ /** Store a token (indexed by both access and refresh token). */
+ set(token: StoredToken): void {
+  this.tokens.set(token.accessToken, token);
+  this.refreshIdx.set(token.refreshToken, token);
+  this.save();
+ }
+
+ /** Update an existing token in place (e.g. after refreshing the upstream NS token). */
+ update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined {
+  const existing = this.tokens.get(accessToken);
+  if (!existing) return undefined;
+  const updated = { ...existing, ...patch };
+  this.tokens.set(updated.accessToken, updated);
+  if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
+   this.refreshIdx.delete(existing.refreshToken);
   }
+  this.refreshIdx.set(updated.refreshToken, updated);
+  this.save();
+  return updated;
+ }
 
-  /** Get a token by its access token string. */
-  get(accessToken: string): StoredToken | undefined {
-    return this.tokens.get(accessToken);
+ /** Delete a token by its access token. */
+ delete(accessToken: string): void {
+  const token = this.tokens.get(accessToken);
+  if (token) {
+   this.tokens.delete(accessToken);
+   this.refreshIdx.delete(token.refreshToken);
+   this.save();
   }
+ }
 
-  /** Get a token by its refresh token string. */
-  getByRefreshToken(refreshToken: string): StoredToken | undefined {
-    return this.refreshIdx.get(refreshToken);
+ /** Delete a token by its refresh token. */
+ deleteByRefreshToken(refreshToken: string): void {
+  const token = this.refreshIdx.get(refreshToken);
+  if (token) {
+   this.refreshIdx.delete(refreshToken);
+   this.tokens.delete(token.accessToken);
+   this.save();
   }
+ }
 
-  /** Store a token (indexed by both access and refresh token). */
-  set(token: StoredToken): void {
-    this.tokens.set(token.accessToken, token);
+ /** Remove all expired tokens. */
+ cleanup(): void {
+  const now = Date.now();
+  let changed = false;
+  for (const [key, token] of this.tokens) {
+   if (token.expiresAt <= now) {
+    this.tokens.delete(key);
+    this.refreshIdx.delete(token.refreshToken);
+    changed = true;
+   }
+  }
+  if (changed) {
+   this.save();
+   logger.info('Cleaned up expired tokens');
+  }
+ }
+
+ /** Number of active (stored) tokens. */
+ get size(): number {
+  return this.tokens.size;
+ }
+
+ // -----------------------------------------------------------------------
+ // Persistence
+ // -----------------------------------------------------------------------
+
+ private load(): void {
+  try {
+   if (!existsSync(this.filePath)) return;
+   const raw = readFileSync(this.filePath, 'utf-8');
+   const data: TokenStoreData = JSON.parse(raw);
+   for (const [key, token] of Object.entries(data.tokens)) {
+    this.tokens.set(key, token);
     this.refreshIdx.set(token.refreshToken, token);
-    this.save();
+   }
+   logger.info('Loaded token store', { count: this.tokens.size, path: this.filePath });
+  } catch (err) {
+   logger.warn('Failed to load token store, starting fresh', { error: String(err) });
   }
+ }
 
-  /** Update an existing token in place (e.g. after refreshing the upstream NS token). */
-  update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined {
-    const existing = this.tokens.get(accessToken);
-    if (!existing) return undefined;
-    const updated = { ...existing, ...patch };
-    this.tokens.set(updated.accessToken, updated);
-    if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
-      this.refreshIdx.delete(existing.refreshToken);
-    }
-    this.refreshIdx.set(updated.refreshToken, updated);
-    this.save();
-    return updated;
+ private save(): void {
+  try {
+   const dir = dirname(this.filePath);
+   if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+   }
+   const data: TokenStoreData = {
+    tokens: Object.fromEntries(this.tokens),
+   };
+   writeFileSync(this.filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
+  } catch (err) {
+   logger.error('Failed to save token store', { error: String(err) });
   }
-
-  /** Delete a token by its access token. */
-  delete(accessToken: string): void {
-    const token = this.tokens.get(accessToken);
-    if (token) {
-      this.tokens.delete(accessToken);
-      this.refreshIdx.delete(token.refreshToken);
-      this.save();
-    }
-  }
-
-  /** Delete a token by its refresh token. */
-  deleteByRefreshToken(refreshToken: string): void {
-    const token = this.refreshIdx.get(refreshToken);
-    if (token) {
-      this.refreshIdx.delete(refreshToken);
-      this.tokens.delete(token.accessToken);
-      this.save();
-    }
-  }
-
-  /** Remove all expired tokens. */
-  cleanup(): void {
-    const now = Date.now();
-    let changed = false;
-    for (const [key, token] of this.tokens) {
-      if (token.expiresAt <= now) {
-        this.tokens.delete(key);
-        this.refreshIdx.delete(token.refreshToken);
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.save();
-      logger.info('Cleaned up expired tokens');
-    }
-  }
-
-  /** Number of active (stored) tokens. */
-  get size(): number {
-    return this.tokens.size;
-  }
-
-  // -----------------------------------------------------------------------
-  // Persistence
-  // -----------------------------------------------------------------------
-
-  private load(): void {
-    try {
-      if (!existsSync(this.filePath)) return;
-      const raw = readFileSync(this.filePath, 'utf-8');
-      const data: TokenStoreData = JSON.parse(raw);
-      for (const [key, token] of Object.entries(data.tokens)) {
-        this.tokens.set(key, token);
-        this.refreshIdx.set(token.refreshToken, token);
-      }
-      logger.info('Loaded token store', { count: this.tokens.size, path: this.filePath });
-    } catch (err) {
-      logger.warn('Failed to load token store, starting fresh', { error: String(err) });
-    }
-  }
-
-  private save(): void {
-    try {
-      const dir = dirname(this.filePath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-      const data: TokenStoreData = {
-        tokens: Object.fromEntries(this.tokens),
-      };
-      writeFileSync(this.filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
-    } catch (err) {
-      logger.error('Failed to save token store', { error: String(err) });
-    }
-  }
+ }
 }
