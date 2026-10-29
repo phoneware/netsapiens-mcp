@@ -236,6 +236,12 @@ export async function lookupCallForTrace(
 // ---------------------------------------------------------------------------
 
 const diagnose_call: CuratedTool = {
+ operations: [
+  'GET /cdrs',
+  'GET /domains/{}/cdrs',
+  'GET /domains/{}/users/{}/calls/{}',
+  'GET /sipflow',
+ ],
  minRole: 'domain_admin',
  schema: {
   name: 'diagnose_call',
@@ -364,6 +370,13 @@ const diagnose_call: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const user_profile: CuratedTool = {
+ operations: [
+  'GET /domains/{}/users/{}',
+  'GET /domains/{}/users/{}/answerrules',
+  'GET /domains/{}/users/{}/cdrs',
+  'GET /domains/{}/users/{}/devices',
+  'GET /domains/{}/users/{}/voicemails/{}',
+ ],
  minRole: 'user',
  schema: {
   name: 'user_profile',
@@ -433,6 +446,10 @@ const user_profile: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const queue_health: CuratedTool = {
+ operations: [
+  'GET /domains/{}/callqueues',
+  'GET /domains/{}/statistics/callqueues/{}',
+ ],
  minRole: 'domain_admin',
  schema: {
   name: 'queue_health',
@@ -510,6 +527,14 @@ const queue_health: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const agent_dashboard: CuratedTool = {
+ operations: [
+  'GET /domains/{}/agents',
+  'GET /domains/{}/callqueues/list',
+  'GET /domains/{}/callqueues/{}/agents/{}',
+  'GET /domains/{}/statistics/agent/{}',
+  'GET /domains/{}/users/{}',
+  'GET /domains/{}/users/{}/cdrs',
+ ],
  minRole: 'user',
  schema: {
   name: 'agent_dashboard',
@@ -621,6 +646,14 @@ const agent_dashboard: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const switch_queue: CuratedTool = {
+ operations: [
+  'GET /domains/{}/callqueues/{}',
+  'GET /domains/{}/callqueues/{}/agents',
+  'GET /domains/{}/callqueues/{}/agents/{}',
+  'GET /domains/{}/users/{}',
+  'PATCH /domains/{}/callqueues/{}/agents/{}/login',
+  'PATCH /domains/{}/callqueues/{}/agents/{}/logout',
+ ],
  minRole: 'user',
  schema: {
   name: 'switch_queue',
@@ -703,6 +736,11 @@ const switch_queue: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const find_and_call: CuratedTool = {
+ operations: [
+  'GET /domains/{}/users',
+  'GET /domains/{}/users/{}/contacts',
+  'POST /domains/{}/users/{}/calls',
+ ],
  minRole: 'user',
  schema: {
   name: 'find_and_call',
@@ -807,6 +845,10 @@ const find_and_call: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const recent_activity_for_number: CuratedTool = {
+ operations: [
+  'GET /domains/{}/cdrs',
+  'GET /domains/{}/messagesessions',
+ ],
  minRole: 'domain_admin',
  schema: {
   name: 'recent_activity_for_number',
@@ -932,6 +974,11 @@ function normalizeVoicemailFolder(raw?: unknown): 'new' | 'save' | 'trash' | und
 }
 
 const voicemail_inbox_summary: CuratedTool = {
+ operations: [
+  'GET /domains/{}/transcriptions',
+  'GET /domains/{}/users/{}/cdrs',
+  'GET /domains/{}/users/{}/voicemails/{}',
+ ],
  minRole: 'user',
  schema: {
   name: 'voicemail_inbox_summary',
@@ -1028,6 +1075,11 @@ function forwardAlways(destination: string | undefined, enabled: boolean) {
 }
 
 const schedule_forwarding: CuratedTool = {
+ operations: [
+  'POST /domains/{}/users/{}/answerrules',
+  'POST /domains/{}/users/{}/timeframes',
+  'PUT /domains/{}/users/{}/answerrules/{}',
+ ],
  minRole: 'user',
  title: 'Schedule Forwarding',
  schema: {
@@ -1160,6 +1212,12 @@ const schedule_forwarding: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const provision_user: CuratedTool = {
+ operations: [
+  'GET /domains/{}/users/{}',
+  'POST /domains/{}/phonenumbers',
+  'POST /domains/{}/users',
+  'POST /domains/{}/users/{}/devices',
+ ],
  minRole: 'domain_admin',
  title: 'Provision User',
  schema: {
@@ -1297,6 +1355,13 @@ const provision_user: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const deprovision_user: CuratedTool = {
+ operations: [
+  'DELETE /domains/{}/callqueues/{}/agents/{}',
+  'DELETE /domains/{}/phonenumbers/{}',
+  'DELETE /domains/{}/users/{}',
+  'GET /domains/{}/agents',
+  'GET /domains/{}/phonenumbers',
+ ],
  minRole: 'domain_admin',
  title: 'Deprovision User',
  destructive: true,
@@ -1422,6 +1487,11 @@ function toUid(value: unknown, domain: string): string {
 }
 
 const provision_call_queue: CuratedTool = {
+ operations: [
+  'POST /domains/{}/callqueues',
+  'POST /domains/{}/callqueues/{}/agents',
+  'POST /domains/{}/phonenumbers',
+ ],
  minRole: 'domain_admin',
  title: 'Provision Call Queue',
  schema: {
@@ -1530,6 +1600,13 @@ const provision_call_queue: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const deprovision_call_queue: CuratedTool = {
+ operations: [
+  'DELETE /domains/{}/callqueues/{}',
+  'DELETE /domains/{}/callqueues/{}/agents/{}',
+  'DELETE /domains/{}/phonenumbers/{}',
+  'GET /domains/{}/callqueues/{}/agents',
+  'GET /domains/{}/phonenumbers',
+ ],
  minRole: 'domain_admin',
  title: 'Deprovision Call Queue',
  destructive: true,
@@ -1640,6 +1717,12 @@ const deprovision_call_queue: CuratedTool = {
 // ---------------------------------------------------------------------------
 
 const set_hold_message: CuratedTool = {
+ operations: [
+  'POST /domains/{}/msg',
+  'POST /domains/{}/users/{}/msg',
+  'PUT /domains/{}/msg/{}',
+  'PUT /domains/{}/users/{}/msg/{}',
+ ],
  minRole: 'domain_admin',
  title: 'Set Hold Message',
  schema: {
