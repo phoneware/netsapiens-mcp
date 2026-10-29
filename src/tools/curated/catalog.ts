@@ -59,7 +59,7 @@ export function parseNsBound(value: string, edge: 'start' | 'end'): Date {
    : new Date(s);
  if (isNaN(parsed.getTime())) {
   throw new Error(`Could not read the date "${value}". Use YYYY-MM-DD, YYYY-MM-DD HH:MM:SS (UTC) or an ISO timestamp with an offset.`);
- }
+    }
  return parsed;
 }
 
@@ -73,7 +73,7 @@ export function nsDateWindow(since?: unknown, until?: unknown, now = new Date())
  const endAt = given(until) ? parseNsBound(given(until)!, 'end') : now;
  const startAt = given(since) ? parseNsBound(given(since)!, 'start') : new Date(endAt.getTime() - DAY_MS);
  return { start: toNsDateTime(startAt), end: toNsDateTime(endAt) };
-}
+ }
 
 /** The signed-in user's extension, for tools whose `~` means "me". Throws rather than widen. */
 export async function resolveSelfUser(client: GenericApiClient): Promise<string> {
@@ -661,8 +661,8 @@ const call_details: CuratedTool = {
    const matched = Array.isArray(r.data)
     ? (r.data as Array<Record<string, unknown>>).find((row) => matchesCallId(row, callid))
     : undefined;
-   if (matched) return textResult({ success: true, data: matched });
-  }
+    if (matched) return textResult({ success: true, data: matched });
+   }
   return textResult({ success: false, error: 'Call not found' });
  },
 };
@@ -1302,25 +1302,25 @@ const queue_status: CuratedTool = {
 
   const queue = queueRes.ok
    ? Array.isArray(queueRes.data)
-    ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
-    : ((queueRes.data as Record<string, unknown>) ?? null)
+     ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
+     : ((queueRes.data as Record<string, unknown>) ?? null)
    : null;
 
   let waiting:
    | {
-    ok: true;
-    count: number;
-    longest_wait_seconds: number;
-    callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
-   }
+      ok: true;
+      count: number;
+      longest_wait_seconds: number;
+      callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
+     }
    | { ok: false; error: string };
 
   if (waitingRes.ok) {
    const rawCallers = Array.isArray(waitingRes.data)
     ? waitingRes.data
     : waitingRes.data
-     ? [waitingRes.data]
-     : [];
+      ? [waitingRes.data]
+      : [];
    const callers = rawCallers.map((row) => {
     const caller = String(row['dial-rule-translation-source-name'] ?? row['from_uri'] ?? '');
     const queued_at = String(row['time_queued'] ?? '');
@@ -1351,8 +1351,8 @@ const queue_status: CuratedTool = {
    const agentList = Array.isArray(agentsRes.data)
     ? agentsRes.data
     : agentsRes.data
-     ? [agentsRes.data]
-     : [];
+      ? [agentsRes.data]
+      : [];
    agents = {
     ok: true,
     data: agentList,
@@ -1366,11 +1366,11 @@ const queue_status: CuratedTool = {
 
   let statistics:
    | {
-    ok: true;
-    start: string;
-    end: string;
-    data: Array<Record<string, unknown>> | Record<string, unknown>;
-   }
+      ok: true;
+      start: string;
+      end: string;
+      data: Array<Record<string, unknown>> | Record<string, unknown>;
+     }
    | { ok: false; error: string };
 
   if (statsRes.ok) {
@@ -1613,16 +1613,16 @@ const agent_status: CuratedTool = {
     }
     // "~" is the signed-in agent: resolve it or fail, never fall through to the whole roster.
     const targetAgent = agent === '~' ? await resolveSelfUser(client) : agent;
-    agents = agents.filter((a) => {
-     const aid = String(a['callqueue-agent-id'] ?? '');
-     const login = String(a['login-username'] ?? '');
-     return (
-      aid === targetAgent ||
-      aid.startsWith(`${targetAgent}@`) ||
-      login === targetAgent ||
-      login.startsWith(`${targetAgent}@`)
-     );
-    });
+     agents = agents.filter((a) => {
+      const aid = String(a['callqueue-agent-id'] ?? '');
+      const login = String(a['login-username'] ?? '');
+      return (
+       aid === targetAgent ||
+       aid.startsWith(`${targetAgent}@`) ||
+       login === targetAgent ||
+       login.startsWith(`${targetAgent}@`)
+      );
+     });
     if (agents.length === 0) {
      return textResult({ success: false, error: 'Agent not found' });
     }
@@ -1867,10 +1867,10 @@ const agent_statistics: CuratedTool = {
   // Only the every-agent route answers with a dictionary keyed by agent; one agent is a flat object.
   if (!agent && r.success && r.data && typeof r.data === 'object' && !Array.isArray(r.data)) {
    const items = Object.entries(r.data as Record<string, unknown>).map(([agentId, stats]) => ({
-    agent: agentId,
-    ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
-   }));
-   return textResult({ ...r, data: items });
+     agent: agentId,
+     ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
+    }));
+    return textResult({ ...r, data: items });
   }
   return textResult(r);
  },
