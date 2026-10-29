@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -116,6 +116,61 @@ describe('forbidden content scanner', () => {
       expect(historyResult.stdout.toLowerCase()).not.toContain(marker);
       expect(tree.stdout).toContain('[redacted]');
       expect(historyResult.stdout).toContain('[redacted]');
+    } finally {
+      rmSync(history, { recursive: true, force: true });
+    }
+  });
+  it('detects commit and annotated tag messages without displaying them', () => {
+    const history = mkdtempSync(join(tmpdir(), 'content-messages-'));
+    try {
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: history, stdio: 'pipe' });
+      run('init', '-b', 'initial');
+      run('config', 'user.email', 'test@example.invalid');
+      run('config', 'user.name', 'Test');
+      writeFileSync(join(history, 'clean.txt'), 'clean');
+      run('add', '.');
+      run('commit', '-m', marker);
+      const commitResult = scan(['--history', join(history, '.git')]);
+      expect(commitResult.status).toBe(1);
+      expect(commitResult.stdout).toContain('MATCH object ');
+      expect(commitResult.stdout.toLowerCase()).not.toContain(marker);
+      run('checkout', '--orphan', 'clean');
+      run('commit', '-m', 'clean');
+      run('branch', '-D', 'initial');
+      run('tag', '-a', 'tag', '-m', marker);
+      const tagResult = scan(['--history', join(history, '.git')]);
+      expect(tagResult.status).toBe(1);
+      expect(tagResult.stdout).toContain('MATCH object ');
+      expect(tagResult.stdout.toLowerCase()).not.toContain(marker);
+    } finally {
+      rmSync(history, { recursive: true, force: true });
+    }
+  });
+  it('uses a fixed number of git processes regardless of pull refs', () => {
+    const history = mkdtempSync(join(tmpdir(), 'content-processes-'));
+    try {
+      const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+      const run = (...args: string[]) => execFileSync(realGit, args, { cwd: history, stdio: 'pipe' });
+      run('init', '-b', 'main');
+      run('config', 'user.email', 'test@example.invalid');
+      run('config', 'user.name', 'Test');
+      writeFileSync(join(history, 'clean.txt'), 'clean');
+      run('add', '.');
+      run('commit', '-m', 'clean');
+      const commit = run('rev-parse', 'HEAD').toString().trim();
+      for (let i = 1; i <= 25; i++) run('update-ref', `refs/pull/${i}/head`, commit);
+      const bin = join(history, 'bin');
+      mkdirSync(bin);
+      const wrapper = join(bin, 'git');
+      writeFileSync(wrapper, '#!/bin/sh\nprintf \"%s\\n\" \"$3\" >> \"$SCAN_GIT_LOG\"\nexec \"$REAL_GIT\" \"$@\"\n');
+      chmodSync(wrapper, 0o755);
+      const log = join(history, 'calls');
+      const result = spawnSync(process.execPath, [scanner, '--history', join(history, '.git')], {
+        cwd: history, encoding: 'utf8',
+        env: { ...process.env, FORBIDDEN_CONTENT_PATTERNS: marker, PATH: `${bin}:${process.env.PATH}`, REAL_GIT: realGit, SCAN_GIT_LOG: log },
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['for-each-ref', 'rev-list', 'cat-file']);
     } finally {
       rmSync(history, { recursive: true, force: true });
     }
