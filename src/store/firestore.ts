@@ -1,7 +1,7 @@
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createStore } from './store.js';
+import { createHash } from 'node:crypto';
+import { createRegisteredClient, createStore } from './store.js';
 import type { AuthCodeRow, McpStore, ResumeRow, SessionRow, StoreBackend } from './types.js';
 
 interface DocumentSnapshotLike {
@@ -64,9 +64,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   return doc.exists ? doc.data() as OAuthClientInformationFull : undefined;
  }
  async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
-  const full: OAuthClientInformationFull = { ...client, client_id: randomUUID(), client_id_issued_at: Math.floor(Date.now() / 1000) };
-  if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
-  else delete full.client_secret;
+  const full = createRegisteredClient(client);
   await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
   return full;
  }

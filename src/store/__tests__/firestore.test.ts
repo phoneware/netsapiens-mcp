@@ -83,8 +83,16 @@ describe.skipIf(!host)('Firestore emulator', () => {
   const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
   const clients = new FirestoreClientsStore({ db, collection: 'lens_oauth_clients' });
   const registered = await clients.registerClient({ redirect_uris: ['https://example.com/'], token_endpoint_auth_method: 'none' });
-  try { expect(await clients.getClient(registered.client_id)).toEqual(registered); }
-  finally { await db.collection('lens_oauth_clients').doc(registered.client_id).delete(); await db.terminate(); }
+  const confidential = await clients.registerClient({ redirect_uris: ['https://example.com/'] });
+  try {
+   expect(registered.client_secret).toBeUndefined();
+   expect(confidential.client_secret).toBeTruthy();
+   expect(await clients.getClient(registered.client_id)).toEqual(registered);
+   expect(await clients.getClient(confidential.client_id)).toEqual(confidential);
+  } finally {
+   await Promise.all([registered, confidential].map(client => db.collection('lens_oauth_clients').doc(client.client_id).delete()));
+   await db.terminate();
+  }
  });
  it('a competing owner cannot be overwritten by lease completion', async () => {
   const ns = `t_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
