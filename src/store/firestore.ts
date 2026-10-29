@@ -1,11 +1,41 @@
-import type { Firestore } from '@google-cloud/firestore';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createStore } from './store.js';
 import type { AuthCodeRow, McpStore, ResumeRow, SessionRow, StoreBackend } from './types.js';
 
-export type FirestoreLike = Pick<Firestore, 'collection' | 'runTransaction'>;
+interface DocumentSnapshotLike {
+ readonly id: string;
+ readonly exists: boolean;
+ data(): Record<string, unknown> | undefined;
+}
+interface QuerySnapshotLike {
+ readonly empty: boolean;
+ readonly docs: DocumentSnapshotLike[];
+}
+interface DocumentReferenceLike {
+ get(): Promise<DocumentSnapshotLike>;
+ set(data: Record<string, unknown>): Promise<unknown>;
+ delete(): Promise<unknown>;
+}
+interface QueryLike {
+ get(): Promise<QuerySnapshotLike>;
+ limit(count: number): QueryLike;
+}
+interface CollectionLike extends QueryLike {
+ doc(id: string): DocumentReferenceLike;
+ where(field: string, op: '==', value: string): QueryLike;
+}
+interface TransactionLike {
+ // The opaque reference is passed back to the same client that created it.
+ get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike>;
+ set(ref: DocumentReferenceLike, data: Record<string, unknown>): unknown;
+ delete(ref: DocumentReferenceLike): unknown;
+}
+export interface FirestoreLike {
+ collection(path: string): CollectionLike;
+ runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>): Promise<T>;
+}
 
 export interface FirestoreCollections {
  sessions: string; oauthClients: string; authCodes: string; resumeTokens: string; usage: string;
@@ -101,7 +131,7 @@ export class FirestoreBackend {
     const ref = resumes.doc(row.id);
     return db.runTransaction(async tx => {
      const snap = await tx.get(ref);
-     if (snap.exists && (snap.data() as ResumeRow).expiresAt > now) return false;
+     if (snap.exists && typeof snap.data()?.expiresAt === 'number' && (snap.data()!.expiresAt as number) > now) return false;
      tx.set(ref, { consumedAt: row.consumedAt, expiresAt: row.expiresAt, ttlAt: new Date(row.expiresAt) });
      return true;
     });
