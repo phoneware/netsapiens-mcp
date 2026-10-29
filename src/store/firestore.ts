@@ -9,7 +9,7 @@ export type FirestoreLike = Pick<Firestore, 'collection' | 'runTransaction'>;
 
 export function firestoreCollections(namespace: string) {
  return {
-  sessions: `${namespace}_sessions`, clients: `${namespace}_oauth_clients`,
+  sessions: `${namespace}_sessions`, oauthClients: `${namespace}_oauth_clients`,
   authCodes: `${namespace}_auth_codes`, resumeTokens: `${namespace}_resume_tokens`,
   usage: `${namespace}_usage`,
  };
@@ -38,85 +38,99 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  }
 }
 
+export interface FirestoreBackend extends StoreBackend { }
+export class FirestoreBackend {
+ readonly db: FirestoreLike;
+ readonly collections: ReturnType<typeof firestoreCollections>;
+ constructor(options: { db: FirestoreLike; namespace: string }) {
+  const { db, namespace } = options;
+  this.db = db;
+  const names = this.collections = firestoreCollections(namespace);
+  const sessions = db.collection(names.sessions);
+  const codes = db.collection(names.authCodes);
+  const resumes = db.collection(names.resumeTokens);
+  const usage = db.collection(names.usage);
+  const clients = db.collection(names.oauthClients);
+  const sessionData = (row: SessionRow) => defined({ ...row, v: 1, ttlAt: new Date(row.retainUntil) });
+  const codeData = (row: AuthCodeRow) => defined({ ...row, v: 1, ttlAt: new Date(row.expiresAt) });
+  const backend: StoreBackend = {
+   name: 'firestore',
+   capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
+   async getSession(id) {
+    const snap = await sessions.doc(id).get();
+    return snap.exists ? snap.data() as SessionRow : undefined;
+   },
+   async findSessionByRefreshId(refreshId) {
+    const snap = await sessions.where('refreshId', '==', refreshId).limit(1).get();
+    return snap.empty ? undefined : snap.docs[0].data() as SessionRow;
+   },
+   async putSession(row) { await sessions.doc(row.id).set(sessionData(row)); },
+   async updateSession(id, mutate) {
+    const ref = sessions.doc(id);
+    return db.runTransaction(async tx => {
+     const snap = await tx.get(ref);
+     if (!snap.exists) return undefined;
+     const current = snap.data() as SessionRow;
+     const next = mutate(current);
+     if (next === null) { tx.delete(ref); return undefined; }
+     if (next === undefined) return current;
+     tx.set(ref, sessionData(next));
+     return next;
+    });
+   },
+   async deleteSession(id) { await sessions.doc(id).delete(); },
+   async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
+   async getAuthCode(id) {
+    const snap = await codes.doc(id).get();
+    return snap.exists ? snap.data() as AuthCodeRow : undefined;
+   },
+   async takeAuthCode(id) {
+    const ref = codes.doc(id);
+    return db.runTransaction(async tx => {
+     const snap = await tx.get(ref);
+     if (!snap.exists) return undefined;
+     tx.delete(ref);
+     return snap.data() as AuthCodeRow;
+    });
+   },
+   async insertResumeIfAbsent(row: ResumeRow, now) {
+    const ref = resumes.doc(row.id);
+    return db.runTransaction(async tx => {
+     const snap = await tx.get(ref);
+     if (snap.exists && (snap.data() as ResumeRow).expiresAt > now) return false;
+     tx.set(ref, { consumedAt: row.consumedAt, expiresAt: row.expiresAt, ttlAt: new Date(row.expiresAt) });
+     return true;
+    });
+   },
+   async incrementUsage(userHash, toolName, now) {
+    const id = createHash('sha256').update(JSON.stringify([userHash, toolName])).digest('hex');
+    const ref = usage.doc(id);
+    await db.runTransaction(async tx => {
+     const snap = await tx.get(ref);
+     const count = snap.exists ? (snap.data()?.count as number) : 0;
+     tx.set(ref, { userHash, toolName, count: count + 1, lastUsed: now });
+    });
+   },
+   async listUsage(userHash) {
+    const snap = await usage.where('userHash', '==', userHash).get();
+    return snap.docs.map(doc => doc.data() as { toolName: string; count: number; lastUsed: number });
+   },
+   async getClient(id) {
+    const snap = await clients.doc(id).get();
+    return snap.exists ? snap.data() as OAuthClientInformationFull : undefined;
+   },
+   async putClient(client) { await clients.doc(client.client_id).set(defined(client)); },
+   async sweep() { return 0; },
+   async close() { },
+  };
+  Object.assign(this, backend);
+ }
+}
+
+export function createFirestoreBackend(options: { db: FirestoreLike; namespace: string }): FirestoreBackend {
+ return new FirestoreBackend(options);
+}
+
 export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array }): McpStore {
- const { db, namespace, key } = options;
- const names = firestoreCollections(namespace);
- const sessions = db.collection(names.sessions);
- const codes = db.collection(names.authCodes);
- const resumes = db.collection(names.resumeTokens);
- const usage = db.collection(names.usage);
- const clients = db.collection(names.clients);
- const sessionData = (row: SessionRow) => defined({ ...row, v: 1, ttlAt: new Date(row.retainUntil) });
- const codeData = (row: AuthCodeRow) => defined({ ...row, v: 1, ttlAt: new Date(row.expiresAt) });
- const backend: StoreBackend = {
-  name: 'firestore',
-  capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
-  async getSession(id) {
-   const snap = await sessions.doc(id).get();
-   return snap.exists ? snap.data() as SessionRow : undefined;
-  },
-  async findSessionByRefreshId(refreshId) {
-   const snap = await sessions.where('refreshId', '==', refreshId).limit(1).get();
-   return snap.empty ? undefined : snap.docs[0].data() as SessionRow;
-  },
-  async putSession(row) { await sessions.doc(row.id).set(sessionData(row)); },
-  async updateSession(id, mutate) {
-   const ref = sessions.doc(id);
-   return db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return undefined;
-    const current = snap.data() as SessionRow;
-    const next = mutate(current);
-    if (next === null) { tx.delete(ref); return undefined; }
-    if (next === undefined) return current;
-    tx.set(ref, sessionData(next));
-    return next;
-   });
-  },
-  async deleteSession(id) { await sessions.doc(id).delete(); },
-  async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
-  async getAuthCode(id) {
-   const snap = await codes.doc(id).get();
-   return snap.exists ? snap.data() as AuthCodeRow : undefined;
-  },
-  async takeAuthCode(id) {
-   const ref = codes.doc(id);
-   return db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return undefined;
-    tx.delete(ref);
-    return snap.data() as AuthCodeRow;
-   });
-  },
-  async insertResumeIfAbsent(row: ResumeRow, now) {
-   const ref = resumes.doc(row.id);
-   return db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    if (snap.exists && (snap.data() as ResumeRow).expiresAt > now) return false;
-    tx.set(ref, { consumedAt: row.consumedAt, expiresAt: row.expiresAt, ttlAt: new Date(row.expiresAt) });
-    return true;
-   });
-  },
-  async incrementUsage(userHash, toolName, now) {
-   const id = createHash('sha256').update(JSON.stringify([userHash, toolName])).digest('hex');
-   const ref = usage.doc(id);
-   await db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    const count = snap.exists ? (snap.data()?.count as number) : 0;
-    tx.set(ref, { userHash, toolName, count: count + 1, lastUsed: now });
-   });
-  },
-  async listUsage(userHash) {
-   const snap = await usage.where('userHash', '==', userHash).get();
-   return snap.docs.map(doc => doc.data() as { toolName: string; count: number; lastUsed: number });
-  },
-  async getClient(id) {
-   const snap = await clients.doc(id).get();
-   return snap.exists ? snap.data() as OAuthClientInformationFull : undefined;
-  },
-  async putClient(client) { await clients.doc(client.client_id).set(defined(client)); },
-  async sweep() { return 0; },
-  async close() { },
- };
- return createStore(backend, { namespace, key });
+ return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
 }
