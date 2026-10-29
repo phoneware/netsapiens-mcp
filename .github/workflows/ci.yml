@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+      - run: npm ci
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for i in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          docker logs fs-emu; exit 1
+      - run: npm test
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
+      - run: npm run build
+      - name: Scan tracked content
+        env:
+          FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
+          FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ -z "$FORBIDDEN_CONTENT_PATTERNS" ] && [ "$FORK_PR" = "true" ]; then
+            echo '::warning::Content scan skipped because the repository secret is unavailable to fork pull requests.'
+            exit 0
+          fi
+          node scripts/scan-forbidden.mjs --tree

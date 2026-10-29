@@ -655,34 +655,34 @@ export function paginateTools(
 
 /** Resolve the target resource for a generated tool name when no curated declaration exists. */
 function resolveGeneratedToolOutput(name: string): OutputDeclaration | undefined {
-  const lower = name.toLowerCase();
-  let resource: string | undefined;
+ const lower = name.toLowerCase();
+ let resource: string | undefined;
 
-  if (lower.includes('apikey')) resource = 'ApiKey';
-  else if (lower.includes('jwt')) resource = 'JwtRequestSuccess';
-  else if (lower.startsWith('post_tokens') || lower.startsWith('get_tokens')) resource = 'AccessToken';
-  else if (lower.includes('chart')) resource = 'Chart';
-  else if (lower.includes('device')) resource = lower.startsWith('v1_') ? 'DeviceLegacy' : 'Device';
-  else if (lower.includes('domain')) resource = lower.startsWith('v1_') ? 'DomainLegacy' : 'Domain';
-  else if (lower.includes('reseller')) resource = 'Reseller';
-  else if (lower.includes('subscriber') || lower.includes('user')) resource = lower.startsWith('v1_') ? 'UserLegacy' : 'User';
-  else if (lower.includes('answerrule')) resource = lower.startsWith('v1_') ? 'AnswerruleLegacy' : 'Answerrule';
-  else if (lower.includes('callqueue')) resource = 'CallQueue';
-  else if (lower.includes('phonenumber')) resource = 'Phonenumber';
-  else if (lower.includes('cdr')) resource = 'CdrD';
-  else if (lower.includes('recording')) resource = 'Recording';
-  else if (lower.includes('voicemail')) resource = 'Voicemail';
+ if (lower.includes('apikey')) resource = 'ApiKey';
+ else if (lower.includes('jwt')) resource = 'JwtRequestSuccess';
+ else if (lower.startsWith('post_tokens') || lower.startsWith('get_tokens')) resource = 'AccessToken';
+ else if (lower.includes('chart')) resource = 'Chart';
+ else if (lower.includes('device')) resource = lower.startsWith('v1_') ? 'DeviceLegacy' : 'Device';
+ else if (lower.includes('domain')) resource = lower.startsWith('v1_') ? 'DomainLegacy' : 'Domain';
+ else if (lower.includes('reseller')) resource = 'Reseller';
+ else if (lower.includes('subscriber') || lower.includes('user')) resource = lower.startsWith('v1_') ? 'UserLegacy' : 'User';
+ else if (lower.includes('answerrule')) resource = lower.startsWith('v1_') ? 'AnswerruleLegacy' : 'Answerrule';
+ else if (lower.includes('callqueue')) resource = 'CallQueue';
+ else if (lower.includes('phonenumber')) resource = 'Phonenumber';
+ else if (lower.includes('cdr')) resource = 'CdrD';
+ else if (lower.includes('recording')) resource = 'Recording';
+ else if (lower.includes('voicemail')) resource = 'Voicemail';
 
-  if (resource && NS_RESOURCE_FIELDS[resource]) {
-    return {
-      rules: [
-        { path: 'data[]', resource },
-        { path: 'data', resource },
-        { path: '', resource },
-      ],
-    };
-  }
-  return undefined;
+ if (resource && NS_RESOURCE_FIELDS[resource]) {
+  return {
+   rules: [
+    { path: 'data[]', resource },
+    { path: 'data', resource },
+    { path: '', resource },
+   ],
+  };
+ }
+ return undefined;
 }
 
 /**
@@ -892,17 +892,9 @@ export async function handleToolCall(
 // ---------------------------------------------------------------------------
 // Synchronous writes
 //
-// 42 NS write operations accept a `synchronous` body parameter, and it
-// defaults to "no". With "no" the API answers 202 with an empty body BEFORE
-// the write has replicated far enough to be read back, so any create-then-read
-// sequence races geo replication: the model writes, re-reads, finds nothing,
-// and reports a failure that did not happen.
-//
-// NetSapiens' own controllers set synchronous=yes whenever they chain a write
-// into a later read (AttendantsController sets it on the subscriber create
-// that its next six steps depend on). We do the same by default: any tool
-// whose schema declares `synchronous` gets "yes" unless the caller said
-// otherwise. It costs latency by design — that is the documented trade.
+// A write that a later step reads back can race replication when `synchronous`
+// is `no`. Tools whose schema declares `synchronous` default it to `yes`
+// unless the caller set it; this costs latency by design.
 //
 // MCP_SYNCHRONOUS_WRITES=false restores the API's own default.
 // ---------------------------------------------------------------------------

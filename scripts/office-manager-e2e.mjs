@@ -1,7 +1,7 @@
 /**
  * End-to-end proof of the office-manager domain-scope fix.
  *
- * Stands up a stub NetSapiens API that answers exactly like Spooner PT did on
+ * Stands up a stub NetSapiens API that answers exactly like Example Clinic did on
  * the call (the office manager has 2 calls today; the domain has 1500), runs
  * the REAL MCP server against it, and drives it as a real MCP client over HTTP
  * with an Office Manager bearer token.
@@ -28,7 +28,7 @@ const ns = http.createServer((req, res) => {
  };
  // Who am I: NS reports this login as an Office Manager.
  if (url.pathname === '/ns-api/v2/domains/~/users/~') {
-  return json({ 'user-scope': 'Office Manager', user: '1001', domain: 'SpoonerPT' });
+  return json({ 'user-scope': 'Office Manager', user: '1001', domain: 'ExampleClinic' });
  }
  if (url.pathname === '/ns-api/v2/domains/~/users/~/cdrs') return json(USER_CDRS);
  if (url.pathname === '/ns-api/v2/domains/~/cdrs')
@@ -57,7 +57,7 @@ writeFileSync(
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-upstream-token',
     nsExpiresAt: Date.now() + 3600_000,
-    nsUsername: '1001@SpoonerPT',
+    nsUsername: '1001@ExampleClinic',
     nsUserRole: 'domain_admin',
    },
   },
@@ -127,7 +127,7 @@ async function callTool(name, args) {
  return { path: upstreamHits.slice(mark).at(-1), body: parse(res) };
 }
 
-// The question Morgan actually asks. A model answering "how many calls did we
+// The question Jordan actually asks. A model answering "how many calls did we
 // take today" passes no scope hint, so the default has to be right on its own.
 const bareVolume = await callTool('call_volume', {});
 const bareCalls = await callTool('recent_calls', {});
@@ -136,7 +136,7 @@ const ownCalls = await callTool('recent_calls', { scope: 'mine' });
 // And one named user stays one named user.
 const oneUser = await callTool('recent_calls', { user: '2002' });
 
-console.log('\n=== Office Manager, connected over OAuth as 1001@SpoonerPT ===');
+console.log('\n=== Office Manager, connected over OAuth as 1001@ExampleClinic ===');
 console.log('NS reported scope        : Office Manager');
 console.log('\n-- "how many calls did we take today" (no scope passed) --');
 console.log('  upstream path          :', bareVolume.path);
