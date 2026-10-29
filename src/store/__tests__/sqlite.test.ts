@@ -58,6 +58,15 @@ describe('SQLite storage', () => {
     await store.close();
   });
 
+  it('closes idempotently and releases the lock', async () => {
+    const { path } = location();
+    const store = createSqliteStore({ path, namespace: 'test', key });
+    await store.close();
+    await store.close();
+    const reopened = createSqliteStore({ path, namespace: 'test', key });
+    await reopened.close();
+  });
+
   it('rejects a second open in this process', async () => {
     const { path } = location();
     const store = createSqliteStore({ path, namespace: 'test', key });
