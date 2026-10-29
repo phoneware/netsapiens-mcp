@@ -1,7 +1,8 @@
+import { expect, it } from 'vitest';
 import { runStoreConformance } from '../conformance.js';
-import { deriveStoreKey } from '../codec.js';
+import { createCodec, deriveStoreKey } from '../codec.js';
 import { MemoryBackend } from '../memory.js';
-import { createStore } from '../store.js';
+import { createStore, SESSION_RETENTION_MS } from '../store.js';
 import type { SessionRow } from '../types.js';
 
 const backends = new Map<string, MemoryBackend>();
@@ -21,4 +22,33 @@ runStoreConformance({
     await backend.putSession({ ...b, sealed: a.sealed } as SessionRow);
   },
   async cleanup(namespace) { backends.delete(namespace); },
+});
+
+it('memory rejects a different key and swapped sealed sessions', async () => {
+  const backend = new MemoryBackend();
+  const store = createStore(backend, { namespace: 'test', key });
+  const other = createStore(backend, { namespace: 'test', key: deriveStoreKey('another conformance secret key 12345') });
+  const record = { clientId: 'client', expiresAt: Date.now() + 10_000, nsAccessToken: 'upstream', nsUsername: 'user' };
+  await store.sessions.create({ accessToken: 'first', refreshToken: 'first-refresh' }, record);
+  await store.sessions.create({ accessToken: 'second', refreshToken: 'second-refresh' }, record);
+  expect(await other.sessions.get('first')).toBeUndefined();
+  const codec = createCodec(key);
+  const first = (await backend.getSession(codec.id('session', 'first')))!;
+  const second = (await backend.getSession(codec.id('session', 'second')))!;
+  await backend.putSession({ ...first, sealed: second.sealed });
+  await backend.putSession({ ...second, sealed: first.sealed });
+  expect(await store.sessions.get('first')).toBeUndefined();
+  expect(await store.sessions.get('second')).toBeUndefined();
+});
+
+it('memory sweep removes physically expired rows', async () => {
+  const backend = new MemoryBackend();
+  const store = createStore(backend, { namespace: 'test', key });
+  const now = Date.now();
+  await store.sessions.create({ accessToken: 'expired', refreshToken: 'refresh' }, { clientId: 'client', expiresAt: now - SESSION_RETENTION_MS - 1, nsAccessToken: 'upstream', nsUsername: 'user' });
+  await store.authCodes.put('code', { pending: { clientId: 'client', codeChallenge: 'challenge', redirectUri: 'https://example.com', createdAt: now }, nsTokens: { access_token: 'upstream' } });
+  await store.resumeTokens.consume('a'.repeat(64));
+  expect(await backend.sweep(now + 2 * 60 * 60 * 1000 + 1)).toBe(3);
+  expect(await backend.getSession(createCodec(key).id('session', 'expired'))).toBeUndefined();
+  expect(await backend.getAuthCode(createCodec(key).id('code', 'code'))).toBeUndefined();
 });
