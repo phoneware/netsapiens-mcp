@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { deriveStoreKey, StoreConfigError, StoreLockedError } from '../codec.js';
 import { createSqliteStore } from '../sqlite.js';
+import { runStoreConformance } from '../conformance.js';
+import type { McpStore } from '../types.js';
 
 const key = deriveStoreKey('a secret long enough for the sqlite tests');
 const directories: string[] = [];
@@ -15,6 +17,60 @@ function location() {
   return { root, directory: join(root, 'private'), path: join(root, 'private', 'store.db') };
 }
 afterEach(() => { vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+
+const conformanceRoot = mkdtempSync(join(tmpdir(), 'sqlite-conformance-'));
+const openStores = new Map<string, McpStore>();
+const conformancePath = (namespace: string) => join(conformanceRoot, namespace, 'store.db');
+runStoreConformance({
+  name: 'sqlite',
+  capabilities: { persistent: true, multiInstance: false, exclusive: true, expiry: 'sweep' },
+  async open(namespace) {
+    const path = conformancePath(namespace);
+    const store = createSqliteStore({ path, namespace, key });
+    openStores.set(namespace, store);
+    return {
+      get backend() { return openStores.get(namespace)!.backend; },
+      get namespace() { return namespace; },
+      get capabilities() { return openStores.get(namespace)!.capabilities; },
+      get sessions() { return openStores.get(namespace)!.sessions; },
+      get clients() { return openStores.get(namespace)!.clients; },
+      get authCodes() { return openStores.get(namespace)!.authCodes; },
+      get resumeTokens() { return openStores.get(namespace)!.resumeTokens; },
+      get usage() { return openStores.get(namespace)!.usage; },
+      async close() { const current = openStores.get(namespace); if (current) { openStores.delete(namespace); await current.close(); } },
+    };
+  },
+  async dumpRaw(namespace) {
+    const path = conformancePath(namespace);
+    return Buffer.concat([readFileSync(path), readFileSync(`${path}-wal`)]).toString('latin1');
+  },
+  async swapSealed(namespace, idA, idB) {
+    const path = conformancePath(namespace);
+    const current = openStores.get(namespace);
+    if (!current) throw new Error('SQLite store is not open');
+    await current.close();
+    openStores.delete(namespace);
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+    const db = new DatabaseSync(path);
+    try {
+      const a = db.prepare('SELECT sealed FROM sessions WHERE id=?').get(idA);
+      const b = db.prepare('SELECT sealed FROM sessions WHERE id=?').get(idB);
+      if (!a || !b) throw new Error('Missing session');
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(b.sealed, idA);
+      db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(a.sealed, idB);
+      db.exec('COMMIT');
+    } finally {
+      db.close();
+      openStores.set(namespace, createSqliteStore({ path, namespace, key }));
+    }
+  },
+  async cleanup(namespace) {
+    const store = openStores.get(namespace);
+    if (store) { openStores.delete(namespace); await store.close(); }
+    rmSync(join(conformanceRoot, namespace), { recursive: true, force: true });
+  },
+});
 
 describe('SQLite storage', () => {
   it('creates private directory, database and WAL', async () => {
