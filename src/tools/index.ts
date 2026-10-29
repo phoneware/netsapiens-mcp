@@ -4,7 +4,7 @@
  * and the dispatch hookup for the MCP Server.
  *
  * The generated layer is produced by `npm run generate` from
- * spec/netsapiens-api-v2.json. Do not edit src/generated/ by hand.
+ * spec/v2/45.0.json. Do not edit src/generated/ by hand.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';

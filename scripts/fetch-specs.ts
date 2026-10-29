@@ -35,6 +35,7 @@ if (process.argv.includes('--check')) {
   const sources: Record<string, object> = {
     [v1Path]: { url: 'https://<netsapiens-host>/ns-api/webroot/apidoc/api_data.json', effectiveUrl: null, retrievedAt: null, apiVersion: '44.4.10', sha256: digest(v1), bytes: v1.length },
   };
+  const fetched: Array<{ path: string; bytes: Buffer }> = [];
   for (const branch of branches) {
     const url = `https://docs.ns-api.com/v${branch}/openapi/netsapiens-api-v2.json`;
     const response = await get(url);
@@ -44,9 +45,10 @@ if (process.argv.includes('--check')) {
       const original = await readFile(resolve(root, path));
       if (!bytes.equals(original)) throw new Error('45.0 documentation differs from the existing vendored spec');
     }
-    await writeFile(resolve(root, path), bytes);
+    fetched.push({ path, bytes });
     sources[path] = { url, effectiveUrl: response.url, retrievedAt: new Date().toISOString(), sha256: digest(bytes), bytes: bytes.length };
     console.log(`Fetched ${branch}: ${bytes.length} bytes`);
   }
+  for (const { path, bytes } of fetched) await writeFile(resolve(root, path), bytes);
   await writeFile(resolve(root, 'spec/SOURCES.json'), JSON.stringify(sources, null, 2) + '\n');
 }

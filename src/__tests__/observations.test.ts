@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { keySetHash, OBSERVATION_RULE, validateObservation, type Observation, type BranchKeys } from '../../scripts/validate-observations.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { keySetHash, OBSERVATION_RULE, validateObservation, validateObservationDirectory, type Observation, type BranchKeys } from '../../scripts/validate-observations.js';
 
 const branches: BranchKeys = new Map([
   ['44.3', new Set(['GET /a', 'GET /b'])],
@@ -38,5 +41,33 @@ describe('observation validation', () => {
   ])('rejects %s', (_name, mutate, filename) => {
     const value = fixture(); mutate(value);
     expect(() => validateObservation(value, filename, branches)).toThrow();
+  });
+  it.each([301, 403, 429, 500, 503])('rejects present status %i', status => {
+    const value = fixture();
+    value.results['GET /a'] = { status, result: 'present' };
+    expect(() => validateObservation(value, '44.4.10.json', branches)).toThrow('non-evidence');
+  });
+  it.each(['3.0.0-host.example.invalid', '3.0.0-192.0.2.1'])('rejects identifying version suffix %s', version => {
+    const value = fixture(); value.probe.version = version;
+    expect(() => validateObservation(value, '44.4.10.json', branches)).toThrow();
+  });
+  it.each(['3.0.0-alpha.1', '3.0.0-beta.2', '3.0.0-rc.3', '3.0.0-next.4'])('accepts release suffix %s', version => {
+    const value = fixture(); value.probe.version = version;
+    expect(() => validateObservation(value, '44.4.10.json', branches)).not.toThrow();
+  });
+  it('rejects duplicate keys and noncanonical observation bytes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'observation-validation-'));
+    try {
+      const path = join(dir, '44.4.10.json');
+      const canonical = JSON.stringify(fixture(), null, 2) + '\n';
+      writeFileSync(path, canonical);
+      expect(() => validateObservationDirectory(dir, branches)).not.toThrow();
+      writeFileSync(path, canonical.replace('{', '{\n  \"apiVersion\": \"host.example.invalid\",'));
+      expect(() => validateObservationDirectory(dir, branches)).toThrow('canonical');
+      writeFileSync(path, canonical + ' ');
+      expect(() => validateObservationDirectory(dir, branches)).toThrow('canonical');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
