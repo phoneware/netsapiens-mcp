@@ -7,7 +7,10 @@ import type { AuthCodeRow, McpStore, ResumeRow, SessionRow, StoreBackend } from 
 
 export type FirestoreLike = Pick<Firestore, 'collection' | 'runTransaction'>;
 
-export function firestoreCollections(namespace: string) {
+export interface FirestoreCollections {
+ sessions: string; oauthClients: string; authCodes: string; resumeTokens: string; usage: string;
+}
+export function firestoreCollections(namespace: string): FirestoreCollections {
  return {
   sessions: `${namespace}_sessions`, oauthClients: `${namespace}_oauth_clients`,
   authCodes: `${namespace}_auth_codes`, resumeTokens: `${namespace}_resume_tokens`,
@@ -17,7 +20,7 @@ export function firestoreCollections(namespace: string) {
 
 // Firestore rejects undefined recursively unless configured otherwise.
 function defined<T>(value: T): T {
- if (Array.isArray(value)) return value.map(defined) as T;
+ if (Array.isArray(value)) return value.filter(v => v !== undefined).map(defined) as T;
  if (value && typeof value === 'object' && !(value instanceof Date)) {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, defined(v)])) as T;
  }
@@ -33,6 +36,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
   const full: OAuthClientInformationFull = { ...client, client_id: randomUUID(), client_id_issued_at: Math.floor(Date.now() / 1000) };
   if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
+  else delete full.client_secret;
   await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
   return full;
  }
@@ -41,7 +45,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
 export interface FirestoreBackend extends StoreBackend { }
 export class FirestoreBackend {
  readonly db: FirestoreLike;
- readonly collections: ReturnType<typeof firestoreCollections>;
+ readonly collections: FirestoreCollections;
  constructor(options: { db: FirestoreLike; namespace: string }) {
   const { db, namespace } = options;
   this.db = db;
@@ -51,18 +55,18 @@ export class FirestoreBackend {
   const resumes = db.collection(names.resumeTokens);
   const usage = db.collection(names.usage);
   const clients = db.collection(names.oauthClients);
-  const sessionData = (row: SessionRow) => defined({ ...row, v: 1, ttlAt: new Date(row.retainUntil) });
-  const codeData = (row: AuthCodeRow) => defined({ ...row, v: 1, ttlAt: new Date(row.expiresAt) });
+  const sessionData = ({ id: _id, ...row }: SessionRow) => defined({ ...row, v: 1, ttlAt: new Date(row.retainUntil) });
+  const codeData = ({ id: _id, ...row }: AuthCodeRow) => defined({ ...row, v: 1, ttlAt: new Date(row.expiresAt) });
   const backend: StoreBackend = {
    name: 'firestore',
    capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
    async getSession(id) {
     const snap = await sessions.doc(id).get();
-    return snap.exists ? snap.data() as SessionRow : undefined;
+    return snap.exists ? { ...snap.data(), id } as SessionRow : undefined;
    },
    async findSessionByRefreshId(refreshId) {
     const snap = await sessions.where('refreshId', '==', refreshId).limit(1).get();
-    return snap.empty ? undefined : snap.docs[0].data() as SessionRow;
+    return snap.empty ? undefined : { ...snap.docs[0].data(), id: snap.docs[0].id } as SessionRow;
    },
    async putSession(row) { await sessions.doc(row.id).set(sessionData(row)); },
    async updateSession(id, mutate) {
@@ -70,7 +74,7 @@ export class FirestoreBackend {
     return db.runTransaction(async tx => {
      const snap = await tx.get(ref);
      if (!snap.exists) return undefined;
-     const current = snap.data() as SessionRow;
+     const current = { ...snap.data(), id } as SessionRow;
      const next = mutate(current);
      if (next === null) { tx.delete(ref); return undefined; }
      if (next === undefined) return current;
@@ -82,7 +86,7 @@ export class FirestoreBackend {
    async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
    async getAuthCode(id) {
     const snap = await codes.doc(id).get();
-    return snap.exists ? snap.data() as AuthCodeRow : undefined;
+    return snap.exists ? { ...snap.data(), id } as AuthCodeRow : undefined;
    },
    async takeAuthCode(id) {
     const ref = codes.doc(id);
@@ -90,7 +94,7 @@ export class FirestoreBackend {
      const snap = await tx.get(ref);
      if (!snap.exists) return undefined;
      tx.delete(ref);
-     return snap.data() as AuthCodeRow;
+     return { ...snap.data(), id } as AuthCodeRow;
     });
    },
    async insertResumeIfAbsent(row: ResumeRow, now) {
