@@ -1003,51 +1003,51 @@ describe('composite handlers translate args correctly', () => {
   expect(parsed.data).toEqual([{ device: 'mac-1', user: '1001' }]);
  });
 
- it('find_device looks up by MAC or model fragment from /domains/{domain}/phones', async () => {
-  const { handleToolCall } = await importTools();
-  const calls: Array<{ pathTemplate: string }> = [];
-  const fakeClient = {
-   request: async (o: { pathTemplate: string }) => {
-    calls.push(o);
-    if (o.pathTemplate === '/domains/{domain}/phones') {
-     return {
-      success: true,
-      data: [
-       {
-        'device-provisioning-mac-address': '0004f2112233',
-        'device-models-brand-and-model': 'Polycom VVX 450',
-        'device-provisioning-line-1-extensions': '1001',
-       },
-       {
-        'device-provisioning-mac-address': '0004f2aabbcc',
-        'device-models-brand-and-model': 'Yealink T46S',
-        'device-provisioning-line-1-extensions': '1002',
-       },
-      ],
-     };
-    }
-    return { success: true, data: [] };
-   },
-  };
+	it('find_device looks up by MAC or model fragment from /domains/{domain}/phones', async () => {
+		const { handleToolCall } = await importTools();
+		const calls: Array<{ pathTemplate: string }> = [];
+		const fakeClient = {
+			request: async (o: { pathTemplate: string }) => {
+				calls.push(o);
+				if (o.pathTemplate === '/domains/{domain}/phones') {
+					return {
+						success: true,
+						data: [
+							{
+								'device-provisioning-mac-address': '0004f2112233',
+								'device-models-brand-and-model': 'Polycom VVX 450',
+								'device-provisioning-line-1-extensions': '1001',
+							},
+							{
+								'device-provisioning-mac-address': '0004f2aabbcc',
+								'device-models-brand-and-model': 'Yealink T46S',
+								'device-provisioning-line-1-extensions': '1002',
+							},
+						],
+					};
+				}
+				return { success: true, data: [] };
+			},
+		};
 
-  // 1. Query by MAC
-  const macResult = (await handleToolCall(fakeClient as never, 'find_device', { query: '0004f2112233' }, 'domain_admin')) as {
-   content: Array<{ text: string }>;
-  };
-  const macParsed = JSON.parse(macResult.content[0].text);
-  expect(macParsed.data.length).toBe(1);
-  expect(macParsed.data[0].device).toBe('0004f2112233');
-  expect(macParsed.data[0]['device-models-model']).toBe('Polycom VVX 450');
+		// 1. Query by MAC
+		const macResult = (await handleToolCall(fakeClient as never, 'find_device', { query: '0004f2112233' }, 'domain_admin')) as {
+			content: Array<{ text: string }>;
+		};
+		const macParsed = JSON.parse(macResult.content[0].text);
+		expect(macParsed.data.length).toBe(1);
+		expect(macParsed.data[0].device).toBe('0004f2112233');
+		expect(macParsed.data[0]['device-models-model']).toBe('Polycom VVX 450');
 
-  // 2. Query by model fragment
-  const modelResult = (await handleToolCall(fakeClient as never, 'find_device', { query: 'Yealink' }, 'domain_admin')) as {
-   content: Array<{ text: string }>;
-  };
-  const modelParsed = JSON.parse(modelResult.content[0].text);
-  expect(modelParsed.data.length).toBe(1);
-  expect(modelParsed.data[0].device).toBe('0004f2112233' ? '0004f2aabbcc' : '');
-  expect(modelParsed.data[0]['device-models-model']).toBe('Yealink T46S');
- });
+		// 2. Query by model fragment
+		const modelResult = (await handleToolCall(fakeClient as never, 'find_device', { query: 'Yealink' }, 'domain_admin')) as {
+			content: Array<{ text: string }>;
+		};
+		const modelParsed = JSON.parse(modelResult.content[0].text);
+		expect(modelParsed.data.length).toBe(1);
+		expect(modelParsed.data[0].device).toBe('0004f2112233' ? '0004f2aabbcc' : '');
+		expect(modelParsed.data[0]['device-models-model']).toBe('Yealink T46S');
+	});
 
  it('recent_calls sends the `datetime-start` + `datetime-end` pair, and the statistics routes send `start_date` + `end_date` as UTC "YYYY-MM-DD HH:MM:SS", for `since`', async () => {
   // `datetime-start`/`datetime-end` are a required pair on the CDR endpoint —
