@@ -130,6 +130,7 @@ describe('loadConfig()', () => {
       savedEnv[key] = process.env[key];
       delete process.env[key];
     }
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
   });
 
   afterEach(() => {
@@ -177,12 +178,10 @@ describe('loadConfig()', () => {
     expect(() => loadConfig()).toThrow('NETSAPIENS_OAUTH_CLIENT_ID');
   });
 
-  it('uses default API URL when NETSAPIENS_API_URL is not set', () => {
+  it('requires NETSAPIENS_API_URL', () => {
+    delete process.env.NETSAPIENS_API_URL;
     process.env.NETSAPIENS_API_TOKEN = 'tok';
-
-    const config = loadConfig();
-
-    expect(config.netsapiens.apiUrl).toBe('https://edge.phoneware.cloud');
+    expect(() => loadConfig()).toThrow('NETSAPIENS_API_URL is required');
   });
 
   it('uses custom API URL from NETSAPIENS_API_URL', () => {
@@ -230,7 +229,7 @@ describe('loadConfig()', () => {
     const config = loadConfig();
 
     expect(config.name).toBe('netsapiens-mcp');
-    expect(config.version).toBe('1.1.1');
+    expect(config.version).toBe('2.3.1');
     expect(config.netsapiens.timeout).toBe(30000);
     expect(config.netsapiens.rateLimit).toEqual({
       requests: 100,
@@ -286,6 +285,7 @@ describe('createMcpServer()', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
     delete process.env.NETSAPIENS_OAUTH_CLIENT_ID;
     delete process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
     delete process.env.NETSAPIENS_OAUTH_USERNAME;
@@ -314,7 +314,7 @@ describe('createMcpServer()', () => {
     createMcpServer(config);
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.3.1', title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),
@@ -346,6 +346,7 @@ describe('NetSapiensMCPServer', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
     delete process.env.NETSAPIENS_OAUTH_CLIENT_ID;
     delete process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
     delete process.env.NETSAPIENS_OAUTH_USERNAME;
@@ -373,7 +374,7 @@ describe('NetSapiensMCPServer', () => {
     createServer();
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.3.1', title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),

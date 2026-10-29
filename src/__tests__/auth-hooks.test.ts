@@ -19,7 +19,8 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     renderPages?: RenderPagesOptions;
   } = {}) {
     return new NetSapiensAuthProvider({
-      nsApiUrl: 'https://edge.phoneware.cloud',
+      platforms: [{ id: 'default', label: 'Test', apiUrl: 'https://netsapiens.example.com' }],
+      nsApiUrl: 'https://netsapiens.example.com',
       nsClientId: 'test-ns-client',
       nsClientSecret: 'test-ns-secret',
       serverBaseUrl: 'http://localhost:3000',
@@ -412,7 +413,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     await provider.handleTokenLogin(
       { body: { auth_state: authState }, headers: {} } as unknown as Request,
       loginRes as unknown as Response,
-      'https://edge.phoneware.cloud',
+      'https://netsapiens.example.com',
       'ns-office-manager-token',
     );
 

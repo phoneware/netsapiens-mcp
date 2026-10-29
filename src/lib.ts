@@ -3,6 +3,8 @@ export { NetSapiensClient } from './netsapiens-client.js';
 export { CURATED_CATALOG } from './tools/curated/catalog.js';
 export { withStructuredContent } from './tools/index.js';
 export { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+export { parsePlatforms } from './auth/platforms.js';
+export type { NetSapiensPlatform } from './auth/platforms.js';
 export { FirestoreTokenStore, FirestoreClientsStore, FirestoreAuthCodeStore } from './auth/firestore-stores.js';
 export { LoopbackTolerantClientsStore } from './auth/loopback-redirect.js';
 export { negotiateProtocolVersion } from './http/protocol-version.js';

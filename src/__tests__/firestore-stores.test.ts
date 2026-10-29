@@ -267,6 +267,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
 
   process.env.MCP_PERSISTENCE = 'firestore';
   const provider1 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -279,6 +280,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const provider2 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -330,12 +332,14 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
  it('fails across instances when using the old in-memory auth codes map', async () => {
   process.env.MCP_PERSISTENCE = 'file';
   const provider1 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
    serverBaseUrl: 'http://localhost:3000',
   });
   const provider2 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -414,6 +418,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
 
   process.env.MCP_PERSISTENCE = 'firestore';
   const readOnlyProvider = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -425,6 +430,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const writableProvider = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -672,6 +678,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
 
   process.env.MCP_PERSISTENCE = 'firestore';
   const provider1 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -692,6 +699,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const provider2 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -854,6 +862,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
 
   const provider1 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -866,6 +875,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const provider2 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -955,6 +965,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
 
   const provider = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -1012,6 +1023,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
 
   const provider = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -1066,6 +1078,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const authCodesCollection = `codes_${randomBytes(4).toString('hex')}`;
 
   const provider1 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
@@ -1078,6 +1091,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const provider2 = new NetSapiensAuthProvider({
+   platforms: [],
    nsApiUrl: 'https://edge.phoneware.cloud',
    nsClientId: 'cid',
    nsClientSecret: 'sec',
