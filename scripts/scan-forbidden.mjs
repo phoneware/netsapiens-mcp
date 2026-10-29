@@ -20,7 +20,8 @@ try {
 const matches = value => patterns.some(pattern => { pattern.lastIndex = 0; return pattern.test(value); });
 const run = (command, args) => execFileSync(command, args, { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 let found = false;
-const report = location => { console.log(`MATCH ${location}`); found = true; };
+const safe = value => matches(value) ? '[redacted]' : value;
+const report = location => { console.log(`MATCH ${safe(location)}`); found = true; };
 const mode = process.argv[2];
 try {
   if (mode === '--tree' && process.argv.length === 3) {
@@ -41,7 +42,7 @@ try {
     const scanRefs = (selected, pending) => {
       if (!selected.length) return;
       for (const ref of selected) {
-        if (matches(ref)) pending ? console.log(`PENDING ${ref}`) : report(`ref ${ref}`);
+        if (matches(ref)) pending ? console.log(`PENDING ${safe(ref)}`) : report(`ref ${ref}`);
       }
       const tagChain = ref => {
         const ids = [];
@@ -53,16 +54,37 @@ try {
         }
         return ids;
       };
+      const matchingObjects = refsToScan => {
+        const matched = new Set();
+        const seenBlobs = new Set();
+        const commits = git('rev-list', ...refsToScan).split('\n').filter(Boolean);
+        const seenTrees = new Set();
+        for (const id of commits) {
+          if (objectMatches(id)) matched.add(id);
+          const tree = git('rev-parse', `${id}^{tree}`).trim();
+          if (seenTrees.has(tree)) continue;
+          seenTrees.add(tree);
+          const entries = git('ls-tree', '-r', '-z', '--full-tree', tree).split('\0').filter(Boolean);
+          for (const entry of entries) {
+            const tab = entry.indexOf('\t');
+            const [mode, type, blob] = entry.slice(0, tab).split(' ');
+            const path = entry.slice(tab + 1);
+            if (type !== 'blob' || path.startsWith('spec/') || seenBlobs.has(blob)) continue;
+            seenBlobs.add(blob);
+            if (objectMatches(blob)) matched.add(blob);
+          }
+        }
+        for (const id of refsToScan.flatMap(tagChain)) {
+          if (objectMatches(id)) matched.add(id);
+        }
+        return matched;
+      };
       if (pending) {
         for (const ref of selected) {
-          const ids = git('rev-list', '--objects', '--no-object-names', ref).split('\n').filter(Boolean);
-          ids.push(...tagChain(ref));
-          if (ids.some(id => objectMatches(id))) console.log(`PENDING ${ref}`);
+          if (matchingObjects([ref]).size) console.log(`PENDING ${safe(ref)}`);
         }
       } else {
-        const ids = git('rev-list', '--objects', '--no-object-names', ...selected).split('\n').filter(Boolean);
-        ids.push(...selected.flatMap(tagChain));
-        for (const id of new Set(ids)) if (objectMatches(id)) report(`object ${id}`);
+        for (const id of matchingObjects(selected)) report(`object ${id}`);
       }
     };
     function objectMatches(id) {

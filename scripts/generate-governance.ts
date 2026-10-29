@@ -4,7 +4,7 @@
  * NetSapiens Governance Field Table Generator
  *
  * Generates per-resource field classification tables from OpenAPI specification
- * (`spec/netsapiens-api-v2.json` components.schemas) and hand-reviewed overrides
+ * (`spec/v2/45.0.json` components.schemas) and hand-reviewed overrides
  * (`src/governance/overrides.ts`).
  *
  * Every field defaults to `{ class: 'metadata' }` unless overridden.
@@ -37,7 +37,7 @@ interface OpenApiSpec {
 }
 
 function generate(): string {
- const specPath = resolve(REPO_ROOT, 'spec/netsapiens-api-v2.json');
+ const specPath = resolve(REPO_ROOT, 'spec/v2/45.0.json');
  const spec: OpenApiSpec = JSON.parse(readFileSync(specPath, 'utf8'));
  const schemas = spec.components?.schemas ?? {};
 
