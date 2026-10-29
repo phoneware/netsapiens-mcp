@@ -25,19 +25,41 @@ function code(row: Record<string, SqlValue> | undefined): AuthCodeRow | undefine
   return row && { id: row.id as string, expiresAt: row.expires_at as number, sealed: row.sealed as string };
 }
 
-export function createSqliteStore(options: { path: string; namespace: string; key: Uint8Array; sweepIntervalMs?: number }) {
-  const { path, namespace, key } = options;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  try { closeSync(openSync(path, 'wx', 0o600)); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-  if ((statSync(path).mode & 0o077) !== 0) throw new StoreConfigError(`${path} is readable by other users; chmod 600 ${path}`);
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => Database };
-  const db = new DatabaseSync(path);
-  try {
-    db.exec('PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=0; BEGIN IMMEDIATE; COMMIT;');
-    const version = db.prepare('PRAGMA user_version').get()?.user_version as number;
-    if (version > 1) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
-    db.exec(`BEGIN IMMEDIATE;
+export class SqliteBackend implements StoreBackend {
+  readonly path: string;
+  readonly db: Database;
+  readonly name!: string;
+  readonly capabilities!: StoreCapabilities;
+  getSession!: StoreBackend['getSession'];
+  findSessionByRefreshId!: StoreBackend['findSessionByRefreshId'];
+  putSession!: StoreBackend['putSession'];
+  updateSession!: StoreBackend['updateSession'];
+  deleteSession!: StoreBackend['deleteSession'];
+  putAuthCode!: StoreBackend['putAuthCode'];
+  getAuthCode!: StoreBackend['getAuthCode'];
+  takeAuthCode!: StoreBackend['takeAuthCode'];
+  insertResumeIfAbsent!: StoreBackend['insertResumeIfAbsent'];
+  incrementUsage!: StoreBackend['incrementUsage'];
+  listUsage!: StoreBackend['listUsage'];
+  getClient!: StoreBackend['getClient'];
+  putClient!: StoreBackend['putClient'];
+  sweep!: StoreBackend['sweep'];
+  close!: StoreBackend['close'];
+  constructor(options: { path: string; namespace: string; sweepIntervalMs?: number }) {
+    const { path, namespace } = options;
+    this.path = path;
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    try { closeSync(openSync(path, 'wx', 0o600)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    if ((statSync(path).mode & 0o077) !== 0) throw new StoreConfigError(`${path} is readable by other users; chmod 600 ${path}`);
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => Database };
+    const db = new DatabaseSync(path);
+    this.db = db;
+    try {
+      db.exec('PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=0; BEGIN IMMEDIATE; COMMIT;');
+      const version = db.prepare('PRAGMA user_version').get()?.user_version as number;
+      if (version > 1) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
+      db.exec(`BEGIN IMMEDIATE;
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY CHECK(length(id)=64), refresh_id TEXT NOT NULL CHECK(length(refresh_id)=64), expires_at INTEGER NOT NULL, retain_until INTEGER NOT NULL CHECK(retain_until >= expires_at), ns_expires_at INTEGER, lease_owner TEXT, lease_until INTEGER, sealed TEXT NOT NULL) STRICT;
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_refresh_id ON sessions(refresh_id);
@@ -46,45 +68,55 @@ export function createSqliteStore(options: { path: string; namespace: string; ke
       CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS usage (user_hash TEXT NOT NULL CHECK(length(user_hash)=64), tool_name TEXT NOT NULL, count INTEGER NOT NULL, last_used INTEGER NOT NULL, PRIMARY KEY(user_hash, tool_name)) STRICT;
       PRAGMA user_version=1; COMMIT;`);
-    const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
-    if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
-    db.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES ('namespace',?)").run(namespace);
-  } catch (error) {
-    db.close();
-    if ((error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test((error as Error).message)) {
-      throw new StoreLockedError(`${path} is in use by another process. Give each server process its own MCP_STORE_PATH, or use MCP_PERSISTENCE=firestore for several instances.`);
+      const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
+      if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
+      db.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES ('namespace',?)").run(namespace);
+    } catch (error) {
+      db.close();
+      if ((error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test((error as Error).message)) {
+        throw new StoreLockedError(`${path} is in use by another process. Give each server process its own MCP_STORE_PATH, or use MCP_PERSISTENCE=firestore for several instances.`);
+      }
+      throw error;
     }
-    throw error;
-  }
-  const transaction = <T>(fn: () => T): T => {
-    db.exec('BEGIN IMMEDIATE');
-    try { const value = fn(); db.exec('COMMIT'); return value; }
-    catch (error) { db.exec('ROLLBACK'); throw error; }
-  };
-  const get = (id: string) => session(db.prepare('SELECT * FROM sessions WHERE id=?').get(id));
-  const put = (row: SessionRow) => db.prepare(`INSERT INTO sessions(id,refresh_id,expires_at,retain_until,ns_expires_at,lease_owner,lease_until,sealed) VALUES(?,?,?,?,?,?,?,?)
+    const transaction = <T>(fn: () => T): T => {
+      db.exec('BEGIN IMMEDIATE');
+      try { const value = fn(); db.exec('COMMIT'); return value; }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+    };
+    const get = (id: string) => session(db.prepare('SELECT * FROM sessions WHERE id=?').get(id));
+    const put = (row: SessionRow) => db.prepare(`INSERT INTO sessions(id,refresh_id,expires_at,retain_until,ns_expires_at,lease_owner,lease_until,sealed) VALUES(?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET refresh_id=excluded.refresh_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,sealed=excluded.sealed`).run(row.id, row.refreshId, row.expiresAt, row.retainUntil, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.sealed);
-  const sweep = (now: number) => transaction(() => ['sessions', 'auth_codes', 'resume_tokens'].reduce((n, table) => n + Number(db.prepare(`DELETE FROM ${table} WHERE ${table === 'sessions' ? 'retain_until' : 'expires_at'} <= ?`).run(now).changes), 0));
-  sweep(Date.now());
-  const timer = setInterval(() => sweep(Date.now()), options.sweepIntervalMs ?? 600_000);
-  timer.unref();
-  const backend: StoreBackend = {
-    name: 'sqlite', capabilities,
-    async getSession(id) { return get(id); },
-    async findSessionByRefreshId(id) { return session(db.prepare('SELECT * FROM sessions WHERE refresh_id=?').get(id)); },
-    async putSession(row) { put(row); },
-    async updateSession(id, mutate) { return transaction(() => { const current = get(id); if (!current) return undefined; const next = mutate(current); if (next === null) { db.prepare('DELETE FROM sessions WHERE id=?').run(id); return undefined; } if (next) { put(next); return next; } return current; }); },
-    async deleteSession(id) { db.prepare('DELETE FROM sessions WHERE id=?').run(id); },
-    async putAuthCode(row) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
-    async getAuthCode(id) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
-    async takeAuthCode(id) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
-    async insertResumeIfAbsent(row: ResumeRow, now) { return transaction(() => { db.prepare('DELETE FROM resume_tokens WHERE id=? AND expires_at<=?').run(row.id, now); return Number(db.prepare('INSERT INTO resume_tokens(id,consumed_at,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(row.id, row.consumedAt, row.expiresAt).changes) === 1; }); },
-    async incrementUsage(userHash, toolName, now) { db.prepare('INSERT INTO usage(user_hash,tool_name,count,last_used) VALUES(?,?,1,?) ON CONFLICT(user_hash,tool_name) DO UPDATE SET count=count+1,last_used=excluded.last_used').run(userHash, toolName, now); },
-    async listUsage(userHash) { return db.prepare('SELECT tool_name,count,last_used FROM usage WHERE user_hash=?').all(userHash).map(row => ({ toolName: row.tool_name as string, count: row.count as number, lastUsed: row.last_used as number })); },
-    async getClient(id) { const row = db.prepare('SELECT value FROM oauth_clients WHERE id=?').get(id); return row ? JSON.parse(row.value as string) as OAuthClientInformationFull : undefined; },
-    async putClient(client) { db.prepare('INSERT OR REPLACE INTO oauth_clients(id,value) VALUES(?,?)').run(client.client_id, JSON.stringify(client)); },
-    async sweep(now) { return sweep(now); },
-    async close() { clearInterval(timer); db.close(); },
-  };
-  return createStore(backend, { namespace, key });
+    const sweep = (now: number) => transaction(() => ['sessions', 'auth_codes', 'resume_tokens'].reduce((n, table) => n + Number(db.prepare(`DELETE FROM ${table} WHERE ${table === 'sessions' ? 'retain_until' : 'expires_at'} <= ?`).run(now).changes), 0));
+    sweep(Date.now());
+    const timer = setInterval(() => sweep(Date.now()), options.sweepIntervalMs ?? 600_000);
+    timer.unref();
+    let closed = false;
+    const backend: StoreBackend = {
+      name: 'sqlite', capabilities,
+      async getSession(id) { return get(id); },
+      async findSessionByRefreshId(id) { return session(db.prepare('SELECT * FROM sessions WHERE refresh_id=?').get(id)); },
+      async putSession(row) { put(row); },
+      async updateSession(id, mutate) { return transaction(() => { const current = get(id); if (!current) return undefined; const next = mutate(current); if (next === null) { db.prepare('DELETE FROM sessions WHERE id=?').run(id); return undefined; } if (next) { put(next); return next; } return current; }); },
+      async deleteSession(id) { db.prepare('DELETE FROM sessions WHERE id=?').run(id); },
+      async putAuthCode(row) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
+      async getAuthCode(id) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
+      async takeAuthCode(id) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
+      async insertResumeIfAbsent(row: ResumeRow, now) { return transaction(() => { db.prepare('DELETE FROM resume_tokens WHERE id=? AND expires_at<=?').run(row.id, now); return Number(db.prepare('INSERT INTO resume_tokens(id,consumed_at,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(row.id, row.consumedAt, row.expiresAt).changes) === 1; }); },
+      async incrementUsage(userHash, toolName, now) { db.prepare('INSERT INTO usage(user_hash,tool_name,count,last_used) VALUES(?,?,1,?) ON CONFLICT(user_hash,tool_name) DO UPDATE SET count=count+1,last_used=excluded.last_used').run(userHash, toolName, now); },
+      async listUsage(userHash) { return db.prepare('SELECT tool_name,count,last_used FROM usage WHERE user_hash=?').all(userHash).map(row => ({ toolName: row.tool_name as string, count: row.count as number, lastUsed: row.last_used as number })); },
+      async getClient(id) { const row = db.prepare('SELECT value FROM oauth_clients WHERE id=?').get(id); return row ? JSON.parse(row.value as string) as OAuthClientInformationFull : undefined; },
+      async putClient(client) { db.prepare('INSERT OR REPLACE INTO oauth_clients(id,value) VALUES(?,?)').run(client.client_id, JSON.stringify(client)); },
+      async sweep(now) { return sweep(now); },
+      async close() { if (!closed) { closed = true; clearInterval(timer); db.close(); } },
+    };
+    Object.assign(this, backend);
+  }
+}
+
+export function createSqliteBackend(options: { path: string; namespace: string; sweepIntervalMs?: number }): SqliteBackend {
+  return new SqliteBackend(options);
+}
+
+export function createSqliteStore(options: { path: string; namespace: string; key: Uint8Array; sweepIntervalMs?: number }) {
+  return createStore(createSqliteBackend(options), { namespace: options.namespace, key: options.key });
 }

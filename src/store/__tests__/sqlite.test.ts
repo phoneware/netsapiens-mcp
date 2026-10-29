@@ -1,13 +1,12 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { deriveStoreKey, StoreConfigError, StoreLockedError } from '../codec.js';
-import { createSqliteStore } from '../sqlite.js';
+import { createSqliteBackend, createSqliteStore, SqliteBackend } from '../sqlite.js';
 import { runStoreConformance } from '../conformance.js';
-import type { McpStore } from '../types.js';
 
 const key = deriveStoreKey('a secret long enough for the sqlite tests');
 const directories: string[] = [];
@@ -20,56 +19,32 @@ afterEach(() => { vi.useRealTimers(); for (const directory of directories.splice
 
 const conformanceRoot = mkdtempSync(join(tmpdir(), 'sqlite-conformance-'));
 afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true }));
-const openStores = new Map<string, McpStore>();
-const conformancePath = (namespace: string) => join(conformanceRoot, namespace, 'store.db');
+const conformancePath = (namespace: string) => join(conformanceRoot, `${namespace}.sqlite`);
 runStoreConformance({
   name: 'sqlite',
   capabilities: { persistent: true, multiInstance: false, exclusive: true, expiry: 'sweep' },
-  async open(namespace) {
-    const path = conformancePath(namespace);
-    const store = createSqliteStore({ path, namespace, key });
-    openStores.set(namespace, store);
+  async openBackend(namespace) { return createSqliteBackend({ path: conformancePath(namespace), namespace }); },
+  async inspect(handle) {
+    const db = (handle as SqliteBackend).db;
+    const rows = (sql: string) => db.prepare(sql).all().map(row => {
+      const { id, ...fields } = row;
+      return { key: id as string, fields: Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)) };
+    });
     return {
-      get backend() { return openStores.get(namespace)!.backend; },
-      get namespace() { return namespace; },
-      get capabilities() { return openStores.get(namespace)!.capabilities; },
-      get sessions() { return openStores.get(namespace)!.sessions; },
-      get clients() { return openStores.get(namespace)!.clients; },
-      get authCodes() { return openStores.get(namespace)!.authCodes; },
-      get resumeTokens() { return openStores.get(namespace)!.resumeTokens; },
-      get usage() { return openStores.get(namespace)!.usage; },
-      async close() { const current = openStores.get(namespace); if (current) { openStores.delete(namespace); await current.close(); } },
+      sessions: rows('SELECT id,refresh_id AS refreshId,expires_at AS expiresAt,retain_until AS retainUntil,ns_expires_at AS nsExpiresAt,lease_owner AS leaseOwner,lease_until AS leaseUntil,sealed FROM sessions'),
+      authCodes: rows('SELECT id,expires_at AS expiresAt,sealed FROM auth_codes'),
+      resumeTokens: rows('SELECT id,consumed_at AS consumedAt,expires_at AS expiresAt FROM resume_tokens'),
+      usage: rows("SELECT user_hash || '__' || tool_name AS id,user_hash AS userHash,tool_name AS toolName,count,last_used AS lastUsed FROM usage"),
+      clients: db.prepare('SELECT id,value FROM oauth_clients').all().map(row => ({ key: row.id as string, fields: JSON.parse(row.value as string) })),
     };
   },
-  async dumpRaw(namespace) {
-    const path = conformancePath(namespace);
-    return Buffer.concat([readFileSync(path), readFileSync(`${path}-wal`)]).toString('latin1');
-  },
-  async swapSealed(namespace, idA, idB) {
-    const path = conformancePath(namespace);
-    const current = openStores.get(namespace);
-    if (!current) throw new Error('SQLite store is not open');
-    await current.close();
-    openStores.delete(namespace);
-    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
-    const db = new DatabaseSync(path);
-    try {
-      const a = db.prepare('SELECT sealed FROM sessions WHERE id=?').get(idA);
-      const b = db.prepare('SELECT sealed FROM sessions WHERE id=?').get(idB);
-      if (!a || !b) throw new Error('Missing session');
-      db.exec('BEGIN IMMEDIATE');
-      db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(b.sealed, idA);
-      db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(a.sealed, idB);
-      db.exec('COMMIT');
-    } finally {
-      db.close();
-      openStores.set(namespace, createSqliteStore({ path, namespace, key }));
-    }
+  async dumpRaw(handle) {
+    const path = (handle as SqliteBackend).path;
+    return Buffer.concat([readFileSync(path), ...(existsSync(`${path}-wal`) ? [readFileSync(`${path}-wal`)] : [])]).toString('latin1');
   },
   async cleanup(namespace) {
-    const store = openStores.get(namespace);
-    if (store) { openStores.delete(namespace); await store.close(); }
-    rmSync(join(conformanceRoot, namespace), { recursive: true, force: true });
+    const path = conformancePath(namespace);
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
   },
 });
 
