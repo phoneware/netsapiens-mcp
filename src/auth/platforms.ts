@@ -13,7 +13,7 @@ export function normalizePlatformUrl(raw: string): string {
 export function parsePlatforms(raw: string | undefined, defaultApiUrl: string): NetSapiensPlatform[] {
  const origin = normalizePlatformUrl(defaultApiUrl);
  let values: unknown = {};
- if (raw !== undefined) {
+ if (raw !== undefined && raw.trim() !== '') {
   try { values = JSON.parse(raw); } catch { throw new Error('ConfigError: NETSAPIENS_PLATFORMS must be a JSON object'); }
  }
  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new Error('ConfigError: NETSAPIENS_PLATFORMS must be a JSON object');

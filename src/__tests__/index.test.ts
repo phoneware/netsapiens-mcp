@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+
+const packageVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
 // ---------------------------------------------------------------------------
 // Module mocks – must be declared before importing the module under test.
@@ -229,7 +232,7 @@ describe('loadConfig()', () => {
     const config = loadConfig();
 
     expect(config.name).toBe('netsapiens-mcp');
-    expect(config.version).toBe('2.3.1');
+    expect(config.version).toBe(packageVersion);
     expect(config.netsapiens.timeout).toBe(30000);
     expect(config.netsapiens.rateLimit).toEqual({
       requests: 100,
@@ -314,7 +317,7 @@ describe('createMcpServer()', () => {
     createMcpServer(config);
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.3.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: packageVersion, title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),
@@ -374,7 +377,7 @@ describe('NetSapiensMCPServer', () => {
     createServer();
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.3.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: packageVersion, title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),

@@ -199,6 +199,7 @@ function isEntrypoint(): boolean {
 
 if (isEntrypoint()) {
   main().catch((error) => {
+    if (error instanceof Error && error.message.startsWith('ConfigError: ')) console.error(error.message);
     logger.error('Fatal error starting MCP server', {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,

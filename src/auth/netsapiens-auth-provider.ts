@@ -518,7 +518,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  constructor(options: NetSapiensAuthProviderOptions) {
   this.nsApiUrl = options.nsApiUrl;
-  if (!options.platforms) throw new Error('platforms is required');
+  if (!options.platforms?.length) throw new Error('platforms must contain at least one platform');
+  if (!isPlatformAllowed(options.platforms, options.nsApiUrl)) throw new Error('nsApiUrl must be in platforms');
   this.platforms = options.platforms;
   this.nsClientId = options.nsClientId;
   this.nsClientSecret = options.nsClientSecret;
