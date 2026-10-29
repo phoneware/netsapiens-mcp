@@ -337,7 +337,7 @@ describe('Tool call arguments and scope resolution', () => {
     });
 
     const provider = new NetSapiensAuthProvider({
-      platforms: [],
+      platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://example.com' }],
       nsApiUrl: 'https://example.com',
       nsClientId: 'test',
       nsClientSecret: 'test',
