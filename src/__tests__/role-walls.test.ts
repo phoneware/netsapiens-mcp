@@ -33,7 +33,7 @@ function recordingClient(
 
 /**
  * Endpoints that require Reseller or Super User / System Admin scope.
- * Derived from spec/netsapiens-api-v2.json.
+ * Derived from spec/v2/45.0.json.
  * Any request issued to these paths by a caller with a role below reseller
  * (domain_admin or user) is a role-wall defect.
  */

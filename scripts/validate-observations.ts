@@ -56,6 +56,8 @@ export function validateObservation(value: unknown, fileName: string, branches: 
   for (const key of keys) {
     if (!union.has(key)) throw new Error(`Unknown GET key: ${key}`);
     if (observation.results[key].result === 'absent' && observation.results[key].status !== 404) throw new Error(`Absent key must have 404: ${key}`);
+    const result = observation.results[key];
+    if (result.result === 'present' && (result.status === 403 || result.status === 429 || (result.status >= 300 && result.status < 400) || result.status >= 500)) throw new Error(`Present key has non-evidence status: ${key}`);
   }
   for (const branch of sorted) for (const key of branches.get(branch)!) {
     if (!(key in observation.results)) throw new Error(`Missing documented key: ${key}`);
@@ -68,7 +70,10 @@ export function validateObservation(value: unknown, fileName: string, branches: 
 
 export function validateObservationDirectory(dir = resolve(root, 'spec/v2/observations'), branches = loadBranchKeys()): void {
   for (const file of readdirSync(dir).filter(name => name.endsWith('.json') && name !== 'schema.json')) {
-    validateObservation(JSON.parse(readFileSync(resolve(dir, file), 'utf8')), file, branches);
+    const raw = readFileSync(resolve(dir, file), 'utf8');
+    const value: unknown = JSON.parse(raw);
+    if (raw !== JSON.stringify(value, null, 2) + '\n') throw new Error('Observation must be unmodified canonical JSON');
+    validateObservation(value, file, branches);
   }
 }
 

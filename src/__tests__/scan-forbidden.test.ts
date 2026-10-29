@@ -82,14 +82,14 @@ describe('forbidden content scanner', () => {
       const clean = scan(['--history', join(history, '.git')]);
       expect(clean.status).toBe(0);
       expect(clean.stdout.toLowerCase()).not.toContain(marker);
-      writeFileSync(join(history, 'zzz-outside.txt'), marker);
+      writeFileSync(join(history, 'aaa-outside.txt'), marker);
       run('add', '.');
       run('commit', '-m', 'outside');
       const dirty = scan(['--history', join(history, '.git')]);
       expect(dirty.status).toBe(1);
       expect(dirty.stdout).toContain('MATCH object ');
       expect(dirty.stdout.toLowerCase()).not.toContain(marker);
-      run('rm', 'zzz-outside.txt');
+      run('rm', 'aaa-outside.txt');
       run('commit', '-m', 'remove');
       expect(scan(['--history', join(history, '.git')]).status).toBe(1);
     } finally {
@@ -120,6 +120,47 @@ describe('forbidden content scanner', () => {
       rmSync(history, { recursive: true, force: true });
     }
   });
+  it('detects forbidden paths in tree and history even when file contents are clean', () => {
+    const history = mkdtempSync(join(tmpdir(), 'content-filenames-'));
+    try {
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: history, stdio: 'pipe' });
+      run('init', '-b', 'main');
+      run('config', 'user.email', 'test@example.invalid');
+      run('config', 'user.name', 'Test');
+      mkdirSync(join(history, 'spec'));
+      writeFileSync(join(history, 'spec', `${marker}.txt`), 'clean');
+      run('add', '.');
+      run('commit', '-m', 'clean');
+      const env = { ...process.env, FORBIDDEN_CONTENT_PATTERNS: marker };
+      const tree = spawnSync(process.execPath, [scanner, '--tree'], { cwd: history, env, encoding: 'utf8' });
+      const old = scan(['--history', join(history, '.git')]);
+      for (const result of [tree, old]) {
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain('MATCH [redacted]');
+        expect(result.stdout.toLowerCase()).not.toContain(marker);
+      }
+    } finally {
+      rmSync(history, { recursive: true, force: true });
+    }
+  });
+  it('scans a root-level blob named spec', () => {
+    const history = mkdtempSync(join(tmpdir(), 'content-spec-file-'));
+    try {
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: history, stdio: 'pipe' });
+      run('init', '-b', 'main');
+      run('config', 'user.email', 'test@example.invalid');
+      run('config', 'user.name', 'Test');
+      writeFileSync(join(history, 'spec'), marker);
+      run('add', '.');
+      run('commit', '-m', 'clean');
+      const result = scan(['--history', join(history, '.git')]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('MATCH object ');
+      expect(result.stdout.toLowerCase()).not.toContain(marker);
+    } finally {
+      rmSync(history, { recursive: true, force: true });
+    }
+  });
   it('detects commit and annotated tag messages without displaying them', () => {
     const history = mkdtempSync(join(tmpdir(), 'content-messages-'));
     try {
@@ -142,6 +183,36 @@ describe('forbidden content scanner', () => {
       expect(tagResult.status).toBe(1);
       expect(tagResult.stdout).toContain('MATCH object ');
       expect(tagResult.stdout.toLowerCase()).not.toContain(marker);
+    } finally {
+      rmSync(history, { recursive: true, force: true });
+    }
+  });
+  it.each(['author', 'committer', 'encoding', 'mergetag', 'tag'])('detects forbidden %s headers', field => {
+    const history = mkdtempSync(join(tmpdir(), 'content-header-'));
+    try {
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: history, stdio: 'pipe' }).toString().trim();
+      run('init', '-b', 'main');
+      run('config', 'user.email', 'test@example.invalid');
+      run('config', 'user.name', 'Test');
+      writeFileSync(join(history, 'clean.txt'), 'clean');
+      run('add', '.');
+      run('commit', '-m', 'clean');
+      const tree = run('rev-parse', 'HEAD^{tree}');
+      const author = field === 'author' ? marker : 'Person';
+      const committer = field === 'committer' ? marker : 'Person';
+      const extra = field === 'encoding' ? `encoding ${marker}\n` : field === 'mergetag' ? `mergetag object 0000000000000000000000000000000000000000\n ${marker}\n` : '';
+      const commit = `tree ${tree}\nauthor ${author} <test@example.invalid> 1 +0000\ncommitter ${committer} <test@example.invalid> 1 +0000\n${extra}\nclean\n`;
+      const oid = execFileSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin'], { cwd: history, input: commit, encoding: 'utf8' }).trim();
+      run('update-ref', 'refs/heads/main', oid);
+      if (field === 'tag') {
+        const tag = `object ${oid}\ntype commit\ntag ${marker}\ntagger Person <test@example.invalid> 1 +0000\n\nclean\n`;
+        const tagId = execFileSync('git', ['hash-object', '-t', 'tag', '-w', '--stdin'], { cwd: history, input: tag, encoding: 'utf8' }).trim();
+        run('update-ref', 'refs/tags/safe', tagId);
+      }
+      const result = scan(['--history', join(history, '.git')]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('MATCH object ');
+      expect(result.stdout.toLowerCase()).not.toContain(marker);
     } finally {
       rmSync(history, { recursive: true, force: true });
     }

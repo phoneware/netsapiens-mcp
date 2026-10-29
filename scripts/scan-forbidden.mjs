@@ -27,6 +27,7 @@ try {
   if (mode === '--tree' && process.argv.length === 3) {
     const files = run('git', ['ls-files', '-z']).toString().split('\0').filter(Boolean);
     for (const file of files) {
+      if (matches(file)) report('[redacted]');
       if (!file.startsWith('spec/') && matches(readFileSync(file).toString('utf8'))) report(file);
     }
   } else if (mode === '--pack' && process.argv.length === 4) {
@@ -105,7 +106,8 @@ try {
           if (separator < 0) throw new Error('Invalid git object');
           const headers = text.slice(0, separator).split('\n');
           const targets = headers.filter(value => /^(tree|parent|object) /.test(value)).map(value => value.slice(value.indexOf(' ') + 1));
-          objects.set(id, { type, targets, matched: matches(text.slice(separator + 2)) });
+          const metadata = headers.filter(value => !/^(tree|parent|object) /.test(value)).join('\n');
+          objects.set(id, { type, targets, matched: matches(metadata) || matches(text.slice(separator + 2)) });
         }
       }
       await exited;
@@ -114,31 +116,35 @@ try {
       const hits = new Set();
       const seen = new Set();
       const seenTrees = new Set();
-      const stack = selected.map(ref => ({ id: ref.id, root: true }));
+      const stack = selected.map(ref => ({ id: ref.id, path: '', excluded: false }));
       while (stack.length) {
-        const { id, root } = stack.pop();
+        const { id, path, excluded } = stack.pop();
         const object = objects.get(id);
         if (!object) throw new Error('Missing reachable object');
         if (object.type === 'tree') {
-          const key = `${id}:${root}`;
+          const key = `${id}:${path}`;
           if (seenTrees.has(key)) continue;
           seenTrees.add(key);
           for (const entry of object.entries) {
-            if (entry.mode === '160000' || (root && entry.name === 'spec')) continue;
-            stack.push({ id: entry.id, root: false });
+            const childPath = path ? `${path}/${entry.name}` : entry.name;
+            if (matches(childPath)) hits.add('path');
+            if (entry.mode === '160000') continue;
+            const childExcluded = excluded || (!path && entry.name === 'spec' && entry.mode === '40000');
+            stack.push({ id: entry.id, path: childPath, excluded: childExcluded });
           }
         } else {
+          if (object.type === 'blob' && excluded) continue;
           if (seen.has(id)) continue;
           seen.add(id);
           if (object.matched) hits.add(id);
-          for (const target of object.targets ?? []) stack.push({ id: target, root: true });
+          for (const target of object.targets ?? []) stack.push({ id: target, path: '', excluded: false });
         }
       }
       return hits;
     }
     const ordinary = refs.filter(ref => !ref.name.startsWith('refs/pull/'));
     for (const ref of ordinary) if (matches(ref.name)) report(`ref ${ref.name}`);
-    for (const id of matchingObjects(ordinary)) report(`object ${id}`);
+    for (const id of matchingObjects(ordinary)) report(id === 'path' ? '[redacted]' : `object ${id}`);
     for (const ref of refs.filter(ref => ref.name.startsWith('refs/pull/'))) {
       if (matches(ref.name) || matchingObjects([ref]).size) console.log(`PENDING ${safe(ref.name)}`);
     }

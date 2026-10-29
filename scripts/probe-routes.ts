@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { keySetHash, loadBranchKeys, OBSERVATION_RULE, validateObservation, type BranchKeys, type Observation } from './validate-observations.js';
@@ -43,20 +43,25 @@ export async function probeRoutes(options: {
   const results: Observation['results'] = {};
   let failures = 0;
   for (const key of keys) {
-    let response: ResponseData;
     for (; ;) {
       await wait(500);
+      let response: ResponseData;
       try {
         response = await request('/ns-api/v2' + key.slice(4).replaceAll('{}', 'probe'));
-        break;
       } catch {
         failures++;
         if (failures >= 3) throw new ProbeError('Three consecutive route requests failed', 3);
+        continue;
       }
+      if (response.status === 403 || response.status === 429 || (response.status >= 300 && response.status < 400) || response.status >= 500) {
+        failures++;
+        if (failures >= 3) throw new ProbeError('Three consecutive route requests failed', 3);
+        continue;
     }
-    failures = response.status === 429 || response.status === 403 || response.status >= 500 ? failures + 1 : 0;
-    if (failures >= 3) throw new ProbeError('Three consecutive route requests failed', 3);
+      failures = 0;
     results[key] = { status: response.status, result: response.status === 404 && response.body.includes('No Route Found') ? 'absent' : 'present' };
+      break;
+    }
   }
   const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')) as { version: string };
   const observation: Observation = {
@@ -81,7 +86,7 @@ export async function runProbeCli(args: string[], overrides: Partial<Parameters<
   const { observation, file } = await probeRoutes({ ...overrides, apiUrl, source: source as 'community' | 'maintainer', out });
   const values = Object.values(observation.results);
   const absent = values.filter(value => value.result === 'absent').length;
-  console.log(`observed ${observation.apiVersion}: ${values.length - absent} present, ${absent} absent of ${values.length} GET keys; wrote ${file}`);
+  console.log(`observed ${observation.apiVersion}: ${values.length - absent} present, ${absent} absent of ${values.length} GET keys; wrote ${basename(file)}`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
