@@ -31,6 +31,7 @@ export function buildMetaTools(
  isVisible: (toolName: string) => boolean = () => true,
 ): CuratedTool[] {
  const search_api: CuratedTool = {
+  operations: [],
   minRole: 'user',
   schema: {
    name: 'search_api',
@@ -82,6 +83,7 @@ export function buildMetaTools(
  };
 
  const call_api: CuratedTool = {
+  operations: [],
   minRole: 'user',
   schema: {
    name: 'call_api',
