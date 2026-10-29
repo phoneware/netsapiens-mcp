@@ -7,6 +7,9 @@ import { toolRegistry } from '../generated/registry.js';
 import { logger } from '../utils/logger.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface TextBlock {
   type: 'text';

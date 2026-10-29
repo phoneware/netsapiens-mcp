@@ -10,6 +10,9 @@ import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import type { GenericApiClient } from '../generated/types.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface RecordedRequest {
  method: string;

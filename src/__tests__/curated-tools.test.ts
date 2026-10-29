@@ -12,32 +12,13 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
-import { normalizeOperationKey } from '../netsapiens/operation-key.js';
+import { recordCuratedDispatch } from './curated-operation-recorder.js';
 
 async function importTools() {
  vi.resetModules();
  // Reload the registry to exercise environment-dependent tool selection.
  const tools = await import('../tools/index.js');
- const handleToolCall: typeof tools.handleToolCall = async (client, name, args, role) => {
-  const declared = CURATED_CATALOG.find((tool) => tool.schema.name === name);
-  if (!declared) return tools.handleToolCall(client, name, args, role);
-  const calls: string[] = [];
-  const recordingClient = new Proxy(client, {
-   get(target, property, receiver) {
-    if (property !== 'request') return Reflect.get(target, property, receiver);
-    return (request: { method: string; pathTemplate: string }) => {
-     calls.push(normalizeOperationKey(request.method, request.pathTemplate));
-     return target.request(request as never);
-    };
-   },
-  });
-  try {
-   return await tools.handleToolCall(recordingClient, name, args, role);
-  } finally {
-   for (const key of calls) expect(declared.operations, `${name}: ${key}`).toContain(key);
-  }
- };
- return { ...tools, handleToolCall };
+ return { ...tools, handleToolCall: recordCuratedDispatch(tools.handleToolCall, CURATED_CATALOG) };
 }
 
 function clearEnv() {
