@@ -44,14 +44,14 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           const now = Date.now();
           const row = await backend.updateSession(id, row => {
             const value = row.retainUntil > now ? codec.open<StoredToken>(row.sealed, `session:${id}`) : undefined;
-            if (!value || !value.nsExpiresAt || now <= value.nsExpiresAt - REFRESH_SKEW_MS) return undefined;
+            if (!value || !row.nsExpiresAt || now <= row.nsExpiresAt - REFRESH_SKEW_MS) return undefined;
             if (row.leaseOwner && row.leaseUntil && row.leaseUntil > now) return undefined;
             return { ...row, leaseOwner: owner, leaseUntil: now + (opts?.leaseDurationMs ?? REFRESH_LEASE_MS) };
           });
           const current = decodeSession(row);
           if (!current) throw new Error('Token document not found');
           if (row?.leaseOwner !== owner) {
-            if (!current.nsExpiresAt || Date.now() <= current.nsExpiresAt - REFRESH_SKEW_MS) return current;
+            if (!row?.nsExpiresAt || Date.now() <= row.nsExpiresAt - REFRESH_SKEW_MS) return current;
             await delay(opts?.pollIntervalMs ?? REFRESH_POLL_MS);
             continue;
           }
@@ -76,8 +76,9 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
             throw error;
           }
         }
-        const latest = decodeSession(await backend.getSession(id));
-        if (latest && (!latest.nsExpiresAt || Date.now() <= latest.nsExpiresAt - REFRESH_SKEW_MS)) return latest;
+        const latestRow = await backend.getSession(id);
+        const latest = decodeSession(latestRow);
+        if (latest && (!latestRow?.nsExpiresAt || Date.now() <= latestRow.nsExpiresAt - REFRESH_SKEW_MS)) return latest;
         throw new RetryableRefreshError();
       },
     },
