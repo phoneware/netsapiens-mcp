@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { StoreConfigError, StoreLockedError } from './codec.js';
 import { createStore } from './store.js';
+import { logger } from '../utils/logger.js';
 import type { AuthCodeRow, ResumeRow, SessionRow, StoreBackend, StoreCapabilities } from './types.js';
 
 // The project supports Node versions whose type definitions do not yet declare node:sqlite.
@@ -55,6 +56,12 @@ export class SqliteBackend implements StoreBackend {
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => Database };
     const db = new DatabaseSync(path);
     this.db = db;
+    const transaction = <T>(fn: () => T): T => {
+      db.exec('BEGIN IMMEDIATE');
+      try { const value = fn(); db.exec('COMMIT'); return value; }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+    };
+    const sweep = (now: number) => transaction(() => ['sessions', 'auth_codes', 'resume_tokens'].reduce((n, table) => n + Number(db.prepare(`DELETE FROM ${table} WHERE ${table === 'sessions' ? 'retain_until' : 'expires_at'} <= ?`).run(now).changes), 0));
     try {
       db.exec('PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=0; BEGIN IMMEDIATE; COMMIT;');
       const version = db.prepare('PRAGMA user_version').get()?.user_version as number;
@@ -71,6 +78,7 @@ export class SqliteBackend implements StoreBackend {
       const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
       if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
       db.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES ('namespace',?)").run(namespace);
+      sweep(Date.now());
     } catch (error) {
       db.close();
       if ((error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR' && /locked|busy/i.test((error as Error).message)) {
@@ -78,17 +86,13 @@ export class SqliteBackend implements StoreBackend {
       }
       throw error;
     }
-    const transaction = <T>(fn: () => T): T => {
-      db.exec('BEGIN IMMEDIATE');
-      try { const value = fn(); db.exec('COMMIT'); return value; }
-      catch (error) { db.exec('ROLLBACK'); throw error; }
-    };
     const get = (id: string) => session(db.prepare('SELECT * FROM sessions WHERE id=?').get(id));
     const put = (row: SessionRow) => db.prepare(`INSERT INTO sessions(id,refresh_id,expires_at,retain_until,ns_expires_at,lease_owner,lease_until,sealed) VALUES(?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET refresh_id=excluded.refresh_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,sealed=excluded.sealed`).run(row.id, row.refreshId, row.expiresAt, row.retainUntil, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.sealed);
-    const sweep = (now: number) => transaction(() => ['sessions', 'auth_codes', 'resume_tokens'].reduce((n, table) => n + Number(db.prepare(`DELETE FROM ${table} WHERE ${table === 'sessions' ? 'retain_until' : 'expires_at'} <= ?`).run(now).changes), 0));
-    sweep(Date.now());
-    const timer = setInterval(() => sweep(Date.now()), options.sweepIntervalMs ?? 600_000);
+    const timer = setInterval(() => {
+      try { sweep(Date.now()); }
+      catch (error) { logger.warn('Failed to sweep SQLite store', { error: String(error) }); }
+    }, options.sweepIntervalMs ?? 600_000);
     timer.unref();
     let closed = false;
     const backend: StoreBackend = {
