@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 import { deriveStoreKey, StoreConfigError, StoreLockedError } from '../codec.js';
 import { createSqliteBackend, createSqliteStore, SqliteBackend } from '../sqlite.js';
 import { runStoreConformance } from '../conformance.js';
+import { logger } from '../../utils/logger.js';
+import type { McpStore } from '../types.js';
 
 const key = deriveStoreKey('a secret long enough for the sqlite tests');
 const directories: string[] = [];
@@ -15,7 +17,7 @@ function location() {
   directories.push(root);
   return { root, directory: join(root, 'private'), path: join(root, 'private', 'store.db') };
 }
-afterEach(() => { vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 const conformanceRoot = mkdtempSync(join(tmpdir(), 'sqlite-conformance-'));
 afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true }));
@@ -51,7 +53,10 @@ runStoreConformance({
 describe('SQLite storage', () => {
   it('creates private directory, database and WAL', async () => {
     const { path, directory } = location();
-    const store = createSqliteStore({ path, namespace: 'test', key });
+    const oldMask = process.umask(0);
+    let store: McpStore;
+    try { store = createSqliteStore({ path, namespace: 'test', key }); }
+    finally { process.umask(oldMask); }
     expect(statSync(directory).mode & 0o777).toBe(0o700);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(`${path}-wal`).mode & 0o777).toBe(0o600);
@@ -145,17 +150,62 @@ describe('SQLite storage', () => {
     db.close();
   });
 
-  it('sweeps expired retained rows on the ten minute timer', async () => {
-    vi.useFakeTimers();
+  it('releases the lock when the startup sweep fails', async () => {
     const { path } = location();
     const store = createSqliteStore({ path, namespace: 'test', key });
     await store.sessions.create({ accessToken: 'old-access', refreshToken: 'old-refresh' }, { clientId: 'client', expiresAt: Date.now() - 31 * 86400_000, nsAccessToken: 'upstream', nsUsername: 'user' });
-    await vi.advanceTimersByTimeAsync(600_000);
     await store.close();
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
     const db = new DatabaseSync(path);
-    expect(db.prepare('SELECT count(*) AS count FROM sessions').get().count).toBe(0);
+    db.exec("CREATE TRIGGER fail_sweep BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
     db.close();
+    expect(() => createSqliteStore({ path, namespace: 'test', key })).toThrow('sweep failure');
+    const repair = new DatabaseSync(path);
+    repair.exec('DROP TRIGGER fail_sweep');
+    repair.close();
+    const reopened = createSqliteStore({ path, namespace: 'test', key });
+    await reopened.close();
+  });
+
+  it('logs a failed timer sweep and continues sweeping', async () => {
+    vi.useFakeTimers();
+    const { path } = location();
+    const backend = createSqliteBackend({ path, namespace: 'test' });
+    const now = Date.now();
+    await backend.putSession({ id: 'a'.repeat(64), refreshId: 'b'.repeat(64), expiresAt: now - 2, retainUntil: now - 1, sealed: 'test' });
+    backend.db.exec("CREATE TRIGGER fail_sweep BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => { });
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(warn).toHaveBeenCalledWith('Failed to sweep SQLite store', expect.objectContaining({ error: expect.stringContaining('sweep failure') }));
+    expect(await backend.getSession('a'.repeat(64))).toBeDefined();
+    backend.db.exec('DROP TRIGGER fail_sweep');
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(await backend.getSession('a'.repeat(64))).toBeUndefined();
+    await backend.close();
+  });
+
+  it('sweeps expired retained rows on the ten minute timer', async () => {
+    vi.useFakeTimers();
+    const original = globalThis.setInterval;
+    const unrefs: ReturnType<typeof vi.spyOn>[] = [];
+    vi.spyOn(globalThis, 'setInterval').mockImplementation(((...args: Parameters<typeof setInterval>) => {
+      const handle = original(...args);
+      unrefs.push(vi.spyOn(handle, 'unref'));
+      return handle;
+    }) as typeof setInterval);
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+    for (const [delay, expected] of [[599_999, 1], [600_000, 0]] as const) {
+      const { path } = location();
+      const store = createSqliteStore({ path, namespace: 'test', key });
+      await store.sessions.create({ accessToken: 'old-access', refreshToken: 'old-refresh' }, { clientId: 'client', expiresAt: Date.now() - 31 * 86400_000, nsAccessToken: 'upstream', nsUsername: 'user' });
+      await vi.advanceTimersByTimeAsync(delay);
+      await store.close();
+      const db = new DatabaseSync(path);
+      expect(db.prepare('SELECT count(*) AS count FROM sessions').get().count).toBe(expected);
+      db.close();
+    }
+    expect(unrefs).toHaveLength(2);
+    for (const unref of unrefs) expect(unref).toHaveBeenCalledTimes(1);
   });
 
   it('keeps session secrets out of database and WAL bytes', async () => {
