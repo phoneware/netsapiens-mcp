@@ -15,6 +15,10 @@ import type { Server as HttpServer } from 'node:http';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { isReadOnlyMode, isToolReadOnly, getAllToolDefinitions, handleToolCall } from '../tools/index.js';
 import type { NetSapiensClient } from '../netsapiens-client.js';
+import { CURATED_CATALOG } from '../tools/curated/catalog.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 const openServers: HttpServer[] = [];
 

@@ -604,6 +604,8 @@ const active_calls: CuratedTool = {
 
 const call_details: CuratedTool = {
  operations: [
+  'GET /domains/{}/cdrs',
+  'GET /domains/{}/users/{}/cdrs',
   'GET /domains/{}/users/{}/calls/{}',
  ],
  minRole: 'user',
