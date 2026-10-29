@@ -52,10 +52,10 @@ export function runStoreConformance(target: ConformanceTarget): void {
       await store.sessions.create(t, s); await store.sessions.deleteByRefreshToken(t.refreshToken); expect(await store.sessions.get(t.accessToken)).toBeUndefined();
     });
     it('at rest hides all secrets and conforms to persisted shape', async () => {
-      const { store, handle } = await open(); const t = tokens(); const s = session(); const code = secret(); const user = secret(); const resume = randomBytes(32).toString('hex');
-      await store.sessions.create(t, s); await store.authCodes.put(code, codeData()); await store.resumeTokens.consume(resume); await store.usage.recordCall(user, 'tool');
+      const { store, handle } = await open(); const t = tokens(); const s = session(); const code = secret(); const user = secret(); const resume = randomBytes(32).toString('hex'); const authData = codeData();
+      await store.sessions.create(t, s); await store.authCodes.put(code, authData); await store.resumeTokens.consume(resume); await store.usage.recordCall(user, 'tool');
       const raw = await target.dumpRaw(handle);
-      for (const value of [t.accessToken, t.refreshToken, code, s.nsAccessToken, s.nsRefreshToken, s.nsUsername, user]) expect(raw).not.toContain(value);
+      for (const value of [t.accessToken, t.refreshToken, code, s.nsAccessToken, s.nsRefreshToken, s.nsUsername, user, authData.nsTokens.access_token]) expect(raw).not.toContain(value);
       const snapshot = await target.inspect(handle);
       expect(snapshot.sessions[0].key).toMatch(/^[0-9a-f]{64}$/); expect(snapshot.authCodes[0].key).toMatch(/^[0-9a-f]{64}$/); expect(snapshot.resumeTokens[0].key).toBe(resume);
       const allowed: Record<keyof PersistedSnapshot, string[]> = { sessions: ['refreshId', 'expiresAt', 'retainUntil', 'nsExpiresAt', 'leaseOwner', 'leaseUntil', 'sealed', 'ttlAt', 'v'], authCodes: ['expiresAt', 'sealed', 'ttlAt', 'v'], resumeTokens: ['consumedAt', 'expiresAt', 'ttlAt'], usage: ['userHash', 'toolName', 'count', 'lastUsed'], clients: [] };
@@ -71,10 +71,24 @@ export function runStoreConformance(target: ConformanceTarget): void {
       expect(await wrong.authCodes.getChallenge(code, expected)).toBeUndefined(); expect(await wrong.authCodes.redeem(code, expected)).toBeUndefined(); expect((await wrong.usage.getUserUsage(user)).size).toBe(0);
       const idA = codec.id('session', a.accessToken), idB = codec.id('session', b.accessToken), idC = codec.id('session', c.accessToken);
       const rowA = (await handle.getSession(idA))!, rowB = (await handle.getSession(idB))!;
+      const wrongCodec = createCodec(randomBytes(32));
+      expect(wrongCodec.open(rowA.sealed, `session:${idA}`)).toBeUndefined();
+      expect(wrongCodec.open(rowA.sealed, `session:${idA}:${rowA.refreshId}`)).toBeUndefined();
       await handle.updateSession(idA, row => ({ ...row, sealed: rowB.sealed })); await handle.updateSession(idB, row => ({ ...row, sealed: rowA.sealed }));
       await handle.updateSession(idC, row => ({ ...row, sealed: 'v1.AAAA.AAAA.AAAA' }));
       for (const t of [a, b, c]) expect(await store.sessions.get(t.accessToken)).toBeUndefined();
       const snapshot = await target.inspect(handle); expect(snapshot.sessions.find(row => row.key === idA)?.fields.sealed).toBe(rowB.sealed); expect(snapshot.sessions.find(row => row.key === idB)?.fields.sealed).toBe(rowA.sealed);
+    });
+    it('refresh lookup rejects a copied refresh identifier', async () => {
+      const { store, handle } = await open(); const victim = tokens(); const attacker = tokens();
+      await store.sessions.create(victim, session());
+      expect(await store.sessions.getByRefreshToken(victim.refreshToken)).toBeDefined();
+      const id = codec.id('session', victim.accessToken);
+      await handle.updateSession(id, row => ({ ...row, refreshId: codec.id('refresh', attacker.refreshToken) }));
+      expect(await store.sessions.getByRefreshToken(attacker.refreshToken)).toBeUndefined();
+      expect(await store.sessions.get(victim.accessToken)).toBeUndefined();
+      await store.sessions.deleteByRefreshToken(attacker.refreshToken);
+      expect(await handle.getSession(id)).toBeDefined();
     });
     it('auth codes check bindings, expiry, and five concurrent redeems', async () => {
       const { store, handle } = await open(); const code = secret();
@@ -114,7 +128,7 @@ export function runStoreConformance(target: ConformanceTarget): void {
       expect((await store.sessions.get(t.accessToken))?.nsAccessToken).toBe(before.nsAccessToken);
       await expect(peer.sessions.refreshUpstream(t.accessToken, refresh, leaseOpts)).rejects.toBeInstanceOf(RetryableRefreshError);
       await handle.updateSession(id, row => ({ ...row, leaseUntil: Date.now() - 1 }));
-      await expect(store.sessions.refreshUpstream(t.accessToken, async () => { await peer.sessions.delete(t.accessToken); return { access_token: secret() }; }, leaseOpts)).rejects.toThrow();
+      await expect(store.sessions.refreshUpstream(t.accessToken, async () => { await peer.sessions.delete(t.accessToken); return { access_token: secret() }; }, leaseOpts)).rejects.toThrow('Token doc was deleted/revoked during refresh');
       expect(await store.sessions.get(t.accessToken)).toBeUndefined();
     };
     it('refresh lease handles abandoned, late completion, deletion and timeout', async () => { const { store, handle } = await open(); await leaseCases(store, handle, store); }, 15000);
@@ -131,8 +145,10 @@ export function runStoreConformance(target: ConformanceTarget): void {
       const id = codec.id('session', t.accessToken); await handle.updateSession(id, row => ({ ...row, retainUntil: row.retainUntil + 5000 }));
       let snapshot = await target.inspect(handle);
       if (target.capabilities.expiry === 'ttl-policy') {
-        for (const row of snapshot.sessions) expect(row.fields.ttlAt).toEqual({ $timestamp: row.fields.retainUntil });
-        for (const row of [...snapshot.authCodes, ...snapshot.resumeTokens]) expect(row.fields.ttlAt).toEqual({ $timestamp: row.fields.expiresAt });
+        expect(snapshot.sessions.length).toBeGreaterThan(0); expect(snapshot.authCodes.length).toBeGreaterThan(0); expect(snapshot.resumeTokens.length).toBeGreaterThan(0);
+        for (const row of snapshot.sessions) { expect(row.fields.ttlAt).toEqual({ $timestamp: row.fields.retainUntil }); expect(row.fields.v).toBe(1); }
+        for (const row of snapshot.authCodes) { expect(row.fields.ttlAt).toEqual({ $timestamp: row.fields.expiresAt }); expect(row.fields.v).toBe(1); }
+        for (const row of snapshot.resumeTokens) expect(row.fields.ttlAt).toEqual({ $timestamp: row.fields.expiresAt });
         expect(await handle.sweep(now)).toBe(0); expect(await target.inspect(handle)).toEqual(snapshot);
       } else {
         const expiredT = tokens(), expiredCode = secret(), expiredResume = randomBytes(32).toString('hex');
@@ -146,7 +162,14 @@ export function runStoreConformance(target: ConformanceTarget): void {
       await handle.close(); const reopened = await open(namespace); expect(Boolean(await reopened.store.sessions.get(t.accessToken))).toBe(target.capabilities.persistent);
     }, 15000);
     it('namespaces isolate records', async () => {
-      const a = await open(), b = await open(); const t = tokens(); await a.store.sessions.create(t, session()); expect(await b.store.sessions.get(t.accessToken)).toBeUndefined();
+      const a = await open(), b = await open(); const t = tokens(), code = secret(), user = secret(), resume = randomBytes(32).toString('hex');
+      await a.store.sessions.create(t, session()); await a.store.authCodes.put(code, codeData());
+      expect(await a.store.resumeTokens.consume(resume)).toBe(true); await a.store.usage.recordCall(user, 'tool');
+      const client = await a.store.clients.registerClient!({ redirect_uris: ['https://example.com/callback'] });
+      expect(await b.store.sessions.get(t.accessToken)).toBeUndefined(); expect(await b.store.sessions.getByRefreshToken(t.refreshToken)).toBeUndefined();
+      expect(await b.store.authCodes.getChallenge(code, expected)).toBeUndefined(); expect(await b.store.authCodes.redeem(code, expected)).toBeUndefined();
+      expect(await b.store.resumeTokens.consume(resume)).toBe(true); expect((await b.store.usage.getUserUsage(user)).size).toBe(0);
+      expect(await b.store.clients.getClient(client.client_id)).toBeUndefined();
     });
   });
 }
