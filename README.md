@@ -104,46 +104,7 @@ Sessions still buy two things, both server-initiated: the elicitation confirmati
 | `MCP_STATELESS=true` (default) | No | No | No |
 | `MCP_STATELESS=false` | Yes | Yes | Yes |
 
-## ☁️ Cloud Run deployment
-
-This repo ships with a Cloud Run-friendly Dockerfile and a `cloudbuild.yaml`. The minimum production stack:
-
-| Component | Purpose |
-|---|---|
-| Cloud Run service | Runs the HTTP server with session affinity and `min-instances=1` |
-| Global Load Balancer + static IP | Stable A record target if you want to point DNS at an IP instead of `ghs.googlehosted.com` |
-| Managed SSL cert | Auto-provisioned for the custom domain |
-| Firestore (native mode) | Persistent token store and DCR client registry |
-| Cloud Run service account → `roles/datastore.user` | Firestore access |
-
-Build, push, deploy:
-
-```bash
-gcloud builds submit --config cloudbuild.yaml --project=<your-project>
-```
-
-Required env vars on Cloud Run:
-
-| Var | Notes |
-|---|---|
-| `MCP_TRANSPORT=http` | enable the HTTP transport |
-| `MCP_BASE_URL` | public URL, e.g. `https://mcp.example.com` |
-| `NETSAPIENS_API_URL` | upstream NS API, e.g. `https://edge.example.com` |
-| `NETSAPIENS_OAUTH_CLIENT_ID` / `_SECRET` | NDP-provisioned client used for the password grant |
-| `MCP_SESSION_SECRET` | 32+ char random; signs and seals login state & must be stable across instances |
-| `MCP_PERSISTENCE=firestore` | enable Firestore-backed tokens and clients |
-| `GOOGLE_CLOUD_PROJECT` | Firestore project ID (auto-set on Cloud Run) |
-
-Optional:
-
-| Var | Notes |
-|---|---|
-| `MCP_LOGIN_HEADER` | login page heading text (defaults to "NetSapiens MCP — Sign In") |
-| `MCP_ICON_URL` | URL to a square PNG; used for `/favicon.*` and as the logo above the login form |
-| `MCP_LOGIN_LOGO_URL` | override for just the login-form logo |
-| `MCP_DISABLED_TOOLS` | comma-separated globs to hide tools (e.g. `delete_*,remove_*,*token*`) |
-| `MCP_DISABLED_ACTIONS` | comma-separated action arg values to block on `manage_*` tools |
-| `MCP_CORS_ORIGIN` | CORS origin for the MCP transport (defaults to `*`) |
+The repository includes a `Dockerfile` for container deployment.
 
 ## 🔐 OAuth flow (detailed)
 
@@ -197,19 +158,16 @@ Every tool (curated, workflow, or generated) carries:
 
 ### Writes are synchronous, and multi-step operations are single tools
 
-
+A write that a later step reads back can race replication when `synchronous` is `no`.
 
 This server defaults `synchronous` to `yes` on every tool whose schema accepts it, never overriding an explicit value. `MCP_SYNCHRONOUS_WRITES=false` restores the API's own default.
 
 Two composites cover operations that are a chain rather than a call:
 
 - **`provision_user`** — creating a user writes only the user record: no device, no DID. A user in that state cannot register a phone or take an outside call. This runs user → device → DID in order with synchronous writes, stops at the first failure instead of orphaning a device on a user that does not exist, and reports what is still unconfigured.
-- **`deprovision_user`** — deleting a user cascades server-side to their devices, contacts, addresses, timeframes, voicemail, and MFA, but **not** to DIDs routed at them or their queue agent rows. Those are left pointing at a destination that no longer exists. This inventories both first, deletes the user, then releases the leftovers. `dry_run: true` shows exactly what would go without touching anything.
+- **`deprovision_user`** inventories DIDs and queue agent rows, deletes the user, then releases the associated entries. `dry_run: true` shows the planned operations.
 
-- **`provision_call_queue`** / **`deprovision_call_queue`** — the same shape for queues. Creating a queue writes the queue and its huntgroup but no agents and no number, so it answers nothing and nobody can reach it. Deleting one removes the queue and huntgroup and leaves every agent membership behind, plus any DID pointed at it.
-
-A full sweep of which NetSapiens operations are chains, and which end of the wire runs them, is in the findings doc. Creating a domain, creating an auto attendant, and creating or deleting a timeframe are all handled server-side in a single call, so they get no composite.
-
+- **`provision_call_queue`** / **`deprovision_call_queue`** provide corresponding workflows for queues and their associated agents and numbers.
 
 
 ### Dead ends, and how they are closed
@@ -217,7 +175,7 @@ A full sweep of which NetSapiens operations are chains, and which end of the wir
 A generated tool can look callable and be impossible to complete. Three kinds showed up, and each is now handled rather than left for the model to discover:
 
 - **Multipart uploads.** The generator treats a `multipart/form-data` body like a JSON one, so it emitted 12 tools that send JSON to endpoints which parse a raw upload. They are hidden from `search_api` and rejected at dispatch with the working alternative named. Greetings, music-on-hold, and images all have a text-to-speech or base64 variant. Hold messages have neither, so `set_hold_message` sends a genuine multipart upload from base64 audio.
-
+- **Queue descriptions.** `provision_call_queue` always sends a description.
 - **Invented field names.** A body key NetSapiens does not recognise is ignored, and the call still answers success, so the tool reports work it never did. `spec-conformance.test.ts` drives every write composite against a recording client and fails if any body key is absent from the spec for that operation. It would have caught the `rule-action` bug the day it was written.
 
 ### What each tool carries

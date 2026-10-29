@@ -1,16 +1,6 @@
 /**
- * Guard against silently-discarded writes.
- *
- * A curated composite hand-writes its request body. If it invents a field name,
- * NetSapiens ignores the unknown key and answers success, so the tool reports
- * that it worked while changing nothing. That is exactly what happened with
- * `schedule_forwarding`, which sent `rule-action` / `forward-destination` for
-
- * source. Tests asserting the invented shape are what let it survive.
- *
- * So: drive every write composite against a recording client, then check each
- * body key against the OpenAPI operation the request actually targets. A field
- * the spec does not declare fails here rather than in production.
+ * Check each composite write body against its OpenAPI operation using a
+ * recording client. Fields absent from the specification fail the test.
  */
 
 import { describe, expect, it } from 'vitest';

@@ -214,7 +214,7 @@ describe('role-wall boundaries', () => {
    expect(parsedNonMatch.data).toEqual([]);
 
    // Matching query
-   const matching = await tool!.handler({ query: 'acmelaw' }, client, 'domain_admin');
+   const matching = await tool!.handler({ query: 'acme-law' }, client, 'domain_admin');
    const parsedMatch = JSON.parse(matching.content[0].text);
    expect(parsedMatch.data).toEqual([fakeDomainData]);
   });

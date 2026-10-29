@@ -1,6 +1,6 @@
 {
   "name": "netsapiens-mcp",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -30,8 +30,7 @@
     "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "check:secrets": "tsx scripts/check-cloudbuild-secrets.ts"
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "mcp",

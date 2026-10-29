@@ -970,7 +970,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'refusal',
           payload: {
             success: false,
-            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+            error: 'Blake Example (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Casey Example (2006) and Avery Example (2007).',
           },
         },
         {
@@ -978,7 +978,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'refusal',
           payload: {
             success: false,
-            error: 'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).',
+            error: 'Blake Example (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Casey Example (2006) and Avery Example (2007).',
           },
         },
         {
@@ -987,7 +987,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           payload: {
             success: true,
             data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'automatic' },
-            note: 'Kim Nguyen is logged in to the Appointments queue (2090).',
+            note: 'Avery Example is logged in to the Appointments queue (2090).',
           },
         },
         {
@@ -996,7 +996,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           payload: {
             success: true,
             data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'manual' },
-            note: 'Kim Nguyen is logged out of the Appointments queue (2090).',
+            note: 'Avery Example is logged out of the Appointments queue (2090).',
           },
         },
         {
@@ -1013,7 +1013,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'all_queues',
           payload: {
             success: true,
-            note: 'Kim Nguyen is logged in to all queues.',
+            note: 'Avery Example is logged in to all queues.',
           },
         },
         {
@@ -1025,7 +1025,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             from: '2090',
             to: '2099',
             agent: '2007@PhonewareLab',
-            note: 'Kim Nguyen is not an agent in the Billing queue (2099), so nothing was changed.',
+            note: 'Avery Example is not an agent in the Billing queue (2099), so nothing was changed.',
           },
         },
         // queue_status: live state success
@@ -1065,13 +1065,13 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
               data: [
                 {
                   'callqueue-agent-id': '2006@PhonewareLab',
-                  'name-full-name': 'Miguel Torres',
+                  'name-full-name': 'Casey Example',
                   'callqueue-agent-availability-type': 'automatic',
                   'active-calls-total-current': 1,
                 },
                 {
                   'callqueue-agent-id': '2007@PhonewareLab',
-                  'name-full-name': 'Kim Nguyen',
+                  'name-full-name': 'Avery Example',
                   'callqueue-agent-availability-type': 'manual',
                   'active-calls-total-current': 0,
                 },

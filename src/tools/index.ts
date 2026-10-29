@@ -892,17 +892,9 @@ export async function handleToolCall(
 // ---------------------------------------------------------------------------
 // Synchronous writes
 //
-
-
-
-
-
-//
-
-
-
-
-
+// A write that a later step reads back can race replication when `synchronous`
+// is `no`. Tools whose schema declares `synchronous` default it to `yes`
+// unless the caller set it; this costs latency by design.
 //
 // MCP_SYNCHRONOUS_WRITES=false restores the API's own default.
 // ---------------------------------------------------------------------------
