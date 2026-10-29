@@ -180,8 +180,8 @@ describe('role-wall boundaries', () => {
 
    const recorded: RecordedRequest[] = [];
    const fakeDomainData = {
-    domain: 'ggrmlaw.com',
-    description: 'GGRM Law Firm',
+    domain: 'acme-law.example',
+    description: 'Acme Law',
    };
    const client = recordingClient(recorded, fakeDomainData);
 
@@ -203,18 +203,18 @@ describe('role-wall boundaries', () => {
 
    const recorded: RecordedRequest[] = [];
    const fakeDomainData = {
-    domain: 'ggrmlaw.com',
-    description: 'GGRM Law Firm',
+    domain: 'acme-law.example',
+    description: 'Acme Law',
    };
    const client = recordingClient(recorded, fakeDomainData);
 
    // Non-matching query
-   const nonMatching = await tool!.handler({ query: 'spooner' }, client, 'domain_admin');
+   const nonMatching = await tool!.handler({ query: 'exampleclinic' }, client, 'domain_admin');
    const parsedNonMatch = JSON.parse(nonMatching.content[0].text);
    expect(parsedNonMatch.data).toEqual([]);
 
    // Matching query
-   const matching = await tool!.handler({ query: 'ggrm' }, client, 'domain_admin');
+   const matching = await tool!.handler({ query: 'acme-law' }, client, 'domain_admin');
    const parsedMatch = JSON.parse(matching.content[0].text);
    expect(parsedMatch.data).toEqual([fakeDomainData]);
   });

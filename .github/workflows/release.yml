@@ -36,6 +36,13 @@ jobs:
           TARBALL="netsapiens-mcp-${VERSION}.tgz"
           tar -tzf "$TARBALL" | grep -q "^package/build/lib.js$"
           tar -tzf "$TARBALL" | grep -q "^package/build/index.js$"
+      - name: Scan package
+        env:
+          FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="netsapiens-mcp-${VERSION}.tgz"
+          node scripts/scan-forbidden.mjs --pack "$TARBALL"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

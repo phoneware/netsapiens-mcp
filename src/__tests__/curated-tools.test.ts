@@ -691,9 +691,7 @@ describe('workflow tools (multi-call composites)', () => {
   await handleToolCall(client as never, 'schedule_forwarding', { destination: '4001' }, 'user');
   expect(captured[0].method).toBe('PUT');
   expect(captured[0].pathTemplate).toBe('/domains/~/users/~/answerrules/{timeframe}');
-  // `forward-always` is the field NS actually reads. `rule-action` /
-  // `forward-destination` appear nowhere in the spec or the controllers, so
-  // the old payload was silently discarded.
+  // The forwarding request uses the field declared in the API specification.
   const fwd = (captured[0].body as { 'forward-always': { enabled: string; parameters: string[] } })['forward-always'];
   expect(fwd.enabled).toBe('yes');
   expect(fwd.parameters).toEqual(['4001']);
@@ -1138,7 +1136,7 @@ describe('composite handlers translate args correctly', () => {
  });
 
  it('an office manager asking a bare call question gets the domain, not their own line', async () => {
-  // Morgan's report: she asked how many calls the office took and got her
+  // Jordan's report: she asked how many calls the office took and got her
   // own two back. The model never passes `scope` for a natural question, so
   // the default has to be right for her tier, not just reachable.
   const { handleToolCall } = await importTools();
@@ -1801,7 +1799,7 @@ describe('provision_call_queue sends the description NetSapiens requires', () =>
    },
   };
   await handleToolCall(client as never, 'provision_call_queue', { callqueue: 'support' }, 'domain_admin');
-  // CallqueuesController::create validates domain, queue AND description.
+  // provision_call_queue always sends a description.
   expect(calls[0].body?.description).toBe('support');
  });
 });
@@ -1816,7 +1814,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1827,7 +1825,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
       success: true,
       data: {
        'callqueue-agent-id': '2007@PhonewareLab',
-       'name-full-name': 'Kim Nguyen',
+       'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': hasPatched ? 'automatic' : 'manual',
       },
      };
@@ -1842,7 +1840,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   const res = await handleToolCall(client as never, 'agent_login', { queue: '2090' }, 'user');
   const parsed = JSON.parse(res.content[0].text);
   expect(parsed.success).toBe(true);
-  expect(parsed.note).toBe('Kim Nguyen is logged in to the Appointments queue (2090).');
+  expect(parsed.note).toBe('Avery Example is logged in to the Appointments queue (2090).');
   const patchWrites = calls.filter((c) => c.method === 'PATCH');
   expect(patchWrites.length).toBe(1);
   expect(patchWrites[0].pathTemplate).toBe('/domains/~/callqueues/{queue}/agents/{agent}/login');
@@ -1856,7 +1854,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
+     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Blake Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1868,8 +1866,8 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
      return {
       success: true,
       data: [
-       { 'callqueue-agent-id': '2006@PhonewareLab', 'name-full-name': 'Miguel Torres', 'login-username': '2006@PhonewareLab' },
-       { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Kim Nguyen', 'login-username': '2007@PhonewareLab' },
+       { 'callqueue-agent-id': '2006@PhonewareLab', 'name-full-name': 'Casey Example', 'login-username': '2006@PhonewareLab' },
+       { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Avery Example', 'login-username': '2007@PhonewareLab' },
       ],
      };
     }
@@ -1881,7 +1879,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   const parsed = JSON.parse(res.content[0].text);
   expect(parsed.success).toBe(false);
   expect(parsed.error).toBe(
-   'Dana Reyes (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Miguel Torres (2006) and Kim Nguyen (2007).'
+   'Blake Example (2001) is not an agent in the Appointments queue (2090), so nothing was changed. Its agents are Casey Example (2006) and Avery Example (2007).'
   );
   const writes = calls.filter((c) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.method));
   expect(writes.length).toBe(0);
@@ -1894,7 +1892,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Dana Reyes' } };
+     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Blake Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1904,7 +1902,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
       success: true,
       data: {
        'callqueue-agent-id': '2007@PhonewareLab',
-       'name-full-name': 'Kim Nguyen',
+       'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': 'automatic',
       },
      };
@@ -1931,7 +1929,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'PATCH') {
      return { success: true, data: { status: 'ok' } };
@@ -1943,7 +1941,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   const res = await handleToolCall(client as never, 'agent_login', { queue: 'all' }, 'user');
   const parsed = JSON.parse(res.content[0].text);
   expect(parsed.success).toBe(true);
-  expect(parsed.note).toBe('Kim Nguyen is logged in to all queues.');
+  expect(parsed.note).toBe('Avery Example is logged in to all queues.');
   const patchWrites = calls.filter((c) => c.method === 'PATCH');
   expect(patchWrites.length).toBe(1);
   expect(patchWrites[0].pathParams).toEqual({ queue: 'all', agent: '2007@PhonewareLab' });
@@ -1957,7 +1955,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      if (o.pathParams?.queue === '2090') return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1965,7 +1963,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      if (o.pathParams?.queue === '2090') {
-      return { success: true, data: { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+      return { success: true, data: { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Avery Example' } };
      }
      return { success: false, error: '404 Not Found' };
     }
@@ -1995,7 +1993,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Kim Nguyen' } };
+     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -2007,7 +2005,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
       success: true,
       data: {
        'callqueue-agent-id': '2007@PhonewareLab',
-       'name-full-name': 'Kim Nguyen',
+       'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': avail,
       },
      };
@@ -2023,7 +2021,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   const parsed = JSON.parse(res.content[0].text);
   expect(parsed.success).toBe(true);
   expect(parsed.data['callqueue-agent-availability-type']).toBe('automatic');
-  expect(parsed.note).toBe('Kim Nguyen is logged in to the Appointments queue (2090).');
+  expect(parsed.note).toBe('Avery Example is logged in to the Appointments queue (2090).');
  });
 });
 
@@ -2077,13 +2075,13 @@ describe('queue_status live state (C2)', () => {
       data: [
        {
         'callqueue-agent-id': '2006@PhonewareLab',
-        'name-full-name': 'Miguel Torres',
+        'name-full-name': 'Casey Example',
         'callqueue-agent-availability-type': 'automatic',
         'active-calls-total-current': 1,
        },
        {
         'callqueue-agent-id': '2007@PhonewareLab',
-        'name-full-name': 'Kim Nguyen',
+        'name-full-name': 'Avery Example',
         'callqueue-agent-availability-type': 'manual',
         'active-calls-total-current': 0,
        },
@@ -2118,8 +2116,8 @@ describe('queue_status live state (C2)', () => {
   expect(payload.agents).toMatchObject({
    ok: true,
    data: [
-    expect.objectContaining({ 'name-full-name': 'Miguel Torres' }),
-    expect.objectContaining({ 'name-full-name': 'Kim Nguyen' }),
+    expect.objectContaining({ 'name-full-name': 'Casey Example' }),
+    expect.objectContaining({ 'name-full-name': 'Avery Example' }),
    ],
   });
   expect(payload.statistics).toMatchObject({
@@ -2139,7 +2137,7 @@ describe('queue_status live state (C2)', () => {
      return { success: false, error: '403 Forbidden' };
     }
     if (opts.pathTemplate === '/domains/{domain}/callqueues/{queue}/agents') {
-     return { success: true, data: [{ 'callqueue-agent-id': '2006@dom', 'name-full-name': 'Miguel Torres' }] };
+     return { success: true, data: [{ 'callqueue-agent-id': '2006@dom', 'name-full-name': 'Casey Example' }] };
     }
     if (opts.pathTemplate === '/domains/{domain}/statistics/callqueues/{queue}') {
      return { success: true, data: [] };

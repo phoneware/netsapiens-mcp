@@ -487,7 +487,7 @@ describe('request paths gate', () => {
     },
    } as unknown as GenericApiClient;
 
-   const result = await tool!.handler({ call_id: 'c-old', domain: 'GGRM' }, mockClient, 'domain_admin');
+   const result = await tool!.handler({ call_id: 'c-old', domain: 'ACMELAW' }, mockClient, 'domain_admin');
    const paths = recorded.map((r) => r.pathTemplate);
    expect(paths).not.toContain('/sipflow');
 
