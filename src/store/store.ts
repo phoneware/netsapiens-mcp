@@ -1,3 +1,5 @@
+// Session AAD binds both the hashed access-token id and the refresh lookup id:
+// session:<id>:<refreshId>. A copied refreshId cannot authenticate another row.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
@@ -13,9 +15,20 @@ export const REFRESH_POLL_MS = 150;
 export const REFRESH_LEASE_MS = 15_000;
 export const REFRESH_SKEW_MS = 60_000;
 
+export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): OAuthClientInformationFull {
+  const full: OAuthClientInformationFull = { ...client, client_id: randomUUID(), client_id_issued_at: Math.floor(Date.now() / 1000) };
+  if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
+  else delete full.client_secret;
+  return full;
+}
+
+function sessionAad(row: Pick<SessionRow, 'id' | 'refreshId'>): string {
+  return `session:${row.id}:${row.refreshId}`;
+}
+
 export function createStore(backend: StoreBackend, { namespace, key }: { namespace: string; key: Uint8Array }): McpStore {
   const codec = createCodec(key);
-  const decodeSession = (row?: SessionRow): StoredToken | undefined => row && row.retainUntil > Date.now() ? codec.open<StoredToken>(row.sealed, `session:${row.id}`) : undefined;
+  const decodeSession = (row?: SessionRow): StoredToken | undefined => row && row.retainUntil > Date.now() ? codec.open<StoredToken>(row.sealed, sessionAad(row)) : undefined;
   const decodeCode = (row: { id: string; expiresAt: number; sealed: string } | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
     if (!row || row.expiresAt <= Date.now()) return undefined;
     const data = codec.open<AuthCodeData>(row.sealed, `code:${row.id}`);
@@ -29,12 +42,13 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     sessions: {
       async create(tokens, session) {
         const id = codec.id('session', tokens.accessToken);
-        await backend.putSession({ id, refreshId: codec.id('refresh', tokens.refreshToken), expiresAt: session.expiresAt, retainUntil: session.expiresAt + SESSION_RETENTION_MS, ...(session.nsExpiresAt === undefined ? {} : { nsExpiresAt: session.nsExpiresAt }), sealed: codec.seal(session, `session:${id}`) });
+        const refreshId = codec.id('refresh', tokens.refreshToken);
+        await backend.putSession({ id, refreshId, expiresAt: session.expiresAt, retainUntil: session.expiresAt + SESSION_RETENTION_MS, ...(session.nsExpiresAt === undefined ? {} : { nsExpiresAt: session.nsExpiresAt }), sealed: codec.seal(session, sessionAad({ id, refreshId })) });
       },
       async get(token) { return decodeSession(await backend.getSession(codec.id('session', token))); },
       async getByRefreshToken(token) { return decodeSession(await backend.findSessionByRefreshId(codec.id('refresh', token))); },
       async delete(token) { await backend.deleteSession(codec.id('session', token)); },
-      async deleteByRefreshToken(token) { const row = await backend.findSessionByRefreshId(codec.id('refresh', token)); if (row) await backend.deleteSession(row.id); },
+      async deleteByRefreshToken(token) { const row = await backend.findSessionByRefreshId(codec.id('refresh', token)); if (row && decodeSession(row)) await backend.deleteSession(row.id); },
       async refreshUpstream(token, doRefresh, opts) {
         const id = codec.id('session', token);
         const start = Date.now();
@@ -43,7 +57,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           const owner = randomUUID();
           const now = Date.now();
           const row = await backend.updateSession(id, row => {
-            const value = row.retainUntil > now ? codec.open<StoredToken>(row.sealed, `session:${id}`) : undefined;
+            const value = row.retainUntil > now ? codec.open<StoredToken>(row.sealed, sessionAad(row)) : undefined;
             if (!value || !row.nsExpiresAt || now <= row.nsExpiresAt - REFRESH_SKEW_MS) return undefined;
             if (row.leaseOwner && row.leaseUntil && row.leaseUntil > now) return undefined;
             return { ...row, leaseOwner: owner, leaseUntil: now + (opts?.leaseDurationMs ?? REFRESH_LEASE_MS) };
@@ -58,13 +72,14 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           try {
             const refreshed = await doRefresh(current);
             const updated: StoredToken = { ...current, nsAccessToken: refreshed.access_token, nsRefreshToken: refreshed.refresh_token ?? current.nsRefreshToken, nsExpiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined };
-            const sealed = codec.seal(updated, `session:${id}`);
+            const refreshId = row!.refreshId;
+            const sealed = codec.seal(updated, sessionAad({ id, refreshId }));
             const finished = await backend.updateSession(id, row => {
-              if (row.leaseOwner !== owner) return undefined;
+              if (row.leaseOwner !== owner || row.refreshId !== refreshId) return undefined;
               const { leaseOwner: _owner, leaseUntil: _until, nsExpiresAt: _oldExpiry, ...rest } = row;
               return { ...rest, ...(updated.nsExpiresAt === undefined ? {} : { nsExpiresAt: updated.nsExpiresAt }), sealed };
             });
-            if (!finished) throw new Error('Token document was deleted/revoked during refresh');
+            if (!finished) throw new Error('Token doc was deleted/revoked during refresh');
             if (finished.sealed !== sealed) throw new LeaseLostError();
             return updated;
           } catch (error) {
@@ -99,9 +114,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     clients: {
       async getClient(id) { return backend.getClient(id); },
       async registerClient(client) {
-        const full: OAuthClientInformationFull = { ...client, client_id: randomUUID(), client_id_issued_at: Math.floor(Date.now() / 1000) };
-        if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
-        else delete full.client_secret;
+        const full = createRegisteredClient(client);
         await backend.putClient(full);
         return full;
       },
