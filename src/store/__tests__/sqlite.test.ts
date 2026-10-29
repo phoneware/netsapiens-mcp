@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,6 +19,7 @@ function location() {
 afterEach(() => { vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 const conformanceRoot = mkdtempSync(join(tmpdir(), 'sqlite-conformance-'));
+afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true }));
 const openStores = new Map<string, McpStore>();
 const conformancePath = (namespace: string) => join(conformanceRoot, namespace, 'store.db');
 runStoreConformance({
@@ -122,6 +123,42 @@ describe('SQLite storage', () => {
     const store = createSqliteStore({ path, namespace: 'one', key });
     await store.close();
     expect(() => createSqliteStore({ path, namespace: 'two', key })).toThrow(StoreConfigError);
+  });
+
+  it('rejects sessions with a different key and swapped ciphertext', async () => {
+    const { path } = location();
+    let store = createSqliteStore({ path, namespace: 'test', key });
+    const session = { clientId: 'client', expiresAt: Date.now() + 60_000, nsAccessToken: 'secret', nsUsername: 'user' };
+    await store.sessions.create({ accessToken: 'first', refreshToken: 'first-refresh' }, session);
+    await store.sessions.create({ accessToken: 'second', refreshToken: 'second-refresh' }, session);
+    await store.close();
+    store = createSqliteStore({ path, namespace: 'test', key: deriveStoreKey('another secret long enough for sqlite tests') });
+    expect(await store.sessions.get('first')).toBeUndefined();
+    await store.close();
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+    const db = new DatabaseSync(path);
+    const rows = db.prepare('SELECT id,sealed FROM sessions ORDER BY id').all();
+    expect(rows).toHaveLength(2);
+    db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(rows[1].sealed, rows[0].id);
+    db.prepare('UPDATE sessions SET sealed=? WHERE id=?').run(rows[0].sealed, rows[1].id);
+    db.close();
+    store = createSqliteStore({ path, namespace: 'test', key });
+    expect(await store.sessions.get('first')).toBeUndefined();
+    expect(await store.sessions.get('second')).toBeUndefined();
+    await store.close();
+  });
+
+  it('sweeps expired rows when the store opens', async () => {
+    const { path } = location();
+    let store = createSqliteStore({ path, namespace: 'test', key });
+    await store.sessions.create({ accessToken: 'old-access', refreshToken: 'old-refresh' }, { clientId: 'client', expiresAt: Date.now() - 31 * 86400_000, nsAccessToken: 'upstream', nsUsername: 'user' });
+    await store.close();
+    store = createSqliteStore({ path, namespace: 'test', key });
+    await store.close();
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+    const db = new DatabaseSync(path);
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get().count).toBe(0);
+    db.close();
   });
 
   it('sweeps expired retained rows on the ten minute timer', async () => {
