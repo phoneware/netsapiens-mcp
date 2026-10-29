@@ -51,7 +51,7 @@ import type {
  RenderPagesOptions,
  NsUserSnapshot,
 } from './types.js';
-import { getAllowedPlatforms, getPlatform, isPlatformAllowed } from './platforms.js';
+import { resolvePlatform, isPlatformAllowed, type NetSapiensPlatform } from './platforms.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
 
@@ -263,6 +263,7 @@ function logoHtml(): string {
 }
 
 function loginPageHtml(
+ platforms: readonly NetSapiensPlatform[],
  authorizeUrl: string,
  error?: string,
  authState?: string,
@@ -283,7 +284,6 @@ function loginPageHtml(
   : 'NetSapiens MCP: Sign In';
  const heading = process.env.MCP_LOGIN_HEADER || defaultHeading;
  const safeHeading = escapeHtml(heading);
- const platforms = getAllowedPlatforms();
 
  return `<!DOCTYPE html>
 <html lang="en">
@@ -447,8 +447,9 @@ function mfaPageHtml(
 // ---------------------------------------------------------------------------
 
 export interface NetSapiensAuthProviderOptions {
- /** Upstream NetSapiens API URL (e.g. https://edge.phoneware.cloud) */
+ /** Upstream NetSapiens API URL. */
  nsApiUrl: string;
+ platforms: readonly NetSapiensPlatform[];
  /** NS OAuth client_id (operator-provisioned) */
  nsClientId: string;
  /** NS OAuth client_secret (operator-provisioned) */
@@ -503,6 +504,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private hooks?: AuthHooks;
  private renderPages?: RenderPagesOptions;
  private nsApiUrl: string;
+ private platforms: readonly NetSapiensPlatform[];
  private nsClientId: string;
  private nsClientSecret: string;
  private tokenLifetimeSec: number;
@@ -516,6 +518,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  constructor(options: NetSapiensAuthProviderOptions) {
   this.nsApiUrl = options.nsApiUrl;
+  if (!options.platforms) throw new Error('platforms is required');
+  this.platforms = options.platforms;
   this.nsClientId = options.nsClientId;
   this.nsClientSecret = options.nsClientSecret;
   this.tokenLifetimeSec = options.tokenLifetimeSec ?? 3600;
@@ -580,7 +584,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.renderPages?.login) {
    return this.renderPages.login({ authorizeUrl, error, authState, initialTab });
   }
-  return loginPageHtml(authorizeUrl, error, authState, initialTab);
+  return loginPageHtml(this.platforms, authorizeUrl, error, authState, initialTab);
  }
 
  private renderMfaPage(
@@ -599,7 +603,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.renderPages?.error) {
    return this.renderPages.error({ message, status });
   }
-  return loginPageHtml('/login', message);
+  return loginPageHtml(this.platforms, '/login', message);
  }
  get activeTokenCount(): number {
   return this.tokenStore.size;
@@ -735,7 +739,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   const refreshedState = signValue(pending, PENDING_AUTH_TTL_SEC);
 
-  const resolvedPlatform = getPlatform(platform);
+  const resolvedPlatform = resolvePlatform(this.platforms, platform);
   if (!resolvedPlatform) {
    logger.warn('Token login rejected: unknown or forbidden platform', { platform });
    sendPage(res, 200, this.renderLoginPage('/login', 'Selected platform is not recognized or not allowed.', refreshedState, 'token'));
@@ -776,7 +780,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   apiUrl: string,
   token: string,
  ): Promise<{ username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string }> {
-  if (!isPlatformAllowed(apiUrl)) {
+  if (!isPlatformAllowed(this.platforms, apiUrl)) {
    throw new Error(`Platform URL is not allowed: ${apiUrl}`);
   }
 

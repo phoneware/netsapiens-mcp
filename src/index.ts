@@ -13,11 +13,24 @@ import { MCPServerConfig } from './types/config.js';
 import { SERVER_INSTRUCTIONS, serverCapabilities, serverImplementation } from './server-info.js';
 import { logger } from './utils/logger.js';
 import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
+import { createRequire } from 'node:module';
+import { normalizePlatformUrl } from './auth/platforms.js';
+
+const packageMetadata: unknown = createRequire(import.meta.url)('../package.json');
+if (!packageMetadata || typeof packageMetadata !== 'object' || !('version' in packageMetadata) || typeof packageMetadata.version !== 'string') {
+  throw new Error('Invalid package version');
+}
+const packageVersion = packageMetadata.version;
 
 // Configuration - these would typically come from environment variables
 export const loadConfig = (): MCPServerConfig => {
-  const apiUrl = process.env.NETSAPIENS_API_URL || 'https://edge.phoneware.cloud';
+  const rawApiUrl = process.env.NETSAPIENS_API_URL;
+  if (!rawApiUrl) throw new Error('ConfigError: NETSAPIENS_API_URL is required (your NetSapiens host, for example https://netsapiens.example.com)');
+  let apiUrl: string;
+  try { apiUrl = normalizePlatformUrl(rawApiUrl); } catch { throw new Error(`ConfigError: NETSAPIENS_API_URL must be an http(s) URL, got "${rawApiUrl}"`); }
   const transport = process.env.MCP_TRANSPORT || 'stdio';
+  if (process.env.MCP_PLATFORMS !== undefined) throw new Error('ConfigError: MCP_PLATFORMS was removed in 3.0.0; use NETSAPIENS_PLATFORMS');
+  if (transport !== 'http' && process.env.NETSAPIENS_PLATFORMS !== undefined) console.error('warn: NETSAPIENS_PLATFORMS is ignored in stdio mode');
 
   // In HTTP mode, per-user auth is handled by the browser login flow.
   // We only need the API URL and operator-level client credentials (validated in http-server.ts).
@@ -67,7 +80,7 @@ export const loadConfig = (): MCPServerConfig => {
 
   return {
     name: 'netsapiens-mcp',
-    version: '1.1.1',
+    version: packageVersion,
     netsapiens: netsapiensConfig,
     debug: process.env.DEBUG === 'true'
   };

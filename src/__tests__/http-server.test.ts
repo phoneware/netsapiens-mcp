@@ -135,6 +135,7 @@ const ENV_KEYS = [
   'NETSAPIENS_OAUTH_PASSWORD',
   'DEBUG',
   'MCP_TRANSPORT',
+  'MCP_SESSION_SECRET',
   'MCP_PORT',
   'MCP_HOST',
   'MCP_BASE_URL',
@@ -207,6 +208,8 @@ describe('startHttpServer()', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;
@@ -370,6 +373,8 @@ describe('stateless MCP transport', () => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
 
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;
