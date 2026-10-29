@@ -49,9 +49,10 @@ export function runStoreConformance(target: ConformanceTarget): void {
       expect(await store.authCodes.redeem('expired', expected)).toBeUndefined();
     });
     it('resume tokens enforce single use until expiry', async () => {
-      const { store } = await open(); expect(await store.resumeTokens.consume('one')).toBe(true); expect(await store.resumeTokens.consume('one')).toBe(false);
-      expect((await Promise.all(Array.from({ length: 5 }, () => store.resumeTokens.consume('parallel')))).filter(Boolean)).toHaveLength(1);
-      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + RESUME_TOKEN_TTL_MS + 1); expect(await store.resumeTokens.consume('one')).toBe(true);
+      const { store } = await open(); const one = 'a'.repeat(64); const parallel = 'b'.repeat(64);
+      expect(await store.resumeTokens.consume(one)).toBe(true); expect(await store.resumeTokens.consume(one)).toBe(false);
+      expect((await Promise.all(Array.from({ length: 5 }, () => store.resumeTokens.consume(parallel)))).filter(Boolean)).toHaveLength(1);
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + RESUME_TOKEN_TTL_MS + 1); expect(await store.resumeTokens.consume(one)).toBe(true);
     });
     it('usage counts concurrent calls by user', async () => {
       const { store } = await open(); await Promise.all(Array.from({ length: 20 }, () => store.usage.recordCall('one', 'tool')));
