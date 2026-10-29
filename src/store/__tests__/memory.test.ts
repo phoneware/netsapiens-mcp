@@ -1,24 +1,23 @@
 import { runStoreConformance } from '../conformance.js';
-import { deriveStoreKey } from '../codec.js';
-import { MemoryBackend } from '../memory.js';
-import { createStore } from '../store.js';
-import type { SessionRow } from '../types.js';
+import type { PersistedRecord, PersistedSnapshot } from '../conformance.js';
+import { createMemoryBackend, MemoryBackend } from '../memory.js';
 
-const backends = new Map<string, MemoryBackend>();
-const key = deriveStoreKey('memory conformance secret key 12345');
 runStoreConformance({
   name: 'memory',
   capabilities: { persistent: false, multiInstance: false, exclusive: false, expiry: 'sweep' },
-  async open(namespace) { const backend = new MemoryBackend(); backends.set(namespace, backend); return createStore(backend, { namespace, key }); },
-  async dumpRaw(namespace) {
-    return JSON.stringify(backends.get(namespace), (_key, value) => value instanceof Map ? Object.fromEntries(value) : value);
+  async openBackend() { return createMemoryBackend(); },
+  async inspect(handle) {
+    const state = (handle as MemoryBackend).state;
+    const rows = (map: Map<string, unknown>, remove: string[] = []): PersistedRecord[] => [...map].map(([key, value]) => {
+      const fields = JSON.parse(JSON.stringify(value)) as PersistedRecord['fields'];
+      for (const field of remove) delete fields[field];
+      return { key, fields };
+    });
+    return {
+      sessions: rows(state.sessions, ['id']), authCodes: rows(state.authCodes, ['id']),
+      resumeTokens: rows(state.resumeTokens, ['id']), usage: rows(state.usage), clients: rows(state.clients),
+    } satisfies PersistedSnapshot;
   },
-  async swapSealed(namespace, idA, idB) {
-    const backend = backends.get(namespace)!;
-    const a = await backend.getSession(idA); const b = await backend.getSession(idB);
-    if (!a || !b) throw new Error('Missing session');
-    await backend.putSession({ ...a, sealed: b.sealed } as SessionRow);
-    await backend.putSession({ ...b, sealed: a.sealed } as SessionRow);
-  },
-  async cleanup(namespace) { backends.delete(namespace); },
+  async dumpRaw(handle) { return JSON.stringify((handle as MemoryBackend).state, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value); },
+  async cleanup() { },
 });
