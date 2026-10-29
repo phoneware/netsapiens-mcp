@@ -1303,9 +1303,8 @@ const deprovision_user: CuratedTool = {
  schema: {
   name: 'deprovision_user',
   description:
-   'Remove a user completely: deletes the user (which cascades to their devices, contacts, addresses, timeframes and voicemail), then removes the two things NetSapiens leaves behind — DIDs still routed to them, and their call queue agent memberships. ' +
-   'Deleting a user through the plain endpoint leaves those DIDs pointing at a destination that no longer exists. ' +
-   'Pass dry_run to see exactly what would be removed without touching anything.',
+   'Delete a user and remove associated DIDs and call queue agent memberships. ' +
+   'Pass dry_run to see the planned operations.',
   inputSchema: {
    type: 'object',
    properties: {
