@@ -141,7 +141,7 @@ function sanitizeIdentifier(name: string): string {
 }
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const specPath = join(rootDir, 'spec', 'netsapiens-api-v2.json');
+const specPath = join(rootDir, 'spec', 'v2', '45.0.json');
 const generatedDir = join(rootDir, 'src', 'generated');
 const toolsDir = join(generatedDir, 'tools');
 

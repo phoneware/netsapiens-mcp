@@ -38,7 +38,7 @@ interface V1Endpoint {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
-const SPEC = join(ROOT, 'spec', 'netsapiens-api-v1.json');
+const SPEC = join(ROOT, 'spec', 'v1', 'apidoc-44.4.10.json');
 const OUT_DIR = join(ROOT, 'src', 'generated', 'v1');
 
 /** v1 objects that are infra/credential endpoints — dropped at generation. */
