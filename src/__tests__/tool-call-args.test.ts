@@ -221,7 +221,7 @@ describe('Tool call arguments and scope resolution', () => {
         'recent_calls',
         { user: SENTINEL_VALUE, limit: 10 },
         'domain_admin',
-        'kevin.johnson',
+        'pat.example',
       );
 
       const toolCallLogs = infoSpy.mock.calls.filter((call) => call[0] === 'Tool call');
@@ -232,7 +232,7 @@ describe('Tool call arguments and scope resolution', () => {
       expect(context).toBeDefined();
       expect(context?.tool).toBe('recent_calls');
       expect(context?.role).toBe('domain_admin');
-      expect(context?.username).toBe('kevin.johnson');
+      expect(context?.username).toBe('pat.example');
       expect(context?.argNames).toEqual(['user', 'limit']);
       expect(context?.ok).toBe(true);
       expect(typeof context?.durationMs).toBe('number');
@@ -333,7 +333,7 @@ describe('Tool call arguments and scope resolution', () => {
     const infoSpy = vi.spyOn(logger, 'info');
 
     vi.spyOn(axios, 'get').mockResolvedValue({
-      data: { 'user-scope': 'Domain Admin', user: 'kevin' },
+      data: { 'user-scope': 'Domain Admin', user: 'pat' },
     });
 
     const provider = new NetSapiensAuthProvider({
@@ -346,12 +346,12 @@ describe('Tool call arguments and scope resolution', () => {
       const detectFn = (provider as unknown as {
         detectNsUserRole: (token: string, username?: string) => Promise<string | undefined>;
       }).detectNsUserRole;
-      const role = await detectFn.call(provider, 'test-token', 'kevin');
+      const role = await detectFn.call(provider, 'test-token', 'pat');
       expect(role).toBe('domain_admin');
 
       const roleLogs = infoSpy.mock.calls.filter((c) => c[0] === 'Detected NS user role');
       expect(roleLogs.length).toBe(1);
-      expect(roleLogs[0][1]?.username).toBe('kevin');
+      expect(roleLogs[0][1]?.username).toBe('pat');
       expect(roleLogs[0][1]?.role).toBe('domain_admin');
     } finally {
       infoSpy.mockRestore();
