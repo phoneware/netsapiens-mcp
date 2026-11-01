@@ -64,13 +64,7 @@ function normalizeOrigin(urlOrOrigin: string): string {
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  return await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
 }
 
 async function readJsonWithLimit<T>(res: Response, maxBytes: number): Promise<T> {
