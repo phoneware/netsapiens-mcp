@@ -1,6 +1,6 @@
 {
-  "harnessSha": "ecc997a6e1239e37ba623e9c9595f96cefd993e5",
-  "timestamp": "2026-11-01T22:14:33.921Z",
+  "harnessSha": "b57cdd950a993168a5d9e076557d8dd824e71bc8",
+  "timestamp": "2026-11-01T22:26:27.396Z",
   "emulatorHost": "127.0.0.1:8080",
   "artifacts": {
     "v231": {
@@ -19,17 +19,17 @@
     },
     "bridge": {
       "branch": "feat/netsapiens-mcp-2-bridge",
-      "gitSha": "3080249d9eac21578f623d7edb5f5fab56c2503c",
-      "path": "/tmp/netsapiens-mcp-2.4.1-3080249.tgz",
-      "sha256": "419f52889c42a162a0c6e071b232901b7249373473937abeab27283a8ad8fd64",
-      "integrity": "sha512-cPwa1k559wYz/yiTHt0n+vqV5MYkRIvcUQP28Pwb3RTPw3XKzjpwjomlZSkKtBCSoOnC/8KAc0xJ9r9hupZIJg=="
+      "gitSha": "a0be24dcce0408544d6a6a26ff48c084050e8548",
+      "path": "/tmp/netsapiens-mcp-2.4.1-a0be24d.tgz",
+      "sha256": "20ba5f525a896223fd05a74f72dca415a6564aaba1c45d97d30cbe03de5f12f5",
+      "integrity": "sha512-t2VZ7ZDR0K+ImMMGxrHms1gBgFinnFA2bY1wBRFzKkQ9lTOOktTWZK5gZcnO72LcqHvE51R+1ztODfdSQ8k5cw=="
     },
     "v3": {
       "branch": "feat/netsapiens-mcp-3",
       "gitSha": "f415003ffd38d3f1ad6b2d2224638a64264ecfa0",
-      "path": "/tmp/netsapiens-mcp-3.0.0-3edf8a2.tgz",
-      "sha256": "f8ec93f12c0c252e6eb2e8e4d5264173ff51d7a90d5713c9869e416afeee136f",
-      "integrity": "sha512-l/Sqn0/xUlDTIMpi53cvoPb5UMJpVnlxTVNKPXdEjakkJN+9Mv+6wYQpKc6o8o22xTK92RREaw2BrY/5GISmOg=="
+      "path": "/tmp/netsapiens-mcp-3.0.0-f415003.tgz",
+      "sha256": "7539c9d076f2941dca4a924d2a4d97fbb39c84ce8f13d0e50fc44f92b9f18c0e",
+      "integrity": "sha512-8Ja4T1u4SlkKDDHY52kJoYFkskg7EIzQlWwFexGWYIVYv35UcqpVsDnaFcBfzJwzPvmOj35f0T8QiwRL27qRDQ=="
     }
   },
   "installed": {
@@ -62,9 +62,11 @@
       "id": "admission_refusal",
       "name": "Admission refusal when fenced (HTTP 503, Retry-After header, zero upstream calls)",
       "status": "PASS",
-      "baselineStatus": "RED",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
+        "baselineAcceptsMutation": false,
+        "baselineRegisterStatus": 400,
         "registerStatus": 503,
         "registerRetryAfter": "5",
         "authorizeStatus": 503,
@@ -103,28 +105,33 @@
     {
       "id": "refresh_ownership_dedup",
       "name": "Refresh ownership and concurrent dedup (concurrent refresh calls yield single upstream grant; retry returns successor)",
-      "status": "PASS",
+      "status": "FAIL",
       "baselineStatus": "UNPROVEN",
-      "candidateStatus": "PASS",
+      "candidateStatus": "FAIL",
       "observations": {
         "req1Status": 200,
         "req2Status": 200,
         "retryStatus": 200,
-        "upstreamRefreshGrants": 1,
+        "replayStatus": 400,
+        "upstreamRefreshGrants": 2,
         "successorMatched": true,
         "retrySuccessorMatched": true,
-        "noExtraGrantOnRetry": true
+        "noExtraGrantOnRetry": false,
+        "familyRevoked": false,
+        "upstreamRemoved": true
       },
-      "receiptValid": true
+      "receiptValid": true,
+      "rejectionReason": "Dedup assertion failed: res1=200, res2=200, grants=2, matched=true"
     },
     {
       "id": "faults_no_second_grant",
-      "name": "Fault handling (upstream pending locks family, preventing second grant)",
+      "name": "Fault handling (prior ambiguous remote outcome throws UpstreamUnavailableError and prevents second grant)",
       "status": "PASS",
       "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
-        "secondGrantBlocked": true,
+        "refreshUnavailableCaught": true,
+        "secondGrantExecuted": false,
         "fakeNsGrants": 0
       },
       "receiptValid": true
@@ -148,14 +155,14 @@
     },
     {
       "id": "reconciliation_family_isolation",
-      "name": "Reconciliation: family isolation (reconciling Family A does not touch Family B; wrong epoch refuses)",
+      "name": "Reconciliation: family isolation (reconciling Family A does not touch Family B; wrong opId refuses)",
       "status": "PASS",
       "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "famBIsolate": true,
-        "famBToken": "h:9c93518f",
-        "wrongEpochRefused": true
+        "wrongOpRefused": true,
+        "famBToken": "h:9c93518f"
       },
       "receiptValid": true
     },
@@ -166,9 +173,9 @@
       "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
-        "failedTxPreservesCode": true,
-        "atomicExchangeSucceeded": true,
-        "replayRefused": true
+        "redeemSucceeded": true,
+        "replayRefused": true,
+        "failedTxPreservesCode": true
       },
       "receiptValid": true
     },
@@ -180,8 +187,8 @@
       "candidateStatus": "FAIL",
       "observations": {
         "scanned": 6,
-        "migrated": 5,
-        "skipped": 4,
+        "migrated": 7,
+        "skipped": 2,
         "errors": 2,
         "v3SessionsCount": 4,
         "v3FamiliesCount": 4,
@@ -193,18 +200,17 @@
     {
       "id": "migration_recovery_and_empty_namespace",
       "name": "Migration recovery and empty namespace (empty manifest, irreversible false until mutation, stale epoch refused)",
-      "status": "FAIL",
+      "status": "PASS",
       "baselineStatus": "UNPROVEN",
-      "candidateStatus": "FAIL",
+      "candidateStatus": "PASS",
       "observations": {
         "emptyScanned": 0,
         "emptyErrors": 0,
         "controlState": "v3_ready",
-        "irreversible": true,
+        "irreversible": false,
         "staleEpochRefused": true
       },
-      "receiptValid": true,
-      "rejectionReason": "C12 violation: irreversible must remain false on empty namespace until first credential mutation"
+      "receiptValid": true
     },
     {
       "id": "secret_safety_audit",
@@ -213,7 +219,7 @@
       "baselineStatus": "NOT_APPLICABLE",
       "candidateStatus": "PASS",
       "observations": {
-        "scannedFields": 740,
+        "scannedFields": 934,
         "totalViolations": 0,
         "violations": []
       },
@@ -235,7 +241,7 @@
   ],
   "secretSafety": {
     "passed": true,
-    "scannedFields": 740,
+    "scannedFields": 934,
     "violations": []
   },
   "summary": {

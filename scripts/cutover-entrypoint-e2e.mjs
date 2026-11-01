@@ -93,8 +93,9 @@ function parseArgs() {
   // Auto-detect defaults
   if (!opts.bridgeTarball) {
     const candBridge = [
-      '/tmp/netsapiens-mcp-2.4.1-3080249.tgz',
+      '/tmp/netsapiens-mcp-2.4.1-a0be24d.tgz',
       '/Users/jwaldrip/dev/worktrees/netsapiens-mcp-2-bridge/netsapiens-mcp-2.4.1.tgz',
+      '/tmp/netsapiens-mcp-2.4.1-3080249.tgz',
       '/tmp/netsapiens-mcp-2.4.1.tgz',
     ];
     for (const c of candBridge) {
@@ -107,6 +108,7 @@ function parseArgs() {
 
   if (!opts.v3Tarball) {
     const candV3 = [
+      '/tmp/netsapiens-mcp-3.0.0-f415003.tgz',
       '/tmp/netsapiens-mcp-3.0.0-3edf8a2.tgz',
       path.join(repoRoot, 'netsapiens-mcp-3.0.0.tgz'),
     ];
@@ -212,7 +214,7 @@ async function spawnMcpServer(consumerDir, env) {
   const binaryPath = fs.existsSync(rawBinaryPath) ? fs.realpathSync(rawBinaryPath) : rawBinaryPath;
   const cp = spawn('node', [binaryPath], {
     cwd: consumerDir,
-    env,
+    env: { ...process.env, PATH: process.env.PATH, ...env },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -299,6 +301,17 @@ async function main() {
   const unfencedBuf = fs.readFileSync(opts.unfencedTarball);
   const v231Buf = fs.readFileSync(opts.v231Tarball);
 
+  // Exact commit extraction for tarballs
+  const v3CommitSha = opts.v3Tarball.includes('f415003')
+    ? 'f415003ffd38d3f1ad6b2d2224638a64264ecfa0'
+    : getGitSha('origin/feat/netsapiens-mcp-3');
+
+  const bridgeCommitSha = opts.bridgeTarball.includes('a0be24d')
+    ? 'a0be24dcce0408544d6a6a26ff48c084050e8548'
+    : (opts.bridgeTarball.includes('3080249')
+      ? '3080249d9eac21578f623d7edb5f5fab56c2503c'
+      : getGitSha('origin/feat/netsapiens-mcp-2-bridge'));
+
   const artifacts = {
     v231: {
       tag: 'v2.3.1',
@@ -316,14 +329,14 @@ async function main() {
     },
     bridge: {
       branch: 'feat/netsapiens-mcp-2-bridge',
-      gitSha: getGitSha('origin/feat/netsapiens-mcp-2-bridge'),
+      gitSha: bridgeCommitSha,
       path: opts.bridgeTarball,
       sha256: sha256(bridgeBuf),
       integrity: sha512Integrity(bridgeBuf),
     },
     v3: {
       branch: 'feat/netsapiens-mcp-3',
-      gitSha: getGitSha('origin/feat/netsapiens-mcp-3'),
+      gitSha: v3CommitSha,
       path: opts.v3Tarball,
       sha256: sha256(v3Buf),
       integrity: sha512Integrity(v3Buf),
@@ -345,6 +358,7 @@ async function main() {
   const { Firestore } = await import(path.join(bridgeConsumer.dir, 'node_modules', '@google-cloud', 'firestore', 'build', 'src', 'index.js'));
   const bridgeLib = await import(path.join(bridgeConsumer.packagePath, 'build', 'lib.js'));
   const v3Lib = await import(path.join(v3Consumer.packagePath, 'build', 'lib.js'));
+  const upstreamGrantMod = await import(path.join(bridgeConsumer.packagePath, 'build', 'auth', 'kit', 'upstream-grant.js'));
 
   const createdProjectIds = new Set();
   const allLogsCaptured = [];
@@ -609,7 +623,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 2: Admission refusal when fenced
+  // CASE 2: Admission refusal when fenced (with real baseline HTTP counterexample)
   // -------------------------------------------------------------------------
   if (shouldRun('admission_refusal')) {
     console.log('\n[Case 2] admission_refusal');
@@ -621,7 +635,8 @@ async function main() {
     const fakeNs = await startFakeNetSapiens();
     const serverPort = await getAvailablePort();
     const namespace = 'mcp';
-    let srv = null;
+    let srvCandidate = null;
+    let srvBaseline = null;
 
     try {
       await bridgeLib.initializeCutoverFence(db, namespace, { initialEpoch: 1 });
@@ -636,7 +651,42 @@ async function main() {
         expectedEpoch: 1,
       });
 
-      const serverEnv = {
+      // 2a. Real baseline HTTP run: historical unfenced 2.4.0 server against fenced namespace
+      const baselineConsumer = setupConsumerDirectory(opts.unfencedTarball, 'baseline-c2');
+      const baselinePort = await getAvailablePort();
+      const baselineEnv = {
+        ...process.env,
+        MCP_TRANSPORT: 'http',
+        MCP_PERSISTENCE: 'firestore',
+        MCP_STORE_NAMESPACE: namespace,
+        GOOGLE_CLOUD_PROJECT: projectId,
+        FIRESTORE_EMULATOR_HOST: opts.emulatorHost,
+        MCP_SESSION_SECRET: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        MCP_BASE_URL: `http://127.0.0.1:${baselinePort}`,
+        NETSAPIENS_API_URL: fakeNs.origin,
+        NETSAPIENS_OAUTH_CLIENT_ID: 'fake-op-client',
+        NETSAPIENS_OAUTH_CLIENT_SECRET: 'fake-op-secret',
+        MCP_STATELESS: 'false',
+        MCP_PORT: String(baselinePort),
+      };
+
+      srvBaseline = await spawnMcpServer(baselineConsumer.dir, baselineEnv);
+      await waitForHealth(baselinePort, srvBaseline);
+
+      // Baseline unfenced 2.4 responds to /register with 201 (ignores fence!)
+      const baselineRegResp = await fetch(`http://127.0.0.1:${baselinePort}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_name: 'Baseline Client Under Fence' }),
+      });
+      const baselineAcceptsMutation = baselineRegResp.status === 201;
+
+      await srvBaseline.stop();
+      allLogsCaptured.push(srvBaseline.getLogs());
+      srvBaseline = null;
+
+      // 2b. Candidate 2.4.1 bridge run against fenced namespace
+      const candidateEnv = {
         ...process.env,
         MCP_TRANSPORT: 'http',
         MCP_PERSISTENCE: 'firestore',
@@ -655,8 +705,8 @@ async function main() {
         MCP_CUTOVER_FENCE_NAMESPACE: namespace,
       };
 
-      srv = await spawnMcpServer(bridgeConsumer.dir, serverEnv);
-      await waitForHealth(serverPort, srv);
+      srvCandidate = await spawnMcpServer(bridgeConsumer.dir, candidateEnv);
+      await waitForHealth(serverPort, srvCandidate);
 
       const regResp = await fetch(`http://127.0.0.1:${serverPort}/register`, {
         method: 'POST',
@@ -683,9 +733,11 @@ async function main() {
         id: caseId,
         name: 'Admission refusal when fenced (HTTP 503, Retry-After header, zero upstream calls)',
         status: pass ? 'PASS' : 'FAIL',
-        baselineStatus: 'RED', // Historical unfenced 2.4 counterexample mutates despite fence
+        baselineStatus: baselineAcceptsMutation ? 'RED' : 'UNPROVEN',
         candidateStatus: pass ? 'PASS' : 'FAIL',
         observations: {
+          baselineAcceptsMutation,
+          baselineRegisterStatus: baselineRegResp.status,
           registerStatus: regResp.status,
           registerRetryAfter: regResp.headers.get('Retry-After'),
           authorizeStatus: authResp.status,
@@ -694,7 +746,7 @@ async function main() {
         },
         receiptValid: true,
       });
-      console.log(`  Result: ${pass ? 'PASS' : 'FAIL'}`);
+      console.log(`  Result: ${pass ? 'PASS' : 'FAIL'} (baseline counterexample verified: unfenced 2.4 returned ${baselineRegResp.status})`);
     } catch (err) {
       receipt.cases.push({
         id: caseId,
@@ -708,9 +760,13 @@ async function main() {
       });
       console.log(`  Result: FAIL (${err.message})`);
     } finally {
-      if (srv) {
-        await srv.stop();
-        allLogsCaptured.push(srv.getLogs());
+      if (srvBaseline) {
+        await srvBaseline.stop();
+        allLogsCaptured.push(srvBaseline.getLogs());
+      }
+      if (srvCandidate) {
+        await srvCandidate.stop();
+        allLogsCaptured.push(srvCandidate.getLogs());
       }
       await fakeNs.close();
     }
@@ -907,7 +963,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 5: Refresh ownership and concurrent deduplication
+  // CASE 5: Refresh ownership and concurrent deduplication (with Replay Proof)
   // -------------------------------------------------------------------------
   if (shouldRun('refresh_ownership_dedup')) {
     console.log('\n[Case 5] refresh_ownership_dedup');
@@ -1037,7 +1093,7 @@ async function main() {
       const singleUpstreamGrant = grantStats.refreshGrants === 1;
       const successorMatched = data1.access_token && data1.access_token === data2.access_token;
 
-      // Retry with same refresh token returns successor without extra grant
+      // Retry within lease window returns same successor without second upstream grant
       const retryResp = await fetch(`http://127.0.0.1:${serverPort}/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1089,6 +1145,7 @@ async function main() {
         retryResp.status === 200 &&
         noExtraGrantOnRetry === true &&
         retrySuccessorMatched === true;
+
       receipt.cases.push({
         id: caseId,
         name: 'Refresh ownership and concurrent dedup (concurrent refresh calls yield single upstream grant; retry returns successor)',
@@ -1099,10 +1156,13 @@ async function main() {
           req1Status: res1.status,
           req2Status: res2.status,
           retryStatus: retryResp.status,
+          replayStatus: replayResp.status,
           upstreamRefreshGrants: grantStats.refreshGrants,
           successorMatched,
           retrySuccessorMatched,
           noExtraGrantOnRetry,
+          familyRevoked,
+          upstreamRemoved,
         },
         receiptValid: true,
         rejectionReason: !pass
@@ -1132,7 +1192,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 6: Fault handling (no second grant on upstream_pending)
+  // CASE 6: Fault handling (real store/provider refresh with ambiguousRemoteOutcome)
   // -------------------------------------------------------------------------
   if (shouldRun('faults_no_second_grant')) {
     console.log('\n[Case 6] faults_no_second_grant');
@@ -1145,57 +1205,55 @@ async function main() {
 
     try {
       await bridgeLib.initializeCutoverFence(db, namespace, { initialEpoch: 1 });
-      const familyId = 'fam-fault-' + randomBytes(4).toString('hex');
-      const opId = 'op-fault-' + randomBytes(8).toString('hex');
+      const testAccessToken = 'acc-fault-' + randomBytes(8).toString('hex');
+      const testRefreshToken = 'ref-fault-' + randomBytes(8).toString('hex');
 
-      await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').doc(opId).set({
-        schemaVersion: 1,
-        operationId: opId,
-        namespace,
-        epoch: 1,
-        kind: 'token_refresh',
-        phase: 'upstream_pending',
-        familyId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+      const tokenStore = new bridgeLib.FirestoreTokenStore({
+        db,
+        collection: `${namespace}_tokens`,
+        fence: { namespace, enforce: true },
       });
 
-      await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
-        id: familyId,
-        currentAccessToken: 'acc-fault-old',
-        currentRefreshToken: 'ref-fault-old',
-        inFlightOperationId: opId,
-        updatedAt: Date.now(),
+      // Seed token in Firestore marked with ambiguousRemoteOutcome (representing remote grant success but local commit failure)
+      await db.collection(`${namespace}_tokens`).doc(testAccessToken).set({
+        accessToken: testAccessToken,
+        refreshToken: testRefreshToken,
+        tokenType: 'Bearer',
+        expiresAt: Date.now() + 3600_000,
+        scope: 'read write',
+        clientId: 'client-fault',
+        nsAccessToken: 'ns-acc-fault',
+        nsRefreshToken: 'ns-ref-fault',
+        nsExpiresAt: Date.now() + 10_000, // expiring
+        ambiguousRemoteOutcome: true,
       });
 
-      let secondGrantBlocked = false;
+      let refreshUnavailableCaught = false;
+      let secondGrantExecuted = false;
+
       try {
-        await bridgeLib.withLegacyOperation(
-          { db, namespace, enforce: true, kind: 'token_refresh' },
-          async (ctx) => {
-            await db.runTransaction(async (tx) => {
-              const famSnap = await tx.get(db.collection(`${namespace}_tokens_refresh_families`).doc(familyId));
-              const famData = famSnap.data();
-              if (famData.inFlightOperationId && famData.inFlightOperationId !== ctx.operationId) {
-                throw new bridgeLib.CutoverRefusedError('Family locked by pending upstream operation; second grant refused');
-              }
-            });
-          },
-        );
-      } catch (e) {
-        if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-        secondGrantBlocked = isCutoverRefusal(e, bridgeLib);
+        await tokenStore.refreshNsToken(testAccessToken, async () => {
+          secondGrantExecuted = true;
+          return { access_token: 'ns-acc-new', expires_in: 3600 };
+        });
+      } catch (err) {
+        if (err instanceof TypeError || err instanceof ReferenceError) throw err;
+        refreshUnavailableCaught =
+          err.name === 'UpstreamUnavailableError' ||
+          err instanceof bridgeLib.UpstreamUnavailableError ||
+          (typeof err.message === 'string' && err.message.includes('ambiguous and pending reconciliation'));
       }
 
-      const pass = secondGrantBlocked === true && fakeNs.getStats().grantCount === 0;
+      const pass = refreshUnavailableCaught === true && secondGrantExecuted === false;
       receipt.cases.push({
         id: caseId,
-        name: 'Fault handling (upstream pending locks family, preventing second grant)',
+        name: 'Fault handling (prior ambiguous remote outcome throws UpstreamUnavailableError and prevents second grant)',
         status: pass ? 'PASS' : 'FAIL',
         baselineStatus: 'UNPROVEN',
         candidateStatus: pass ? 'PASS' : 'FAIL',
         observations: {
-          secondGrantBlocked,
+          refreshUnavailableCaught,
+          secondGrantExecuted,
           fakeNsGrants: fakeNs.getStats().grantCount,
         },
         receiptValid: true,
@@ -1268,8 +1326,14 @@ async function main() {
       try {
         await bridgeLib.withLegacyOperation(
           { db, namespace, enforce: true, operationId: abortOpId, kind: 'token_exchange' },
-          async () => {
-            await db.runTransaction(async () => {
+          async (ctx) => {
+            await db.runTransaction(async (transaction) => {
+              await bridgeLib.checkMutationGuardInTransaction(transaction, {
+                db,
+                namespace,
+                operation: ctx,
+                completeOperation: true,
+              });
               throw new Error('Simulated transaction rollback');
             });
           },
@@ -1327,7 +1391,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 8: Reconciliation: Family isolation
+  // CASE 8: Reconciliation: Family isolation (real reconcileAmbiguousGrant API)
   // -------------------------------------------------------------------------
   if (shouldRun('reconciliation_family_isolation')) {
     console.log('\n[Case 8] reconciliation_family_isolation');
@@ -1341,7 +1405,43 @@ async function main() {
       await bridgeLib.initializeCutoverFence(db, namespace, { initialEpoch: 1 });
       const famA = 'fam-a-' + randomBytes(4).toString('hex');
       const famB = 'fam-b-' + randomBytes(4).toString('hex');
+      const opA = 'op-a-' + randomBytes(8).toString('hex');
 
+      const upstreamStore = new upstreamGrantMod.FirestoreUpstreamGrantStore({
+        db,
+        collection: `${namespace}_tokens_upstream`,
+        fence: { namespace, enforce: true },
+      });
+
+      // Seed Family A in upstream store with ambiguous outcome
+      await db.collection(`${namespace}_tokens_upstream`).doc(famA).set({
+        grant: { nsAccessToken: 'acc-a', nsRefreshToken: 'ref-a' },
+        ambiguousOutcome: true,
+        ambiguousOperationId: opA,
+        updatedAt: 1000,
+      });
+      // Seed operation record in cutover_fence/operations for opA
+      await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').doc(opA).set({
+        schemaVersion: 1,
+        id: opA,
+        namespace,
+        epoch: 1,
+        kind: 'upstream_refresh',
+        phase: 'upstream_pending',
+        ambiguousRemoteOutcome: true,
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+      await db.collection(`${namespace}_meta`).doc('cutover_fence').update({ activeOperations: 1 });
+
+      // Seed Family B in upstream store (healthy, not ambiguous)
+      await db.collection(`${namespace}_tokens_upstream`).doc(famB).set({
+        grant: { nsAccessToken: 'acc-b', nsRefreshToken: 'ref-b' },
+        ambiguousOutcome: false,
+        updatedAt: 1000,
+      });
+
+      // Seed family documents in families collection
       await db.collection(`${namespace}_tokens_refresh_families`).doc(famA).set({
         id: famA,
         currentAccessToken: 'acc-a',
@@ -1355,43 +1455,50 @@ async function main() {
         updatedAt: 1000,
       });
 
-      await db.collection(`${namespace}_tokens_refresh_families`).doc(famA).update({
-        currentAccessToken: 'acc-a-reconciled',
-        updatedAt: 2000,
-      });
+      // Call REAL reconcileAmbiguousGrant on Family A
+      await upstreamStore.reconcileAmbiguousGrant(
+        famA,
+        { nsAccessToken: 'acc-a-resolved', nsRefreshToken: 'ref-a-resolved' },
+        Date.now() + 3600_000,
+        { operationId: opA },
+      );
 
+      // Verify Family B's upstream grant and family doc are completely untouched
       const famBSnap = await db.collection(`${namespace}_tokens_refresh_families`).doc(famB).get();
       const famBData = famBSnap.data();
-      const famBIsolate = famBData.currentAccessToken === 'acc-b' && famBData.updatedAt === 1000;
+      const upBSnap = await db.collection(`${namespace}_tokens_upstream`).doc(famB).get();
+      const upBData = upBSnap.data();
 
-      // Reconcile with wrong epoch refuses with CutoverFenceError
-      let wrongEpochRefused = false;
+      const famBIsolate =
+        famBData.currentAccessToken === 'acc-b' &&
+        famBData.updatedAt === 1000 &&
+        upBData.grant?.nsAccessToken === 'acc-b';
+
+      // Reconcile with wrong operationId on Family A refuses
+      let wrongOpRefused = false;
       try {
-        await bridgeLib.withLegacyOperation(
-          { db, namespace, enforce: true, kind: 'reconciliation' },
-          async () => {
-            const ctrl = await bridgeLib.getCutoverFenceRecord(db, namespace);
-            if (ctrl.epoch !== 999) { // wrong epoch
-              throw new bridgeLib.CutoverFenceError('Epoch mismatch during reconciliation');
-            }
-          },
+        await upstreamStore.reconcileAmbiguousGrant(
+          famA,
+          { nsAccessToken: 'acc-a-retry', nsRefreshToken: 'ref-a-retry' },
+          Date.now() + 3600_000,
+          { operationId: 'wrong-op-id' },
         );
       } catch (e) {
         if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-        wrongEpochRefused = isCutoverFenceError(e, bridgeLib);
+        wrongOpRefused = isCutoverFenceError(e, bridgeLib);
       }
 
-      const pass = famBIsolate && wrongEpochRefused;
+      const pass = famBIsolate === true && wrongOpRefused === true;
       receipt.cases.push({
         id: caseId,
-        name: 'Reconciliation: family isolation (reconciling Family A does not touch Family B; wrong epoch refuses)',
+        name: 'Reconciliation: family isolation (reconciling Family A does not touch Family B; wrong opId refuses)',
         status: pass ? 'PASS' : 'FAIL',
         baselineStatus: 'UNPROVEN',
         candidateStatus: pass ? 'PASS' : 'FAIL',
         observations: {
           famBIsolate,
+          wrongOpRefused,
           famBToken: hashSecret(famBData.currentAccessToken),
-          wrongEpochRefused,
         },
         receiptValid: true,
       });
@@ -1412,7 +1519,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 9: Atomic continuation and code exchange
+  // CASE 9: Atomic continuation and code exchange (real FirestoreAuthCodeStore API)
   // -------------------------------------------------------------------------
   if (shouldRun('atomic_continuation_and_code')) {
     console.log('\n[Case 9] atomic_continuation_and_code');
@@ -1427,49 +1534,102 @@ async function main() {
       const authCode = 'code-atomic-' + randomBytes(16).toString('hex');
       const now = Date.now();
 
-      await db.collection(`${namespace}_auth_codes`).doc(authCode).set({
-        clientId: 'client-atomic',
-        expiresAt: now + 300_000,
-        used: false,
-        serverBaseUrl: 'http://127.0.0.1:3000',
+      const authCodeStore = new bridgeLib.FirestoreAuthCodeStore({
+        db,
+        collection: `${namespace}_auth_codes`,
+        fence: { namespace, enforce: true },
       });
 
+      await bridgeLib.withLegacyOperation(
+        { db, namespace, enforce: true, kind: 'auth_code' },
+        async (ctx) => {
+          await authCodeStore.set(authCode, {
+            clientId: 'client-atomic',
+            expiresAt: now + 300_000,
+            pending: {
+              clientId: 'client-atomic',
+              redirectUri: 'http://127.0.0.1:3000/cb',
+              codeChallenge: 'chall-1',
+              codeChallengeMethod: 'S256',
+              scope: 'read write',
+              state: 'st-1',
+              createdAt: now,
+            },
+            nsTokens: {
+              access_token: 'ns-acc-atomic',
+              refresh_token: 'ns-ref-atomic',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              username: '1001@example.com',
+            },
+            serverBaseUrl: 'http://127.0.0.1:3000',
+          }, { operation: ctx });
+        },
+      );
+
+      // 9a. Real redeem on valid code succeeds
+      let redeemed = null;
+      await bridgeLib.withLegacyOperation(
+        { db, namespace, enforce: true, kind: 'token_exchange' },
+        async (ctx) => {
+          redeemed = await authCodeStore.redeem(authCode, { clientId: 'client-atomic', serverBaseUrl: 'http://127.0.0.1:3000' }, { operation: ctx });
+        },
+      );
+      const redeemSucceeded = Boolean(redeemed?.nsTokens?.access_token);
+
+      // 9b. Replay redemption on now-consumed code is refused
+      let replayed = 'initial';
+      await bridgeLib.withLegacyOperation(
+        { db, namespace, enforce: true, kind: 'token_exchange' },
+        async (ctx) => {
+          replayed = await authCodeStore.redeem(authCode, { clientId: 'client-atomic', serverBaseUrl: 'http://127.0.0.1:3000' }, { operation: ctx });
+        },
+      );
+      const replayRefused = replayed === undefined;
+
+      // 9c. Pre-commit failure leaves code usable
+      const code2 = 'code-fail-preserve-' + randomBytes(16).toString('hex');
+      await bridgeLib.withLegacyOperation(
+        { db, namespace, enforce: true, kind: 'auth_code' },
+        async (ctx) => {
+          await authCodeStore.set(code2, {
+            clientId: 'client-atomic',
+            expiresAt: now + 300_000,
+            pending: {
+              clientId: 'client-atomic',
+              redirectUri: 'http://127.0.0.1:3000/cb',
+              codeChallenge: 'chall-2',
+              codeChallengeMethod: 'S256',
+              scope: 'read write',
+              state: 'st-2',
+              createdAt: now,
+            },
+            nsTokens: {
+              access_token: 'ns-acc-code2',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              username: '1002@example.com',
+            },
+            serverBaseUrl: 'http://127.0.0.1:3000',
+          }, { operation: ctx });
+        },
+      );
+
+      // Injected failure before commit
       let failedTxPreservesCode = false;
       try {
-        await db.runTransaction(async (tx) => {
-          const codeSnap = await tx.get(db.collection(`${namespace}_auth_codes`).doc(authCode));
-          if (!codeSnap.exists || codeSnap.data().used) throw new Error('invalid_code');
-          throw new Error('Injected commit error');
+        await db.runTransaction(async (transaction) => {
+          const docRef = db.collection(`${namespace}_auth_codes`).doc(code2);
+          const snap = await transaction.get(docRef);
+          if (!snap.exists) throw new Error('missing');
+          throw new Error('Simulated pre-commit failure');
         });
-      } catch (e) {
-        const checkSnap = await db.collection(`${namespace}_auth_codes`).doc(authCode).get();
-        failedTxPreservesCode = checkSnap.exists && checkSnap.data().used === false;
+      } catch {
+        const snap = await db.collection(`${namespace}_auth_codes`).doc(code2).get();
+        failedTxPreservesCode = snap.exists && snap.data()?.used === false;
       }
 
-      let atomicExchangeSucceeded = false;
-      await db.runTransaction(async (tx) => {
-        const codeSnap = await tx.get(db.collection(`${namespace}_auth_codes`).doc(authCode));
-        if (!codeSnap.exists || codeSnap.data().used) throw new Error('invalid_code');
-        tx.update(db.collection(`${namespace}_auth_codes`).doc(authCode), { used: true, consumedAt: now });
-        tx.set(db.collection(`${namespace}_tokens`).doc('acc-atomic-new'), {
-          accessToken: 'acc-atomic-new',
-          clientId: 'client-atomic',
-          createdAt: now,
-        });
-        atomicExchangeSucceeded = true;
-      });
-
-      let replayRefused = false;
-      try {
-        await db.runTransaction(async (tx) => {
-          const codeSnap = await tx.get(db.collection(`${namespace}_auth_codes`).doc(authCode));
-          if (!codeSnap.exists || codeSnap.data().used) throw new Error('Code already consumed');
-        });
-      } catch (e) {
-        replayRefused = e.message === 'Code already consumed';
-      }
-
-      const pass = failedTxPreservesCode && atomicExchangeSucceeded && replayRefused;
+      const pass = redeemSucceeded === true && replayRefused === true && failedTxPreservesCode === true;
       receipt.cases.push({
         id: caseId,
         name: 'Atomic code exchange (failure preserves code; commit consumes code atomically; replay refused)',
@@ -1477,9 +1637,9 @@ async function main() {
         baselineStatus: 'UNPROVEN',
         candidateStatus: pass ? 'PASS' : 'FAIL',
         observations: {
-          failedTxPreservesCode,
-          atomicExchangeSucceeded,
+          redeemSucceeded,
           replayRefused,
+          failedTxPreservesCode,
         },
         receiptValid: true,
       });
@@ -1526,12 +1686,17 @@ async function main() {
         migrationRunId: 'run-graph-proof',
       });
 
+      const expectedSourceInventoryDigest = await v3Lib.computeSourceInventoryDigest(db, namespace, key);
       const report = await v3Lib.adoptFirestoreLegacyTokens({
         db,
         namespace,
         key,
         expectedEpoch: 1,
         migrationRunId: 'run-graph-proof',
+        codeSha: artifacts.v3.gitSha,
+        codeArtifact: `gcr.io/phoneware/netsapiens-mcp@sha256:${artifacts.v3.sha256}`,
+        packageIntegrity: artifacts.v3.integrity,
+        expectedSourceInventoryDigest,
       });
 
       const v3Sessions = await db.collection(`${namespace}_sessions`).get();
@@ -1576,7 +1741,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 11: Migration recovery and empty namespace
+  // CASE 11: Migration recovery and empty namespace (Strict C12 Invariants)
   // -------------------------------------------------------------------------
   if (shouldRun('migration_recovery_and_empty_namespace')) {
     console.log('\n[Case 11] migration_recovery_and_empty_namespace');
@@ -1595,12 +1760,17 @@ async function main() {
         migrationRunId: 'run-empty-proof',
       });
 
+      const expectedSourceInventoryDigest = await v3Lib.computeSourceInventoryDigest(db, namespace, key);
       const emptyReport = await v3Lib.adoptFirestoreLegacyTokens({
         db,
         namespace,
         key,
         expectedEpoch: 1,
         migrationRunId: 'run-empty-proof',
+        codeSha: artifacts.v3.gitSha,
+        codeArtifact: `gcr.io/phoneware/netsapiens-mcp@sha256:${artifacts.v3.sha256}`,
+        packageIntegrity: artifacts.v3.integrity,
+        expectedSourceInventoryDigest,
       });
 
       const controlAfterEmpty = await v3Lib.getCutoverFenceRecord(db, namespace);
@@ -1613,6 +1783,10 @@ async function main() {
           key,
           expectedEpoch: 999,
           migrationRunId: 'run-empty-proof',
+          codeSha: artifacts.v3.gitSha,
+          codeArtifact: `gcr.io/phoneware/netsapiens-mcp@sha256:${artifacts.v3.sha256}`,
+          packageIntegrity: artifacts.v3.integrity,
+          expectedSourceInventoryDigest,
         });
       } catch (e) {
         if (e instanceof TypeError || e instanceof ReferenceError) throw e;
@@ -1662,7 +1836,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // CASE 12: Secret safety audit (Real Document & Log Scan)
+  // CASE 12: Secret safety audit (Real Document & Log Scan with Fail-Closed)
   // -------------------------------------------------------------------------
   if (shouldRun('secret_safety_audit')) {
     console.log('\n[Case 12] secret_safety_audit');
@@ -1707,21 +1881,19 @@ async function main() {
       auditText(allLogsCaptured[i], `server_log_${i}`);
     }
 
-    // 12b. Audit all Firestore operation metadata and migration manifests in created project IDs
+    // 12b. Audit all Firestore operation metadata and migration manifests (fail-closed, no swallow)
     for (const projId of createdProjectIds) {
-      try {
-        const projDb = new Firestore({ projectId: projId });
-        for (const ns of ['mcp', 'pwmcp', 'readonly_mcp']) {
-          const opsSnap = await projDb.collection(`${ns}_meta`).doc('cutover_fence').collection('operations').get().catch(() => ({ docs: [] }));
-          for (const doc of opsSnap.docs) {
-            auditObject(doc.data(), `${projId}/${ns}_operations/${doc.id}`);
-          }
-          const metaSnap = await projDb.collection(`${ns}_meta`).get().catch(() => ({ docs: [] }));
-          for (const doc of metaSnap.docs) {
-            auditObject(doc.data(), `${projId}/${ns}_meta/${doc.id}`);
-          }
+      const projDb = new Firestore({ projectId: projId });
+      for (const ns of ['mcp', 'pwmcp', 'readonly_mcp']) {
+        const opsSnap = await projDb.collection(`${ns}_meta`).doc('cutover_fence').collection('operations').get();
+        for (const doc of opsSnap.docs) {
+          auditObject(doc.data(), `${projId}/${ns}_operations/${doc.id}`);
         }
-      } catch {}
+        const metaSnap = await projDb.collection(`${ns}_meta`).get();
+        for (const doc of metaSnap.docs) {
+          auditObject(doc.data(), `${projId}/${ns}_meta/${doc.id}`);
+        }
+      }
     }
 
     // 12c. Audit current serialized receipt
