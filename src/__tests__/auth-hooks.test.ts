@@ -6,6 +6,9 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import type { StoredToken, AuthHooks, RenderPagesOptions } from '../auth/types.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
+import type { McpStore } from '../store/types.js';
 
 describe('NetSapiensAuthProvider auth hooks & pages', () => {
   const dummyClient = {
@@ -18,12 +21,14 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     hooks?: AuthHooks;
     renderPages?: RenderPagesOptions;
   } = {}) {
+    const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
     return new NetSapiensAuthProvider({
       platforms: [{ id: 'default', label: 'Test', apiUrl: 'https://netsapiens.example.com' }],
       nsApiUrl: 'https://netsapiens.example.com',
       nsClientId: 'test-ns-client',
       nsClientSecret: 'test-ns-secret',
       serverBaseUrl: 'http://localhost:3000',
+      store,
       hooks: options.hooks,
       renderPages: options.renderPages,
     });
@@ -225,12 +230,11 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       code,
     );
 
-    const stored = await (provider as unknown as { tokenStore: { get: (t: string) => Promise<StoredToken> } }).tokenStore.get(tokens.access_token);
-    expect(stored.extra).toEqual({
+    const stored = await provider.store.sessions.get(tokens.access_token);
+    expect(stored?.extra).toEqual({
       seatId: 'seat-456',
       domainPolicy: 'active',
     });
-    expect(stored.ttlAt).toBeInstanceOf(Date);
   });
 
   it('onLogin interstitial and resumeLogin: renders interstitial with resumeToken and completes flow', async () => {
@@ -307,7 +311,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       dummyClient as unknown as import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationFull,
       code,
     );
-    const stored = await (provider as unknown as { tokenStore: { get: (t: string) => Promise<StoredToken> } }).tokenStore.get(tokens.access_token);
+    const stored = await provider.store.sessions.get(tokens.access_token);
     expect(stored.extra).toEqual({ enrolledVia: 'self' });
   });
 
@@ -327,8 +331,6 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     });
 
     const revokedToken: StoredToken = {
-      accessToken: 'mcp-bearer-revoked',
-      refreshToken: 'refresh-revoked',
       clientId: 'test-client',
       expiresAt: Date.now() + 3600_000,
       nsAccessToken: 'ns-tok',
@@ -336,7 +338,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       nsUserRole: 'domain_admin',
       serverBaseUrl: 'http://localhost:3000',
     };
-    await (provider as unknown as { tokenStore: { set: (t: StoredToken) => Promise<void> } }).tokenStore.set(revokedToken);
+    await provider.store.sessions.create({ accessToken: 'mcp-bearer-revoked', refreshToken: 'refresh-revoked' }, revokedToken);
 
     const app = express();
     const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp'));

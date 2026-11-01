@@ -38,11 +38,11 @@ async function importApp() {
  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
- delete process.env.MCP_PERSISTENCE;
+ process.env.MCP_PERSISTENCE = 'memory';
 
  // Dynamic import required because env vars must be applied before loadConfig initializes.
  const mod = await import('../http-server.js');
- const created = mod.createApp();
+ const created = await mod.createApp();
  const server = created.app.listen(0);
  openServers.push(server);
  return { ...created, app: server as unknown as typeof created.app };
@@ -433,9 +433,7 @@ describe('NetSapiens Token Sign-In', () => {
 
    // Create an already-expired token directly in the tokenStore with no refresh token
    const expiredMcpToken = 'expired-mcp-bearer-' + randomBytes(8).toString('hex');
-   await (authProvider as any).tokenStore.set({
-    accessToken: expiredMcpToken,
-    refreshToken: 'dummy-refresh',
+   await authProvider.store.sessions.create({ accessToken: expiredMcpToken, refreshToken: 'dummy-refresh' }, {
     clientId: 'client-1',
     expiresAt: Date.now() + 3600_000, // MCP token itself is unexpired
     nsAccessToken: 'expiring-portal-token',

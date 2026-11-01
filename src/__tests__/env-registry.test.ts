@@ -45,7 +45,7 @@ describe('environment registry', () => {
   }
   const registered = ENV_VARS.map((item) => item.name);
   expect(new Set(registered).size).toBe(registered.length);
-  expect([...registered].sort()).toEqual([...new Set([...names, 'MCP_STORE_NAMESPACE', 'MCP_STORE_PATH'])].sort());
+  expect([...registered].sort()).toEqual([...new Set(names)].sort());
  });
 
  it.each([

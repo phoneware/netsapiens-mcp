@@ -28,9 +28,12 @@ import {
  serverCapabilities,
  serverImplementation,
 } from './server-info.js';
+import { createStoreFromEnv } from './config/store.js';
+import { setUsageStore } from './tools/promotion/usage-store.js';
+import type { McpStore } from './store/types.js';
 import { logger } from './utils/logger.js';
 import type { UserRole } from './auth/roles.js';
-import type { NetSapiensConfig } from './types/config.js';
+import type { NetSapiensConfig, MCPServerConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 // ---------------------------------------------------------------------------
@@ -102,12 +105,15 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export function createApp(): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
+export async function createApp(options?: { store?: McpStore }): Promise<{
+ app: express.Express;
+ authProvider: NetSapiensAuthProvider;
+ baseUrl: URL;
+ mcpUrl: URL;
+ store: McpStore;
+}> {
  const config = loadConfig();
  const platforms = parsePlatforms(process.env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
- if (!process.env.MCP_SESSION_SECRET || process.env.MCP_SESSION_SECRET.length < 32) {
-  throw new Error('ConfigError: MCP_SESSION_SECRET must be at least 32 characters');
- }
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
@@ -122,11 +128,15 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
   );
  }
 
- // Issued bearer lifetime. MCP clients SHOULD refresh on 401 using the
- // refresh token we hand back at /token, but real-world client refresh
- // implementations vary, so a longer-lived bearer keeps far more sessions
- // alive without ever hitting the cliff. Default 7 days; operator-tunable
- // via MCP_TOKEN_LIFETIME_HOURS.
+ let store: McpStore;
+ if (options?.store) {
+  store = options.store;
+ } else {
+  const storeResult = await createStoreFromEnv();
+  store = storeResult.store;
+ }
+ setUsageStore(store.usage);
+
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  const authProvider = new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
@@ -135,10 +145,11 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
   nsClientSecret,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
+  store,
  });
 
- const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
- return { app, authProvider, baseUrl, mcpUrl };
+ const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store);
+ return { app, authProvider, baseUrl, mcpUrl, store };
 }
 
 /**
@@ -148,10 +159,21 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
  * especially, which otherwise leak a listener per case and collide on ports.
  */
 export async function startHttpServer(): Promise<HttpServer> {
- const { app, baseUrl, mcpUrl } = createApp();
+ const { app, baseUrl, mcpUrl, store } = await createApp();
  const config = loadConfig();
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const host = process.env.MCP_HOST || '0.0.0.0';
+
+ const onShutdown = async () => {
+  try {
+   await store.close();
+  } catch (err) {
+   logger.error('Error closing store on shutdown', { error: String(err) });
+  }
+  process.exit(0);
+ };
+ process.once('SIGINT', onShutdown);
+ process.once('SIGTERM', onShutdown);
 
  const httpServer = app.listen(port, host, () => {
   logger.info('NetSapiens MCP HTTP server started', {
@@ -174,6 +196,11 @@ export async function startHttpServer(): Promise<HttpServer> {
   }
  });
 
+ httpServer.on('close', () => {
+  process.removeListener('SIGINT', onShutdown);
+  process.removeListener('SIGTERM', onShutdown);
+ });
+
  return httpServer;
 }
 
@@ -189,10 +216,11 @@ function parseLifetimeHoursToSeconds(raw: string | undefined, defaultHours: numb
 }
 
 function wireApp(
- config: ReturnType<typeof loadConfig>,
+ config: MCPServerConfig,
  authProvider: NetSapiensAuthProvider,
  baseUrl: URL,
  mcpUrl: URL,
+ store: McpStore,
 ): { app: express.Express; sessions: Map<string, McpSession> } {
 
  // -----------------------------------------------------------------------
@@ -280,6 +308,12 @@ function wireApp(
    activeSessions: sessions.size,
    nsApiUrl: config.netsapiens.apiUrl,
    version: config.version,
+   store: {
+    backend: store.backend,
+    namespace: store.namespace,
+    persistent: store.capabilities.persistent,
+    multiInstance: store.capabilities.multiInstance,
+   },
   });
  });
 

@@ -5,7 +5,9 @@
  * This server provides AI agents with access to NetSapiens VoIP platform
  * functionality including user management, call records, and system information.
  */
-
+import { randomBytes } from 'node:crypto';
+import { createMemoryStore } from './store/memory.js';
+import { setUsageStore } from './tools/promotion/usage-store.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { NetSapiensClient } from './netsapiens-client.js';
@@ -18,72 +20,72 @@ import { normalizePlatformUrl } from './auth/platforms.js';
 
 const packageMetadata: unknown = createRequire(import.meta.url)('../package.json');
 if (!packageMetadata || typeof packageMetadata !== 'object' || !('version' in packageMetadata) || typeof packageMetadata.version !== 'string') {
-  throw new Error('Invalid package version');
+ throw new Error('Invalid package version');
 }
 const packageVersion = packageMetadata.version;
 
 // Configuration - these would typically come from environment variables
 export const loadConfig = (): MCPServerConfig => {
-  const rawApiUrl = process.env.NETSAPIENS_API_URL;
-  if (!rawApiUrl) throw new Error('ConfigError: NETSAPIENS_API_URL is required (your NetSapiens host, for example https://netsapiens.example.com)');
-  let apiUrl: string;
-  try { apiUrl = normalizePlatformUrl(rawApiUrl); } catch { throw new Error(`ConfigError: NETSAPIENS_API_URL must be an http(s) URL, got "${rawApiUrl}"`); }
-  const transport = process.env.MCP_TRANSPORT || 'stdio';
-  if (process.env.MCP_PLATFORMS !== undefined) throw new Error('ConfigError: MCP_PLATFORMS was removed in 3.0.0; use NETSAPIENS_PLATFORMS');
-  if (transport !== 'http' && process.env.NETSAPIENS_PLATFORMS !== undefined) console.error('warn: NETSAPIENS_PLATFORMS is ignored in stdio mode');
+ const rawApiUrl = process.env.NETSAPIENS_API_URL;
+ if (!rawApiUrl) throw new Error('ConfigError: NETSAPIENS_API_URL is required (your NetSapiens host, for example https://netsapiens.example.com)');
+ let apiUrl: string;
+ try { apiUrl = normalizePlatformUrl(rawApiUrl); } catch { throw new Error(`ConfigError: NETSAPIENS_API_URL must be an http(s) URL, got "${rawApiUrl}"`); }
+ const transport = process.env.MCP_TRANSPORT || 'stdio';
+ if (process.env.MCP_PLATFORMS !== undefined) throw new Error('ConfigError: MCP_PLATFORMS was removed in 3.0.0; use NETSAPIENS_PLATFORMS');
+ if (transport !== 'http' && process.env.NETSAPIENS_PLATFORMS !== undefined) console.error('warn: NETSAPIENS_PLATFORMS is ignored in stdio mode');
 
-  // In HTTP mode, per-user auth is handled by the browser login flow.
-  // We only need the API URL and operator-level client credentials (validated in http-server.ts).
-  const isHttp = transport === 'http';
+ // In HTTP mode, per-user auth is handled by the browser login flow.
+ // We only need the API URL and operator-level client credentials (validated in http-server.ts).
+ const isHttp = transport === 'http';
 
-  // Check if OAuth credentials are provided (full set for stdio mode)
-  const hasOAuth = !!(
-    process.env.NETSAPIENS_OAUTH_CLIENT_ID &&
-    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET &&
-    process.env.NETSAPIENS_OAUTH_USERNAME &&
-    process.env.NETSAPIENS_OAUTH_PASSWORD
+ // Check if OAuth credentials are provided (full set for stdio mode)
+ const hasOAuth = !!(
+  process.env.NETSAPIENS_OAUTH_CLIENT_ID &&
+  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET &&
+  process.env.NETSAPIENS_OAUTH_USERNAME &&
+  process.env.NETSAPIENS_OAUTH_PASSWORD
+ );
+
+ // Check if API token is provided
+ const hasApiToken = !!process.env.NETSAPIENS_API_TOKEN;
+
+ // Stdio mode requires authentication credentials upfront
+ if (!isHttp && !hasOAuth && !hasApiToken) {
+  throw new Error(
+   'Authentication required: Either provide NETSAPIENS_API_TOKEN or OAuth credentials ' +
+   '(NETSAPIENS_OAUTH_CLIENT_ID, NETSAPIENS_OAUTH_CLIENT_SECRET, ' +
+   'NETSAPIENS_OAUTH_USERNAME, NETSAPIENS_OAUTH_PASSWORD)'
   );
+ }
 
-  // Check if API token is provided
-  const hasApiToken = !!process.env.NETSAPIENS_API_TOKEN;
-
-  // Stdio mode requires authentication credentials upfront
-  if (!isHttp && !hasOAuth && !hasApiToken) {
-    throw new Error(
-      'Authentication required: Either provide NETSAPIENS_API_TOKEN or OAuth credentials ' +
-      '(NETSAPIENS_OAUTH_CLIENT_ID, NETSAPIENS_OAUTH_CLIENT_SECRET, ' +
-      'NETSAPIENS_OAUTH_USERNAME, NETSAPIENS_OAUTH_PASSWORD)'
-    );
+ // Build NetSapiens config
+ const netsapiensConfig: any = {
+  apiUrl,
+  timeout: 30000,
+  rateLimit: {
+   requests: 100,
+   perMilliseconds: 60000 // 100 requests per minute
   }
+ };
 
-  // Build NetSapiens config
-  const netsapiensConfig: any = {
-    apiUrl,
-    timeout: 30000,
-    rateLimit: {
-      requests: 100,
-      perMilliseconds: 60000 // 100 requests per minute
-    }
+ // Add OAuth config if provided (takes precedence over API token)
+ if (hasOAuth) {
+  netsapiensConfig.oauth = {
+   clientId: process.env.NETSAPIENS_OAUTH_CLIENT_ID!,
+   clientSecret: process.env.NETSAPIENS_OAUTH_CLIENT_SECRET!,
+   username: process.env.NETSAPIENS_OAUTH_USERNAME!,
+   password: process.env.NETSAPIENS_OAUTH_PASSWORD!
   };
+ } else if (hasApiToken) {
+  netsapiensConfig.apiToken = process.env.NETSAPIENS_API_TOKEN!;
+ }
 
-  // Add OAuth config if provided (takes precedence over API token)
-  if (hasOAuth) {
-    netsapiensConfig.oauth = {
-      clientId: process.env.NETSAPIENS_OAUTH_CLIENT_ID!,
-      clientSecret: process.env.NETSAPIENS_OAUTH_CLIENT_SECRET!,
-      username: process.env.NETSAPIENS_OAUTH_USERNAME!,
-      password: process.env.NETSAPIENS_OAUTH_PASSWORD!
-    };
-  } else if (hasApiToken) {
-    netsapiensConfig.apiToken = process.env.NETSAPIENS_API_TOKEN!;
-  }
-
-  return {
-    name: 'netsapiens-mcp',
-    version: packageVersion,
-    netsapiens: netsapiensConfig,
-    debug: process.env.DEBUG === 'true'
-  };
+ return {
+  name: 'netsapiens-mcp',
+  version: packageVersion,
+  netsapiens: netsapiensConfig,
+  debug: process.env.DEBUG === 'true'
+ };
 };
 
 /**
@@ -91,7 +93,7 @@ export const loadConfig = (): MCPServerConfig => {
  * Delegates to the modular tools system in src/tools/.
  */
 export function getToolDefinitions() {
-  return getAllToolDefinitions();
+ return getAllToolDefinitions();
 }
 
 /**
@@ -99,12 +101,12 @@ export function getToolDefinitions() {
  * Delegates to the modular tools system in src/tools/.
  */
 export function registerTools(
-  server: Server,
-  netsapiensClient: NetSapiensClient,
-  userRole?: import('./auth/roles.js').UserRole,
-  userIdentity?: string,
+ server: Server,
+ netsapiensClient: NetSapiensClient,
+ userRole?: import('./auth/roles.js').UserRole,
+ userIdentity?: string,
 ): void {
-  registerAllTools(server, netsapiensClient, userRole, userIdentity);
+ registerAllTools(server, netsapiensClient, userRole, userIdentity);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,43 +114,43 @@ export function registerTools(
 // ---------------------------------------------------------------------------
 
 export class NetSapiensMCPServer {
-  private server: Server;
-  private netsapiensClient: NetSapiensClient;
+ private server: Server;
+ private netsapiensClient: NetSapiensClient;
 
-  constructor(config: MCPServerConfig) {
-    this.server = new Server(
-      serverImplementation(config),
-      {
-        capabilities: serverCapabilities(),
-        instructions: SERVER_INSTRUCTIONS,
-      }
-    );
+ constructor(config: MCPServerConfig) {
+  this.server = new Server(
+   serverImplementation(config),
+   {
+    capabilities: serverCapabilities(),
+    instructions: SERVER_INSTRUCTIONS,
+   }
+  );
 
-    this.netsapiensClient = new NetSapiensClient(config.netsapiens);
-    registerTools(this.server, this.netsapiensClient);
-    this.setupErrorHandling();
+  this.netsapiensClient = new NetSapiensClient(config.netsapiens);
+  registerTools(this.server, this.netsapiensClient);
+  this.setupErrorHandling();
+ }
+
+ private setupErrorHandling(): void {
+  this.server.onerror = (error) => {
+   logger.error('[MCP Error]', { error: String(error) });
+  };
+
+  process.on('SIGINT', async () => {
+   await this.server.close();
+   process.exit(0);
+  });
+ }
+
+ async run(): Promise<void> {
+  const transport = new StdioServerTransport();
+  await this.server.connect(transport);
+
+  const config = loadConfig();
+  if (config.debug) {
+   logger.debug('NetSapiens MCP Server started successfully', { nsApiUrl: config.netsapiens.apiUrl });
   }
-
-  private setupErrorHandling(): void {
-    this.server.onerror = (error) => {
-      logger.error('[MCP Error]', { error: String(error) });
-    };
-
-    process.on('SIGINT', async () => {
-      await this.server.close();
-      process.exit(0);
-    });
-  }
-
-  async run(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-
-    const config = loadConfig();
-    if (config.debug) {
-      logger.debug('NetSapiens MCP Server started successfully', { nsApiUrl: config.netsapiens.apiUrl });
-    }
-  }
+ }
 }
 
 /**
@@ -156,31 +158,38 @@ export class NetSapiensMCPServer {
  * Used by both the stdio and HTTP code paths.
  */
 export function createMcpServer(config: MCPServerConfig): { server: Server; client: NetSapiensClient } {
-  const server = new Server(
-    serverImplementation(config),
-    { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS }
-  );
-  const client = new NetSapiensClient(config.netsapiens);
-  registerTools(server, client);
+ const server = new Server(
+  serverImplementation(config),
+  { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS }
+ );
+ const client = new NetSapiensClient(config.netsapiens);
+ registerTools(server, client);
 
-  server.onerror = (error) => {
-    logger.error('[MCP Error]', { error: String(error) });
-  };
+ server.onerror = (error) => {
+  logger.error('[MCP Error]', { error: String(error) });
+ };
 
-  return { server, client };
+ return { server, client };
 }
 
 export async function main(): Promise<void> {
-  const transport = process.env.MCP_TRANSPORT || 'stdio';
+ const transport = process.env.MCP_TRANSPORT || 'stdio';
 
-  if (transport === 'http') {
-    const { startHttpServer } = await import('./http-server.js');
-    await startHttpServer();
-  } else {
-    const config = loadConfig();
-    const server = new NetSapiensMCPServer(config);
-    await server.run();
-  }
+ if (transport === 'http') {
+  const { startHttpServer } = await import('./http-server.js');
+  await startHttpServer();
+ } else {
+  if (process.env.MCP_PERSISTENCE !== undefined) console.error('warn: MCP_PERSISTENCE is ignored in stdio mode');
+  if (process.env.MCP_STORE_NAMESPACE !== undefined) console.error('warn: MCP_STORE_NAMESPACE is ignored in stdio mode');
+  if (process.env.MCP_STORE_PATH !== undefined) console.error('warn: MCP_STORE_PATH is ignored in stdio mode');
+  if (process.env.MCP_SESSION_SECRET !== undefined) console.error('warn: MCP_SESSION_SECRET is ignored in stdio mode');
+  const stdioStore = createMemoryStore({ namespace: 'stdio', key: randomBytes(32) });
+  setUsageStore(stdioStore.usage);
+
+  const config = loadConfig();
+  const server = new NetSapiensMCPServer(config);
+  await server.run();
+ }
 }
 
 /**
@@ -188,22 +197,22 @@ export async function main(): Promise<void> {
  * from tests. Compares the resolved CLI argv path against import.meta.url.
  */
 function isEntrypoint(): boolean {
-  if (typeof process === 'undefined' || !process.argv?.[1]) return false;
-  try {
-    const argvUrl = new URL(`file://${process.argv[1]}`).href;
-    return import.meta.url === argvUrl;
-  } catch {
-    return false;
-  }
+ if (typeof process === 'undefined' || !process.argv?.[1]) return false;
+ try {
+  const argvUrl = new URL(`file://${process.argv[1]}`).href;
+  return import.meta.url === argvUrl;
+ } catch {
+  return false;
+ }
 }
 
 if (isEntrypoint()) {
-  main().catch((error) => {
-    if (error instanceof Error && error.message.startsWith('ConfigError: ')) console.error(error.message);
-    logger.error('Fatal error starting MCP server', {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-    process.exit(1);
+ main().catch((error) => {
+  if (error instanceof Error && error.message.startsWith('ConfigError: ')) console.error(error.message);
+  logger.error('Fatal error starting MCP server', {
+   error: error instanceof Error ? error.message : String(error),
+   stack: error instanceof Error ? error.stack : undefined,
   });
+  process.exit(1);
+ });
 }

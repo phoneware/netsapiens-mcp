@@ -7,6 +7,8 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { parsePlatforms } from '../auth/platforms.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
 
 const home = mkdtempSync(join(tmpdir(), 'nsmcp-config-test-'));
 afterAll(() => rmSync(home, { recursive: true, force: true }));
@@ -53,7 +55,8 @@ describe('configuration contract', () => {
  });
 
  it('requires a nonempty platform list containing the upstream origin', () => {
-  const options = { nsApiUrl: 'https://netsapiens.example.com', nsClientId: 'client', nsClientSecret: 'secret' };
+  const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey('a'.repeat(32)) });
+  const options = { nsApiUrl: 'https://netsapiens.example.com', nsClientId: 'client', nsClientSecret: 'secret', store };
   expect(() => new NetSapiensAuthProvider({ ...options, platforms: [] })).toThrow('platforms must contain at least one platform');
   expect(() => new NetSapiensAuthProvider({ ...options, platforms: [{ id: 'other', label: 'Other', apiUrl: 'https://other.example.com' }] })).toThrow('nsApiUrl must be in platforms');
  });
