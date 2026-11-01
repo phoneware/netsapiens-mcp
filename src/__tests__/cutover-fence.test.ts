@@ -9,8 +9,10 @@ import {
   markIrreversibleInTransaction,
   CutoverFenceError,
   CutoverRefusedError,
-} from '../auth/kit/cutover-fence.js';
-import { adoptFirestoreLegacyTokens, computeSourceInventoryDigest, ensureFirestoreAdopted } from '../store/firestore-v2-adoption.js';
+  adoptFirestoreLegacyTokens,
+  computeSourceInventoryDigest,
+  ensureFirestoreAdopted,
+} from '../store/firestore-v2-adoption.js';
 import { createFirestoreStore, createFirestoreBackend, type FirestoreLike } from '../store/firestore.js';
 import { deriveStoreKey } from '../store/codec.js';
 
@@ -113,17 +115,20 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
   };
 
   const defaultAdoptOpts = async (db: any, namespace: string, opts: Record<string, unknown> = {}) => {
+    const ctrl = await getCutoverFenceRecord(db, namespace);
+    const epoch = (opts.expectedEpoch as number | undefined) ?? ctrl?.epoch ?? 1;
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
-      (opts.dryRun ? undefined : await computeSourceInventoryDigest(db, namespace, key));
+      (opts.dryRun ? undefined : await computeSourceInventoryDigest(db, namespace, key, epoch));
     return {
       db,
       namespace,
       key,
-      expectedEpoch: 1,
-      migrationRunId: 'test-run-1',
+      expectedEpoch: epoch,
+      migrationRunId: 'test-run-12345',
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
-      packageIntegrity: 'sha512-test',
+      packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
+      protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
       expectedSourceInventoryDigest: digest,
       ...opts,
     };
@@ -211,7 +216,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     ).rejects.toThrow(CutoverRefusedError);
 
     // 5. Run migration under fenced state
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBe(0);
     // 6. Verify state is now v3_ready and irreversible is true
     const finalRecord = await getCutoverFenceRecord(db, namespace);
@@ -224,7 +229,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       transitionCutoverFenceState(db, namespace, {
         fromState: 'v3_ready',
         toState: 'legacy_open',
-        expectedEpoch: 1,
+        expectedEpoch: finalRecord!.epoch,
       }),
     ).rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
 
@@ -232,7 +237,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     await transitionCutoverFenceState(db, namespace, {
       fromState: 'v3_ready',
       toState: 'v3_active',
-      expectedEpoch: 1,
+      expectedEpoch: finalRecord!.epoch,
       migrationRunId: finalRecord!.migrationRunId!,
       migrationManifestDigest: finalRecord!.migrationManifestDigest!,
     });
@@ -248,7 +253,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const db = new MockFirestore();
     const namespace = 'mcp';
 
-    await initializeCutoverFence(db, namespace, { initialEpoch: 5 });
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1 });
 
     // Wrong expectedEpoch throws
     await expect(
@@ -264,7 +269,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       transitionCutoverFenceState(db, namespace, {
         fromState: 'closing', // currently legacy_open!
         toState: 'fenced',
-        expectedEpoch: 5,
+        expectedEpoch: 1,
       }),
     ).rejects.toThrow(/Invalid state transition/);
   });
@@ -310,7 +315,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       clientId: 'dry-client',
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, dryRun: true, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, dryRun: true, expectedEpoch: 2 });
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
 
@@ -323,7 +328,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     // Assert that control record remained strictly in 'fenced' state with irreversible: false
     const ctrlAfterDryRun = await getCutoverFenceRecord(db, namespace);
     expect(ctrlAfterDryRun?.state).toBe('fenced');
-    expect(ctrlAfterDryRun?.epoch).toBe(1);
+    expect(ctrlAfterDryRun?.epoch).toBe(2);
     expect(ctrlAfterDryRun?.irreversible).toBe(false);
     expect(ctrlAfterDryRun?.migrationRunId).toBeUndefined();
   });
@@ -342,7 +347,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       clientId: 'client-orphan',
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     // Must report error, NOT silent skip!
     expect(report.errors).toBe(1);
   });
@@ -389,7 +394,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       status: 'active',
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBe(1);
   });
 
@@ -412,7 +417,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       updatedAt: Date.now(),
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBe(1);
   });
 
@@ -442,7 +447,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       nsRefreshToken: 'ns-ref',
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBe(2);
   });
 
@@ -499,7 +504,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       expiresAt: now + 3600_000,
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBeGreaterThanOrEqual(1);
   });
 
@@ -542,7 +547,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       expiresAt: now + 3600_000,
     });
 
-    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { expectedEpoch: 1 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace));
     expect(report.errors).toBe(1);
   });
 
@@ -550,21 +555,11 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const db = new MockFirestore();
     const namespace = 'mcp';
 
-    // Initialize fence in v3_ready (not yet active)
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
-    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
-    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
-    await transitionCutoverFenceState(db, namespace, { fromState: 'fenced', toState: 'migrating', expectedEpoch: 1, migrationRunId: 'run-1' });
-    await db.runTransaction(async (tx) => {
-      await markIrreversibleInTransaction(tx, db, namespace, 1, 'run-1');
-    });
-    await transitionCutoverFenceState(db, namespace, {
-      fromState: 'migrating',
-      toState: 'v3_ready',
-      expectedEpoch: 1,
-      migrationRunId: 'run-1',
-      migrationManifestDigest: 'digest-1',
-    });
+    await setupFencedState(db, namespace, 1);
+    const runId = 'run-ready-writer-test';
+    await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { migrationRunId: runId }));
+    const ctrlReady = await getCutoverFenceRecord(db, namespace);
+    expect(ctrlReady?.state).toBe('v3_ready');
 
     const backend = createFirestoreBackend({ db, namespace, key });
     // In v3_ready, ordinary write mutations MUST BE REFUSED!
@@ -582,9 +577,9 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     await transitionCutoverFenceState(db, namespace, {
       fromState: 'v3_ready',
       toState: 'v3_active',
-      expectedEpoch: 1,
-      migrationRunId: 'run-1',
-      migrationManifestDigest: 'digest-1',
+      expectedEpoch: ctrlReady!.epoch,
+      migrationRunId: runId,
+      migrationManifestDigest: ctrlReady!.migrationManifestDigest!,
     });
 
     // Now ordinary write mutation MUST SUCCEED!

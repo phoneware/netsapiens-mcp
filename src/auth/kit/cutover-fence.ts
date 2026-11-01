@@ -25,6 +25,21 @@ export class CutoverRefusedError extends Error {
   }
 }
 
+export function isCutoverFenceError(err: unknown): err is CutoverFenceError {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      (err as any).kitCode === 'cutover_fence_error',
+  );
+}
+
+export function isCutoverRefusedError(err: unknown): err is CutoverRefusedError {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      (err as any).kitCode === 'cutover_refused',
+  );
+}
 export function stripUndefined<T>(value: T): T {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map(stripUndefined) as unknown as T;
@@ -39,10 +54,390 @@ export function stripUndefined<T>(value: T): T {
   return value;
 }
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { FirestoreLike } from '../../store/firestore.js';
 
+export const PHYSICAL_COUNT_KEYS = [
+  'families',
+  'tokens',
+  'refresh',
+  'upstream',
+  'authCodes',
+  'resumeTokens',
+  'oauthClients',
+  'clients',
+] as const;
 
+export const TARGET_COUNT_KEYS = [
+  'families',
+  'tokens',
+  'refresh',
+  'upstream',
+  'authCodes',
+  'resumeTokens',
+  'retiredRefreshTokens',
+  'oauthClients',
+] as const;
+
+export const CLASSIFICATION_KEYS = [
+  'pr56Families',
+  'baseFormatTokens',
+  'authCodes',
+  'resumeTokens',
+  'clients',
+] as const;
+
+export const REASON_KEYS = [
+  'orphanAccessTokens',
+  'orphanRefreshPointers',
+  'orphanUpstreamGrants',
+  'conflictingClaims',
+  'missingAccessTokens',
+  'missingUpstreamGrants',
+  'missingRefreshPointers',
+  'partialTargets',
+  'malformedRecords',
+] as const;
+
+export const REQUIRED_IDENTITY_KEYS = [
+  'schemaVersion',
+  'namespace',
+  'epoch',
+  'migrationRunId',
+  'codeSha',
+  'codeArtifact',
+  'packageIntegrity',
+  'protocolDigest',
+] as const;
+
+export const REQUIRED_OWNERSHIP_MARKER_KEYS = [
+  ...REQUIRED_IDENTITY_KEYS,
+  'kind',
+  'preparedDigest',
+  'migrationManifestDigest',
+  'emptyNamespace',
+  'adoptedAt',
+] as const;
+
+export const REQUIRED_PREPARED_MANIFEST_KEYS = [
+  ...REQUIRED_IDENTITY_KEYS,
+  'kind',
+  'preparedAt',
+  'physicalCounts',
+  'classifications',
+  'reasons',
+  'totalPhysicalRecords',
+  'scanned',
+  'expectedTargetCounts',
+  'sourceInventoryDigest',
+  'sourceLogicalDigest',
+  'candidateCommitments',
+] as const;
+
+export const REQUIRED_FINAL_MANIFEST_KEYS = [
+  ...REQUIRED_IDENTITY_KEYS,
+  'kind',
+  'preparedDigest',
+  'completedAt',
+  'physicalCounts',
+  'classifications',
+  'reasons',
+  'totalPhysicalRecords',
+  'targetCounts',
+  'scanned',
+  'migrated',
+  'skipped',
+  'errors',
+  'sourceInventoryDigest',
+  'targetInventoryDigest',
+  'sourceLogicalDigest',
+  'targetLogicalDigest',
+  'receiptSetDigest',
+] as const;
+
+export const REQUIRED_RECEIPT_KEYS = [
+  ...REQUIRED_IDENTITY_KEYS,
+  'kind',
+  'preparedDigest',
+  'candidateId',
+  'candidateDigest',
+  'disposition',
+  'sourceAfter',
+  'targetAfter',
+  'logicalDigest',
+  'completedAt',
+] as const;
+
+export function validateNoLoneSurrogates(str: string): void {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (i + 1 >= str.length) {
+        throw new CutoverFenceError(`Invalid lone high surrogate at index ${i}`);
+      }
+      const next = str.charCodeAt(i + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw new CutoverFenceError(`Invalid lone high surrogate at index ${i}`);
+      }
+      i++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new CutoverFenceError(`Invalid lone low surrogate at index ${i}`);
+    }
+  }
+}
+
+export function normalizeValue(val: unknown): unknown[] {
+  if (val === null) return ['null'];
+  if (typeof val === 'boolean') return ['boolean', val];
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val)) {
+      throw new CutoverFenceError(`Cannot normalize non-finite number: ${val}`);
+    }
+    const normalizedNum = Object.is(val, -0) ? 0 : val;
+    if (Number.isInteger(normalizedNum)) {
+      if (!Number.isSafeInteger(normalizedNum)) {
+        throw new CutoverFenceError(`Cannot normalize unsafe integer: ${normalizedNum}`);
+      }
+    }
+    return ['number', normalizedNum];
+  }
+  if (typeof val === 'string') {
+    validateNoLoneSurrogates(val);
+    return ['string', val];
+  }
+  if (val instanceof Date) {
+    const ms = val.getTime();
+    if (Number.isNaN(ms)) {
+      throw new CutoverFenceError('Invalid Date object');
+    }
+    const seconds = Math.floor(ms / 1000);
+    const nanoseconds = (ms - seconds * 1000) * 1_000_000;
+    return ['timestamp', String(seconds), nanoseconds];
+  }
+  if (
+    val &&
+    typeof val === 'object' &&
+    typeof (val as any).toMillis === 'function' &&
+    typeof (val as any).seconds === 'number' &&
+    typeof (val as any).nanoseconds === 'number'
+  ) {
+    const ts = val as { seconds: number; nanoseconds: number };
+    if (
+      !Number.isSafeInteger(ts.seconds) ||
+      !Number.isSafeInteger(ts.nanoseconds) ||
+      ts.nanoseconds < 0 ||
+      ts.nanoseconds >= 1_000_000_000
+    ) {
+      throw new CutoverFenceError('Invalid Firestore Timestamp field ranges');
+    }
+    return ['timestamp', String(ts.seconds), ts.nanoseconds];
+  }
+  if (val instanceof Uint8Array || (typeof Buffer !== 'undefined' && Buffer.isBuffer(val))) {
+    return ['bytes', Buffer.from(val).toString('base64')];
+  }
+  if (Array.isArray(val)) {
+    for (let i = 0; i < val.length; i++) {
+      if (!(i in val)) {
+        throw new CutoverFenceError(`Sparse arrays are not supported at index ${i}`);
+      }
+    }
+    return ['array', val.map(normalizeValue)];
+  }
+  if (typeof val === 'object') {
+    if (val.constructor && val.constructor !== Object && val.constructor.name !== 'Object') {
+      throw new CutoverFenceError(`Unsupported object class: ${val.constructor.name}`);
+    }
+    const keys = Object.keys(val).sort();
+    return ['map', keys.map((k) => {
+      validateNoLoneSurrogates(k);
+      return [k, normalizeValue((val as Record<string, unknown>)[k])];
+    })];
+  }
+  throw new CutoverFenceError(`Unsupported type for canonical normalization: ${typeof val}`);
+}
+
+export function rfc8785CanonicalJson(val: unknown): string {
+  if (val === null) return 'null';
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val)) {
+      throw new CutoverFenceError(`Cannot serialize non-finite number: ${val}`);
+    }
+    return Object.is(val, -0) ? '0' : String(val);
+  }
+  if (typeof val === 'string') {
+    validateNoLoneSurrogates(val);
+    return JSON.stringify(val);
+  }
+  if (Array.isArray(val)) {
+    return '[' + val.map(rfc8785CanonicalJson).join(',') + ']';
+  }
+  if (typeof val === 'object') {
+    const keys = Object.keys(val).sort();
+    return '{' + keys.map((k) => {
+      validateNoLoneSurrogates(k);
+      return JSON.stringify(k) + ':' + rfc8785CanonicalJson((val as Record<string, unknown>)[k]);
+    }).join(',') + '}';
+  }
+  throw new CutoverFenceError(`Unsupported type for canonical JSON: ${typeof val}`);
+}
+
+export function C(value: unknown): string {
+  return rfc8785CanonicalJson(normalizeValue(value));
+}
+
+export function canonicalJsonStringify(val: unknown): string {
+  return C(val);
+}
+
+export function deriveKey(storeKey: string | Uint8Array): Buffer {
+  const rawKey = typeof storeKey === 'string' ? Buffer.from(storeKey, 'utf8') : storeKey;
+  return createHmac('sha256', rawKey).update(Buffer.from('netsapiens-mcp/cutover/v2', 'utf8')).digest();
+}
+
+export function frame(purpose: string, namespace: string, epoch: number, value: unknown): string {
+  const framedObj = [
+    'netsapiens-mcp/cutover',
+    2,
+    purpose,
+    namespace,
+    epoch,
+    value,
+  ];
+  return C(framedObj);
+}
+
+export const F = frame;
+
+export function D(purpose: string, namespace: string, epoch: number, value: unknown): string {
+  const payload = frame(purpose, namespace, epoch, value);
+  return createHash('sha256').update(Buffer.from(payload, 'utf8')).digest('hex');
+}
+
+export function H(storeKey: string | Uint8Array, purpose: string, namespace: string, epoch: number, value: unknown): string {
+  const K = deriveKey(storeKey);
+  const payload = frame(purpose, namespace, epoch, value);
+  return createHmac('sha256', K).update(Buffer.from(payload, 'utf8')).digest('hex');
+}
+
+export function computeManifestDigest(manifest: any): string {
+  if (!manifest || typeof manifest !== 'object') {
+    throw new CutoverFenceError('Manifest must be an object');
+  }
+  const namespace = manifest.namespace;
+  const epoch = manifest.epoch;
+  return D('final', namespace, epoch, manifest);
+}
+
+export function computeProtocolDigest(moduleSource: string | Uint8Array): string {
+  return createHash('sha256')
+    .update(typeof moduleSource === 'string' ? Buffer.from(moduleSource, 'utf8') : moduleSource)
+    .digest('hex');
+}
+
+export const FIRESTORE_MAX_DOCUMENT_SIZE_BYTES = 1_048_576;
+export const FIRESTORE_MAX_REQUEST_SIZE_BYTES = 10_485_760;
+export const FIRESTORE_MAX_INDEX_ENTRIES = 40_000;
+export const FIRESTORE_MAX_INDEX_BYTES = 8_388_608;
+export const FIRESTORE_MAX_NESTING_DEPTH = 20;
+export const FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
+export const FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16_000;
+
+export const PREFLIGHT_MAX_DOC_BYTES = Math.floor((4 * FIRESTORE_MAX_DOCUMENT_SIZE_BYTES) / 5);
+export const PREFLIGHT_MAX_REQUEST_BYTES = Math.floor((4 * FIRESTORE_MAX_REQUEST_SIZE_BYTES) / 5);
+export const PREFLIGHT_MAX_INDEX_ENTRIES = Math.floor((4 * FIRESTORE_MAX_INDEX_ENTRIES) / 5);
+export const PREFLIGHT_MAX_INDEX_BYTES = Math.floor((4 * FIRESTORE_MAX_INDEX_BYTES) / 5);
+export const PREFLIGHT_MAX_NESTING_DEPTH = Math.floor((4 * FIRESTORE_MAX_NESTING_DEPTH) / 5);
+export const PREFLIGHT_MAX_FIELD_TRANSFORMS = Math.floor((4 * FIRESTORE_MAX_FIELD_TRANSFORMS) / 5);
+
+export function computeEstimatedFirestoreDocSize(obj: any): number {
+  let size = 32;
+  function calc(val: any, nameLen = 0): void {
+    size += nameLen + 1;
+    if (val === null || typeof val === 'boolean') {
+      size += 1;
+    } else if (typeof val === 'number') {
+      size += 8;
+    } else if (typeof val === 'string') {
+      size += Buffer.byteLength(val, 'utf8') + 1;
+    } else if (val instanceof Date || (val && typeof val === 'object' && typeof val.seconds === 'number')) {
+      size += 8;
+    } else if (val instanceof Uint8Array || Buffer.isBuffer(val)) {
+      size += val.length;
+    } else if (Array.isArray(val)) {
+      for (const item of val) calc(item, 0);
+    } else if (val && typeof val === 'object') {
+      for (const [k, v] of Object.entries(val)) {
+        calc(v, Buffer.byteLength(k, 'utf8') + 1);
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    calc(v, Buffer.byteLength(k, 'utf8') + 1);
+  }
+  return size;
+}
+
+export function validateMigrationPreflightLimits(prep: any): { sizeBytes: number; estFirestoreSize: number } {
+  const jsonStr = C(prep);
+  const sizeBytes = Buffer.byteLength(jsonStr, 'utf8');
+  if (sizeBytes > PREFLIGHT_MAX_DOC_BYTES) {
+    throw new CutoverFenceError(
+      `Prepared migration manifest canonical size (${sizeBytes} bytes) exceeds 80% limit (${PREFLIGHT_MAX_DOC_BYTES} bytes)`,
+    );
+  }
+  const estFirestoreSize = computeEstimatedFirestoreDocSize(prep);
+  if (estFirestoreSize > PREFLIGHT_MAX_DOC_BYTES) {
+    throw new CutoverFenceError(
+      `Prepared migration manifest estimated Firestore storage size (${estFirestoreSize} bytes) exceeds 80% limit (${PREFLIGHT_MAX_DOC_BYTES} bytes)`,
+    );
+  }
+  return { sizeBytes, estFirestoreSize };
+}
+
+export function validateMigrationIdentityFields(
+  record: any,
+  expectedNamespace?: string,
+  expectedEpoch?: number,
+  expectedRunId?: string,
+): void {
+  if (!record || typeof record !== 'object') {
+    throw new CutoverFenceError('Migration record must be an object');
+  }
+  if (record.schemaVersion !== 2) {
+    throw new CutoverFenceError(`Invalid schemaVersion: expected 2, got ${record.schemaVersion}`);
+  }
+  if (!SUPPORTED_CUTOVER_NAMESPACES.includes(record.namespace)) {
+    throw new CutoverFenceError(`Invalid namespace: ${record.namespace}`);
+  }
+  if (expectedNamespace && record.namespace !== expectedNamespace) {
+    throw new CutoverFenceError(`Namespace mismatch: expected ${expectedNamespace}, got ${record.namespace}`);
+  }
+  if (!Number.isInteger(record.epoch) || record.epoch < 1) {
+    throw new CutoverFenceError(`Invalid epoch: must be a positive integer, got ${record.epoch}`);
+  }
+  if (expectedEpoch !== undefined && record.epoch !== expectedEpoch) {
+    throw new CutoverFenceError(`Epoch mismatch: expected ${expectedEpoch}, got ${record.epoch}`);
+  }
+  if (typeof record.migrationRunId !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(record.migrationRunId)) {
+    throw new CutoverFenceError(`Invalid migrationRunId: got '${record.migrationRunId}'`);
+  }
+  if (expectedRunId && record.migrationRunId !== expectedRunId) {
+    throw new CutoverFenceError(`migrationRunId mismatch: expected ${expectedRunId}, got ${record.migrationRunId}`);
+  }
+  if (typeof record.codeSha !== 'string' || !/^[0-9a-f]{40}$/.test(record.codeSha)) {
+    throw new CutoverFenceError(`Invalid codeSha: expected 40-char lowercase hex, got '${record.codeSha}'`);
+  }
+  if (typeof record.codeArtifact !== 'string' || !/^[a-zA-Z0-9_./-]+@sha256:[0-9a-f]{64}$/.test(record.codeArtifact)) {
+    throw new CutoverFenceError(`Invalid codeArtifact: expected name@sha256:<64 hex>, got '${record.codeArtifact}'`);
+  }
+  if (typeof record.packageIntegrity !== 'string' || !/^sha512-[A-Za-z0-9+/=]{86,88}$/.test(record.packageIntegrity)) {
+    throw new CutoverFenceError(`Invalid packageIntegrity: expected sha512- SRI, got '${record.packageIntegrity}'`);
+  }
+  if (typeof record.protocolDigest !== 'string' || !/^[0-9a-f]{64}$/.test(record.protocolDigest)) {
+    throw new CutoverFenceError(`Invalid protocolDigest: expected 64-char lowercase hex, got '${record.protocolDigest}'`);
+  }
+}
 
 export const SUPPORTED_CUTOVER_NAMESPACES = ['mcp', 'pwmcp', 'readonly_mcp'] as const;
 export type SupportedCutoverNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];

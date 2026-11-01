@@ -141,16 +141,18 @@ describe('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant sha
     await initializeCutoverFence(db, namespace, { initialEpoch: 1 });
     await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
     await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+    const ctrlFenced = await getCutoverFenceRecord(db, namespace);
     const report = await adoptFirestoreLegacyTokens({
       db,
       namespace,
       key,
-      expectedEpoch: 1,
+      expectedEpoch: ctrlFenced!.epoch,
       migrationRunId: 'pr56-run',
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
-      packageIntegrity: 'sha512-test',
-      expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key),
+      packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
+      protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
+      expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key, ctrlFenced!.epoch),
     });
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
@@ -159,7 +161,7 @@ describe('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant sha
     await transitionCutoverFenceState(db, namespace, {
       fromState: 'v3_ready',
       toState: 'v3_active',
-      expectedEpoch: 1,
+      expectedEpoch: ctrl!.epoch,
       migrationRunId: ctrl!.migrationRunId!,
       migrationManifestDigest: ctrl!.migrationManifestDigest!,
     });
