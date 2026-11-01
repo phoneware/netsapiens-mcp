@@ -24,7 +24,6 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Start Firestore emulator
-        if: matrix.node != 22
         run: |
           docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
             gcloud emulators firestore start --host-port=0.0.0.0:8080
@@ -32,7 +31,7 @@ jobs:
           docker logs fs-emu; exit 1
       - run: npm test
         env:
-          FIRESTORE_EMULATOR_HOST: ${{ matrix.node == 22 && '' || 'localhost:8080' }}
+          FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
           NSMCP_REQUIRE_FIRESTORE_EMULATOR: 1
       - run: npm run build
