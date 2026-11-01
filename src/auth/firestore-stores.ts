@@ -314,18 +314,21 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       );
     }
     const accessRef = this.accessDocRef(accessToken);
-    return await this.rawDb.runTransaction(async (transaction) => {
-      let guard: GuardMutationResult | undefined;
-      const fence = this.fenceConfig;
-      if (fence && fence.enforce) {
-        guard = await checkMutationGuardInTransaction(transaction, {
-          db: this.rawDb,
-          namespace: fence.namespace,
-          operation: op,
-          now: this.localNow,
-        });
-      }
-      const accessSnap = await transaction.get(accessRef);
+    let guardResult: GuardMutationResult | undefined;
+    const runTx = async () => {
+      return await this.rawDb.runTransaction(async (transaction) => {
+        let guard: GuardMutationResult | undefined;
+        const fence = this.fenceConfig;
+        if (fence && fence.enforce) {
+          guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.rawDb,
+            namespace: fence.namespace,
+            operation: op,
+            now: this.localNow,
+          });
+          guardResult = guard;
+        }
+        const accessSnap = await transaction.get(accessRef);
       if (!accessSnap.exists) return undefined;
       const existing = accessSnap.data() as StoredToken;
       const updated: StoredToken = { ...existing, ...patch };
@@ -362,8 +365,12 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         }), { merge: true });
       }
 
-      return updated;
-    });
+        return updated;
+      });
+    };
+    const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
+    guardResult?.commitCompletion?.();
+    return result;
   }
 
  async refreshNsToken(
@@ -500,7 +507,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return updated;
     });
   };
-  const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
+  const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
   guardResult?.commitCompletion?.();
   return result;
  }
@@ -623,7 +630,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
     });
    };
    if (op?.trackWriter) {
-    await op.trackWriter(runTx());
+    await op.trackWriter(runTx);
    } else {
     await runTx();
    }
@@ -710,7 +717,7 @@ export class FirestoreAuthCodeStore {
     });
   };
   if (op?.trackWriter) {
-    await op.trackWriter(runTx());
+    await op.trackWriter(runTx);
   } else {
     await runTx();
   }
@@ -783,7 +790,7 @@ export class FirestoreAuthCodeStore {
     };
    });
   };
-  return op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
+  return op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
  }
 
  async redeemAndIssue(
@@ -890,8 +897,8 @@ export class FirestoreAuthCodeStore {
    };
   });
  };
- const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
+ const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
  guardResult?.commitCompletion?.();
-  return result;
+ return result;
  }
 }

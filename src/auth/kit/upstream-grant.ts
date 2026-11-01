@@ -260,8 +260,9 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     const force = options?.force ?? false;
     const leaseOwner = randomUUID();
 
-    const claimResult = await this.db.runTransaction(async (transaction) => {
-      let guard: GuardMutationResult | undefined;
+    const runClaimTx = async () => {
+      return await this.db.runTransaction(async (transaction) => {
+        let guard: GuardMutationResult | undefined;
       if (this.fence?.enforce) {
         guard = await checkMutationGuardInTransaction(transaction, {
           db: this.db,
@@ -333,8 +334,9 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       );
 
       return { status: 'claimed' as const, grant: current.grant };
-    });
-
+      });
+    };
+    const claimResult = op?.trackWriter ? await op.trackWriter(runClaimTx) : await runClaimTx();
     if (claimResult.status === 'fresh') {
       return claimResult.grant;
     }
@@ -365,7 +367,8 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     // claimResult.status === 'claimed': instance holds the lease
     let refreshed: { grant: G; expiresAt?: number } | undefined;
     try {
-      refreshed = await refresh(claimResult.grant);
+      const runRefresh = () => refresh(claimResult.grant);
+      refreshed = op?.trackWriter ? await op.trackWriter(runRefresh) : await runRefresh();
     } catch (err) {
       const code = kitCodeOf(err);
       if (code === 'cutover_refused' || code === 'cutover_fence_error') {
@@ -463,19 +466,21 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     // Remote grant succeeded! Commit locally:
     const commitNow = options?.now ?? this.nowProvider();
     try {
-      await this.db.runTransaction(async (transaction) => {
-        let guard: GuardMutationResult | undefined;
-        if (this.fence?.enforce) {
-          const op = options?.operation ?? requestOperationContext.getStore();
-          guard = await checkMutationGuardInTransaction(transaction, {
-            db: this.db,
-            namespace: this.fence.namespace,
-            operation: op,
-            now: this.nowProvider,
-            completeOperation: options?.completeOperation ?? true,
-          });
-        }
-
+      let commitGuard: GuardMutationResult | undefined;
+      const runCommitTx = async () => {
+        await this.db.runTransaction(async (transaction) => {
+          let guard: GuardMutationResult | undefined;
+          if (this.fence?.enforce) {
+            const op = options?.operation ?? requestOperationContext.getStore();
+            guard = await checkMutationGuardInTransaction(transaction, {
+              db: this.db,
+              namespace: this.fence.namespace,
+              operation: op,
+              now: this.nowProvider,
+              completeOperation: options?.completeOperation ?? true,
+            });
+            commitGuard = guard;
+          }
         const snap = await transaction.get(docRef);
         if (!snap.exists) {
           throw new UpstreamRevokedError('Grant document deleted during refresh');
@@ -504,8 +509,14 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           }),
           { merge: true },
         );
-      });
-
+        });
+      };
+      if (op?.trackWriter) {
+        await op.trackWriter(runCommitTx);
+      } else {
+        await runCommitTx();
+      }
+      commitGuard?.commitCompletion?.();
       return refreshed.grant;
     } catch (err) {
       const op = options?.operation ?? requestOperationContext.getStore();

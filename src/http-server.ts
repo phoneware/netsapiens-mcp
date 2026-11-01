@@ -380,13 +380,14 @@ function wireApp(
      },
      async (opCtx) => {
       (req as any).cutoverOperation = opCtx;
-      let activeWriters = 0;
+      // Whole-task lifecycle: starts at 1 covering the route execution itself
+      let activeTasks = 1;
       let routeCompleted = false;
       let closedToNewTasks = false;
       let resolveQuiescence: (() => void) | undefined;
 
       const checkQuiescent = () => {
-       if (closedToNewTasks && routeCompleted && activeWriters === 0) {
+       if (closedToNewTasks && activeTasks === 0) {
         if (resolveQuiescence) {
          const r = resolveQuiescence;
          resolveQuiescence = undefined;
@@ -399,18 +400,22 @@ function wireApp(
        if (closedToNewTasks) {
         throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
        }
-       activeWriters++;
+       activeTasks++;
       };
 
       (opCtx as any).exitWriter = () => {
-       activeWriters = Math.max(0, activeWriters - 1);
+       activeTasks--;
+       if (activeTasks < 0) {
+        throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
+       }
        checkQuiescent();
       };
 
-      (opCtx as any).trackWriter = async <T>(promise: Promise<T>): Promise<T> => {
+      // Thunk registration: enterWriter is called BEFORE fn() is invoked
+      (opCtx as any).trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
        (opCtx as any).enterWriter();
        try {
-        return await promise;
+        return await fn();
        } finally {
         (opCtx as any).exitWriter();
        }
@@ -420,29 +425,35 @@ function wireApp(
        resolveQuiescence = resolve;
       });
 
-      const markRouteComplete = () => {
+      // Route handler completion: closes registration and drains the initial 1 count
+      const markRouteHandlerComplete = () => {
        if (!routeCompleted) {
         routeCompleted = true;
         closedToNewTasks = true;
+        activeTasks--;
+        if (activeTasks < 0) {
+         throw new CutoverFenceError('Active tasks underflow on route completion');
+        }
         checkQuiescent();
        }
       };
 
-      res.once('finish', markRouteComplete);
+      res.once('finish', markRouteHandlerComplete);
       const origEnd = res.end.bind(res);
       res.end = (...args: any[]) => {
        const ret = (origEnd as any)(...args);
-       markRouteComplete();
+       markRouteHandlerComplete();
        return ret;
       };
+      // Close ONLY notes transport loss; it NEVER decrements or releases early!
       res.once('close', () => {
-       markRouteComplete();
+       // Transport disconnected; handler work continues until markRouteHandlerComplete & quiescence
       });
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {
         const ret = (origWriteHead as any)(...args);
-        markRouteComplete();
+        markRouteHandlerComplete();
         return ret;
        };
       }

@@ -114,46 +114,56 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             `Durable operation context is required for fence-enforced issue in namespace ${this.fence.namespace}`,
           );
         }
-        await this.db.runTransaction(async (transaction: Transaction) => {
-          const guard = await checkMutationGuardInTransaction(transaction, {
-            db: this.db,
-            namespace: this.fence!.namespace,
-            operation: op,
-            completeOperation: options?.completeOperation,
-            now: this.nowProvider,
-          });
-          guard.bufferCompletion(this.nowProvider());
-          transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
-          transaction.set(
-            this.refreshCol().doc(docId(stored.refreshToken)),
-            stripUndefined({
-              status: 'active',
-              familyId,
-              token: stored,
-            }),
-          );
-          transaction.set(
-            this.familyCol().doc(docId(familyId)),
-            stripUndefined({
-              id: familyId,
-              currentAccessToken: stored.accessToken,
-              currentRefreshToken: stored.refreshToken,
-              retiredRefreshFingerprints: [],
-              updatedAt: this.nowProvider(),
-            }),
-          );
-          if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
-            const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
-            if (upstreamData) {
-              const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
-              const upstreamPayload = stripUndefined({
-                ...upstreamData,
+        let guardResult: GuardMutationResult | undefined;
+        const runTx = async () => {
+          await this.db.runTransaction(async (transaction: Transaction) => {
+            const guard = await checkMutationGuardInTransaction(transaction, {
+              db: this.db,
+              namespace: this.fence!.namespace,
+              operation: op,
+              completeOperation: options?.completeOperation,
+              now: this.nowProvider,
+            });
+            guardResult = guard;
+            guard.bufferCompletion(this.nowProvider());
+            transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
+            transaction.set(
+              this.refreshCol().doc(docId(stored.refreshToken)),
+              stripUndefined({
+                status: 'active',
+                familyId,
+                token: stored,
+              }),
+            );
+            transaction.set(
+              this.familyCol().doc(docId(familyId)),
+              stripUndefined({
+                id: familyId,
+                currentAccessToken: stored.accessToken,
+                currentRefreshToken: stored.refreshToken,
+                retiredRefreshFingerprints: [],
                 updatedAt: this.nowProvider(),
-              });
-              transaction.set(upstreamRef, upstreamPayload);
+              }),
+            );
+            if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
+              const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
+              if (upstreamData) {
+                const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
+                const upstreamPayload = stripUndefined({
+                  ...upstreamData,
+                  updatedAt: this.nowProvider(),
+                });
+                transaction.set(upstreamRef, upstreamPayload);
+              }
             }
-          }
-        });
+          });
+        };
+        if (op?.trackWriter) {
+          await op.trackWriter(runTx);
+        } else {
+          await runTx();
+        }
+        guardResult?.commitCompletion?.();
         return stored;
       }
 
@@ -867,7 +877,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         return { status: 'claimed', token: stored } as const;
         });
       };
-      const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
+      const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
       guardResult?.commitCompletion?.();
       return result;
     } catch (err) {
@@ -908,7 +918,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         });
       };
       if (op?.trackWriter) {
-        await op.trackWriter(runTx());
+        await op.trackWriter(runTx);
       } else {
         await runTx();
       }
@@ -1003,7 +1013,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         });
       };
       if (op?.trackWriter) {
-        await op.trackWriter(runTx());
+        await op.trackWriter(runTx);
       } else {
         await runTx();
       }
@@ -1061,7 +1071,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       });
     };
     if (op?.trackWriter) {
-      return await op.trackWriter(runTx());
+      return await op.trackWriter(runTx);
     }
     return await runTx();
   }
