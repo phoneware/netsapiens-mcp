@@ -93,6 +93,7 @@ function parseArgs() {
   // Auto-detect defaults
   if (!opts.bridgeTarball) {
     const candBridge = [
+      '/tmp/netsapiens-mcp-2.4.1-1a8f2e9.tgz',
       '/tmp/netsapiens-mcp-2.4.1-5cfb23c.tgz',
       '/tmp/netsapiens-mcp-2.4.1-a0be24d.tgz',
       '/Users/jwaldrip/dev/worktrees/netsapiens-mcp-2-bridge/netsapiens-mcp-2.4.1.tgz',
@@ -307,13 +308,15 @@ async function main() {
     ? 'f415003ffd38d3f1ad6b2d2224638a64264ecfa0'
     : getGitSha('origin/feat/netsapiens-mcp-3');
 
-  const bridgeCommitSha = opts.bridgeTarball.includes('5cfb23c')
-    ? '5cfb23c7ac20fb856416c76c4a95212eb60a7c7a'
-    : (opts.bridgeTarball.includes('a0be24d')
-      ? 'a0be24d620fc3e138d73500b6a39ab93d61f8c51'
-      : (opts.bridgeTarball.includes('3080249')
-        ? '3080249d9eac21578f623d7edb5f5fab56c2503c'
-        : getGitSha('origin/feat/netsapiens-mcp-2-bridge')));
+  const bridgeCommitSha = opts.bridgeTarball.includes('1a8f2e9')
+    ? '1a8f2e954738904b2e2574d70f0c2937d49ac39b'
+    : (opts.bridgeTarball.includes('5cfb23c')
+      ? '5cfb23c7ac20fb856416c76c4a95212eb60a7c7a'
+      : (opts.bridgeTarball.includes('a0be24d')
+        ? 'a0be24d620fc3e138d73500b6a39ab93d61f8c51'
+        : (opts.bridgeTarball.includes('3080249')
+          ? '3080249d9eac21578f623d7edb5f5fab56c2503c'
+          : getGitSha('origin/feat/netsapiens-mcp-2-bridge'))));
 
   const artifacts = {
     v231: {
@@ -1112,7 +1115,8 @@ async function main() {
       const retrySuccessorMatched = retryData.access_token === data1.access_token;
 
       // Replay proof: replay of consumed refresh token outside retry window must revoke family and remove upstream grant
-      const famId = (await db.collection(`${namespace}_tokens_refresh_families`).get()).docs[0]?.id;
+      const refDoc = await db.collection(`${namespace}_tokens_refresh`).doc(initialRefresh).get();
+      const famId = refDoc.data()?.familyId;
       if (famId) {
         await db.collection(`${namespace}_tokens_refresh`).doc(initialRefresh).update({
           consumedAt: Date.now() - (600_000 + 5000), // outside 10m retry window
