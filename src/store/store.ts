@@ -249,7 +249,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
 
       async getByRefreshToken(refreshToken: string): Promise<StoredSession | undefined> {
         const id = codec.id('refresh', refreshToken);
-        const refresh = await backend.getRefresh(id);
+        const refresh = await backend.getRefresh(id, refreshToken);
         if (!refresh) {
           if (backend.findSessionByRefreshId) {
             const v1Row = await backend.findSessionByRefreshId(id);

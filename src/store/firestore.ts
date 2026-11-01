@@ -239,6 +239,24 @@ export class FirestoreBackend implements StoreBackend {
               if (snap.exists) {
                 return { ...snap.data(), id } as unknown as RefreshPointerRow;
               }
+            } else if (refData?.accessToken) {
+              const legacyTokSnap = await db.collection(`${namespace}_tokens`).doc(String(refData.accessToken).replace(/[\/.]/g, '_')).get();
+              if (legacyTokSnap.exists) {
+                const tokData = legacyTokSnap.data();
+                if (tokData) {
+                  await adoptSingleLegacyToken({
+                    db,
+                    namespace,
+                    key,
+                    accessToken: String(refData.accessToken),
+                    tokData,
+                  });
+                  snap = await refreshTokens.doc(id).get();
+                  if (snap.exists) {
+                    return { ...snap.data(), id } as unknown as RefreshPointerRow;
+                  }
+                }
+              }
             }
           }
         }

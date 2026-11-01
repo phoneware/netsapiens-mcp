@@ -456,14 +456,26 @@ export async function adoptSingleLegacyFamily(options: {
   const legacyUpstreamCol = `${namespace}_tokens_upstream`;
 
   await db.runTransaction(async (tx) => {
-    const existingV3 = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
-    if (existingV3.exists) return;
-
     const famSnap = await tx.get(db.collection(legacyFamiliesCol).doc(familyId));
     if (!famSnap.exists) return;
     const famData = famSnap.data() as Record<string, unknown>;
 
     const currentRefreshToken = famData.currentRefreshToken as string | undefined;
+    const rawRefreshId = currentRefreshToken || randomUUID();
+    const newRefreshId = codec.id('refresh', rawRefreshId);
+
+    const existingV3 = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
+    let previousActiveRefreshId: string | undefined;
+    let generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
+
+    if (existingV3.exists) {
+      const existingFam = existingV3.data() as unknown as FamilyRow;
+      if (existingFam.activeRefreshId === newRefreshId) {
+        return; // Already up to date
+      }
+      generation = Math.max(generation, existingFam.generation + 1);
+      previousActiveRefreshId = existingFam.activeRefreshId;
+    }
     const refSnap = currentRefreshToken
       ? await tx.get(db.collection(legacyRefreshCol).doc(currentRefreshToken))
       : null;
@@ -487,13 +499,12 @@ export async function adoptSingleLegacyFamily(options: {
     }
 
     const now = Date.now();
-    const generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
     const grantVersion = typeof upData.grantVersion === 'number' ? (upData.grantVersion as number) : 1;
+
 
     const rawAccessId = accessId || randomUUID();
     const newAccessId = codec.id('session', rawAccessId);
-    const rawRefreshId = currentRefreshToken || (embeddedToken.refreshToken as string | undefined) || randomUUID();
-    const newRefreshId = codec.id('refresh', rawRefreshId);
+
 
     const expiresAt = typeof accData?.expiresAt === 'number'
       ? (accData.expiresAt as number)
@@ -577,6 +588,40 @@ export async function adoptSingleLegacyFamily(options: {
     tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), defined({ ...refreshRow, v: 2 }));
     tx.set(db.collection(v3Cols.sessions).doc(newAccessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
 
+    if (previousActiveRefreshId && previousActiveRefreshId !== newRefreshId) {
+      tx.set(db.collection(v3Cols.refreshTokens).doc(previousActiveRefreshId), defined({
+        id: previousActiveRefreshId,
+        familyId,
+        status: 'consumed',
+        generation: Math.max(1, generation - 1),
+        consumedAt: now,
+        successorSealed: codec.seal({
+          accessToken: rawAccessId,
+          refreshToken: currentRefreshToken!,
+        }, `successor:${previousActiveRefreshId}`),
+        v: 2,
+      }));
+    }
+
+    if (famData.previousRefreshToken && currentRefreshToken && rawAccessId) {
+      const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
+      const prevRefDoc = await tx.get(db.collection(legacyRefreshCol).doc(famData.previousRefreshToken as string));
+      const prevData = prevRefDoc.exists ? (prevRefDoc.data() as Record<string, unknown>) : null;
+      const consumedAt = typeof prevData?.consumedAt === 'number' ? (prevData.consumedAt as number) : now;
+
+      tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshId), defined({
+        id: prevRefreshId,
+        familyId,
+        status: 'consumed',
+        generation: Math.max(1, generation - 1),
+        consumedAt,
+        successorSealed: codec.seal({
+          accessToken: rawAccessId,
+          refreshToken: currentRefreshToken,
+        }, `successor:${prevRefreshId}`),
+        v: 2,
+      }));
+    }
     for (const fp of retiredFingerprints) {
       tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), {
         familyId,

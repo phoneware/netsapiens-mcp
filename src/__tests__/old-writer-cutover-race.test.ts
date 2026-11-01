@@ -176,4 +176,131 @@ describe('Old-Writer Rolling Cutover Race Protection', () => {
       expect(lookup.session.nsUsername).toBe('late@domain.com');
     }
   });
+
+  it('reconciles same family when old 2.x writer rotates F->R2 after v3 already adopted F->R1', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    const familyId = 'fam-reconcile-race';
+    const clientId = 'client-reconcile';
+
+    // 1. Initial legacy state with R1
+    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
+      id: familyId,
+      currentAccessToken: 'A1',
+      currentRefreshToken: 'R1',
+      retiredRefreshFingerprints: [],
+      updatedAt: 1000,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('R1').set({
+      accessToken: 'A1',
+      familyId,
+      status: 'active',
+      token: {
+        accessToken: 'A1',
+        refreshToken: 'R1',
+        clientId,
+        expiresAt: Date.now() + 3600_000,
+        nsAccessToken: 'ns-tok-1',
+        nsRefreshToken: 'ns-ref-1',
+        nsUsername: 'reconcile-user@domain.com',
+      },
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+      grant: { access_token: 'ns-tok-1', refresh_token: 'ns-ref-1', username: 'reconcile-user@domain.com' },
+      expiresAt: Date.now() + 3600_000,
+      updatedAt: 1000,
+    });
+
+    // 2. Preflight adopts F with R1 into v3
+    await ensureFirestoreAdopted({ db, namespace, key });
+    const store = createFirestoreStore({ db, namespace, key });
+
+    // Verify v3 has R1
+    const lookupR1Before = await store.sessions.lookupRefresh('R1', clientId, Date.now());
+    expect(lookupR1Before.status).toBe('active');
+
+    // 3. Old 2.x instance in Cloud Run rotates F in legacy: R1 -> R2!
+    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
+      id: familyId,
+      currentAccessToken: 'A2',
+      currentRefreshToken: 'R2',
+      previousAccessToken: 'A1',
+      previousRefreshToken: 'R1',
+      retiredRefreshFingerprints: [],
+      updatedAt: 2000,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('R1').set({
+      accessToken: 'A1',
+      familyId,
+      status: 'consumed',
+      consumedAt: 2000,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('R2').set({
+      accessToken: 'A2',
+      familyId,
+      status: 'active',
+      token: {
+        accessToken: 'A2',
+        refreshToken: 'R2',
+        clientId,
+        expiresAt: Date.now() + 3600_000,
+        nsAccessToken: 'ns-tok-2',
+        nsRefreshToken: 'ns-ref-2',
+        nsUsername: 'reconcile-user@domain.com',
+        extra: { seatId: 'seat-reconciled' },
+      },
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+      grant: { access_token: 'ns-tok-2', refresh_token: 'ns-ref-2', username: 'reconcile-user@domain.com' },
+      expiresAt: Date.now() + 3600_000,
+      updatedAt: 2000,
+    });
+
+    // 4. Client presents R2 to v3!
+    // v3 must atomically reconcile F: advance generation, adopt R2, consume R1, and serve R2!
+    const lookupR2 = await store.sessions.lookupRefresh('R2', clientId, Date.now());
+    expect(lookupR2.status).toBe('active');
+    if (lookupR2.status === 'active') {
+      expect(lookupR2.session.clientId).toBe(clientId);
+      expect(lookupR2.session.nsAccessToken).toBe('ns-tok-2');
+      expect(lookupR2.session.extra?.seatId).toBe('seat-reconciled');
+    }
+  });
+
+  it('adopts pre-PR56 base-format refresh pointer { accessToken } without familyId upon refresh', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    const clientId = 'base-client-99';
+
+    await ensureFirestoreAdopted({ db, namespace, key });
+    const store = createFirestoreStore({ db, namespace, key });
+
+    // Pre-PR56 base format: tokens_refresh has doc(refreshToken) = { accessToken: 'base-acc' } (no familyId!)
+    const baseRefresh = 'base-refresh-token-xyz';
+    const baseAccess = 'base-access-token-xyz';
+
+    await db.collection(`${namespace}_tokens_refresh`).doc(baseRefresh.replace(/[\/.]/g, '_')).set({
+      accessToken: baseAccess,
+    });
+    await db.collection(`${namespace}_tokens`).doc(baseAccess.replace(/[\/.]/g, '_')).set({
+      accessToken: baseAccess,
+      refreshToken: baseRefresh,
+      clientId,
+      expiresAt: Date.now() + 3600_000,
+      nsAccessToken: 'ns-base-tok',
+      nsRefreshToken: 'ns-base-ref',
+      nsUsername: 'base@domain.com',
+      seatId: 'seat-base-123',
+    });
+
+    // Client presents baseRefresh to v3 lookupRefresh
+    const lookup = await store.sessions.lookupRefresh(baseRefresh, clientId, Date.now());
+    expect(lookup.status).toBe('active');
+    if (lookup.status === 'active') {
+      expect(lookup.session.clientId).toBe(clientId);
+      expect(lookup.session.extra?.seatId).toBe('seat-base-123');
+      expect(lookup.session.nsUsername).toBe('base@domain.com');
+      expect(lookup.session.nsAccessToken).toBe('ns-base-tok');
+    }
+  });
 });
