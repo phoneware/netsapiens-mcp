@@ -34,6 +34,7 @@
     "specs:validate": "tsx scripts/validate-observations.ts",
     "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts && tsx scripts/generate-governance.ts && tsx scripts/generate-availability.ts",
     "availability:diff": "tsx scripts/availability-diff.ts",
+    "readme:facts": "tsx scripts/readme-facts.ts",
     "prebuild": "npm run clean && npm run generate",
     "prepack": "npm run build",
     "test": "vitest run",
