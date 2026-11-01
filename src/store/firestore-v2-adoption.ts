@@ -482,9 +482,17 @@ export async function adoptFirestoreLegacyTokens(
         codeSha: options.codeSha,
         codeArtifact: options.codeArtifact,
         packageIntegrity: options.packageIntegrity,
+        totalPhysicalRecords:
+          physicalCounts.families +
+          physicalCounts.tokens +
+          physicalCounts.refresh +
+          physicalCounts.upstream +
+          physicalCounts.authCodes +
+          physicalCounts.resumeTokens +
+          physicalCounts.oauthClients +
+          physicalCounts.clients,
         physicalCounts,
         candidateCommitments: sourceEntries,
-        createdAt: nowProvider(),
       }),
     );
   }
