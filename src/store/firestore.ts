@@ -1,168 +1,501 @@
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { createHash } from 'node:crypto';
-import { createRegisteredClient, createStore } from './store.js';
-import type { AuthCodeRow, McpStore, ResumeRow, SessionRow, StoreBackend } from './types.js';
+import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
+import type {
+  AccessRow,
+  AuthCodeRow,
+  BackendRotateParams,
+  BackendRotateResult,
+  FamilyRow,
+  McpStore,
+  RefreshPointerRow,
+  ResumeRow,
+  RevokeCondition,
+  SessionRow,
+  StoreBackend,
+  StoreCapabilities,
+  UpstreamGrantRow,
+} from './types.js';
 
 interface DocumentSnapshotLike {
- readonly id: string;
- readonly exists: boolean;
- data(): Record<string, unknown> | undefined;
+  readonly id: string;
+  readonly exists: boolean;
+  data(): Record<string, unknown> | undefined;
 }
 interface QuerySnapshotLike {
- readonly empty: boolean;
- readonly docs: DocumentSnapshotLike[];
+  readonly empty: boolean;
+  readonly docs: DocumentSnapshotLike[];
 }
 interface DocumentReferenceLike {
- get(): Promise<DocumentSnapshotLike>;
- set(data: Record<string, unknown>): Promise<unknown>;
- delete(): Promise<unknown>;
+  readonly id: string;
+  get(): Promise<DocumentSnapshotLike>;
+  set(data: Record<string, unknown>): Promise<unknown>;
+  delete(): Promise<unknown>;
 }
 interface QueryLike {
- get(): Promise<QuerySnapshotLike>;
- limit(count: number): QueryLike;
+  get(): Promise<QuerySnapshotLike>;
+  limit(count: number): QueryLike;
 }
 interface CollectionLike extends QueryLike {
- doc(id: string): DocumentReferenceLike;
- where(field: string, op: '==', value: string): QueryLike;
+  doc(id: string): DocumentReferenceLike;
+  where(field: string, op: '==', value: string): QueryLike;
 }
 interface TransactionLike {
- // The opaque reference is passed back to the same client that created it.
- get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike>;
- set(ref: DocumentReferenceLike, data: Record<string, unknown>): unknown;
- delete(ref: DocumentReferenceLike): unknown;
+  get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike>;
+  set(ref: DocumentReferenceLike, data: Record<string, unknown>): unknown;
+  delete(ref: DocumentReferenceLike): unknown;
 }
 export interface FirestoreLike {
- collection(path: string): CollectionLike;
- runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>): Promise<T>;
+  collection(path: string): CollectionLike;
+  runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>): Promise<T>;
 }
 
 export interface FirestoreCollections {
- sessions: string; oauthClients: string; authCodes: string; resumeTokens: string; usage: string;
-}
-export function firestoreCollections(namespace: string): FirestoreCollections {
- return {
-  sessions: `${namespace}_sessions`, oauthClients: `${namespace}_oauth_clients`,
-  authCodes: `${namespace}_auth_codes`, resumeTokens: `${namespace}_resume_tokens`,
-  usage: `${namespace}_usage`,
- };
+  sessions: string;
+  refreshTokens: string;
+  refreshFamilies: string;
+  upstreamGrants: string;
+  oauthClients: string;
+  authCodes: string;
+  resumeTokens: string;
+  usage: string;
 }
 
-// Firestore rejects undefined recursively unless configured otherwise.
+export function firestoreCollections(namespace: string): FirestoreCollections {
+  return {
+    sessions: `${namespace}_sessions`,
+    refreshTokens: `${namespace}_refresh_tokens`,
+    refreshFamilies: `${namespace}_refresh_families`,
+    upstreamGrants: `${namespace}_upstream_grants`,
+    oauthClients: `${namespace}_oauth_clients`,
+    authCodes: `${namespace}_auth_codes`,
+    resumeTokens: `${namespace}_resume_tokens`,
+    usage: `${namespace}_usage`,
+  };
+}
+
 function defined<T>(value: T): T {
- if (Array.isArray(value)) return value.filter(v => v !== undefined).map(defined) as T;
- if (value && typeof value === 'object' && !(value instanceof Date)) {
-  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, defined(v)])) as T;
- }
- return value;
+  if (Array.isArray(value)) return value.filter(v => v !== undefined).map(defined) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, defined(v)])) as T;
+  }
+  return value;
 }
 
 export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
- constructor(private readonly options: { db: FirestoreLike; collection: string }) { }
- async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-  const doc = await this.options.db.collection(this.options.collection).doc(clientId).get();
-  return doc.exists ? doc.data() as OAuthClientInformationFull : undefined;
- }
- async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
-  const full = createRegisteredClient(client);
-  await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
-  return full;
- }
+  constructor(private readonly options: { db: FirestoreLike; collection: string }) { }
+  async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
+    const doc = await this.options.db.collection(this.options.collection).doc(clientId).get();
+    return doc.exists ? doc.data() as OAuthClientInformationFull : undefined;
+  }
+  async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
+    const full = createRegisteredClient(client);
+    await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
+    return full;
+  }
 }
 
 export interface FirestoreBackend extends StoreBackend { }
-export class FirestoreBackend {
- readonly db: FirestoreLike;
- readonly collections: FirestoreCollections;
- constructor(options: { db: FirestoreLike; namespace: string }) {
-  const { db, namespace } = options;
-  this.db = db;
-  const names = this.collections = firestoreCollections(namespace);
-  const sessions = db.collection(names.sessions);
-  const codes = db.collection(names.authCodes);
-  const resumes = db.collection(names.resumeTokens);
-  const usage = db.collection(names.usage);
-  const clients = db.collection(names.oauthClients);
-  const sessionData = ({ id: _id, ...row }: SessionRow) => defined({ ...row, v: 1, ttlAt: new Date(row.retainUntil) });
-  const codeData = ({ id: _id, ...row }: AuthCodeRow) => defined({ ...row, v: 1, ttlAt: new Date(row.expiresAt) });
-  const backend: StoreBackend = {
-   name: 'firestore',
-   capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
-   async getSession(id) {
-    const snap = await sessions.doc(id).get();
-    return snap.exists ? { ...snap.data(), id } as SessionRow : undefined;
-   },
-   async findSessionByRefreshId(refreshId) {
-    const snap = await sessions.where('refreshId', '==', refreshId).limit(1).get();
-    return snap.empty ? undefined : { ...snap.docs[0].data(), id: snap.docs[0].id } as SessionRow;
-   },
-   async putSession(row) { await sessions.doc(row.id).set(sessionData(row)); },
-   async updateSession(id, mutate) {
-    const ref = sessions.doc(id);
-    return db.runTransaction(async tx => {
-     const snap = await tx.get(ref);
-     if (!snap.exists) return undefined;
-     const current = { ...snap.data(), id } as SessionRow;
-     const next = mutate(current);
-     if (next === null) { tx.delete(ref); return undefined; }
-     if (next === undefined) return current;
-     tx.set(ref, sessionData(next));
-     return next;
-    });
-   },
-   async deleteSession(id) { await sessions.doc(id).delete(); },
-   async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
-   async getAuthCode(id) {
-    const snap = await codes.doc(id).get();
-    return snap.exists ? { ...snap.data(), id } as AuthCodeRow : undefined;
-   },
-   async takeAuthCode(id) {
-    const ref = codes.doc(id);
-    return db.runTransaction(async tx => {
-     const snap = await tx.get(ref);
-     if (!snap.exists) return undefined;
-     tx.delete(ref);
-     return { ...snap.data(), id } as AuthCodeRow;
-    });
-   },
-   async insertResumeIfAbsent(row: ResumeRow, now) {
-    const ref = resumes.doc(row.id);
-    return db.runTransaction(async tx => {
-     const snap = await tx.get(ref);
-     if (snap.exists && typeof snap.data()?.expiresAt === 'number' && (snap.data()!.expiresAt as number) > now) return false;
-     tx.set(ref, { consumedAt: row.consumedAt, expiresAt: row.expiresAt, ttlAt: new Date(row.expiresAt) });
-     return true;
-    });
-   },
-   async incrementUsage(userHash, toolName, now) {
-    const id = createHash('sha256').update(JSON.stringify([userHash, toolName])).digest('hex');
-    const ref = usage.doc(id);
-    await db.runTransaction(async tx => {
-     const snap = await tx.get(ref);
-     const count = snap.exists ? (snap.data()?.count as number) : 0;
-     tx.set(ref, { userHash, toolName, count: count + 1, lastUsed: now });
-    });
-   },
-   async listUsage(userHash) {
-    const snap = await usage.where('userHash', '==', userHash).get();
-    return snap.docs.map(doc => doc.data() as { toolName: string; count: number; lastUsed: number });
-   },
-   async getClient(id) {
-    const snap = await clients.doc(id).get();
-    return snap.exists ? snap.data() as OAuthClientInformationFull : undefined;
-   },
-   async putClient(client) { await clients.doc(client.client_id).set(defined(client)); },
-   async sweep() { return 0; },
-   async close() { },
-  };
-  Object.assign(this, backend);
- }
+export class FirestoreBackend implements StoreBackend {
+  readonly name = 'firestore';
+  readonly capabilities: StoreCapabilities = { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' };
+  readonly db: FirestoreLike;
+  readonly collections: FirestoreCollections;
+
+  getAccess!: StoreBackend['getAccess'];
+  putAccess!: StoreBackend['putAccess'];
+  deleteAccess!: StoreBackend['deleteAccess'];
+
+  getRefresh!: StoreBackend['getRefresh'];
+  putRefresh!: StoreBackend['putRefresh'];
+  deleteRefresh!: StoreBackend['deleteRefresh'];
+
+  getFamily!: StoreBackend['getFamily'];
+  putFamily!: StoreBackend['putFamily'];
+
+  getUpstream!: StoreBackend['getUpstream'];
+  putUpstream!: StoreBackend['putUpstream'];
+  updateUpstream!: StoreBackend['updateUpstream'];
+
+  atomicRotate!: StoreBackend['atomicRotate'];
+  atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
+
+  putAuthCode!: StoreBackend['putAuthCode'];
+  getAuthCode!: StoreBackend['getAuthCode'];
+  takeAuthCode!: StoreBackend['takeAuthCode'];
+  insertResumeIfAbsent!: StoreBackend['insertResumeIfAbsent'];
+  incrementUsage!: StoreBackend['incrementUsage'];
+  listUsage!: StoreBackend['listUsage'];
+  getClient!: StoreBackend['getClient'];
+  putClient!: StoreBackend['putClient'];
+  sweep!: StoreBackend['sweep'];
+  close!: StoreBackend['close'];
+
+  constructor(options: { db: FirestoreLike; namespace: string }) {
+    const { db, namespace } = options;
+    this.db = db;
+    const names = this.collections = firestoreCollections(namespace);
+    const sessions = db.collection(names.sessions);
+    const refreshTokens = db.collection(names.refreshTokens);
+    const refreshFamilies = db.collection(names.refreshFamilies);
+    const upstreamGrants = db.collection(names.upstreamGrants);
+    const codes = db.collection(names.authCodes);
+    const resumes = db.collection(names.resumeTokens);
+    const usage = db.collection(names.usage);
+    const clients = db.collection(names.oauthClients);
+
+    const accessData = ({ id: _id, ...row }: AccessRow) => defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) });
+    const refreshData = ({ id: _id, ...row }: RefreshPointerRow) => defined({ ...row, v: 2 });
+    const familyData = ({ id: _id, ...row }: FamilyRow) => defined({ ...row, v: 2 });
+    const upstreamData = ({ id: _id, ...row }: UpstreamGrantRow) => defined({ ...row, v: 2 });
+    const codeData = ({ id: _id, ...row }: AuthCodeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
+    const resumeData = ({ id: _id, ...row }: ResumeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
+
+    const backend: StoreBackend = {
+      name: 'firestore',
+      capabilities: this.capabilities,
+
+      async getAccess(id) {
+        const snap = await sessions.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
+      },
+      async putAccess(row) {
+        await sessions.doc(row.id).set(accessData(row));
+      },
+      async deleteAccess(id) {
+        await sessions.doc(id).delete();
+      },
+
+      async getRefresh(id) {
+        const snap = await refreshTokens.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
+      },
+      async putRefresh(row) {
+        await refreshTokens.doc(row.id).set(refreshData(row));
+      },
+      async deleteRefresh(id) {
+        await refreshTokens.doc(id).delete();
+      },
+
+      async getFamily(id) {
+        const snap = await refreshFamilies.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as FamilyRow) : undefined;
+      },
+      async putFamily(row) {
+        await refreshFamilies.doc(row.id).set(familyData(row));
+      },
+
+      async getUpstream(id) {
+        const snap = await upstreamGrants.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as UpstreamGrantRow) : undefined;
+      },
+      async putUpstream(row) {
+        await upstreamGrants.doc(row.id).set(upstreamData(row));
+      },
+      async updateUpstream(id, mutate) {
+        const ref = upstreamGrants.doc(id);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) return undefined;
+          const current = { ...snap.data(), id } as UpstreamGrantRow;
+          const next = mutate(current);
+          if (next === null) { tx.delete(ref); return undefined; }
+          if (next === undefined) return undefined;
+          tx.set(ref, upstreamData(next));
+          return next;
+        });
+      },
+
+      async atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult> {
+        const oldRefDoc = refreshTokens.doc(params.oldRefreshId);
+        return db.runTransaction(async tx => {
+          const oldSnap = await tx.get(oldRefDoc);
+          if (!oldSnap.exists) {
+            return { status: 'missing' };
+          }
+
+          const oldRef = { ...oldSnap.data(), id: params.oldRefreshId } as RefreshPointerRow;
+          const famDoc = refreshFamilies.doc(oldRef.familyId);
+          const famSnap = await tx.get(famDoc);
+          if (!famSnap.exists) return { status: 'missing' };
+
+          const fam = { ...famSnap.data(), id: famDoc.id } as FamilyRow;
+          if (fam.status !== 'active') return { status: 'missing' };
+
+          const upDoc = upstreamGrants.doc(fam.id);
+          const upSnap = params.newUpstreamSealed ? await tx.get(upDoc) : null;
+          if (oldRef.status === 'consumed') {
+            const withinRetry = oldRef.consumedAt !== undefined && params.now - oldRef.consumedAt <= REFRESH_RETRY_WINDOW_MS;
+            if (withinRetry && oldRef.successorSealed) {
+              return {
+                status: 'retry',
+                familyId: fam.id,
+                generation: fam.generation,
+                successorSealed: oldRef.successorSealed,
+              };
+            }
+            // Late replay
+            tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
+            return { status: 'replay', familyId: fam.id };
+          }
+
+          const nextGen = fam.generation + 1;
+
+          // 1. Consume old refresh
+          tx.set(oldRefDoc, refreshData({
+            ...oldRef,
+            status: 'consumed',
+            consumedAt: params.now,
+            successorSealed: params.newSuccessorSealed,
+          }));
+
+          // 2. Put new refresh
+          tx.set(refreshTokens.doc(params.newRefreshRow.id), refreshData({
+            ...params.newRefreshRow,
+            familyId: fam.id,
+            generation: nextGen,
+          }));
+
+          // 3. Delete old access doc
+          if (fam.currentAccessTokenId) {
+            tx.delete(sessions.doc(fam.currentAccessTokenId));
+          }
+
+          // 4. Put new access doc
+          tx.set(sessions.doc(params.newAccessRow.id), accessData({
+            ...params.newAccessRow,
+            familyId: fam.id,
+          }));
+
+          // 5. Update family
+          tx.set(famDoc, familyData({
+            ...fam,
+            generation: nextGen,
+            activeRefreshId: params.newRefreshRow.id,
+            currentAccessTokenId: params.newAccessRow.id,
+            sealed: params.newFamilySealed,
+            updatedAt: params.now,
+          }));
+
+          // 6. Update upstream if provided
+          if (params.newUpstreamSealed) {
+            const currentUp = upSnap && upSnap.exists ? (upSnap.data() as unknown as UpstreamGrantRow) : undefined;
+            const nextGrantVersion = (currentUp?.grantVersion ?? 0) + 1;
+            tx.set(upDoc, upstreamData({
+              id: fam.id,
+              grantVersion: nextGrantVersion,
+              nsExpiresAt: params.newNsExpiresAt,
+              updatedAt: params.now,
+              sealed: params.newUpstreamSealed,
+            }));
+          }
+
+          return {
+            status: 'claimed',
+            familyId: fam.id,
+            generation: nextGen,
+          };
+        });
+      },
+
+      async atomicRevokeFamily(familyId: string, condition?: RevokeCondition): Promise<'revoked' | 'stale' | 'missing'> {
+        const famDoc = refreshFamilies.doc(familyId);
+        return db.runTransaction(async tx => {
+          const famSnap = await tx.get(famDoc);
+          if (!famSnap.exists) return 'missing';
+
+          const fam = { ...famSnap.data(), id: famDoc.id } as FamilyRow;
+          if (fam.status !== 'active') return 'stale';
+
+          if (condition?.expectedFamilyGeneration !== undefined && fam.generation !== condition.expectedFamilyGeneration) {
+            return 'stale';
+          }
+
+          if (condition?.expectedUpstreamGrantVersion !== undefined) {
+            const upSnap = await tx.get(upstreamGrants.doc(familyId));
+            if (upSnap.exists && (upSnap.data() as unknown as UpstreamGrantRow).grantVersion !== condition.expectedUpstreamGrantVersion) {
+              return 'stale';
+            }
+          }
+
+          const refDoc = fam.activeRefreshId ? refreshTokens.doc(fam.activeRefreshId) : null;
+          const refSnap = refDoc ? await tx.get(refDoc) : null;
+
+          const now = Date.now();
+          tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: now, generation: fam.generation + 1, updatedAt: now }));
+
+          if (fam.currentAccessTokenId) {
+            tx.delete(sessions.doc(fam.currentAccessTokenId));
+          }
+          if (refDoc && refSnap && refSnap.exists) {
+            tx.set(refDoc, refreshData({ ...(refSnap.data() as unknown as RefreshPointerRow), status: 'consumed', consumedAt: now }));
+          }
+
+          return 'revoked';
+        });
+      },
+
+      async getSession(id: string): Promise<SessionRow | undefined> {
+        const snap = await sessions.doc(id).get();
+        if (!snap.exists) return undefined;
+        const data = snap.data() as unknown as AccessRow;
+        const upSnap = data.familyId ? await upstreamGrants.doc(data.familyId).get() : undefined;
+        const upData = upSnap?.exists ? (upSnap.data() as unknown as UpstreamGrantRow) : undefined;
+        return {
+          id,
+          refreshId: data.familyId,
+          expiresAt: data.expiresAt,
+          retainUntil: data.retainUntil,
+          nsExpiresAt: upData?.nsExpiresAt,
+          leaseOwner: upData?.leaseOwner,
+          leaseUntil: upData?.leaseUntil,
+          sealed: data.sealed,
+        };
+      },
+      async findSessionByRefreshId(refreshId: string): Promise<SessionRow | undefined> {
+        const refSnap = await refreshTokens.doc(refreshId).get();
+        if (!refSnap.exists) return undefined;
+        const refData = refSnap.data() as unknown as RefreshPointerRow;
+        const famSnap = await refreshFamilies.doc(refData.familyId).get();
+        if (!famSnap.exists) return undefined;
+        const famData = famSnap.data() as unknown as FamilyRow;
+        const accSnap = await sessions.doc(famData.currentAccessTokenId).get();
+        if (!accSnap.exists) return undefined;
+        const accData = accSnap.data() as unknown as AccessRow;
+        const upSnap = accData.familyId ? await upstreamGrants.doc(accData.familyId).get() : undefined;
+        const upData = upSnap?.exists ? (upSnap.data() as unknown as UpstreamGrantRow) : undefined;
+        return {
+          id: accData.id,
+          refreshId: accData.familyId,
+          expiresAt: accData.expiresAt,
+          retainUntil: accData.retainUntil,
+          nsExpiresAt: upData?.nsExpiresAt,
+          leaseOwner: upData?.leaseOwner,
+          leaseUntil: upData?.leaseUntil,
+          sealed: accData.sealed,
+        };
+      },
+      async putSession(row) {
+        await sessions.doc(row.id).set(defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) }));
+      },
+      async updateSession(id, mutate) {
+        return db.runTransaction(async tx => {
+          const ref = sessions.doc(id);
+          const snap = await tx.get(ref);
+          if (!snap.exists) return undefined;
+          const data = snap.data() as unknown as AccessRow;
+          const upRef = data.familyId ? upstreamGrants.doc(data.familyId) : undefined;
+          const upSnap = upRef ? await tx.get(upRef) : undefined;
+          const upData = upSnap?.exists ? (upSnap.data() as unknown as UpstreamGrantRow) : undefined;
+
+          const current: SessionRow = {
+            id,
+            refreshId: data.familyId,
+            expiresAt: data.expiresAt,
+            retainUntil: data.retainUntil,
+            nsExpiresAt: upData?.nsExpiresAt,
+            leaseOwner: upData?.leaseOwner,
+            leaseUntil: upData?.leaseUntil,
+            sealed: data.sealed,
+          };
+
+          const next = mutate(current);
+          if (next === null) {
+            tx.delete(ref);
+            if (upRef) tx.delete(upRef);
+            return undefined;
+          }
+          if (next === undefined) return undefined;
+
+          if (upRef && upSnap?.exists && (next.leaseOwner !== upData?.leaseOwner || next.leaseUntil !== upData?.leaseUntil || next.nsExpiresAt !== upData?.nsExpiresAt)) {
+            tx.set(upRef, upstreamData({
+              ...upData!,
+              leaseOwner: next.leaseOwner,
+              leaseUntil: next.leaseUntil,
+              nsExpiresAt: next.nsExpiresAt,
+            }));
+          }
+
+          tx.set(ref, accessData({
+            id,
+            familyId: data.familyId,
+            expiresAt: next.expiresAt,
+            retainUntil: next.retainUntil,
+            sealed: next.sealed,
+          }));
+
+          return next;
+        });
+      },
+      async deleteSession(id) { await sessions.doc(id).delete(); },
+
+      async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
+      async getAuthCode(id) {
+        const snap = await codes.doc(id).get();
+        return snap.exists ? { ...snap.data(), id } as AuthCodeRow : undefined;
+      },
+      async takeAuthCode(id) {
+        const ref = codes.doc(id);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) return undefined;
+          const current = { ...snap.data(), id } as AuthCodeRow;
+          tx.delete(ref);
+          return current;
+        });
+      },
+      async insertResumeIfAbsent(row, now) {
+        const ref = resumes.doc(row.id);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          if (snap.exists && (snap.data() as unknown as ResumeRow).expiresAt > now) return false;
+          tx.set(ref, resumeData(row));
+          return true;
+        });
+      },
+      async incrementUsage(userHash, toolName, now) {
+        const id = `${userHash}__${toolName}`;
+        const ref = usage.doc(id);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          try {
+            await db.runTransaction(async tx => {
+              const snap = await tx.get(ref);
+              const current = snap.exists ? (snap.data() as { count: number; lastUsed: number }) : { count: 0, lastUsed: now };
+              tx.set(ref, { userHash, toolName, count: current.count + 1, lastUsed: now });
+            });
+            return;
+          } catch (err) {
+            if (attempt === 14) throw err;
+            await new Promise(r => setTimeout(r, 15 + Math.random() * 40 * (attempt + 1)));
+          }
+        }
+      },
+      async listUsage(userHash) {
+        const snap = await usage.where('userHash', '==', userHash).get();
+        return snap.docs.map(doc => {
+          const data = doc.data() as { toolName: string; count: number; lastUsed: number };
+          return { toolName: data.toolName, count: data.count, lastUsed: data.lastUsed };
+        });
+      },
+      async getClient(id) {
+        const snap = await clients.doc(id).get();
+        return snap.exists ? snap.data() as OAuthClientInformationFull : undefined;
+      },
+      async putClient(client) {
+        await clients.doc(client.client_id).set(defined(client));
+      },
+      async sweep() { return 0; },
+      async close() { },
+    };
+
+    Object.assign(this, backend);
+  }
 }
 
 export function createFirestoreBackend(options: { db: FirestoreLike; namespace: string }): FirestoreBackend {
- return new FirestoreBackend(options);
+  return new FirestoreBackend(options);
 }
 
 export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array }): McpStore {
- return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
+  return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
 }

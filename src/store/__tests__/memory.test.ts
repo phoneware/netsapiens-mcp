@@ -14,8 +14,14 @@ runStoreConformance({
       return { key, fields };
     });
     return {
-      sessions: rows(state.sessions, ['id']), authCodes: rows(state.authCodes, ['id']),
-      resumeTokens: rows(state.resumeTokens, ['id']), usage: rows(state.usage), clients: rows(state.clients),
+      sessions: rows(state.access, ['id']),
+      refreshTokens: rows(state.refresh, ['id']),
+      refreshFamilies: rows(state.families, ['id']),
+      upstreamGrants: rows(state.upstream, ['id']),
+      authCodes: rows(state.authCodes, ['id']),
+      resumeTokens: rows(state.resumeTokens, ['id']),
+      usage: rows(state.usage),
+      clients: rows(state.clients),
     } satisfies PersistedSnapshot;
   },
   async dumpRaw(handle) { return JSON.stringify((handle as MemoryBackend).state, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value); },

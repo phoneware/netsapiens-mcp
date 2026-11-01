@@ -35,7 +35,10 @@ runStoreConformance({
       return { key: id as string, fields: Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)) };
     });
     return {
-      sessions: rows('SELECT id,refresh_id AS refreshId,expires_at AS expiresAt,retain_until AS retainUntil,ns_expires_at AS nsExpiresAt,lease_owner AS leaseOwner,lease_until AS leaseUntil,sealed FROM sessions'),
+      sessions: rows('SELECT id,family_id AS familyId,expires_at AS expiresAt,retain_until AS retainUntil,sealed FROM sessions'),
+      refreshTokens: rows('SELECT id,family_id AS familyId,status,generation,consumed_at AS consumedAt,successor_sealed AS successorSealed FROM refresh_tokens'),
+      refreshFamilies: rows('SELECT id,generation,status,active_refresh_id AS activeRefreshId,current_access_token_id AS currentAccessTokenId,revoked_at AS revokedAt,updated_at AS updatedAt,sealed FROM refresh_families'),
+      upstreamGrants: rows('SELECT id,grant_version AS grantVersion,ns_expires_at AS nsExpiresAt,lease_owner AS leaseOwner,lease_until AS leaseUntil,updated_at AS updatedAt,sealed FROM upstream_grants'),
       authCodes: rows('SELECT id,expires_at AS expiresAt,sealed FROM auth_codes'),
       resumeTokens: rows('SELECT id,consumed_at AS consumedAt,expires_at AS expiresAt FROM resume_tokens'),
       usage: rows("SELECT user_hash || '__' || tool_name AS id,user_hash AS userHash,tool_name AS toolName,count,last_used AS lastUsed FROM usage"),

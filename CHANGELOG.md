@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
   - `type: "peer"` is removed because it invoked an undocumented route.
   - Attended transfer now accepts `consult_call_id`, looks up `core-server` and `call-session-id`, and bridges call legs.
   - Blind transfer sends `to` using the documented `call-term-user` parameter.
-- AuthHooks: onVerify now also runs during refresh-token exchange before any upstream refresh grant. If onVerify throws InvalidTokenError, the session is deleted and the client receives 400 invalid_grant. Other errors preserve the session and return 500 server_error.
+- AuthHooks: onVerify runs during refresh-token exchange before any upstream refresh grant. If onVerify throws InvalidTokenError, the family is revoked and the client receives 400 invalid_grant. Operational errors preserve the family and return 400 temporarily_unavailable.
 
 ### Features
 
@@ -33,3 +33,4 @@ All notable changes to this project will be documented in this file.
 - Role-aware tool visibility and execution gating across all supported NetSapiens versions.
 - Guarded client layer preventing invocation of unsupported routes.
 - Streamable HTTP and stdio transports with OAuth 2.1 authorization code flow and PKCE.
+- OAuth permanence: permanent refresh families, 30-second replay grace window for response-lost retries, late-replay family revocation, tool-call 401 automatic upstream refresh retry, and transactional v2.4 Firestore adoption.

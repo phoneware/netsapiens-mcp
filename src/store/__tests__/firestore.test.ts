@@ -3,6 +3,7 @@ import { connect } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { createFirestoreBackend, createFirestoreStore, firestoreCollections, FirestoreBackend, FirestoreClientsStore } from '../firestore.js';
+import { adoptFirestoreLegacyTokens } from '../firestore-v2-adoption.js';
 import { createCodec, deriveStoreKey, LeaseLostError } from '../codec.js';
 import { runStoreConformance, type PersistedSnapshot, type PersistedValue } from '../conformance.js';
 import type { StoreBackend } from '../types.js';
@@ -71,7 +72,16 @@ describe.skipIf(!host)('Firestore emulator', () => {
     const { id: _id, ...rest } = fields;
     return { key, fields: normalize(rest) as Record<string, PersistedValue> };
    });
-   return { sessions: convert('sessions'), authCodes: convert('authCodes'), resumeTokens: convert('resumeTokens'), usage: convert('usage').map((row: { key: string; fields: Record<string, PersistedValue> }) => ({ ...row, key: `${row.fields.userHash}__${row.fields.toolName}` })), clients: convert('oauthClients') } as PersistedSnapshot;
+   return {
+    sessions: convert('sessions'),
+    refreshTokens: convert('refreshTokens'),
+    refreshFamilies: convert('refreshFamilies'),
+    upstreamGrants: convert('upstreamGrants'),
+    authCodes: convert('authCodes'),
+    resumeTokens: convert('resumeTokens'),
+    usage: convert('usage').map((row: { key: string; fields: Record<string, PersistedValue> }) => ({ ...row, key: `${row.fields.userHash}__${row.fields.toolName}` })),
+    clients: convert('oauthClients'),
+   } as PersistedSnapshot;
   },
   async dumpRaw(handle) {
    const rows = await documents(handle);
@@ -162,5 +172,82 @@ describe.skipIf(!host)('Firestore emulator', () => {
   await store.close(); await store.close();
   expect((await db.collection(firestoreCollections(ns).sessions).get()).empty).toBe(true);
   await cleanup(ns);
+ });
+ it('adopts both PR56 families and unattached base-format token documents', async () => {
+  const ns = `adopt_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
+  handles.set(ns, [db]);
+
+  const famId = 'pr56-fam-1';
+  await db.collection(`${ns}_tokens_refresh_families`).doc(famId).set({
+   id: famId,
+   generation: 2,
+   status: 'active',
+   currentAccessToken: 'pr56-acc',
+   currentRefreshToken: 'pr56-ref',
+   clientId: 'pr56-client',
+   serverBaseUrl: 'https://example.com',
+   retiredRefreshFingerprints: ['old-fp-1'],
+  });
+  await db.collection(`${ns}_tokens_upstream`).doc(famId).set({
+   id: famId,
+   grantVersion: 3,
+   nsAccessToken: 'pr56-ns-acc',
+   nsRefreshToken: 'pr56-ns-ref',
+   nsUsername: 'user@pr56.com',
+  });
+  await db.collection(`${ns}_tokens`).doc('pr56-acc').set({
+   accessToken: 'pr56-acc',
+   refreshToken: 'pr56-ref',
+   expiresAt: Date.now() + 3600_000,
+   clientId: 'pr56-client',
+  });
+
+  await db.collection(`${ns}_tokens`).doc('legacy-acc-2').set({
+   accessToken: 'legacy-acc-2',
+   refreshToken: 'legacy-ref-2',
+   expiresAt: Date.now() + 3600_000,
+   nsAccessToken: 'legacy-ns-acc',
+   nsRefreshToken: 'legacy-ns-ref',
+   nsUsername: 'legacy@domain.com',
+   clientId: 'legacy-client',
+   seatId: 'seat-42',
+   ttlAt: new Date(Date.now() + 30 * 86400_000),
+  });
+
+  const report = await adoptFirestoreLegacyTokens({ db, namespace: ns, key });
+  expect(report.errors).toBe(0);
+  expect(report.migrated).toBe(2);
+
+  const store = createFirestoreStore({ db, namespace: ns, key });
+
+  const pr56Session = await store.sessions.getByRefreshToken('pr56-ref');
+  expect(pr56Session).toBeDefined();
+  expect(pr56Session?.clientId).toBe('pr56-client');
+  expect(pr56Session?.nsUsername).toBe('user@pr56.com');
+
+  const unattachedSession = await store.sessions.getByRefreshToken('legacy-ref-2');
+  expect(unattachedSession).toBeDefined();
+  expect(unattachedSession?.clientId).toBe('legacy-client');
+  expect(unattachedSession?.nsUsername).toBe('legacy@domain.com');
+  expect(unattachedSession?.extra).toEqual({ seatId: 'seat-42' });
+
+  const v3Cols = firestoreCollections(ns);
+  const famSnap = await db.collection(v3Cols.refreshFamilies).doc(famId).get();
+  expect(famSnap.data()?.ttlAt).toBeUndefined();
+
+  const upSnap = await db.collection(v3Cols.upstreamGrants).doc(famId).get();
+  expect(upSnap.data()?.ttlAt).toBeUndefined();
+
+  const refSnap = await db.collection(v3Cols.refreshTokens).get();
+  for (const d of refSnap.docs) {
+   expect(d.data()?.ttlAt).toBeUndefined();
+  }
+
+  const accSnap = await db.collection(v3Cols.sessions).get();
+  expect(accSnap.docs.length).toBeGreaterThan(0);
+  for (const d of accSnap.docs) {
+   expect(d.data()?.ttlAt).toBeDefined();
+  }
  });
 });

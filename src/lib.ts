@@ -26,6 +26,7 @@ export { createStore } from './store/store.js';
 export { createSqliteStore } from './store/sqlite.js';
 export { createFirestoreStore, createFirestoreBackend, firestoreCollections, FirestoreClientsStore } from './store/firestore.js';
 export { createMemoryStore } from './store/memory.js';
+export { adoptFirestoreLegacyTokens, type FirestoreAdoptionReport } from './store/firestore-v2-adoption.js';
 export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 
 // Types
@@ -35,6 +36,11 @@ export type { UserRole } from './auth/roles.js';
 export type { NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot } from './auth/types.js';
 export type {
   StoredToken,
+  StoredSession,
+  OAuthTokenPair,
+  RefreshLookupResult,
+  RefreshRotationResult,
+  RevokeCondition,
   UpstreamTokens,
   AuthCodeData,
   UsageRecord,

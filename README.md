@@ -149,7 +149,10 @@ When configured with `MCP_PERSISTENCE=firestore`, the following collection layou
 <!-- facts:firestore-collections -->
 | Collection Name | Document Contents | TTL Field | Lifecycle / Retention |
 |---|---|---|---|
-| `<namespace>_sessions` | Encrypted session tokens & NS refresh credentials | `ttlAt` | Cleaned up after 30 days retention |
+| `<namespace>_sessions` | Encrypted access tokens & family bindings | `ttlAt` | Cleaned up after 30 days access retention |
+| `<namespace>_refresh_tokens` | Refresh token pointers & successor states | None | Permanent until explicit revocation or replay |
+| `<namespace>_refresh_families` | Refresh family generation & client bindings | None | Permanent until explicit revocation or replay |
+| `<namespace>_upstream_grants` | Encrypted NetSapiens credentials & leases | None | Permanent until explicit revocation |
 | `<namespace>_auth_codes` | PKCE authorization codes | `ttlAt` | Single-use, expires in 5 minutes |
 | `<namespace>_resume_tokens` | MCP resumption nonces | `ttlAt` | Single-use, expires in 2 hours |
 | `<namespace>_oauth_clients` | Registered OAuth clients | None | Persistent client configurations |
@@ -168,6 +171,8 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 - **Stdio Token Cache:** In stdio mode, tokens are cached unencrypted in `~/.netsapiens-mcp-tokens.json` (mode 0600 on POSIX).
 - **Secret Invalidation:** Rotating `MCP_SESSION_SECRET` immediately terminates and invalidates all existing HTTP sessions. `MCP_SESSION_SECRET` is required in HTTP mode; stdio mode uses an ephemeral in-memory key and ignores this variable.
 - **Usage Retention:** In-store rate limiting telemetry counters do not expire automatically.
+- **Permanent Refresh Credentials:** Refresh tokens belong to permanent refresh families that persist until explicit revocation, detection of token replay outside the 30-second retry grace window, or definitive upstream rejection. Access tokens carry a 30-day retention window after expiry for audit records before being purged, while refresh families have no calendar expiration.
+- **Plaintext Token Non-Migration:** Plaintext 2.x `http-tokens*.json` files are not migrated and must be re-authenticated.
 
 ## Configuration Reference
 

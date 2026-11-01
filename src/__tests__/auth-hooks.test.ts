@@ -509,7 +509,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       expect(await store.sessions.getByRefreshToken('ref-2')).toBeUndefined();
     });
 
-    it('Hook throws plain Error: 500 server_error, 0 upstream calls, session kept in store', async () => {
+    it('Hook throws plain Error: 400 temporarily_unavailable, 0 upstream calls, session kept in store', async () => {
       const provider = createProvider({
         hooks: {
           async onVerify() {
@@ -529,9 +529,9 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
         .post('/token')
         .send(`grant_type=refresh_token&refresh_token=ref-3&client_id=${client.client_id}`);
 
-      expect(res.status).toBe(500);
-      expect(res.body.error).toBe('server_error');
-      expect(res.body.error_description).toBe('Refresh authorization check failed; please retry');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('temporarily_unavailable');
+      expect(res.body.error_description).toContain('temporarily unavailable');
       expect(refreshGrantMock).toHaveBeenCalledTimes(0);
       expect(await store.sessions.getByRefreshToken('ref-3')).toBeDefined();
     });

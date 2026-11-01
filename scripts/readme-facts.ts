@@ -112,7 +112,10 @@ export function generateReadmeFacts(): ReadmeFacts {
   const firestoreCollectionsTable = [
     '| Collection Name | Document Contents | TTL Field | Lifecycle / Retention |',
     '|---|---|---|---|',
-    `| \`${collections.sessions}\` | Encrypted session tokens & NS refresh credentials | \`ttlAt\` | Cleaned up after 30 days retention |`,
+    `| \`${collections.sessions}\` | Encrypted access tokens & family bindings | \`ttlAt\` | Cleaned up after 30 days access retention |`,
+    `| \`${collections.refreshTokens}\` | Refresh token pointers & successor states | None | Permanent until explicit revocation or replay |`,
+    `| \`${collections.refreshFamilies}\` | Refresh family generation & client bindings | None | Permanent until explicit revocation or replay |`,
+    `| \`${collections.upstreamGrants}\` | Encrypted NetSapiens credentials & leases | None | Permanent until explicit revocation |`,
     `| \`${collections.authCodes}\` | PKCE authorization codes | \`ttlAt\` | Single-use, expires in 5 minutes |`,
     `| \`${collections.resumeTokens}\` | MCP resumption nonces | \`ttlAt\` | Single-use, expires in 2 hours |`,
     `| \`${collections.oauthClients}\` | Registered OAuth clients | None | Persistent client configurations |`,

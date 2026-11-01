@@ -18,11 +18,17 @@ export function deriveStoreKey(sessionSecret: string): Buffer {
   return Buffer.from(hkdfSync('sha256', Buffer.from(sessionSecret), Buffer.from('netsapiens-mcp/store/v1'), Buffer.from('root'), 32));
 }
 
-export function createCodec(root: Uint8Array) {
+export interface Codec {
+  id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream', value: string): string;
+  seal(value: unknown, aad: string): string;
+  open<T>(sealed: string, aad: string): T | undefined;
+}
+
+export function createCodec(root: Uint8Array): Codec {
   const idKey = Buffer.from(hkdfSync('sha256', root, '', 'id', 32));
   const encKey = Buffer.from(hkdfSync('sha256', root, '', 'enc', 32));
   return {
-    id(purpose: 'session' | 'refresh' | 'code' | 'user', value: string): string {
+    id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream', value: string): string {
       return createHmac('sha256', idKey).update(`${purpose}\0${value}`).digest('hex');
     },
     seal(value: unknown, aad: string): string {

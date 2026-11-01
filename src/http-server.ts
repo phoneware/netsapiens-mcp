@@ -19,6 +19,9 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
+import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
@@ -474,6 +477,30 @@ function wireApp(
   verifier: authProvider,
   resourceMetadataUrl,
  });
+ const mcpAuthMiddleware: express.RequestHandler = (req, res, next) => {
+  bearerAuth(req, res, (err) => {
+   if (err) {
+    if (
+     err instanceof StoreConfigError ||
+     err instanceof StoreLockedError ||
+     err instanceof RetryableRefreshError ||
+     err instanceof LeaseLostError ||
+     err instanceof UpstreamUnavailableError ||
+     err instanceof UpstreamTimeoutError ||
+     (err instanceof ServerError && /temporarily unavailable/i.test(err.message))
+    ) {
+     res.setHeader('Retry-After', '5');
+     res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: 'Service temporarily unavailable, please retry',
+     });
+     return;
+    }
+    return next(err);
+   }
+   next();
+  });
+ };
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
   const negotiated = negotiateProtocolVersion(req);
@@ -485,7 +512,7 @@ function wireApp(
 
 
  // POST /mcp: JSON-RPC requests
- app.post('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.post('/mcp', mcpAuthMiddleware, async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   const body = (req as any).body;
 
@@ -692,7 +719,10 @@ async function createAuthenticatedMcpServer(
    timeout: config.netsapiens.timeout,
    onUnauthorized: async () => {
     if (authProvider && bearerToken) {
-     await authProvider.invalidateToken(bearerToken);
+     const refreshed = await authProvider.forceRefreshUpstream(bearerToken);
+     if (refreshed?.nsAccessToken) {
+      client.setApiToken(refreshed.nsAccessToken);
+     }
     }
    },
   }
