@@ -50,7 +50,7 @@ export async function adoptFirestoreLegacyTokens(options: {
       const familyId = famDoc.id;
 
       try {
-        await db.runTransaction(async (tx) => {
+        const outcome = await db.runTransaction(async (tx) => {
           // Check if already migrated inside transaction
           const existingV3 = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
           if (existingV3.exists) {
@@ -205,8 +205,11 @@ export async function adoptFirestoreLegacyTokens(options: {
           }
           return 'migrated';
         });
-
-        report.migrated++;
+        if (outcome === 'skipped') {
+          report.skipped++;
+        } else {
+          report.migrated++;
+        }
       } catch (err: unknown) {
         report.errors++;
       }
@@ -231,10 +234,10 @@ export async function adoptFirestoreLegacyTokens(options: {
       const accessId = codec.id('session', accessToken);
 
       try {
-        await db.runTransaction(async (tx) => {
+        const outcome = await db.runTransaction(async (tx) => {
           const existingV3Access = await tx.get(db.collection(v3Cols.sessions).doc(accessId));
           if (existingV3Access.exists) {
-            return;
+            return 'skipped';
           }
 
           const familyId = (tokData.refreshFamilyId as string) || randomUUID();
@@ -300,9 +303,13 @@ export async function adoptFirestoreLegacyTokens(options: {
             tx.set(db.collection(v3Cols.refreshTokens).doc(refreshId), defined({ ...refreshRow, v: 2 }));
             tx.set(db.collection(v3Cols.sessions).doc(accessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
           }
+          return 'migrated';
         });
-
-        report.migrated++;
+        if (outcome === 'skipped') {
+          report.skipped++;
+        } else {
+          report.migrated++;
+        }
       } catch (err: unknown) {
         report.errors++;
       }
