@@ -671,5 +671,15 @@ export function createFirestoreBackend(options: { db: FirestoreLike; namespace: 
 export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array }): McpStore {
   return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
 }
-export { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
-export { adoptSingleLegacyToken, adoptSingleLegacyFamily } from './firestore-v2-adoption.js';
+export {
+  adoptFirestoreLegacyTokens,
+  ensureFirestoreAdopted,
+  adoptSingleLegacyToken,
+  adoptSingleLegacyFamily,
+  checkCutoverFence,
+  engageCutoverFence,
+  releaseCutoverFence,
+  assertLegacyWritePermitted,
+  CutoverFencedError,
+  type CutoverFenceDoc,
+} from './firestore-v2-adoption.js';

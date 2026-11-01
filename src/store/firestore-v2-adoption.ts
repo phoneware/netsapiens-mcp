@@ -20,13 +20,92 @@ export interface FirestoreAdoptionReport {
   errors: number;
 }
 
+export interface CutoverFenceDoc {
+  status: 'open' | 'fenced' | 'migrated';
+  fencedAt?: number;
+  migratedAt?: number;
+  fenceEpoch?: number;
+}
+
+export class CutoverFencedError extends Error {
+  constructor(message = 'Legacy token mutations are fenced for v3 migration') {
+    super(message);
+    this.name = 'CutoverFencedError';
+  }
+}
+
+export async function checkCutoverFence(options: {
+  db: FirestoreLike;
+  namespace: string;
+}): Promise<CutoverFenceDoc> {
+  const { db, namespace } = options;
+  const snap = await db.collection(`${namespace}_meta`).doc('cutover_fence').get();
+  if (!snap.exists) {
+    return { status: 'open' };
+  }
+  return snap.data() as unknown as CutoverFenceDoc;
+}
+
+export async function engageCutoverFence(options: {
+  db: FirestoreLike;
+  namespace: string;
+}): Promise<CutoverFenceDoc> {
+  const { db, namespace } = options;
+  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence');
+  const now = Date.now();
+  const fence: CutoverFenceDoc = {
+    status: 'fenced',
+    fencedAt: now,
+    fenceEpoch: now,
+  };
+  await docRef.set(defined(fence as unknown as Record<string, unknown>));
+  return fence;
+}
+
+export async function releaseCutoverFence(options: {
+  db: FirestoreLike;
+  namespace: string;
+}): Promise<CutoverFenceDoc> {
+  const { db, namespace } = options;
+  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence');
+  const fence: CutoverFenceDoc = {
+    status: 'open',
+  };
+  await docRef.set(defined(fence as unknown as Record<string, unknown>));
+  return fence;
+}
+
+export async function assertLegacyWritePermitted(options: {
+  db: FirestoreLike;
+  namespace: string;
+  tx?: any;
+}): Promise<void> {
+  const { db, namespace, tx } = options;
+  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence');
+  const snap = tx ? await tx.get(docRef) : await docRef.get();
+  if (snap && snap.exists) {
+    const fence = snap.data() as unknown as CutoverFenceDoc;
+    if (fence.status === 'fenced' || fence.status === 'migrated') {
+      throw new CutoverFencedError(`Legacy write refused: namespace ${namespace} is ${fence.status}`);
+    }
+  }
+}
+
 export async function adoptFirestoreLegacyTokens(options: {
   db: FirestoreLike;
   namespace: string;
   key: Uint8Array;
   dryRun?: boolean;
+  requireFence?: boolean;
 }): Promise<FirestoreAdoptionReport> {
-  const { db, namespace, key, dryRun = false } = options;
+  const { db, namespace, key, dryRun = false, requireFence = false } = options;
+
+  if (requireFence) {
+    const fence = await checkCutoverFence({ db, namespace });
+    if (fence.status !== 'fenced') {
+      throw new StoreUnavailableError(`Cannot adopt legacy tokens: cutover fence is not engaged (current status: ${fence.status})`);
+    }
+  }
   const codec = createCodec(key);
   const v3Cols = firestoreCollections(namespace);
 
@@ -325,8 +404,13 @@ export async function adoptFirestoreLegacyTokens(options: {
     report.errors++;
   }
   if (!dryRun && report.errors === 0) {
+    const now = Date.now();
+    await db.collection(`${namespace}_meta`).doc('cutover_fence').set({
+      status: 'migrated',
+      migratedAt: now,
+    });
     await db.collection(`${namespace}_meta`).doc('v2_adopted').set({
-      adoptedAt: Date.now(),
+      adoptedAt: now,
       scanned: report.scanned,
       migrated: report.migrated,
       skipped: report.skipped,
