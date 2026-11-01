@@ -113,7 +113,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   private readonly rawDb: Firestore;
   private readonly tokensCollection: string;
   private readonly refreshColName: string;
-  readonly fenceConfig: CutoverFenceConfig;
+  readonly fenceConfig?: CutoverFenceConfig;
 
   constructor(opts: FirestoreTokenStoreOptions = {}) {
     const defaultCollection = process.env.MCP_READ_ONLY === 'true'
@@ -184,7 +184,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   }
 
   get fenceNamespace(): string {
-    return this.fenceConfig.namespace;
+    return this.fenceConfig?.namespace ?? detectNamespace(this.tokensCollection);
   }
 
   accessDocRef(accessToken: string) {
@@ -266,10 +266,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const accessRef = this.accessDocRef(accessToken);
     return await this.rawDb.runTransaction(async (transaction) => {
       let guard: GuardMutationResult | undefined;
-      if (this.fenceConfig.enforce) {
+      const fence = this.fenceConfig;
+      if (fence && fence.enforce) {
         guard = await checkMutationGuardInTransaction(transaction, {
           db: this.rawDb,
-          namespace: this.fenceConfig.namespace,
+          namespace: fence.namespace,
           operation: options?.operation,
           now: this.localNow,
         });
@@ -333,15 +334,17 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
    let currentLeaseOwner: string | undefined;
       await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
-    if (this.fenceConfig.enforce) {
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.rawDb,
-        namespace: this.fenceConfig.namespace,
+        namespace: fence.namespace,
         operation: opts?.operation,
         now: this.localNow,
         completeOperation: false,
       });
     }
+    const snap = await transaction.get(docRef);
     if (!snap.exists) {
      throw new Error('Token document not found');
     }
@@ -390,15 +393,17 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     let resultToken: StoredToken | undefined;
         await this.rawDb.runTransaction(async (transaction) => {
      let guard: GuardMutationResult | undefined;
-     if (this.fenceConfig.enforce) {
+     const fence = this.fenceConfig;
+     if (fence && fence.enforce) {
        guard = await checkMutationGuardInTransaction(transaction, {
          db: this.rawDb,
-         namespace: this.fenceConfig.namespace,
+         namespace: fence.namespace,
          operation: opts?.operation,
          now: this.localNow,
          completeOperation: true,
        });
      }
+     const snap = await transaction.get(docRef);
      if (!snap.exists) {
       throw new Error('Token document was deleted/revoked during refresh');
      }
@@ -502,7 +507,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  private cache = new Map<string, OAuthClientInformationFull>();
  private readonly db: Firestore;
  private readonly collection: string;
- readonly fenceConfig: CutoverFenceConfig;
+ readonly fenceConfig?: CutoverFenceConfig;
 
  constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig } = {}) {
   this.collection = opts.collection ?? 'mcp_oauth_clients';
@@ -550,10 +555,11 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   try {
    await this.db.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
-    if (this.fenceConfig.enforce) {
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
-        namespace: this.fenceConfig.namespace,
+        namespace: fence.namespace,
         operation: options?.operation,
       });
     }
@@ -581,7 +587,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
 export class FirestoreAuthCodeStore {
  private readonly db: Firestore;
  private readonly collection: string;
- readonly fenceConfig: CutoverFenceConfig;
+ readonly fenceConfig?: CutoverFenceConfig;
 
  constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig } = {}) {
   this.collection = opts.collection ?? 'mcp_auth_codes';
@@ -619,14 +625,14 @@ export class FirestoreAuthCodeStore {
   const docRef = this.db.collection(this.collection).doc(code);
   await this.db.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
-    if (this.fenceConfig.enforce) {
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
-        namespace: this.fenceConfig.namespace,
+        namespace: fence.namespace,
         operation: options?.operation,
       });
     }
-    guard?.bufferCompletion();
     transaction.set(docRef, stripUndefined(docData));
   });
  }
@@ -667,10 +673,11 @@ export class FirestoreAuthCodeStore {
   const docRef = this.db.collection(this.collection).doc(code);
   return await this.db.runTransaction(async (transaction) => {
    let guard: GuardMutationResult | undefined;
-   if (this.fenceConfig.enforce) {
+   const fence = this.fenceConfig;
+   if (fence && fence.enforce) {
      guard = await checkMutationGuardInTransaction(transaction, {
        db: this.db,
-       namespace: this.fenceConfig.namespace,
+       namespace: fence.namespace,
        operation: options?.operation,
        completeOperation: false,
      });
@@ -717,10 +724,11 @@ export class FirestoreAuthCodeStore {
   const codeRef = this.db.collection(this.collection).doc(code);
   return await this.db.runTransaction(async (transaction) => {
    let guard: GuardMutationResult | undefined;
-   if (this.fenceConfig.enforce) {
+   const fence = this.fenceConfig;
+   if (fence && fence.enforce) {
      guard = await checkMutationGuardInTransaction(transaction, {
        db: this.db,
-       namespace: this.fenceConfig.namespace,
+       namespace: fence.namespace,
        operation: options?.operation,
        completeOperation: true,
      });
