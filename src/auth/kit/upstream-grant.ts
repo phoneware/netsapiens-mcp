@@ -280,7 +280,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
       if (current.ambiguousOutcome) {
         throw new UpstreamUnavailableError(
-          `Upstream grant for family ${familyId} has an unresolved ambiguous outcome: ${current.ambiguousReason ?? 'pending reconciliation'}`,
+          `Upstream grant has an unresolved ambiguous outcome: ${current.ambiguousReason ?? 'pending reconciliation'}`,
         );
       }
 
@@ -289,13 +289,13 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         const priorOpSnap = await transaction.get(priorOpRef);
         if (!priorOpSnap.exists) {
           throw new CutoverFenceError(
-            `Upstream grant for family ${familyId} references missing ambiguous operation ${current.ambiguousOperationId}; fail closed`,
+            'Upstream grant references missing ambiguous operation; fail closed',
           );
         }
         const priorOp = priorOpSnap.data() as LegacyOperationRecord;
         if (priorOp.phase !== 'completed' && priorOp.phase !== 'failed') {
           throw new UpstreamUnavailableError(
-            `Upstream grant for family ${familyId} is locked by in-flight or unresolved operation ${current.ambiguousOperationId} in phase ${priorOp.phase}`,
+            `Upstream grant is locked by in-flight or unresolved operation in phase ${priorOp.phase}`,
           );
         }
       }
@@ -350,7 +350,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         const checkData = checkSnap.data() as StoredUpstreamRecord<G>;
         if (checkData.ambiguousOutcome) {
           throw new UpstreamUnavailableError(
-            `Upstream grant for family ${familyId} has an unresolved ambiguous outcome: ${checkData.ambiguousReason ?? 'pending reconciliation'}`,
+            `Upstream grant has an unresolved ambiguous outcome: ${checkData.ambiguousReason ?? 'pending reconciliation'}`,
           );
         }
         const refreshedCommitted = !checkData.leaseUntil;
@@ -359,13 +359,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         }
       }
 
-      const fallbackSnap = await docRef.get();
-      if (fallbackSnap.exists) {
-        const fallbackData = fallbackSnap.data() as StoredUpstreamRecord<G>;
-        if (fallbackData.expiresAt && fallbackData.expiresAt > now) {
-          return fallbackData.grant;
-        }
-      }
       throw new UpstreamUnavailableError('Timed out waiting for upstream token refresh');
     }
 
@@ -394,11 +387,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           }
         }).catch(() => {});
 
-        const op = options?.operation ?? requestOperationContext.getStore();
-        if (op) {
-          op.clearAmbiguousRemoteOutcome();
-          await releaseLegacyOperation(this.db, op, 'failed', this.nowProvider).catch(() => {});
-        }
 
         if (err instanceof UpstreamRevokedError) {
           throw err;
@@ -497,18 +485,21 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamUnavailableError('Lease owner changed during refresh');
         }
 
-        guard?.bufferCompletion(commitNow);
+        const isTerminal = options?.completeOperation !== false;
+        if (isTerminal) {
+          guard?.bufferCompletion(commitNow);
+        }
         transaction.set(
           docRef,
           stripUndefined({
             grant: refreshed.grant,
             expiresAt: refreshed.expiresAt,
-            leaseUntil: null,
-            leaseOwner: null,
+            leaseUntil: isTerminal ? null : (now + leaseMs),
+            leaseOwner: isTerminal ? null : leaseOwner,
             ambiguousOutcome: null,
             ambiguousReason: null,
             ambiguousAt: null,
-            ambiguousOperationId: null,
+            ambiguousOperationId: isTerminal ? null : op?.id,
             updatedAt: commitNow,
           }),
           { merge: true },
@@ -564,17 +555,15 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     await this.db.runTransaction(async (transaction) => {
       const grantSnap = await transaction.get(docRef);
       if (!grantSnap.exists) {
-        throw new CutoverFenceError(`Cannot reconcile grant: document does not exist for family ${familyId}`);
+        throw new CutoverFenceError('Cannot reconcile grant: document does not exist');
       }
       const currentGrant = grantSnap.data() as StoredUpstreamRecord<G>;
       if (!currentGrant.ambiguousOutcome) {
-        throw new CutoverFenceError(`Cannot reconcile grant: family ${familyId} does not have an ambiguous outcome`);
+        throw new CutoverFenceError('Cannot reconcile grant: grant does not have an ambiguous outcome');
       }
 
       if (currentGrant.ambiguousOperationId && options.operationId !== currentGrant.ambiguousOperationId) {
-        throw new CutoverFenceError(
-          `Cannot reconcile grant: operationId mismatch for family ${familyId}: expected ${currentGrant.ambiguousOperationId}, got ${options.operationId}`,
-        );
+        throw new CutoverFenceError('Cannot reconcile grant: operationId mismatch');
       }
 
       if (this.fence?.enforce) {

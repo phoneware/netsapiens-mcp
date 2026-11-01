@@ -689,6 +689,8 @@ export async function releaseLegacyOperation(
     if (!controlSnap.exists) {
       throw new CutoverFenceError(`Control record missing for namespace ${ctx.namespace}`);
     }
+    const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
+
     if (!opSnap.exists) {
       throw new CutoverFenceError(`Operation record missing for operation ${ctx.id}`);
     }
@@ -698,7 +700,17 @@ export async function releaseLegacyOperation(
       return;
     }
 
-    const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
+    if (opRecord.phase === 'upstream_pending' || opRecord.ambiguousRemoteOutcome || ctx.isAmbiguousRemoteOutcome()) {
+      throw new CutoverFenceError(
+        `Cannot release operation ${ctx.id} in phase ${opRecord.phase}: operation has pending or ambiguous upstream claim`,
+      );
+    }
+
+    if (opRecord.epoch !== control.epoch) {
+      throw new CutoverFenceError(
+        `Operation epoch mismatch on release for namespace ${ctx.namespace}: expected ${control.epoch}, got ${opRecord.epoch}`,
+      );
+    }
     if (control.activeOperations <= 0) {
       throw new CutoverFenceError(
         `Active operations underflow on release for namespace ${ctx.namespace}: count is ${control.activeOperations}`,

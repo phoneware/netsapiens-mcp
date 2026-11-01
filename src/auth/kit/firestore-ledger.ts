@@ -827,6 +827,13 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId));
             const upstreamPayload = stripUndefined({
               ...upstreamData,
+              grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
+              leaseUntil: null,
+              leaseOwner: null,
+              ambiguousOutcome: null,
+              ambiguousReason: null,
+              ambiguousAt: null,
+              ambiguousOperationId: null,
               updatedAt: now,
             });
             transaction.set(upstreamRef, upstreamPayload, { merge: true });

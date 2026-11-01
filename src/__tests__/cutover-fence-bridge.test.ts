@@ -1604,6 +1604,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     const clientInfo = { client_id: 'concurrent_client' } as any;
 
+    // Pairing 1: Concurrent exchangeRefreshToken vs exchangeRefreshToken on same family
     const [tokenExchange1, tokenExchange2] = await Promise.all([
       authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
       authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
@@ -1613,6 +1614,33 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(tokenExchange2.access_token).toBe(tokenExchange1.access_token);
     expect(tokenExchange2.refresh_token).toBe(tokenExchange1.refresh_token);
     expect(grantCallCount).toBe(1);
+
+    // Pairing 2: Concurrent verifyAccessToken (transparent refresh) vs forceRefreshUpstream on same family
+    const testAccessTokenB = 'crosspath-access-b-' + randomBytes(8).toString('hex');
+    const testRefreshTokenB = 'crosspath-refresh-b-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessTokenB,
+      refreshToken: testRefreshTokenB,
+      clientId: 'concurrent_client',
+      expiresAt: virtualNow + 3600 * 1000,
+      nsAccessToken: 'ns-token-expiring-b',
+      nsRefreshToken: 'ns-refresh-expiring-b',
+      nsExpiresAt: virtualNow + 30 * 1000,
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const grantCountBefore = grantCallCount;
+    const [verifyResult, forcedResult] = await Promise.all([
+      authProvider.verifyAccessToken(testAccessTokenB),
+      authProvider.forceRefreshUpstream(testAccessTokenB),
+    ]);
+
+    expect(verifyResult).toBeDefined();
+    expect(forcedResult).toBe('concurrent-ns-access-token');
+    expect(grantCallCount - grantCountBefore).toBe(1);
 
     const control = await getCutoverFenceRecord(db, namespace);
     expect(control?.activeOperations).toBe(0);
@@ -1687,5 +1715,152 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow();
     expect(grantAttempts).toBe(1);
+  });
+
+  it('31. GET /mcp SSE connection releases admission upon response headers write without holding activeOperations open', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.MCP_BASE_URL = 'http://localhost';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    process.env.MCP_STATELESS = 'false';
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const testAccessToken = 'sse-test-token-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'sse-refresh-token-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'sse_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-sse-token',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    const reqPromise = request(app)
+      .get('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'text/event-stream');
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    let activeOps = 1;
+    for (let i = 0; i < 30; i++) {
+      const c = await getCutoverFenceRecord(db, namespace);
+      if (c?.activeOperations === 0) {
+        activeOps = 0;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(activeOps).toBe(0);
+
+    reqPromise.abort();
+  });
+
+  it('32. Pre-send failure after claim preserves upstream_pending, makes zero upstream calls on subsequent retry, and prevents sealing (Reset Section 8)', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.MCP_BASE_URL = 'http://localhost';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    let virtualNow = Date.now();
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+      now: () => virtualNow,
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      now: () => virtualNow,
+    });
+
+    let grantCallCount = 0;
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
+      throw new Error('Crash before HTTP transmission');
+    });
+
+    const testAccessToken = 'presend-access-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'presend-refresh-' + randomBytes(8).toString('hex');
+
+    const issued = await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'presend_client',
+      expiresAt: virtualNow + 3600 * 1000,
+      nsAccessToken: 'ns-token-presend',
+      nsRefreshToken: 'ns-refresh-presend',
+      nsExpiresAt: virtualNow + 10 * 1000,
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const familyId = issued.refreshFamilyId!;
+
+    await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow();
+    expect(grantCallCount).toBe(0);
+
+    const upstreamSnap = await db.collection('mcp_tokens_upstream').doc(docId(familyId)).get();
+    expect(upstreamSnap.exists).toBe(true);
+
+    virtualNow += 60_000;
+
+    await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow(UpstreamUnavailableError);
+    expect(grantCallCount).toBe(0);
+
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    await expect(
+      transitionCutoverFenceState(db, namespace, {
+        fromState: 'closing',
+        toState: 'fenced',
+        expectedEpoch: 1,
+      }),
+    ).rejects.toThrow(CutoverFenceError);
   });
 });

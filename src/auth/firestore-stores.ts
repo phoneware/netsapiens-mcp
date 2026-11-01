@@ -393,15 +393,27 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     upstreamGrant = await this.upstreamStore.ensureFresh(
       familyId,
       async (currentGrant: NsUpstreamGrant) => {
-        const refreshed = await doRefresh(stored);
+        const grantObj = (currentGrant as any)?.grant ?? currentGrant ?? {};
+        const authoritativeRefreshToken = grantObj.nsRefreshToken ?? stored.nsRefreshToken;
+        const authoritativeApiUrl = grantObj.nsApiUrl ?? stored.nsApiUrl;
+        const grantCandidate: StoredToken = {
+          ...stored,
+          nsAccessToken: grantObj.nsAccessToken ?? stored.nsAccessToken,
+          nsRefreshToken: authoritativeRefreshToken,
+          nsApiUrl: authoritativeApiUrl,
+          nsExpiresAt: grantObj.nsExpiresAt ?? stored.nsExpiresAt,
+          nsUsername: grantObj.nsUsername ?? stored.nsUsername,
+          nsUserRole: grantObj.nsUserRole ?? stored.nsUserRole,
+        };
+        const refreshed = await doRefresh(grantCandidate);
         return {
           grant: {
             nsAccessToken: refreshed.access_token,
-            nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+            nsRefreshToken: refreshed.refresh_token ?? authoritativeRefreshToken,
             nsExpiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
             nsUsername: stored.nsUsername,
             nsUserRole: stored.nsUserRole,
-            nsApiUrl: stored.nsApiUrl,
+            nsApiUrl: authoritativeApiUrl,
           },
           expiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
         };
