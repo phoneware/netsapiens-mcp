@@ -176,11 +176,11 @@ export interface StoreBackend {
   readonly name: string;
   readonly capabilities: StoreCapabilities;
 
-  getAccess(id: string): Promise<AccessRow | undefined>;
+  getAccess(id: string, rawToken?: string): Promise<AccessRow | undefined>;
   putAccess(row: AccessRow): Promise<void>;
   deleteAccess(id: string): Promise<void>;
 
-  getRefresh(id: string): Promise<RefreshPointerRow | undefined>;
+  getRefresh(id: string, rawRefreshToken?: string): Promise<RefreshPointerRow | undefined>;
   putRefresh(row: RefreshPointerRow): Promise<void>;
   deleteRefresh(id: string): Promise<void>;
 
