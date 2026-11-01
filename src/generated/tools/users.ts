@@ -5,23 +5,77 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_users: ToolDefinition = {
   schema: {
     name: 'get_users',
-    description: 'Get Users in Domain — [GET /domains/{domain}/users]',
+    description: 'List users — Returns the users in a domain, sorted by extension, 100 at a time unless you set `limit`. Requires Site Manager, Office Manager, Call Center Supervisor, Reseller, or Super User scope, or a read-only scope derived from them. Basic User, Advanced User, Simple User, and Call Center Agent scopes read the domain directory with `GET /domains/{domain}/users/list`.  Filter with the query parameters. Filters combine, so `site` and `department` together return the users in that site and department. Page with `limit` and `start`. `GET /domains/{domain}/users/count` takes the same filters and returns the total.  By default the response includes system users, such as call queues and auto attendants, and leaves out the rows that represent sites and departments. Use `filter_users` to change that.  The voicemail PIN is masked unless you send `include-secret=yes`.  The named examples show these uses:  - `All users`: no query parameters - `By site`: `?site=Main Office` - `By department`: `?department=Support` - `Search by last name`: `?name-last-name=Desk` - `By scope`: `?user-scope=Office Manager,Site Manager` - `Find by email`: `?email=user1001@example.com` - `People only`: `?filter_users=departments,sites,system` - `Paged and sorted`: `?limit=2&start=2&sort=user desc` - `Selected fields`: `?fields=user,name-first-name,name-last-name,email` - `PIN revealed`: `?include-secret=yes&site=Branch Office` — [GET /domains/{domain}/users]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the users in this site. Exact match."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Returns only the users in this department. Exact match on one department name."
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Returns only the users with this first name. Exact match."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Returns the users whose last name contains this text."
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Returns the users that have this email address, ignoring case. A user with several addresses matches on any of them."
+                },
+                "service-code": {
+                      "type": "string",
+                      "description": "Returns only the users with this service code, such as `system-queue`. Exact match."
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Returns only the users with this scope. Send a comma-separated list to match any of several scopes."
+                },
+                "login": {
+                      "type": "string",
+                      "description": "Returns the one user with this login name."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Chooses which rows to leave out. By default the response leaves out the rows that represent a site or a department and the domain's `domain` placeholder user, and includes system users such as call queues and auto attendants. Send a comma-separated list to replace that default. Each item is one of the following: - `departments`, which leaves out department rows - `sites`, which leaves out site rows - `system`, which leaves out every user whose service code starts with `system-` - a service code such as `system-queue`, which leaves out that code - an extension, which leaves out that user `no` returns every row."
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "A comma-separated list of the fields to return, by their names in the response. Names the API does not know are ignored."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
                       "default": 100
                 },
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
                       "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "The sort order: `user` (extension, sorted numerically), `site`, or `group` (department), followed by a space and `asc` or `desc`. Defaults to `user asc`. Default: \"user asc\"",
+                      "default": "user asc"
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns `voicemail-login-pin` in full. By default the PIN is masked: a PIN of 8 characters or fewer is all asterisks, and a longer one shows only its first 2 and last 2 characters. Any token that can read the user can ask for it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -29,13 +83,19 @@ export const get_users: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit', 'start'];
+    const queryParamNames = ['site', 'department', 'name-first-name', 'name-last-name', 'email', 'service-code', 'user-scope', 'login', 'filter_users', 'fields', 'limit', 'start', 'sort', 'include-secret'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -59,610 +119,25 @@ export const get_users: ToolDefinition = {
 export const create_user: ToolDefinition = {
   schema: {
     name: 'create_user',
-    description: 'Create User in Domain — [POST /domains/{domain}/users]',
+    description: 'Create user — Creates a user (an extension) in a domain. Requires Site Manager, Office Manager, Reseller, or Super User scope.  Send `user`, `name-first-name`, and `name-last-name`. The other fields are optional:  - A field you leave out takes the value from the user\\\'s site, then from the domain, then from the platform defaults. - `login-username` defaults to the extension and domain, such as `1001@example.com`. - `directory-name-number-dtmf-mapping` is computed from the last name. - A `site` that does not exist is created. - Send `password-hash` to set a password, and `voicemail-login-pin` or `passwordLength` to set the voicemail PIN.  The new user starts with a default answering rule.  The response is `202`: the user is accepted and created shortly after. With `synchronous=yes` the call waits up to about 2 seconds and answers `200` with the new user, including the voicemail PIN in full. This is the only response that shows a generated PIN. If the user is not created in time, the response is `202`.  The named examples show a minimal create, a create in a site with a PIN, and a create that waits for the result. — [POST /domains/{domain}/users]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account."
-                },
-                "name-first-name": {
-                      "type": "string",
-                      "description": "This is the first name for the user"
-                },
-                "name-last-name": {
-                      "type": "string",
-                      "description": "This is the last name for the user"
-                },
-                "login-username": {
-                      "type": "string",
-                      "description": "This is the login for the user used to access the portals and other applications. The default will be [user]@[domain] if not set otherwise.  This value is required to be unique across the entire system so 409 will be returned if not unique."
-                },
-                "email": {
-                      "type": "string",
-                      "description": "This is the email adresses or list of email addresses sepertaed with a semi-colon."
-                },
-                "user-scope": {
-                      "type": "string",
-                      "description": "Will link this resource with a User Scope granting it certain permisionf to the system for use in API and Portal. Allowed values: \"Basic User\", \"Simple User\", \"Advanced User\", \"Call Center Agent\", \"Site Manager\", \"Call Center Supervisor\", \"Office Manager\", \"Reseller\", \"Super User\", \"NDP\", \"No Portal\". Default: \"Basic User\"",
-                      "enum": [
-                            "Basic User",
-                            "Simple User",
-                            "Advanced User",
-                            "Call Center Agent",
-                            "Site Manager",
-                            "Call Center Supervisor",
-                            "Office Manager",
-                            "Reseller",
-                            "Super User",
-                            "NDP",
-                            "No Portal"
-                      ],
-                      "default": "Basic User"
-                },
-                "department": {
-                      "type": "string",
-                      "description": "This is the depertment that user belongs to in the domain. Can be any string to group users, a department is not require to be setup before in order to set it for a user."
-                },
-                "site": {
-                      "type": "string",
-                      "description": "This is the site or location for this user. The site will group users that are at the same phyiscal location, but can be used for other grouping purposes as well. New users will inherit some settings from the site if the site was previously setup. If the site is not previously created then a new site will be created with the value given on new user create assuming the domain's max sites setting has remaining sites."
-                },
-                "time-zone": {
-                      "type": "string",
-                      "description": "This is the time zone that the user is primarily located in. Allowed values: \"US/Alaska\", \"US/Central\", \"US/Eastern\", \"US/Hawaii\", \"US/Mountain\", \"US/Pacific\", \"Africa/Addis_Ababa\", \"Africa/Algiers\", \"Africa/Brazzaville\", \"Africa/Cairo\", \"Africa/Casablanca\", \"Africa/Dakar\", \"Africa/Dar_es_Salaam\", \"Africa/Djibouti\", \"Africa/Johannesburg\", \"Africa/Khartoum\", \"Africa/Kigali\", \"Africa/Kinshasa\", \"Africa/Lagos\", \"Africa/Nairobi\", \"Africa/Timbuktu\", \"Africa/Tripoli\", \"Africa/Tunis\", \"America/Antigua\", \"America/Aruba\", \"America/Belize\", \"America/Bogota\", \"America/Buenos_Aires\", \"America/Cancun\", \"America/Caracas\", \"America/Cayman\", \"America/Chihuahua\", \"America/Costa_Rica\", \"America/Denver\", \"America/Detroit\", \"America/Edmonton\", \"America/El_Salvador\", \"America/Ensenada\", \"America/Grenada\", \"America/Guadeloupe\", \"America/Guatemala\", \"America/Havana\", \"America/Indianapolis\", \"America/Jamaica\", \"America/Juneau\", \"America/La_Paz\", \"America/Lima\", \"America/Los_Angeles\", \"America/Louisville\", \"America/Martinique\", \"America/Mazatlan\", \"America/Mendoza\", \"America/Menominee\", \"America/Merida\", \"America/Mexico_City\", \"America/Miquelon\", \"America/Moncton\", \"America/Monterrey\", \"America/Montevideo\", \"America/Montreal\", \"America/Montserrat\", \"America/Nassau\", \"America/New_York\", \"America/Panama\", \"America/Phoenix\", \"America/Port-au-Prince\", \"America/Port_of_Spain\", \"America/Regina\", \"America/Santiago\", \"America/Santo_Domingo\", \"America/Sao_Paulo\", \"America/Thule\", \"America/Thunder_Bay\", \"America/Tijuana\", \"America/Toronto\", \"America/Vancouver\", \"America/Winnipeg\", \"America/Yellowknife\", \"Antarctica/South_Pole\", \"Arctic/Longyearbyen\", \"Asia/Amman\", \"Asia/Baghdad\", \"Asia/Bahrain\", \"Asia/Bangkok\", \"Asia/Beirut\", \"Asia/Brunei\", \"Asia/Calcutta\", \"Asia/Colombo\", \"Asia/Dacca\", \"Asia/Damascus\", \"Asia/Dhaka\", \"Asia/Dubai\", \"Asia/Gaza\", \"Asia/Hong_Kong\", \"Asia/Istanbul\", \"Asia/Jakarta\", \"Asia/Jerusalem\", \"Asia/Kabul\", \"Asia/Katmandu\", \"Asia/Kuala_Lumpur\", \"Asia/Kuching\", \"Asia/Kuwait\", \"Asia/Macau\", \"Asia/Manila\", \"Asia/Muscat\", \"Asia/Phnom_Penh\", \"Asia/Rangoon\", \"Asia/Riyadh\", \"Asia/Saigon\", \"Asia/Seoul\", \"Asia/Shanghai\", \"Asia/Singapore\", \"Asia/Taipei\", \"Asia/Tehran\", \"Asia/Tel_Aviv\", \"Asia/Thimphu\", \"Asia/Tokyo\", \"Asia/Ulan_Bator\", \"Asia/Vientiane\", \"Asia/Vladivostok\", \"Atlantic/Azores\", \"Atlantic/Bermuda\", \"Atlantic/Canary\", \"Atlantic/Cape_Verde\", \"Atlantic/Faeroe\", \"Atlantic/Reykjavik\", \"Australia/ACT\", \"Australia/Adelaide\", \"Australia/Brisbane\", \"Australia/Canberra\", \"Australia/Darwin\", \"Australia/LHI\", \"Australia/Melbourne\", \"Australia/North\", \"Australia/NSW\", \"Australia/Perth\", \"Australia/Queensland\", \"Australia/South\", \"Australia/Sydney\", \"Australia/Tasmania\", \"Australia/Victoria\", \"Australia/West\", \"Canada/Atlantic\", \"Canada/Central\", \"Canada/Eastern\", \"Canada/Mountain\", \"Canada/Newfoundland\", \"Canada/Pacific\", \"Canada/Saskatchewan\", \"Canada/Yukon\", \"Cuba\", \"Etc/GMT\", \"Etc/GMT+1\", \"Etc/GMT+10\", \"Etc/GMT+11\", \"Etc/GMT+12\", \"Etc/GMT+2\", \"Etc/GMT+3\", \"Etc/GMT+4\", \"Etc/GMT+5\", \"Etc/GMT+6\", \"Etc/GMT+7\", \"Etc/GMT+8\", \"Etc/GMT+9\", \"Etc/GMT-1\", \"Etc/GMT-10\", \"Etc/GMT-11\", \"Etc/GMT-12\", \"Etc/GMT-13\", \"Etc/GMT-14\", \"Etc/GMT-2\", \"Etc/GMT-3\", \"Etc/GMT-4\", \"Etc/GMT-5\", \"Etc/GMT-6\", \"Etc/GMT-7\", \"Etc/GMT-8\", \"Etc/GMT-9\", \"Etc/Greenwich\", \"Europe/Amsterdam\", \"Europe/Athens\", \"Europe/Belfast\", \"Europe/Belgrade\", \"Europe/Berlin\", \"Europe/Brussels\", \"Europe/Bucharest\", \"Europe/Budapest\", \"Europe/Copenhagen\", \"Europe/Dublin\", \"Europe/Helsinki\", \"Europe/Istanbul\", \"Europe/Kiev\", \"Europe/Lisbon\", \"Europe/Ljubljana\", \"Europe/London\", \"Europe/Madrid\", \"Europe/Malta\", \"Europe/Monaco\", \"Europe/Moscow\", \"Europe/Oslo\", \"Europe/Paris\", \"Europe/Prague\", \"Europe/Rome\", \"Europe/Sofia\", \"Europe/Stockholm\", \"Europe/Vienna\", \"Europe/Warsaw\", \"Europe/Zurich\", \"Greenwich\", \"Pacific/Auckland\", \"Pacific/Easter\", \"Pacific/Fiji\", \"Pacific/Galapagos\", \"Pacific/Gambier\", \"Pacific/Guam\", \"Pacific/Honolulu\", \"Pacific/Marquesas\", \"Pacific/Midway\", \"Pacific/Palau\", \"Pacific/Rarotonga\", \"Pacific/Tahiti\"",
-                      "enum": [
-                            "US/Alaska",
-                            "US/Central",
-                            "US/Eastern",
-                            "US/Hawaii",
-                            "US/Mountain",
-                            "US/Pacific",
-                            "Africa/Addis_Ababa",
-                            "Africa/Algiers",
-                            "Africa/Brazzaville",
-                            "Africa/Cairo",
-                            "Africa/Casablanca",
-                            "Africa/Dakar",
-                            "Africa/Dar_es_Salaam",
-                            "Africa/Djibouti",
-                            "Africa/Johannesburg",
-                            "Africa/Khartoum",
-                            "Africa/Kigali",
-                            "Africa/Kinshasa",
-                            "Africa/Lagos",
-                            "Africa/Nairobi",
-                            "Africa/Timbuktu",
-                            "Africa/Tripoli",
-                            "Africa/Tunis",
-                            "America/Antigua",
-                            "America/Aruba",
-                            "America/Belize",
-                            "America/Bogota",
-                            "America/Buenos_Aires",
-                            "America/Cancun",
-                            "America/Caracas",
-                            "America/Cayman",
-                            "America/Chihuahua",
-                            "America/Costa_Rica",
-                            "America/Denver",
-                            "America/Detroit",
-                            "America/Edmonton",
-                            "America/El_Salvador",
-                            "America/Ensenada",
-                            "America/Grenada",
-                            "America/Guadeloupe",
-                            "America/Guatemala",
-                            "America/Havana",
-                            "America/Indianapolis",
-                            "America/Jamaica",
-                            "America/Juneau",
-                            "America/La_Paz",
-                            "America/Lima",
-                            "America/Los_Angeles",
-                            "America/Louisville",
-                            "America/Martinique",
-                            "America/Mazatlan",
-                            "America/Mendoza",
-                            "America/Menominee",
-                            "America/Merida",
-                            "America/Mexico_City",
-                            "America/Miquelon",
-                            "America/Moncton",
-                            "America/Monterrey",
-                            "America/Montevideo",
-                            "America/Montreal",
-                            "America/Montserrat",
-                            "America/Nassau",
-                            "America/New_York",
-                            "America/Panama",
-                            "America/Phoenix",
-                            "America/Port-au-Prince",
-                            "America/Port_of_Spain",
-                            "America/Regina",
-                            "America/Santiago",
-                            "America/Santo_Domingo",
-                            "America/Sao_Paulo",
-                            "America/Thule",
-                            "America/Thunder_Bay",
-                            "America/Tijuana",
-                            "America/Toronto",
-                            "America/Vancouver",
-                            "America/Winnipeg",
-                            "America/Yellowknife",
-                            "Antarctica/South_Pole",
-                            "Arctic/Longyearbyen",
-                            "Asia/Amman",
-                            "Asia/Baghdad",
-                            "Asia/Bahrain",
-                            "Asia/Bangkok",
-                            "Asia/Beirut",
-                            "Asia/Brunei",
-                            "Asia/Calcutta",
-                            "Asia/Colombo",
-                            "Asia/Dacca",
-                            "Asia/Damascus",
-                            "Asia/Dhaka",
-                            "Asia/Dubai",
-                            "Asia/Gaza",
-                            "Asia/Hong_Kong",
-                            "Asia/Istanbul",
-                            "Asia/Jakarta",
-                            "Asia/Jerusalem",
-                            "Asia/Kabul",
-                            "Asia/Katmandu",
-                            "Asia/Kuala_Lumpur",
-                            "Asia/Kuching",
-                            "Asia/Kuwait",
-                            "Asia/Macau",
-                            "Asia/Manila",
-                            "Asia/Muscat",
-                            "Asia/Phnom_Penh",
-                            "Asia/Rangoon",
-                            "Asia/Riyadh",
-                            "Asia/Saigon",
-                            "Asia/Seoul",
-                            "Asia/Shanghai",
-                            "Asia/Singapore",
-                            "Asia/Taipei",
-                            "Asia/Tehran",
-                            "Asia/Tel_Aviv",
-                            "Asia/Thimphu",
-                            "Asia/Tokyo",
-                            "Asia/Ulan_Bator",
-                            "Asia/Vientiane",
-                            "Asia/Vladivostok",
-                            "Atlantic/Azores",
-                            "Atlantic/Bermuda",
-                            "Atlantic/Canary",
-                            "Atlantic/Cape_Verde",
-                            "Atlantic/Faeroe",
-                            "Atlantic/Reykjavik",
-                            "Australia/ACT",
-                            "Australia/Adelaide",
-                            "Australia/Brisbane",
-                            "Australia/Canberra",
-                            "Australia/Darwin",
-                            "Australia/LHI",
-                            "Australia/Melbourne",
-                            "Australia/North",
-                            "Australia/NSW",
-                            "Australia/Perth",
-                            "Australia/Queensland",
-                            "Australia/South",
-                            "Australia/Sydney",
-                            "Australia/Tasmania",
-                            "Australia/Victoria",
-                            "Australia/West",
-                            "Canada/Atlantic",
-                            "Canada/Central",
-                            "Canada/Eastern",
-                            "Canada/Mountain",
-                            "Canada/Newfoundland",
-                            "Canada/Pacific",
-                            "Canada/Saskatchewan",
-                            "Canada/Yukon",
-                            "Cuba",
-                            "Etc/GMT",
-                            "Etc/GMT+1",
-                            "Etc/GMT+10",
-                            "Etc/GMT+11",
-                            "Etc/GMT+12",
-                            "Etc/GMT+2",
-                            "Etc/GMT+3",
-                            "Etc/GMT+4",
-                            "Etc/GMT+5",
-                            "Etc/GMT+6",
-                            "Etc/GMT+7",
-                            "Etc/GMT+8",
-                            "Etc/GMT+9",
-                            "Etc/GMT-1",
-                            "Etc/GMT-10",
-                            "Etc/GMT-11",
-                            "Etc/GMT-12",
-                            "Etc/GMT-13",
-                            "Etc/GMT-14",
-                            "Etc/GMT-2",
-                            "Etc/GMT-3",
-                            "Etc/GMT-4",
-                            "Etc/GMT-5",
-                            "Etc/GMT-6",
-                            "Etc/GMT-7",
-                            "Etc/GMT-8",
-                            "Etc/GMT-9",
-                            "Etc/Greenwich",
-                            "Europe/Amsterdam",
-                            "Europe/Athens",
-                            "Europe/Belfast",
-                            "Europe/Belgrade",
-                            "Europe/Berlin",
-                            "Europe/Brussels",
-                            "Europe/Bucharest",
-                            "Europe/Budapest",
-                            "Europe/Copenhagen",
-                            "Europe/Dublin",
-                            "Europe/Helsinki",
-                            "Europe/Istanbul",
-                            "Europe/Kiev",
-                            "Europe/Lisbon",
-                            "Europe/Ljubljana",
-                            "Europe/London",
-                            "Europe/Madrid",
-                            "Europe/Malta",
-                            "Europe/Monaco",
-                            "Europe/Moscow",
-                            "Europe/Oslo",
-                            "Europe/Paris",
-                            "Europe/Prague",
-                            "Europe/Rome",
-                            "Europe/Sofia",
-                            "Europe/Stockholm",
-                            "Europe/Vienna",
-                            "Europe/Warsaw",
-                            "Europe/Zurich",
-                            "Greenwich",
-                            "Pacific/Auckland",
-                            "Pacific/Easter",
-                            "Pacific/Fiji",
-                            "Pacific/Galapagos",
-                            "Pacific/Gambier",
-                            "Pacific/Guam",
-                            "Pacific/Honolulu",
-                            "Pacific/Marquesas",
-                            "Pacific/Midway",
-                            "Pacific/Palau",
-                            "Pacific/Rarotonga",
-                            "Pacific/Tahiti"
-                      ]
-                },
-                "voicemail-login-pin": {
-                      "type": "string",
-                      "description": "This is the numberic pin that would be used by the user validating their account when connecting into voice IVR to check voicemail."
-                },
-                "privacy": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "dial-plan": {
-                      "type": "string",
-                      "description": "This is the dial plan set for the user. Dial plans are used to control action and forward options that will be used when dialing out from the user."
-                },
-                "dial-policy": {
-                      "type": "string",
-                      "description": "This value is the dial policy/permission for this user whch will control the destinations this user can dial. Generally dial policys are preconfigured at system level and selected at user level."
-                },
-                "status-message": {
-                      "type": "string",
-                      "description": "This is is a value that is often set by the end user to show their current status, often a away message of some kind."
-                },
-                "user-presence-status": {
-                      "type": "string",
-                      "description": "This is a read only presence status for the user that will be calculated by the core system based on registration, answer rules and active call status."
-                },
-                "directory-name-number-dtmf-mapping": {
-                      "type": "number",
-                      "description": "This is a 3 digit numberic mapping that correlates to the first 3 digits of a user's first or last name for dial by name directory. Example Smith would be \"764\" translating the letters to numbers using the normal phone number mappings."
-                },
-                "voicemail-user-control-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "phone-numbers-to-allow-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "phone-numbers-to-reject-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "call-screening-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "ring-no-answer-timeout-seconds": {
-                      "type": "number",
-                      "description": "This time setting in seconds will controll how long a inbound call attempt will attempt to connect the call before stopping and attempting the next option which might be a forward setting in answer rules or voicemail if enabled."
-                },
-                "language-token": {
-                      "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
-                },
-                "limits-max-data-storage-kilobytes": {
-                      "type": "number",
-                      "description": "This is the maximum value in kilobytes that is allowed to be stored in the user's voicemail, audio greetings and fax storage."
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the maximum number of active calls allowed for the user."
-                },
-                "directory-announce-in-dial-by-name-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "directory-override-order-duplicate-dtmf-mapping": {
-                      "type": "number",
-                      "description": "This value can be used in cases where multiple users have the same value for directory-name-number-dtmf-mapping, if they are the same then use this setting to set the order low to high for playback in dial by name directory menu."
-                },
-                "voicemail-greeting-index": {
-                      "type": "number",
-                      "description": "This is the index of the greeting that is enabled currently for the user. Greeting 0 is the generic \"[name] is not available\" message will be played."
-                },
-                "voicemail-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "voicemail-receive-broadcast-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "reject-anonymous-calls-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-datetime-received": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-caller-id": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-sort-newest-to-oldest": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "email-send-alert-new-voicemail-cc-list-csv": {
-                      "type": "string",
-                      "description": "This list of user's which will be forward copies of new voicemails left on that user."
-                },
-                "email-send-alert-new-voicemail-behavior": {
-                      "type": "string",
-                      "description": "This is the behavior that the voicemail logic will take after a voicmail is left. The options include ability to send with attachements or hyperlinks. Allowed values: \"no\", \"yes\", \"attnew\", \"attsave\", \"atttrash\", \"brief\", \"briefattnew\", \"briefattsave\", \"briefatttrash\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "yes",
-                            "attnew",
-                            "attsave",
-                            "atttrash",
-                            "brief",
-                            "briefattnew",
-                            "briefattsave",
-                            "briefatttrash"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-new-voicemail-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-new-missed-call-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-data-storage-limit-reached-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "caller-id-number": {
-                      "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-name": {
-                      "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number-emergency": {
-                      "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
-                },
-                "area-code": {
-                      "type": "number",
-                      "description": "This is a area code for the user. I will be used when user dial's 7 digits to translate it to full 10 or 11 digit number."
-                },
-                "directory-name-visible-in-list-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "service-code": {
-                      "type": "string",
-                      "description": "Service codes are for internal use that allow user's to be tagged for billing and tracking purposes. Any service code starting with \"system-\" will be hidden by default in the portals and not count as regular users."
-                },
-                "voicemail-transcription-enabled": {
-                      "type": "string",
-                      "description": "Enable this setting and select a vendor if you wish to have voicemails transcripted after a voicemail is recorded. Allowed values: \"no\", \"Deepgram\", \"Google\", \"Mutare\", \"Voicebase\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "Deepgram",
-                            "Google",
-                            "Mutare",
-                            "Voicebase"
-                      ],
-                      "default": "no"
-                },
-                "emergency-address-id": {
-                      "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
-                },
-                "call-recordings-hide-from-others-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "music-on-hold-randomized-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "music-on-hold-comfort-message-repeat-interval-seconds": {
-                      "type": "number",
-                      "description": "This interval will control how frequently the music on hold would be interupted and have messages played. Should be used when using music on hod and custom messages."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This read only setting is the current active call count for this user."
-                },
-                "account-status": {
-                      "type": "string",
-                      "description": "This status is read only and is calcuated to suggest special states that can be relayed to the end user or manager views. Status's include when a user is new, the user has been reset or pasword needs to be set. Allowed values: \"standard\", \"reset\", \"new\", \"pwd reset\"",
-                      "enum": [
-                            "standard",
-                            "reset",
-                            "new",
-                            "pwd reset"
-                      ]
-                },
-                "created-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was created."
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was last modified."
-                },
-                "recording-configuration": {
-                      "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "yes-with-transcription",
-                            "yes-with-transcription-and-sentiment",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
-                "domain",
-                "user",
-                "name-first-name",
-                "name-last-name",
-                "email",
-                "user-scope"
+                "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -670,16 +145,10 @@ export const create_user: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'user', 'name-first-name', 'name-last-name', 'login-username', 'email', 'user-scope', 'department', 'site', 'time-zone', 'voicemail-login-pin', 'privacy', 'dial-plan', 'dial-policy', 'status-message', 'user-presence-status', 'directory-name-number-dtmf-mapping', 'voicemail-user-control-enabled', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'ring-no-answer-timeout-seconds', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'directory-announce-in-dial-by-name-enabled', 'directory-override-order-duplicate-dtmf-mapping', 'voicemail-greeting-index', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'reject-anonymous-calls-enabled', 'voicemail-playback-announce-datetime-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'email-send-alert-new-voicemail-cc-list-csv', 'email-send-alert-new-voicemail-behavior', 'email-send-alert-new-voicemail-enabled', 'email-send-alert-new-missed-call-enabled', 'email-send-alert-data-storage-limit-reached-enabled', 'caller-id-number', 'caller-id-name', 'caller-id-number-emergency', 'area-code', 'directory-name-visible-in-list-enabled', 'service-code', 'voicemail-transcription-enabled', 'emergency-address-id', 'call-recordings-hide-from-others-enabled', 'music-on-hold-randomized-enabled', 'music-on-hold-comfort-message-repeat-interval-seconds', 'active-calls-total-current', 'account-status', 'created-datetime', 'last-modified-datetime', 'recording-configuration'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users',
       pathParams,
-      body,
     });
 
     return {
@@ -694,13 +163,37 @@ export const create_user: ToolDefinition = {
 export const count_users: ToolDefinition = {
   schema: {
     name: 'count_users',
-    description: 'Count users in Domain — [GET /domains/{domain}/users/count]',
+    description: 'Count users — Returns the number of users in a domain. It takes the same filters as `GET /domains/{domain}/users`: `site`, `department`, `user-scope`, `service-code`, `email`, and `filter_users`. Any user scope in the domain can call it, Basic User included.  By default the count leaves out the rows that represent sites and departments and the `domain` placeholder user, and includes system users such as call queues. Send `filter_users=system` to count only people. — [GET /domains/{domain}/users/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the users in this site. Exact match."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Returns only the users in this department. Exact match on one department name."
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Returns only the users with this scope. Send a comma-separated list to match any of several scopes."
+                },
+                "service-code": {
+                      "type": "string",
+                      "description": "Returns only the users with this service code, such as `system-queue`. Exact match."
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Counts the users whose stored email value equals this text exactly. A user with several addresses matches only on the whole semicolon-separated value."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Chooses which rows to leave out. By default the response leaves out the rows that represent a site or a department and the domain's `domain` placeholder user, and includes system users such as call queues and auto attendants. Send a comma-separated list to replace that default. Each item is one of the following: - `departments`, which leaves out department rows - `sites`, which leaves out site rows - `system`, which leaves out every user whose service code starts with `system-` - a service code such as `system-queue`, which leaves out that code - an extension, which leaves out that user `no` returns every row."
                 }
           },
           "required": [
@@ -708,16 +201,28 @@ export const count_users: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['site', 'department', 'user-scope', 'service-code', 'email', 'filter_users'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -750,6 +255,12 @@ export const search_users: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
@@ -780,17 +291,37 @@ export const search_users: ToolDefinition = {
 export const get_user: ToolDefinition = {
   schema: {
     name: 'get_user',
-    description: 'Get Specific User in Domain — [GET /domains/{domain}/users/{user}]',
+    description: 'Read user — Returns one user. A Basic User token reads only its own user. Site Manager, Office Manager, Reseller, and Super User tokens read the users in their domains.  A single-user read adds `mfa` (the user\\\'s multi-factor methods), `sso_ids` (linked single sign-on identities), and, when the user inherits its emergency address, `emergency-address-source`. These are not returned when a list returns more than one user.  The voicemail PIN is masked unless you send `include-secret=yes`. `moh=yes` adds whether the user\\\'s site and domain have their own music on hold and hold message.  Use `~` for `domain` and `user` to read the user your token belongs to. `GET /domains/~/users/~` does the same. — [GET /domains/{domain}/users/{user}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "A comma-separated list of the fields to return, by their names in the response. Names the API does not know are ignored."
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns `voicemail-login-pin` in full. By default the PIN is masked: a PIN of 8 characters or fewer is all asterisks, and a longer one shows only its first 2 and last 2 characters. Any token that can read the user can ask for it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "moh": {
+                      "type": "string",
+                      "description": "Any value adds `site_moh`, `site_msg`, `domain_moh`, and `domain_msg` to the response. Each says whether the user's site or domain has its own music on hold or hold message. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -799,16 +330,28 @@ export const get_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['fields', 'include-secret', 'moh'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -823,601 +366,30 @@ export const get_user: ToolDefinition = {
 export const update_user: ToolDefinition = {
   schema: {
     name: 'update_user',
-    description: 'Update a User in Domain — [PUT /domains/{domain}/users/{user}]',
+    description: 'Update user — Changes a user. Send only the fields to change. A field you leave out keeps its value. Send an empty `site`, `department`, or `email` to clear it.  A Basic User token changes only its own user. Site Manager, Office Manager, Reseller, and Super User tokens change the users in their domains.  Some changes have conditions:  - **Your own password or email.** Send `current_password` with your current password. Without it, when a password is already set, `password-hash` and `email` are not changed. A wrong `current_password` is a `403`. - **Scope.** You can give a user your own scope or a lower one. A higher scope is a `403`. - **Email for scopes below Reseller.** When the domain does not allow users to edit their primary email, changing `email` from a scope below Reseller is a `403`. - **A new password** signs the user out everywhere and sends the user a security notification. An empty `password-hash` resets the account: it removes the user\\\'s single sign-on links and signs the user out. - **The masked PIN.** Sending back the masked `voicemail-login-pin` from a read leaves the PIN unchanged.  The response is `202`: the change is accepted and applied shortly after.  The named examples change a name and caller ID, move a user to another site, change your own password, and clear a department. — [PUT /domains/{domain}/users/{user}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "name-first-name": {
-                      "type": "string",
-                      "description": "This is the first name for the user"
-                },
-                "name-last-name": {
-                      "type": "string",
-                      "description": "This is the last name for the user"
-                },
-                "login-username": {
-                      "type": "string",
-                      "description": "This is the login for the user used to access the portals and other applications. The default will be [user]@[domain] if not set otherwise.  This value is required to be unique across the entire system so 409 will be returned if not unique."
-                },
-                "email": {
-                      "type": "string",
-                      "description": "This is the email adresses or list of email addresses sepertaed with a semi-colon."
-                },
-                "user-scope": {
-                      "type": "string",
-                      "description": "Will link this resource with a User Scope granting it certain permisionf to the system for use in API and Portal. Allowed values: \"Basic User\", \"Simple User\", \"Advanced User\", \"Call Center Agent\", \"Site Manager\", \"Call Center Supervisor\", \"Office Manager\", \"Reseller\", \"Super User\", \"NDP\", \"No Portal\". Default: \"Basic User\"",
-                      "enum": [
-                            "Basic User",
-                            "Simple User",
-                            "Advanced User",
-                            "Call Center Agent",
-                            "Site Manager",
-                            "Call Center Supervisor",
-                            "Office Manager",
-                            "Reseller",
-                            "Super User",
-                            "NDP",
-                            "No Portal"
-                      ],
-                      "default": "Basic User"
-                },
-                "department": {
-                      "type": "string",
-                      "description": "This is the depertment that user belongs to in the domain. Can be any string to group users, a department is not require to be setup before in order to set it for a user."
-                },
-                "site": {
-                      "type": "string",
-                      "description": "This is the site or location for this user. The site will group users that are at the same phyiscal location, but can be used for other grouping purposes as well. New users will inherit some settings from the site if the site was previously setup. If the site is not previously created then a new site will be created with the value given on new user create assuming the domain's max sites setting has remaining sites."
-                },
-                "time-zone": {
-                      "type": "string",
-                      "description": "This is the time zone that the user is primarily located in. Allowed values: \"US/Alaska\", \"US/Central\", \"US/Eastern\", \"US/Hawaii\", \"US/Mountain\", \"US/Pacific\", \"Africa/Addis_Ababa\", \"Africa/Algiers\", \"Africa/Brazzaville\", \"Africa/Cairo\", \"Africa/Casablanca\", \"Africa/Dakar\", \"Africa/Dar_es_Salaam\", \"Africa/Djibouti\", \"Africa/Johannesburg\", \"Africa/Khartoum\", \"Africa/Kigali\", \"Africa/Kinshasa\", \"Africa/Lagos\", \"Africa/Nairobi\", \"Africa/Timbuktu\", \"Africa/Tripoli\", \"Africa/Tunis\", \"America/Antigua\", \"America/Aruba\", \"America/Belize\", \"America/Bogota\", \"America/Buenos_Aires\", \"America/Cancun\", \"America/Caracas\", \"America/Cayman\", \"America/Chihuahua\", \"America/Costa_Rica\", \"America/Denver\", \"America/Detroit\", \"America/Edmonton\", \"America/El_Salvador\", \"America/Ensenada\", \"America/Grenada\", \"America/Guadeloupe\", \"America/Guatemala\", \"America/Havana\", \"America/Indianapolis\", \"America/Jamaica\", \"America/Juneau\", \"America/La_Paz\", \"America/Lima\", \"America/Los_Angeles\", \"America/Louisville\", \"America/Martinique\", \"America/Mazatlan\", \"America/Mendoza\", \"America/Menominee\", \"America/Merida\", \"America/Mexico_City\", \"America/Miquelon\", \"America/Moncton\", \"America/Monterrey\", \"America/Montevideo\", \"America/Montreal\", \"America/Montserrat\", \"America/Nassau\", \"America/New_York\", \"America/Panama\", \"America/Phoenix\", \"America/Port-au-Prince\", \"America/Port_of_Spain\", \"America/Regina\", \"America/Santiago\", \"America/Santo_Domingo\", \"America/Sao_Paulo\", \"America/Thule\", \"America/Thunder_Bay\", \"America/Tijuana\", \"America/Toronto\", \"America/Vancouver\", \"America/Winnipeg\", \"America/Yellowknife\", \"Antarctica/South_Pole\", \"Arctic/Longyearbyen\", \"Asia/Amman\", \"Asia/Baghdad\", \"Asia/Bahrain\", \"Asia/Bangkok\", \"Asia/Beirut\", \"Asia/Brunei\", \"Asia/Calcutta\", \"Asia/Colombo\", \"Asia/Dacca\", \"Asia/Damascus\", \"Asia/Dhaka\", \"Asia/Dubai\", \"Asia/Gaza\", \"Asia/Hong_Kong\", \"Asia/Istanbul\", \"Asia/Jakarta\", \"Asia/Jerusalem\", \"Asia/Kabul\", \"Asia/Katmandu\", \"Asia/Kuala_Lumpur\", \"Asia/Kuching\", \"Asia/Kuwait\", \"Asia/Macau\", \"Asia/Manila\", \"Asia/Muscat\", \"Asia/Phnom_Penh\", \"Asia/Rangoon\", \"Asia/Riyadh\", \"Asia/Saigon\", \"Asia/Seoul\", \"Asia/Shanghai\", \"Asia/Singapore\", \"Asia/Taipei\", \"Asia/Tehran\", \"Asia/Tel_Aviv\", \"Asia/Thimphu\", \"Asia/Tokyo\", \"Asia/Ulan_Bator\", \"Asia/Vientiane\", \"Asia/Vladivostok\", \"Atlantic/Azores\", \"Atlantic/Bermuda\", \"Atlantic/Canary\", \"Atlantic/Cape_Verde\", \"Atlantic/Faeroe\", \"Atlantic/Reykjavik\", \"Australia/ACT\", \"Australia/Adelaide\", \"Australia/Brisbane\", \"Australia/Canberra\", \"Australia/Darwin\", \"Australia/LHI\", \"Australia/Melbourne\", \"Australia/North\", \"Australia/NSW\", \"Australia/Perth\", \"Australia/Queensland\", \"Australia/South\", \"Australia/Sydney\", \"Australia/Tasmania\", \"Australia/Victoria\", \"Australia/West\", \"Canada/Atlantic\", \"Canada/Central\", \"Canada/Eastern\", \"Canada/Mountain\", \"Canada/Newfoundland\", \"Canada/Pacific\", \"Canada/Saskatchewan\", \"Canada/Yukon\", \"Cuba\", \"Etc/GMT\", \"Etc/GMT+1\", \"Etc/GMT+10\", \"Etc/GMT+11\", \"Etc/GMT+12\", \"Etc/GMT+2\", \"Etc/GMT+3\", \"Etc/GMT+4\", \"Etc/GMT+5\", \"Etc/GMT+6\", \"Etc/GMT+7\", \"Etc/GMT+8\", \"Etc/GMT+9\", \"Etc/GMT-1\", \"Etc/GMT-10\", \"Etc/GMT-11\", \"Etc/GMT-12\", \"Etc/GMT-13\", \"Etc/GMT-14\", \"Etc/GMT-2\", \"Etc/GMT-3\", \"Etc/GMT-4\", \"Etc/GMT-5\", \"Etc/GMT-6\", \"Etc/GMT-7\", \"Etc/GMT-8\", \"Etc/GMT-9\", \"Etc/Greenwich\", \"Europe/Amsterdam\", \"Europe/Athens\", \"Europe/Belfast\", \"Europe/Belgrade\", \"Europe/Berlin\", \"Europe/Brussels\", \"Europe/Bucharest\", \"Europe/Budapest\", \"Europe/Copenhagen\", \"Europe/Dublin\", \"Europe/Helsinki\", \"Europe/Istanbul\", \"Europe/Kiev\", \"Europe/Lisbon\", \"Europe/Ljubljana\", \"Europe/London\", \"Europe/Madrid\", \"Europe/Malta\", \"Europe/Monaco\", \"Europe/Moscow\", \"Europe/Oslo\", \"Europe/Paris\", \"Europe/Prague\", \"Europe/Rome\", \"Europe/Sofia\", \"Europe/Stockholm\", \"Europe/Vienna\", \"Europe/Warsaw\", \"Europe/Zurich\", \"Greenwich\", \"Pacific/Auckland\", \"Pacific/Easter\", \"Pacific/Fiji\", \"Pacific/Galapagos\", \"Pacific/Gambier\", \"Pacific/Guam\", \"Pacific/Honolulu\", \"Pacific/Marquesas\", \"Pacific/Midway\", \"Pacific/Palau\", \"Pacific/Rarotonga\", \"Pacific/Tahiti\"",
-                      "enum": [
-                            "US/Alaska",
-                            "US/Central",
-                            "US/Eastern",
-                            "US/Hawaii",
-                            "US/Mountain",
-                            "US/Pacific",
-                            "Africa/Addis_Ababa",
-                            "Africa/Algiers",
-                            "Africa/Brazzaville",
-                            "Africa/Cairo",
-                            "Africa/Casablanca",
-                            "Africa/Dakar",
-                            "Africa/Dar_es_Salaam",
-                            "Africa/Djibouti",
-                            "Africa/Johannesburg",
-                            "Africa/Khartoum",
-                            "Africa/Kigali",
-                            "Africa/Kinshasa",
-                            "Africa/Lagos",
-                            "Africa/Nairobi",
-                            "Africa/Timbuktu",
-                            "Africa/Tripoli",
-                            "Africa/Tunis",
-                            "America/Antigua",
-                            "America/Aruba",
-                            "America/Belize",
-                            "America/Bogota",
-                            "America/Buenos_Aires",
-                            "America/Cancun",
-                            "America/Caracas",
-                            "America/Cayman",
-                            "America/Chihuahua",
-                            "America/Costa_Rica",
-                            "America/Denver",
-                            "America/Detroit",
-                            "America/Edmonton",
-                            "America/El_Salvador",
-                            "America/Ensenada",
-                            "America/Grenada",
-                            "America/Guadeloupe",
-                            "America/Guatemala",
-                            "America/Havana",
-                            "America/Indianapolis",
-                            "America/Jamaica",
-                            "America/Juneau",
-                            "America/La_Paz",
-                            "America/Lima",
-                            "America/Los_Angeles",
-                            "America/Louisville",
-                            "America/Martinique",
-                            "America/Mazatlan",
-                            "America/Mendoza",
-                            "America/Menominee",
-                            "America/Merida",
-                            "America/Mexico_City",
-                            "America/Miquelon",
-                            "America/Moncton",
-                            "America/Monterrey",
-                            "America/Montevideo",
-                            "America/Montreal",
-                            "America/Montserrat",
-                            "America/Nassau",
-                            "America/New_York",
-                            "America/Panama",
-                            "America/Phoenix",
-                            "America/Port-au-Prince",
-                            "America/Port_of_Spain",
-                            "America/Regina",
-                            "America/Santiago",
-                            "America/Santo_Domingo",
-                            "America/Sao_Paulo",
-                            "America/Thule",
-                            "America/Thunder_Bay",
-                            "America/Tijuana",
-                            "America/Toronto",
-                            "America/Vancouver",
-                            "America/Winnipeg",
-                            "America/Yellowknife",
-                            "Antarctica/South_Pole",
-                            "Arctic/Longyearbyen",
-                            "Asia/Amman",
-                            "Asia/Baghdad",
-                            "Asia/Bahrain",
-                            "Asia/Bangkok",
-                            "Asia/Beirut",
-                            "Asia/Brunei",
-                            "Asia/Calcutta",
-                            "Asia/Colombo",
-                            "Asia/Dacca",
-                            "Asia/Damascus",
-                            "Asia/Dhaka",
-                            "Asia/Dubai",
-                            "Asia/Gaza",
-                            "Asia/Hong_Kong",
-                            "Asia/Istanbul",
-                            "Asia/Jakarta",
-                            "Asia/Jerusalem",
-                            "Asia/Kabul",
-                            "Asia/Katmandu",
-                            "Asia/Kuala_Lumpur",
-                            "Asia/Kuching",
-                            "Asia/Kuwait",
-                            "Asia/Macau",
-                            "Asia/Manila",
-                            "Asia/Muscat",
-                            "Asia/Phnom_Penh",
-                            "Asia/Rangoon",
-                            "Asia/Riyadh",
-                            "Asia/Saigon",
-                            "Asia/Seoul",
-                            "Asia/Shanghai",
-                            "Asia/Singapore",
-                            "Asia/Taipei",
-                            "Asia/Tehran",
-                            "Asia/Tel_Aviv",
-                            "Asia/Thimphu",
-                            "Asia/Tokyo",
-                            "Asia/Ulan_Bator",
-                            "Asia/Vientiane",
-                            "Asia/Vladivostok",
-                            "Atlantic/Azores",
-                            "Atlantic/Bermuda",
-                            "Atlantic/Canary",
-                            "Atlantic/Cape_Verde",
-                            "Atlantic/Faeroe",
-                            "Atlantic/Reykjavik",
-                            "Australia/ACT",
-                            "Australia/Adelaide",
-                            "Australia/Brisbane",
-                            "Australia/Canberra",
-                            "Australia/Darwin",
-                            "Australia/LHI",
-                            "Australia/Melbourne",
-                            "Australia/North",
-                            "Australia/NSW",
-                            "Australia/Perth",
-                            "Australia/Queensland",
-                            "Australia/South",
-                            "Australia/Sydney",
-                            "Australia/Tasmania",
-                            "Australia/Victoria",
-                            "Australia/West",
-                            "Canada/Atlantic",
-                            "Canada/Central",
-                            "Canada/Eastern",
-                            "Canada/Mountain",
-                            "Canada/Newfoundland",
-                            "Canada/Pacific",
-                            "Canada/Saskatchewan",
-                            "Canada/Yukon",
-                            "Cuba",
-                            "Etc/GMT",
-                            "Etc/GMT+1",
-                            "Etc/GMT+10",
-                            "Etc/GMT+11",
-                            "Etc/GMT+12",
-                            "Etc/GMT+2",
-                            "Etc/GMT+3",
-                            "Etc/GMT+4",
-                            "Etc/GMT+5",
-                            "Etc/GMT+6",
-                            "Etc/GMT+7",
-                            "Etc/GMT+8",
-                            "Etc/GMT+9",
-                            "Etc/GMT-1",
-                            "Etc/GMT-10",
-                            "Etc/GMT-11",
-                            "Etc/GMT-12",
-                            "Etc/GMT-13",
-                            "Etc/GMT-14",
-                            "Etc/GMT-2",
-                            "Etc/GMT-3",
-                            "Etc/GMT-4",
-                            "Etc/GMT-5",
-                            "Etc/GMT-6",
-                            "Etc/GMT-7",
-                            "Etc/GMT-8",
-                            "Etc/GMT-9",
-                            "Etc/Greenwich",
-                            "Europe/Amsterdam",
-                            "Europe/Athens",
-                            "Europe/Belfast",
-                            "Europe/Belgrade",
-                            "Europe/Berlin",
-                            "Europe/Brussels",
-                            "Europe/Bucharest",
-                            "Europe/Budapest",
-                            "Europe/Copenhagen",
-                            "Europe/Dublin",
-                            "Europe/Helsinki",
-                            "Europe/Istanbul",
-                            "Europe/Kiev",
-                            "Europe/Lisbon",
-                            "Europe/Ljubljana",
-                            "Europe/London",
-                            "Europe/Madrid",
-                            "Europe/Malta",
-                            "Europe/Monaco",
-                            "Europe/Moscow",
-                            "Europe/Oslo",
-                            "Europe/Paris",
-                            "Europe/Prague",
-                            "Europe/Rome",
-                            "Europe/Sofia",
-                            "Europe/Stockholm",
-                            "Europe/Vienna",
-                            "Europe/Warsaw",
-                            "Europe/Zurich",
-                            "Greenwich",
-                            "Pacific/Auckland",
-                            "Pacific/Easter",
-                            "Pacific/Fiji",
-                            "Pacific/Galapagos",
-                            "Pacific/Gambier",
-                            "Pacific/Guam",
-                            "Pacific/Honolulu",
-                            "Pacific/Marquesas",
-                            "Pacific/Midway",
-                            "Pacific/Palau",
-                            "Pacific/Rarotonga",
-                            "Pacific/Tahiti"
-                      ]
-                },
-                "voicemail-login-pin": {
-                      "type": "string",
-                      "description": "This is the numberic pin that would be used by the user validating their account when connecting into voice IVR to check voicemail."
-                },
-                "privacy": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "dial-plan": {
-                      "type": "string",
-                      "description": "This is the dial plan set for the user. Dial plans are used to control action and forward options that will be used when dialing out from the user."
-                },
-                "dial-policy": {
-                      "type": "string",
-                      "description": "This value is the dial policy/permission for this user whch will control the destinations this user can dial. Generally dial policys are preconfigured at system level and selected at user level."
-                },
-                "status-message": {
-                      "type": "string",
-                      "description": "This is is a value that is often set by the end user to show their current status, often a away message of some kind."
-                },
-                "user-presence-status": {
-                      "type": "string",
-                      "description": "This is a read only presence status for the user that will be calculated by the core system based on registration, answer rules and active call status."
-                },
-                "directory-name-number-dtmf-mapping": {
-                      "type": "number",
-                      "description": "This is a 3 digit numberic mapping that correlates to the first 3 digits of a user's first or last name for dial by name directory. Example Smith would be \"764\" translating the letters to numbers using the normal phone number mappings."
-                },
-                "voicemail-user-control-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "phone-numbers-to-allow-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "phone-numbers-to-reject-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "call-screening-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "ring-no-answer-timeout-seconds": {
-                      "type": "number",
-                      "description": "This time setting in seconds will controll how long a inbound call attempt will attempt to connect the call before stopping and attempting the next option which might be a forward setting in answer rules or voicemail if enabled."
-                },
-                "language-token": {
-                      "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
-                },
-                "limits-max-data-storage-kilobytes": {
-                      "type": "number",
-                      "description": "This is the maximum value in kilobytes that is allowed to be stored in the user's voicemail, audio greetings and fax storage."
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the maximum number of active calls allowed for the user."
-                },
-                "directory-announce-in-dial-by-name-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "directory-override-order-duplicate-dtmf-mapping": {
-                      "type": "number",
-                      "description": "This value can be used in cases where multiple users have the same value for directory-name-number-dtmf-mapping, if they are the same then use this setting to set the order low to high for playback in dial by name directory menu."
-                },
-                "voicemail-greeting-index": {
-                      "type": "number",
-                      "description": "This is the index of the greeting that is enabled currently for the user. Greeting 0 is the generic \"[name] is not available\" message will be played."
-                },
-                "voicemail-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "voicemail-receive-broadcast-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "reject-anonymous-calls-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-datetime-received": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-caller-id": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-sort-newest-to-oldest": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "email-send-alert-new-voicemail-cc-list-csv": {
-                      "type": "string",
-                      "description": "This list of user's which will be forward copies of new voicemails left on that user."
-                },
-                "email-send-alert-new-voicemail-behavior": {
-                      "type": "string",
-                      "description": "This is the behavior that the voicemail logic will take after a voicmail is left. The options include ability to send with attachements or hyperlinks. Allowed values: \"no\", \"yes\", \"attnew\", \"attsave\", \"atttrash\", \"brief\", \"briefattnew\", \"briefattsave\", \"briefatttrash\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "yes",
-                            "attnew",
-                            "attsave",
-                            "atttrash",
-                            "brief",
-                            "briefattnew",
-                            "briefattsave",
-                            "briefatttrash"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-new-voicemail-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-new-missed-call-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "email-send-alert-data-storage-limit-reached-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "caller-id-number": {
-                      "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-name": {
-                      "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number-emergency": {
-                      "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
-                },
-                "area-code": {
-                      "type": "number",
-                      "description": "This is a area code for the user. I will be used when user dial's 7 digits to translate it to full 10 or 11 digit number."
-                },
-                "directory-name-visible-in-list-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "service-code": {
-                      "type": "string",
-                      "description": "Service codes are for internal use that allow user's to be tagged for billing and tracking purposes. Any service code starting with \"system-\" will be hidden by default in the portals and not count as regular users."
-                },
-                "voicemail-transcription-enabled": {
-                      "type": "string",
-                      "description": "Enable this setting and select a vendor if you wish to have voicemails transcripted after a voicemail is recorded. Allowed values: \"no\", \"Deepgram\", \"Google\", \"Mutare\", \"Voicebase\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "Deepgram",
-                            "Google",
-                            "Mutare",
-                            "Voicebase"
-                      ],
-                      "default": "no"
-                },
-                "emergency-address-id": {
-                      "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
-                },
-                "call-recordings-hide-from-others-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "music-on-hold-randomized-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "music-on-hold-comfort-message-repeat-interval-seconds": {
-                      "type": "number",
-                      "description": "This interval will control how frequently the music on hold would be interupted and have messages played. Should be used when using music on hod and custom messages."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This read only setting is the current active call count for this user."
-                },
-                "account-status": {
-                      "type": "string",
-                      "description": "This status is read only and is calcuated to suggest special states that can be relayed to the end user or manager views. Status's include when a user is new, the user has been reset or pasword needs to be set. Allowed values: \"standard\", \"reset\", \"new\", \"pwd reset\"",
-                      "enum": [
-                            "standard",
-                            "reset",
-                            "new",
-                            "pwd reset"
-                      ]
-                },
-                "created-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was created."
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was last modified."
-                },
-                "recording-configuration": {
-                      "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "yes-with-transcription",
-                            "yes-with-transcription-and-sentiment",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "name-first-name",
-                "name-last-name",
-                "email",
-                "user-scope"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -1425,16 +397,10 @@ export const update_user: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['name-first-name', 'name-last-name', 'login-username', 'email', 'user-scope', 'department', 'site', 'time-zone', 'voicemail-login-pin', 'privacy', 'dial-plan', 'dial-policy', 'status-message', 'user-presence-status', 'directory-name-number-dtmf-mapping', 'voicemail-user-control-enabled', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'ring-no-answer-timeout-seconds', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'directory-announce-in-dial-by-name-enabled', 'directory-override-order-duplicate-dtmf-mapping', 'voicemail-greeting-index', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'reject-anonymous-calls-enabled', 'voicemail-playback-announce-datetime-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'email-send-alert-new-voicemail-cc-list-csv', 'email-send-alert-new-voicemail-behavior', 'email-send-alert-new-voicemail-enabled', 'email-send-alert-new-missed-call-enabled', 'email-send-alert-data-storage-limit-reached-enabled', 'caller-id-number', 'caller-id-name', 'caller-id-number-emergency', 'area-code', 'directory-name-visible-in-list-enabled', 'service-code', 'voicemail-transcription-enabled', 'emergency-address-id', 'call-recordings-hide-from-others-enabled', 'music-on-hold-randomized-enabled', 'music-on-hold-comfort-message-repeat-interval-seconds', 'active-calls-total-current', 'account-status', 'created-datetime', 'last-modified-datetime', 'recording-configuration'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'PUT',
       pathTemplate: '/domains/{domain}/users/{user}',
       pathParams,
-      body,
     });
 
     return {
@@ -1449,17 +415,17 @@ export const update_user: ToolDefinition = {
 export const delete_user: ToolDefinition = {
   schema: {
     name: 'delete_user',
-    description: 'Delete User in Domain — [DELETE /domains/{domain}/users/{user}]',
+    description: 'Delete user — Deletes a user and everything that belongs to it. Requires Site Manager, Office Manager, Reseller, or Super User scope.  The delete also removes the following:  - the user\\\'s devices, answering rules, time frames, voicemail reminders, contacts, and conferences - the user\\\'s emergency addresses, call recording settings, scheduled CDR reports, and call queue email reports - the user\\\'s video host, multi-factor enrollment, avatar, and personal settings  The user\\\'s phone numbers and SMS numbers return to the domain\\\'s inventory. The delete cannot be undone.  The response is `202`: the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/users/{user}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -1467,6 +433,12 @@ export const delete_user: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -1492,16 +464,42 @@ export const delete_user: ToolDefinition = {
 export const get_my_user: ToolDefinition = {
   schema: {
     name: 'get_my_user',
-    description: 'Get My User  — [GET /domains/~/users/~]',
+    description: 'Read my user — Returns the user your access token belongs to. It is `GET /domains/{domain}/users/{user}` with `~` for both, and takes the same query parameters, such as `include-secret` and `fields`.  Any user scope can read its own user. A token that does not belong to a user, such as a platform API key, has no user to return. — [GET /domains/~/users/~]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "fields": {
+                      "type": "string",
+                      "description": "A comma-separated list of the fields to return, by their names in the response. Names the API does not know are ignored."
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns `voicemail-login-pin` in full. By default the PIN is masked: a PIN of 8 characters or fewer is all asterisks, and a longer one shows only its first 2 and last 2 characters. Any token that can read the user can ask for it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['fields', 'include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/~/users/~',
+      queryParams,
     });
 
     return {
@@ -1516,17 +514,38 @@ export const get_my_user: ToolDefinition = {
 export const list_users: ToolDefinition = {
   schema: {
     name: 'list_users',
-    description: 'List Basic Info on Users in Domain — [GET /domains/{domain}/users/list]',
+    description: 'List domain directory — Returns the domain directory: the extension, name, site, department, and dial-by-name digits of each user. Any user scope in the domain can call it, Basic User included. It is the read to use for a contact picker or a dial-by-name list.  Users are sorted by extension. Every user is returned unless you set `limit`. Filter on any field shown by the response, such as `site`, or on `user-scope` or `service-code`. Paging with `start` and ordering with `sort` are not available on this read.  By default the directory leaves out system users, such as call queues and auto attendants, the rows that represent sites and departments, and the `domain` placeholder user. `filter_users` replaces that default and also takes `noVmail`, which keeps only users with voicemail.  `fields` takes only these names: `user`, `domain`, `site`, `name-first-name`, `name-last-name`, `department`, and `directory-name-number-dtmf-mapping`. Any other name is a `400`. Without `fields`, all of them are returned. — [GET /domains/{domain}/users/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Comma delimited string of specific return fields to list."
+                      "description": "A comma-separated list of the fields to return. Takes only `user`, `domain`, `site`, `name-first-name`, `name-last-name`, `department`, and `directory-name-number-dtmf-mapping`. Defaults to all of them."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the users in this site. Exact match."
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Returns only the users with this scope. Exact match."
+                },
+                "service-code": {
+                      "type": "string",
+                      "description": "Returns only the users with this service code, such as `system-queue`. Exact match."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Replaces the default, which leaves out system users, site and department rows, and the `domain` placeholder user. Send a comma-separated list. Each item is one of the following: - `departments`, which leaves out department rows - `sites`, which leaves out site rows - `system`, which leaves out system users - `noVmail`, which keeps only users with voicemail - an extension, which leaves out that user `no` returns every row."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most users to return. Without it every user is returned. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -1534,13 +553,19 @@ export const list_users: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['fields'];
+    const queryParamNames = ['fields', 'site', 'user-scope', 'service-code', 'filter_users', 'limit'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -1548,6 +573,120 @@ export const list_users: ToolDefinition = {
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_users_userinfo: ToolDefinition = {
+  schema: {
+    name: 'list_users_userinfo',
+    description: 'List users (older path) — Returns the users in a domain. This is an older path for `GET /domains/{domain}/users`. It takes the same query parameters and returns the same response, and it accepts only `GET`. Use `GET /domains/{domain}/users` in new integrations. — [GET /domains/{domain}/userinfo]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the users in this site. Exact match."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Returns only the users in this department. Exact match on one department name."
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Returns only the users with this first name. Exact match."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Returns the users whose last name contains this text."
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Returns the users that have this email address, ignoring case. A user with several addresses matches on any of them."
+                },
+                "service-code": {
+                      "type": "string",
+                      "description": "Returns only the users with this service code, such as `system-queue`. Exact match."
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Returns only the users with this scope. Send a comma-separated list to match any of several scopes."
+                },
+                "login": {
+                      "type": "string",
+                      "description": "Returns the one user with this login name."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Chooses which rows to leave out. By default the response leaves out the rows that represent a site or a department and the domain's `domain` placeholder user, and includes system users such as call queues and auto attendants. Send a comma-separated list to replace that default. Each item is one of the following: - `departments`, which leaves out department rows - `sites`, which leaves out site rows - `system`, which leaves out every user whose service code starts with `system-` - a service code such as `system-queue`, which leaves out that code - an extension, which leaves out that user `no` returns every row."
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "A comma-separated list of the fields to return, by their names in the response. Names the API does not know are ignored."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "The sort order: `user` (extension, sorted numerically), `site`, or `group` (department), followed by a space and `asc` or `desc`. Defaults to `user asc`. Default: \"user asc\"",
+                      "default": "user asc"
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns `voicemail-login-pin` in full. By default the PIN is masked: a PIN of 8 characters or fewer is all asterisks, and a longer one shows only its first 2 and last 2 characters. Any token that can read the user can ask for it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/userinfo',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['site', 'department', 'name-first-name', 'name-last-name', 'email', 'service-code', 'user-scope', 'login', 'filter_users', 'fields', 'limit', 'start', 'sort', 'include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/userinfo',
       pathParams,
       queryParams,
     });

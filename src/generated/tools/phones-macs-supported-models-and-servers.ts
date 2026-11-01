@@ -5,16 +5,78 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_supported_models: ToolDefinition = {
   schema: {
     name: 'get_supported_models',
-    description: 'Get list of Supported/Provisionable Models — [GET /phones/models]',
+    description: 'List device models — Returns the phone and gateway models that the Endpoints server (NDP) can provision, from `device_models`, one object per model. Requires Reseller, Super User, or Super User Read Only scope.  By default the list holds only models whose `device-models-visible-in-portal` is `yes` and whose type is `Device` or `AnalogGW`. Models whose config format is `Counterpath` are always left out. Send `portal_view=any` to include hidden models, and send `device_type` as a comma-separated list to choose types.  Send both `brand` and `model`, or send `brand_model`, to get one object instead of a list. That form still applies the defaults above, and it returns `404` when nothing matches. To read any model by its key, whatever its type or visibility, use `GET /phones/models/{brand}/{model}`. Use `GET /phones/models/count` for a total with the same defaults. — [GET /phones/models]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. On its own, it filters the list. With `model`, it returns one object."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name. With `brand`, it returns one object instead of a list."
+                },
+                "brand_model": {
+                      "type": "string",
+                      "description": "Brand and model separated by one space, such as `Yealink SIP-T42G`. Returns one object instead of a list. Also accepted as `device-models-brand-and-model`."
+                },
+                "device_type": {
+                      "type": "string",
+                      "description": "Comma-separated types to include: `Device`, `AnalogGW`, `DigitalGW`. The default is `Device,AnalogGW`. Also accepted as `device-models-type`."
+                },
+                "ndp_syntax": {
+                      "type": "string",
+                      "description": "Config format to match, such as `Polycom` or `CiscoSPA`. `Counterpath` models are always excluded. Also accepted as `device-models-config-format`."
+                },
+                "portal_view": {
+                      "type": "string",
+                      "description": "`yes` (the default) returns models shown in the portal, and `no` returns hidden ones. `any` or `all` returns both. Also accepted as `device-models-visible-in-portal`. Allowed values: \"yes\", \"no\", \"any\", \"all\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "any",
+                            "all"
+                      ],
+                      "default": "yes"
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "Comma-separated v2 field names to return instead of every field."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of models to return. Omit it to get every model. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "A column name such as `brand` or `model`, optionally followed by ` DESC`. Separate several with commas. Use the column names, not the v2 field names; a v2 name is ignored."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['brand', 'model', 'brand_model', 'device_type', 'ndp_syntax', 'portal_view', 'fields', 'limit', 'start', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/phones/models',
+      queryParams,
     });
 
     return {
@@ -39,6 +101,12 @@ export const get_supported_models_by_vendor: ToolDefinition = {
                 }
           }
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const queryParamNames = ['brand'];
@@ -79,6 +147,12 @@ export const get_specific_model: ToolDefinition = {
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const queryParamNames = ['brand', 'model'];
     const queryParams: Record<string, unknown> = {};
@@ -103,16 +177,55 @@ export const get_specific_model: ToolDefinition = {
 export const get_provisionable_servers: ToolDefinition = {
   schema: {
     name: 'get_provisionable_servers',
-    description: 'Get list of Provisionable Server Profiles — [GET /phones/servers]',
+    description: 'List core servers — Returns the core servers that the Endpoints server (NDP) provisions devices against, from `servers_config`. Requires Reseller, Super User, or Super User Read Only scope.  The fields you get depend on your scope. A Reseller gets `name`, `address-location-description`, `device-provisioning-redundancy-group`, the TCP and TLS ports, `backup_ok`, the postfix and API FQDNs, and `status`, plus their aliases. Super User and Super User Read Only also get the hostname, database, TAC, OAuth, and token-expiry fields. Credentials are left out unless a Super User sends `include-secrets=yes`, and every such request is logged. Certificates are left out unless you send `include-certs=yes`.  Omit `server` to list every server. Name one server to get it and every server in the same redundancy group. Send a bracketed list such as `[east,west]` to list whole redundancy groups. Add `geo_group` to keep only servers in one redundancy group; it narrows whatever `server` selected. An unmatched filter returns `[]`. Use `GET /phones/servers/count` for a total. — [GET /phones/servers]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "server": {
+                      "type": "string",
+                      "description": "Filter. Omit it, or send `SiPbx`, `lookup`, or `*`, to list every server. A server name returns that server and every server in its redundancy group. A server with no group returns only itself. A bracketed, comma-separated list such as `[east,west]` returns every server in those redundancy groups."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` adds the credential fields in plain text. Super User only, not Super User Read Only. Every request is logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "include-certs": {
+                      "type": "string",
+                      "description": "`yes` adds the PEM fields `core-server-cert` and `core-server-ca`. Super User or Super User Read Only. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "geo_group": {
+                      "type": "string",
+                      "description": "Redundancy group to keep. Combines with `server`: a server outside this group is left out. Blank is ignored."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/servers',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['server', 'include-secrets', 'include-certs', 'geo_group'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/phones/servers',
+      queryParams,
     });
 
     return {
@@ -127,19 +240,1365 @@ export const get_provisionable_servers: ToolDefinition = {
 export const get_provisionable_server: ToolDefinition = {
   schema: {
     name: 'get_provisionable_server',
-    description: 'Read Provisionable Server Details — [GET /phones/servers/{server}]',
+    description: 'Read core server — Returns one core server from `servers_config`. Requires Reseller, Super User, or Super User Read Only scope.  The fields you get depend on your scope, exactly as on `GET /phones/servers`. Credentials need `include-secrets=yes` and Super User scope. Certificates need `include-certs=yes`. Unlike the list, this read returns only the named server, not its redundancy group.  An unknown name returns `404`. — [GET /phones/servers/{server}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "server": {
                       "type": "string",
-                      "description": "server"
+                      "description": "The core server's `name`. Letters, digits, spaces, and `* . - _ '`. `readconfig` is reserved for `GET /phones/servers/readconfig`."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` adds the credential fields in plain text. Super User only, not Super User Read Only. Every request is logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "include-certs": {
+                      "type": "string",
+                      "description": "`yes` adds the PEM fields `core-server-cert` and `core-server-ca`. Super User or Super User Read Only. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "server"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/servers/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['server'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-secrets', 'include-certs'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/servers/{server}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_device_model: ToolDefinition = {
+  schema: {
+    name: 'create_device_model',
+    description: 'Create device model — Adds a phone or gateway model to `device_models` on every Endpoints server (NDP). Requires Super User scope. The API publishes the row on the service bus (SBUS) and each NDP server applies it when the event arrives, so `202` means published, not applied.  `device-models-brand`, `device-models-model`, and `device-models-type` are required. The type is `Device`, `AnalogGW`, or `DigitalGW`. Every yes/no field takes `yes` or `no`. The 4 count fields take a whole number of 0 or more. `device-models-overrides-blob` is checked with the same NDP parser as `PUT /phones/models/{brand}/{model}/overrides/raw`. `device-models-brand-and-model` is computed, and any value you send is ignored.  A brand and model that already exist return `409`. Use `PUT /phones/models/{brand}/{model}` to change them. — [POST /phones/models]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "device-models-brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. Part of the key."
+                },
+                "device-models-model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Part of the key. Up to 127 characters."
+                },
+                "device-models-type": {
+                      "type": "string",
+                      "description": "`Device` for a phone, `AnalogGW` for an analog gateway, or `DigitalGW` for a digital gateway. The list shows `Device` and `AnalogGW` by default. Allowed values: \"Device\", \"AnalogGW\", \"DigitalGW\"",
+                      "enum": [
+                            "Device",
+                            "AnalogGW",
+                            "DigitalGW"
+                      ]
+                },
+                "device-models-config-format": {
+                      "type": "string",
+                      "description": "The NDP config builder that renders this model, such as `Polycom`, `CiscoSPA`, or `SnomM3`, or a custom template name. Models with `Counterpath` never appear in the list. Up to 128 characters."
+                },
+                "device-models-https-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Stored as `force_https`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-tftp-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Stored as `allow_tftp`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-count-buttons": {
+                      "type": "number",
+                      "description": "A whole number of 0 or more. Stored as `phone_ext`."
+                },
+                "device-models-fxs-support-enabled": {
+                      "type": "number",
+                      "description": "Number of FXS ports. A whole number of 0 or more. The value is a count, even though the name ends in `-enabled`."
+                },
+                "device-models-fxo-support-enabled": {
+                      "type": "number",
+                      "description": "Number of FXO ports. A whole number of 0 or more."
+                },
+                "device-models-trunk-support-enabled": {
+                      "type": "number",
+                      "description": "Number of trunk ports. A whole number of 0 or more."
+                },
+                "device-models-directory-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports a directory, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-presence-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports presence, otherwise `no`. Stored in the misspelled column `presense`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-shared-line-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports shared line appearances (SLA), otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-sidecar-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports an expansion module (sidecar), otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-resync-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports resync, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-encryption-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports encryption, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-firmware-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports firmware management, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-firmware-options": {
+                      "type": "string",
+                      "description": "Firmware choices for this model, as stored. Up to 255 characters."
+                },
+                "device-models-overrides-blob": {
+                      "type": "string",
+                      "description": "Model-level provisioning overrides as `key=\"value\"` pairs separated by spaces. Checked with NDP's parser on write. To edit one option at a time, use `/phones/models/{brand}/{model}/overrides`."
+                },
+                "device-models-description": {
+                      "type": "string",
+                      "description": "Free-text description. Up to 127 characters."
+                },
+                "device-models-visible-in-portal": {
+                      "type": "string",
+                      "description": "`yes` when the model is offered in the portal, otherwise `no`. The list returns only `yes` models by default. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "device-models-brand",
+                "device-models-model",
+                "device-models-type"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /phones/models',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['device-models-brand', 'device-models-model', 'device-models-type', 'device-models-config-format', 'device-models-https-enabled', 'device-models-tftp-enabled', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-fxo-support-enabled', 'device-models-trunk-support-enabled', 'device-models-directory-support-enabled', 'device-models-presence-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-models-resync-support-enabled', 'device-models-encryption-support-enabled', 'device-models-firmware-support-enabled', 'device-models-firmware-options', 'device-models-overrides-blob', 'device-models-description', 'device-models-visible-in-portal'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/phones/models',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_device_model: ToolDefinition = {
+  schema: {
+    name: 'read_device_model',
+    description: 'Read device model — Returns every field of one device model, whatever its type or portal visibility. Requires Reseller, Super User, or Super User Read Only scope.  An unknown brand and model return `404`. The brand is case-sensitive to the stored value, so `Polycom` and `polycom` are different keys. — [GET /phones/models/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/models/{brand}/{model}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_device_model: ToolDefinition = {
+  schema: {
+    name: 'update_device_model',
+    description: 'Update device model — Changes the fields you send on one device model, on every Endpoints server (NDP). Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  The brand and model come from the path and cannot be changed. The fields you send are checked as they are on create. A `device-models-overrides-blob` must pass the NDP parser. To change a single override, use `PUT /phones/models/{brand}/{model}/overrides/{option-name}`.  An unknown model returns `404`. — [PUT /phones/models/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "device-models-type": {
+                      "type": "string",
+                      "description": "`Device` for a phone, `AnalogGW` for an analog gateway, or `DigitalGW` for a digital gateway. The list shows `Device` and `AnalogGW` by default. Allowed values: \"Device\", \"AnalogGW\", \"DigitalGW\"",
+                      "enum": [
+                            "Device",
+                            "AnalogGW",
+                            "DigitalGW"
+                      ]
+                },
+                "device-models-config-format": {
+                      "type": "string",
+                      "description": "The NDP config builder that renders this model, such as `Polycom`, `CiscoSPA`, or `SnomM3`, or a custom template name. Models with `Counterpath` never appear in the list. Up to 128 characters."
+                },
+                "device-models-https-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Stored as `force_https`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-tftp-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Stored as `allow_tftp`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-count-buttons": {
+                      "type": "number",
+                      "description": "A whole number of 0 or more. Stored as `phone_ext`."
+                },
+                "device-models-fxs-support-enabled": {
+                      "type": "number",
+                      "description": "Number of FXS ports. A whole number of 0 or more. The value is a count, even though the name ends in `-enabled`."
+                },
+                "device-models-fxo-support-enabled": {
+                      "type": "number",
+                      "description": "Number of FXO ports. A whole number of 0 or more."
+                },
+                "device-models-trunk-support-enabled": {
+                      "type": "number",
+                      "description": "Number of trunk ports. A whole number of 0 or more."
+                },
+                "device-models-directory-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports a directory, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-presence-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports presence, otherwise `no`. Stored in the misspelled column `presense`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-shared-line-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports shared line appearances (SLA), otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-sidecar-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports an expansion module (sidecar), otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-resync-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports resync, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-encryption-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports encryption, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-firmware-support-enabled": {
+                      "type": "string",
+                      "description": "`yes` when the model supports firmware management, otherwise `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-models-firmware-options": {
+                      "type": "string",
+                      "description": "Firmware choices for this model, as stored. Up to 255 characters."
+                },
+                "device-models-overrides-blob": {
+                      "type": "string",
+                      "description": "Model-level provisioning overrides as `key=\"value\"` pairs separated by spaces. Checked with NDP's parser on write. To edit one option at a time, use `/phones/models/{brand}/{model}/overrides`."
+                },
+                "device-models-description": {
+                      "type": "string",
+                      "description": "Free-text description. Up to 127 characters."
+                },
+                "device-models-visible-in-portal": {
+                      "type": "string",
+                      "description": "`yes` when the model is offered in the portal, otherwise `no`. The list returns only `yes` models by default. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /phones/models/{}/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['device-models-type', 'device-models-config-format', 'device-models-https-enabled', 'device-models-tftp-enabled', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-fxo-support-enabled', 'device-models-trunk-support-enabled', 'device-models-directory-support-enabled', 'device-models-presence-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-models-resync-support-enabled', 'device-models-encryption-support-enabled', 'device-models-firmware-support-enabled', 'device-models-firmware-options', 'device-models-overrides-blob', 'device-models-description', 'device-models-visible-in-portal'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/phones/models/{brand}/{model}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_device_model: ToolDefinition = {
+  schema: {
+    name: 'delete_device_model',
+    description: 'Delete device model — Removes one device model from `device_models` on every Endpoints server (NDP). Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  An unknown model returns `404` and publishes nothing. List what exists with `GET /phones/models`. — [DELETE /phones/models/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /phones/models/{}/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/phones/models/{brand}/{model}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_device_model_overrides: ToolDefinition = {
+  schema: {
+    name: 'list_device_model_overrides',
+    description: 'List device model overrides — Returns a device model\\\'s provisioning overrides, one object per option, in stored order. Requires Reseller, Super User, or Super User Read Only scope.  Overrides use the same `key="value"` format and the same checks as domain provisioning defaults. They belong to a single model, so there is no server tier. To read one option whose name contains `/` or is literally `raw`, send `option-name`: you get a single object instead of a list, or `404` if the model does not have that option. Use `GET /phones/models/{brand}/{model}/overrides/raw` for the whole stored value.  An unknown model returns `404`. Sorting on anything but `option-name` returns `400`. — [GET /phones/models/{brand}/{model}/overrides]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "option-name": {
+                      "type": "string",
+                      "description": "Returns this one option instead of the list. Use it for a name that contains `/` or is literally `raw`."
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "`option-name`, optionally followed by ` DESC`. Any other field returns `400`. Omit it to keep stored order."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of options to return. The default is `1000`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models/{}/{}/overrides',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['option-name', 'sort', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_device_model_override: ToolDefinition = {
+  schema: {
+    name: 'create_device_model_override',
+    description: 'Create device model override — Adds one provisioning option to a device model\\\'s overrides. Requires Super User scope. The API publishes the option on the service bus (SBUS), and each Endpoints server (NDP) adds it to the end of the model\\\'s overrides when the event arrives, so `202` means published, not applied.  The option is checked with NDP\\\'s own parser first, and a name or value that NDP would drop returns `400` with the reason. A value cannot contain `"`.  An option that already exists returns `409`. Send `overwrite=yes` to replace it, or use `PUT /phones/models/{brand}/{model}/overrides/{option-name}`. A model that already has 2,000 options returns `400`. An unknown model returns `404`. — [POST /phones/models/{brand}/{model}/overrides]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "overwrite": {
+                      "type": "string",
+                      "description": "`yes` replaces an existing option instead of returning `409`. You can also send it in the body. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "option-name": {
+                      "type": "string",
+                      "description": "The option name. Letters, digits, and `_ * ; : - ( ) [ ] . / |`. Cannot contain the texts `SPACE`, `EQUALQUOTE`, or `EQUALINVALUE`."
+                },
+                "option-value": {
+                      "type": "string",
+                      "description": "The option value. May contain spaces and `=`. Cannot contain `\"` or the texts `SPACE`, `EQUALQUOTE`, or `EQUALINVALUE`. An empty value is stored as `<null>`."
+                }
+          },
+          "required": [
+                "brand",
+                "model",
+                "option-name",
+                "option-value"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /phones/models/{}/{}/overrides',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['overwrite'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const bodyParamNames = ['option-name', 'option-value'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides',
+      pathParams,
+      queryParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_device_model_override: ToolDefinition = {
+  schema: {
+    name: 'read_device_model_override',
+    description: 'Read device model override — Returns one provisioning option from a device model\\\'s overrides. Requires Reseller, Super User, or Super User Read Only scope.  An unknown model, or an option the model does not have, returns `404`. — [GET /phones/models/{brand}/{model}/overrides/{option-name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "option-name": {
+                      "type": "string",
+                      "description": "The option name, such as `dialplan.digitmap`. The path accepts letters, digits, and `_ * ; : - ( ) [ ] . |`. For a name that contains `/` or is literally `raw`, use the `/overrides` collection with `option-name` in the query or body."
+                }
+          },
+          "required": [
+                "brand",
+                "model",
+                "option-name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models/{}/{}/overrides/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model', 'option-name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/{option-name}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_device_model_override: ToolDefinition = {
+  schema: {
+    name: 'update_device_model_override',
+    description: 'Update device model override — Changes the value of one provisioning option on a device model. The option keeps its position. Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  The value is checked as it is on create. An unknown model, or an option the model does not have, returns `404`. Use `POST /phones/models/{brand}/{model}/overrides` to add a new option. For a name the path cannot carry, send `PUT /phones/models/{brand}/{model}/overrides` with `option-name` in the body. — [PUT /phones/models/{brand}/{model}/overrides/{option-name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "option-name": {
+                      "type": "string",
+                      "description": "The option name, such as `dialplan.digitmap`. The path accepts letters, digits, and `_ * ; : - ( ) [ ] . |`. For a name that contains `/` or is literally `raw`, use the `/overrides` collection with `option-name` in the query or body."
+                },
+                "option-value": {
+                      "type": "string",
+                      "description": "The option value. May contain spaces and `=`. Cannot contain `\"` or the texts `SPACE`, `EQUALQUOTE`, or `EQUALINVALUE`. An empty value is stored as `<null>`."
+                }
+          },
+          "required": [
+                "brand",
+                "model",
+                "option-name",
+                "option-value"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /phones/models/{}/{}/overrides/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model', 'option-name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['option-value'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/{option-name}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_device_model_override: ToolDefinition = {
+  schema: {
+    name: 'delete_device_model_override',
+    description: 'Delete device model override — Removes one provisioning option from a device model. Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  Removing the last option leaves the model with no overrides, and the model itself stays. An unknown model, or an option the model does not have, returns `404`. — [DELETE /phones/models/{brand}/{model}/overrides/{option-name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "option-name": {
+                      "type": "string",
+                      "description": "The option name, such as `dialplan.digitmap`. The path accepts letters, digits, and `_ * ; : - ( ) [ ] . |`. For a name that contains `/` or is literally `raw`, use the `/overrides` collection with `option-name` in the query or body."
+                }
+          },
+          "required": [
+                "brand",
+                "model",
+                "option-name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /phones/models/{}/{}/overrides/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model', 'option-name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/{option-name}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_device_model_overrides_raw: ToolDefinition = {
+  schema: {
+    name: 'read_device_model_overrides_raw',
+    description: 'Read raw device model overrides — Returns all of a device model\\\'s overrides as one stored value, for export or inspection. Requires Reseller, Super User, or Super User Read Only scope.  `option-count` is the number of options NDP\\\'s parser reads from that value. Text the parser would drop appears only here, not in `GET /phones/models/{brand}/{model}/overrides`.  An unknown model returns `404`. — [GET /phones/models/{brand}/{model}/overrides/raw]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/models/{}/{}/overrides/raw',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/raw',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const replace_device_model_overrides_raw: ToolDefinition = {
+  schema: {
+    name: 'replace_device_model_overrides_raw',
+    description: 'Replace raw device model overrides — Replaces all of a device model\\\'s overrides with one value. Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  The value must pass NDP\\\'s parser cleanly: every fragment the parser would drop is listed in the `400`, and the value can hold at most 2,000 options. An empty value clears the overrides.  An unknown model returns `404`. — [PUT /phones/models/{brand}/{model}/overrides/raw]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                },
+                "device-models-overrides-blob": {
+                      "type": "string",
+                      "description": "Every override as `key=\"value\"` pairs separated by spaces. At most 2,000 options. Send an empty string to clear every override."
+                }
+          },
+          "required": [
+                "brand",
+                "model",
+                "device-models-overrides-blob"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /phones/models/{}/{}/overrides/raw',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['device-models-overrides-blob'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/raw',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_device_model_overrides_raw: ToolDefinition = {
+  schema: {
+    name: 'delete_device_model_overrides_raw',
+    description: 'Delete raw device model overrides — Removes every override from a device model. The model itself stays. Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  An unknown model returns `404`. To remove one option, use `DELETE /phones/models/{brand}/{model}/overrides/{option-name}`. — [DELETE /phones/models/{brand}/{model}/overrides/raw]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Vendor-cased brand, such as `Polycom`. This is not the lowercase slug that `/brand-defaults` uses. Letters, digits, `-`, and `_`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Model name, such as `VVX 400`. Letters, digits, spaces, `-`, and `_`. A model name with any other character is reachable only with `GET /phones/models?brand_model=`."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /phones/models/{}/{}/overrides/raw',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/phones/models/{brand}/{model}/overrides/raw',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_ndp_server: ToolDefinition = {
+  schema: {
+    name: 'create_ndp_server',
+    description: 'Create core server — Adds a core server to `servers_config` on every Endpoints server (NDP). Requires Super User scope. The API publishes the row on the service bus (SBUS) and each NDP server applies it when the event arrives, so `202` means published, not applied.  `name` and `core-server-hostname` are required. A non-blank `core-server-api-key` switches the server to API-key mode: it blanks `core-server-client-id`, `core-server-client-secret`, `core-server-oauth-username`, and `core-server-oauth-password`, and sets `status` to `APIkey enabled`. Otherwise `status` is written by NDP, and any value you send is ignored.  A `name` that already exists returns `409`. Use `PUT /phones/servers/{server}` to change it. — [POST /phones/servers]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "name": {
+                      "type": "string",
+                      "description": "Server name and primary key. Up to 127 characters. Devices and provisioning defaults refer to a server by this name."
+                },
+                "core-server-hostname": {
+                      "type": "string",
+                      "description": "SIP proxy FQDN handed to devices. Required on create. Super User and Super User Read Only only on read."
+                },
+                "core-server-db-hostname": {
+                      "type": "string",
+                      "description": "Host of this server's SiPbx database. Super User and Super User Read Only only on read."
+                },
+                "core-server-port": {
+                      "type": "string",
+                      "description": "SIP port, as a string. Super User and Super User Read Only only on read."
+                },
+                "device-provisioning-core-server-tcp-port": {
+                      "type": "string",
+                      "description": "SIP TCP port, as a string."
+                },
+                "device-provisioning-core-server-tls-port": {
+                      "type": "string",
+                      "description": "SIP TLS port, as a string."
+                },
+                "core-server-sipbx-db": {
+                      "type": "string",
+                      "description": "Name of this server's SiPbx database. Super User and Super User Read Only only on read."
+                },
+                "core-server-user": {
+                      "type": "string",
+                      "description": "SiPbx database user. Super User and Super User Read Only only on read."
+                },
+                "core-server-tac-url": {
+                      "type": "string",
+                      "description": "TAC endpoint URL. Super User and Super User Read Only only on read."
+                },
+                "core-server-tac-username": {
+                      "type": "string",
+                      "description": "TAC endpoint user name. Super User and Super User Read Only only on read."
+                },
+                "core-server-active": {
+                      "type": "string",
+                      "description": "Not used. Present in the table, read by nothing."
+                },
+                "device-provisioning-redundancy-group": {
+                      "type": "string",
+                      "description": "Failover group (`geo_group`). Servers sharing a group are failover peers."
+                },
+                "backup_ok": {
+                      "type": "string",
+                      "description": "May this server be chosen as a failover target. NDP treats NULL as `yes`. This raw column name is the one to send on a write. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "core-server-lat": {
+                      "type": "string",
+                      "description": "Latitude, a decimal with 4 places, as a string."
+                },
+                "core-server-lon": {
+                      "type": "string",
+                      "description": "Longitude, a decimal with 4 places, as a string."
+                },
+                "address-location-description": {
+                      "type": "string",
+                      "description": "Free-text location (`location`). This spelling is the one to send on a write."
+                },
+                "device-provisioning-core-server-postfix-fqdn": {
+                      "type": "string",
+                      "description": "DNS suffix appended when building the device registrar (`postfix`)."
+                },
+                "device-provisioning-core-server-api-fqdn": {
+                      "type": "string",
+                      "description": "NsApi FQDN NDP calls for subscriber/device data (`ns_api_hostname`)."
+                },
+                "core-server-client-id": {
+                      "type": "string",
+                      "description": "OAuth client ID NDP uses. Defaults to `ndp`. Blanked when an API key is set. Super User and Super User Read Only only on read."
+                },
+                "core-server-oauth-username": {
+                      "type": "string",
+                      "description": "OAuth user NDP logs in as. Blanked when an API key is set. Super User and Super User Read Only only on read."
+                },
+                "core-server-access-expires-datetime": {
+                      "type": "string",
+                      "description": "When NDP's OAuth access token expires. Written by NDP. Super User and Super User Read Only only on read."
+                },
+                "core-server-refresh-expires-datetime": {
+                      "type": "string",
+                      "description": "When NDP's OAuth refresh token expires. Written by NDP. Super User and Super User Read Only only on read."
+                },
+                "core-server-pass": {
+                      "type": "string",
+                      "description": "SiPbx database password. Secret: returned only with `include-secrets=yes` and Super User scope. Send an empty string on update to leave it unchanged."
+                },
+                "core-server-tac-password": {
+                      "type": "string",
+                      "description": "TAC endpoint password. Secret: returned only with `include-secrets=yes` and Super User scope. Send an empty string on update to leave it unchanged."
+                },
+                "core-server-client-secret": {
+                      "type": "string",
+                      "description": "OAuth client secret. Secret: returned only with `include-secrets=yes` and Super User scope. Blanked when an API key is set."
+                },
+                "core-server-oauth-password": {
+                      "type": "string",
+                      "description": "OAuth password. Secret: returned only with `include-secrets=yes` and Super User scope. Blanked when an API key is set."
+                },
+                "core-server-access-token": {
+                      "type": "string",
+                      "description": "OAuth access token, written by NDP. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-refresh-token": {
+                      "type": "string",
+                      "description": "OAuth refresh token, written by NDP. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-api-key": {
+                      "type": "string",
+                      "description": "API key NDP uses instead of OAuth. When it is not blank, the 4 OAuth fields are blanked and `status` becomes `APIkey enabled`. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-cert": {
+                      "type": "string",
+                      "description": "PEM certificate. Returned only with `include-certs=yes` and a Super User or Super User Read Only scope."
+                },
+                "core-server-ca": {
+                      "type": "string",
+                      "description": "PEM CA certificate. Returned only with `include-certs=yes` and a Super User or Super User Read Only scope."
+                }
+          },
+          "required": [
+                "name",
+                "core-server-hostname"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /phones/servers',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['name', 'core-server-hostname', 'core-server-db-hostname', 'core-server-port', 'device-provisioning-core-server-tcp-port', 'device-provisioning-core-server-tls-port', 'core-server-sipbx-db', 'core-server-user', 'core-server-tac-url', 'core-server-tac-username', 'core-server-active', 'device-provisioning-redundancy-group', 'backup_ok', 'core-server-lat', 'core-server-lon', 'address-location-description', 'device-provisioning-core-server-postfix-fqdn', 'device-provisioning-core-server-api-fqdn', 'core-server-client-id', 'core-server-oauth-username', 'core-server-access-expires-datetime', 'core-server-refresh-expires-datetime', 'core-server-pass', 'core-server-tac-password', 'core-server-client-secret', 'core-server-oauth-password', 'core-server-access-token', 'core-server-refresh-token', 'core-server-api-key', 'core-server-cert', 'core-server-ca'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/phones/servers',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_ndp_server: ToolDefinition = {
+  schema: {
+    name: 'update_ndp_server',
+    description: 'Update core server — Changes the fields you send on one core server, on every Endpoints server (NDP). Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  The path names the server, so you cannot rename it, and a `name` in the body is ignored. Send a credential as an empty string to leave it unchanged. That way you can send back a row you read without its credentials. A non-blank `core-server-api-key` blanks the 4 OAuth fields and sets `status` to `APIkey enabled`. Otherwise `status` is ignored.  Sending back a masked value such as `ab****yz` returns `400`. An unknown server returns `404`. — [PUT /phones/servers/{server}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "server": {
+                      "type": "string",
+                      "description": "The core server's `name`. Letters, digits, spaces, and `* . - _ '`. `readconfig` is reserved for `GET /phones/servers/readconfig`."
+                },
+                "core-server-hostname": {
+                      "type": "string",
+                      "description": "SIP proxy FQDN handed to devices. Required on create. Super User and Super User Read Only only on read."
+                },
+                "core-server-db-hostname": {
+                      "type": "string",
+                      "description": "Host of this server's SiPbx database. Super User and Super User Read Only only on read."
+                },
+                "core-server-port": {
+                      "type": "string",
+                      "description": "SIP port, as a string. Super User and Super User Read Only only on read."
+                },
+                "device-provisioning-core-server-tcp-port": {
+                      "type": "string",
+                      "description": "SIP TCP port, as a string."
+                },
+                "device-provisioning-core-server-tls-port": {
+                      "type": "string",
+                      "description": "SIP TLS port, as a string."
+                },
+                "core-server-sipbx-db": {
+                      "type": "string",
+                      "description": "Name of this server's SiPbx database. Super User and Super User Read Only only on read."
+                },
+                "core-server-user": {
+                      "type": "string",
+                      "description": "SiPbx database user. Super User and Super User Read Only only on read."
+                },
+                "core-server-tac-url": {
+                      "type": "string",
+                      "description": "TAC endpoint URL. Super User and Super User Read Only only on read."
+                },
+                "core-server-tac-username": {
+                      "type": "string",
+                      "description": "TAC endpoint user name. Super User and Super User Read Only only on read."
+                },
+                "core-server-active": {
+                      "type": "string",
+                      "description": "Not used. Present in the table, read by nothing."
+                },
+                "device-provisioning-redundancy-group": {
+                      "type": "string",
+                      "description": "Failover group (`geo_group`). Servers sharing a group are failover peers."
+                },
+                "backup_ok": {
+                      "type": "string",
+                      "description": "May this server be chosen as a failover target. NDP treats NULL as `yes`. This raw column name is the one to send on a write. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "core-server-lat": {
+                      "type": "string",
+                      "description": "Latitude, a decimal with 4 places, as a string."
+                },
+                "core-server-lon": {
+                      "type": "string",
+                      "description": "Longitude, a decimal with 4 places, as a string."
+                },
+                "address-location-description": {
+                      "type": "string",
+                      "description": "Free-text location (`location`). This spelling is the one to send on a write."
+                },
+                "device-provisioning-core-server-postfix-fqdn": {
+                      "type": "string",
+                      "description": "DNS suffix appended when building the device registrar (`postfix`)."
+                },
+                "device-provisioning-core-server-api-fqdn": {
+                      "type": "string",
+                      "description": "NsApi FQDN NDP calls for subscriber/device data (`ns_api_hostname`)."
+                },
+                "core-server-client-id": {
+                      "type": "string",
+                      "description": "OAuth client ID NDP uses. Defaults to `ndp`. Blanked when an API key is set. Super User and Super User Read Only only on read."
+                },
+                "core-server-oauth-username": {
+                      "type": "string",
+                      "description": "OAuth user NDP logs in as. Blanked when an API key is set. Super User and Super User Read Only only on read."
+                },
+                "core-server-access-expires-datetime": {
+                      "type": "string",
+                      "description": "When NDP's OAuth access token expires. Written by NDP. Super User and Super User Read Only only on read."
+                },
+                "core-server-refresh-expires-datetime": {
+                      "type": "string",
+                      "description": "When NDP's OAuth refresh token expires. Written by NDP. Super User and Super User Read Only only on read."
+                },
+                "core-server-pass": {
+                      "type": "string",
+                      "description": "SiPbx database password. Secret: returned only with `include-secrets=yes` and Super User scope. Send an empty string on update to leave it unchanged."
+                },
+                "core-server-tac-password": {
+                      "type": "string",
+                      "description": "TAC endpoint password. Secret: returned only with `include-secrets=yes` and Super User scope. Send an empty string on update to leave it unchanged."
+                },
+                "core-server-client-secret": {
+                      "type": "string",
+                      "description": "OAuth client secret. Secret: returned only with `include-secrets=yes` and Super User scope. Blanked when an API key is set."
+                },
+                "core-server-oauth-password": {
+                      "type": "string",
+                      "description": "OAuth password. Secret: returned only with `include-secrets=yes` and Super User scope. Blanked when an API key is set."
+                },
+                "core-server-access-token": {
+                      "type": "string",
+                      "description": "OAuth access token, written by NDP. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-refresh-token": {
+                      "type": "string",
+                      "description": "OAuth refresh token, written by NDP. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-api-key": {
+                      "type": "string",
+                      "description": "API key NDP uses instead of OAuth. When it is not blank, the 4 OAuth fields are blanked and `status` becomes `APIkey enabled`. Secret: returned only with `include-secrets=yes` and Super User scope."
+                },
+                "core-server-cert": {
+                      "type": "string",
+                      "description": "PEM certificate. Returned only with `include-certs=yes` and a Super User or Super User Read Only scope."
+                },
+                "core-server-ca": {
+                      "type": "string",
+                      "description": "PEM CA certificate. Returned only with `include-certs=yes` and a Super User or Super User Read Only scope."
+                }
+          },
+          "required": [
+                "server"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /phones/servers/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['server'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['core-server-hostname', 'core-server-db-hostname', 'core-server-port', 'device-provisioning-core-server-tcp-port', 'device-provisioning-core-server-tls-port', 'core-server-sipbx-db', 'core-server-user', 'core-server-tac-url', 'core-server-tac-username', 'core-server-active', 'device-provisioning-redundancy-group', 'backup_ok', 'core-server-lat', 'core-server-lon', 'address-location-description', 'device-provisioning-core-server-postfix-fqdn', 'device-provisioning-core-server-api-fqdn', 'core-server-client-id', 'core-server-oauth-username', 'core-server-access-expires-datetime', 'core-server-refresh-expires-datetime', 'core-server-pass', 'core-server-tac-password', 'core-server-client-secret', 'core-server-oauth-password', 'core-server-access-token', 'core-server-refresh-token', 'core-server-api-key', 'core-server-cert', 'core-server-ca'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/phones/servers/{server}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_ndp_server: ToolDefinition = {
+  schema: {
+    name: 'delete_ndp_server',
+    description: 'Delete core server — Removes one core server from `servers_config` on every Endpoints server (NDP). Requires Super User scope. `202` means the change was published on the service bus (SBUS), not that every Endpoints server (NDP) has applied it yet.  An unknown server returns `404` and publishes nothing. List what exists with `GET /phones/servers`. — [DELETE /phones/servers/{server}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "server": {
+                      "type": "string",
+                      "description": "The core server's `name`. Letters, digits, spaces, and `* . - _ '`. `readconfig` is reserved for `GET /phones/servers/readconfig`."
+                }
+          },
+          "required": [
+                "server"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /phones/servers/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['server'];
@@ -148,9 +1607,39 @@ export const get_provisionable_server: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
-      method: 'GET',
+      method: 'DELETE',
       pathTemplate: '/phones/servers/{server}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_ndp_server_config: ToolDefinition = {
+  schema: {
+    name: 'read_ndp_server_config',
+    description: 'Read NDP connection config — Returns the Endpoints server (NDP) connection that this API instance is configured with. This is not a `servers_config` row. Requires Reseller, Super User, or Super User Read Only scope.  `hostname` is the host of this API\\\'s NDP database connection, or this server\\\'s own name when that connection is local. `name` is always `ndpConfig`, and `port` is always `5060`. Any method other than `GET` returns `405`. — [GET /phones/servers/readconfig]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/servers/readconfig',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/servers/readconfig',
     });
 
     return {

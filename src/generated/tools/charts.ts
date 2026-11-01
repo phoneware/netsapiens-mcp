@@ -5,21 +5,21 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_charts_by_dashboard_id_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_charts_by_dashboard_id_count',
-    description: 'Count Charts — [GET /domains/{domain}/charts/{dashboard_id}/count]',
+    description: 'Count charts — Counts the charts on a dashboard. It takes the same `type` filter as `GET /domains/{domain}/charts/{dashboard_id}/list`.  Requires a token that can read charts in the domain in the path. The dashboard must be one you can see: one you own, one shared with the domain or with you, or a stock dashboard offered to your scope. Office Manager, Site Manager, Call Center Supervisor, and Reseller can also see dashboards owned by users with a lower scope in their own domain or territory, and Super User can see every dashboard. A dashboard you cannot see returns `403`. A dashboard that is not in this domain, and is not a stock dashboard, returns `404`.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/charts/{dashboard_id}/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dashboard_id": {
                       "type": "number",
-                      "description": "dashboard_id"
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
                 },
                 "type": {
                       "type": "string",
-                      "description": "type"
+                      "description": "Counts only charts of this type, such as `ResponsiveLine`. Exact match."
                 }
           },
           "required": [
@@ -27,6 +27,12 @@ export const get_domains_by_domain_charts_by_dashboard_id_count: ToolDefinition 
                 "dashboard_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/charts/{}/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dashboard_id'];
@@ -58,17 +64,21 @@ export const get_domains_by_domain_charts_by_dashboard_id_count: ToolDefinition 
 export const get_domains_by_domain_charts_by_dashboard_id_list: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_charts_by_dashboard_id_list',
-    description: 'Get Chart List — [GET /domains/{domain}/charts/{dashboard_id}/list]',
+    description: 'List charts — Lists the charts on a dashboard by ID, name, and type, each with a data token for loading its data. Use `GET /domains/{domain}/charts/{dashboard_id}` for each chart\\\'s properties and data sources.  Requires a token that can read charts in the domain in the path. The dashboard must be one you can see: one you own, one shared with the domain or with you, or a stock dashboard offered to your scope. Office Manager, Site Manager, Call Center Supervisor, and Reseller can also see dashboards owned by users with a lower scope in their own domain or territory, and Super User can see every dashboard. A dashboard you cannot see returns `403`. A dashboard that is not in this domain, and is not a stock dashboard, returns `404`.  Each chart carries a `data_token`: an access token issued to you, in the dashboard\\\'s domain (your own domain for a stock dashboard), with `Call Center Data` scope. Use it to read the call center data the charts show. Every chart in one response carries the same token. It lasts `expires_in` seconds, a day by default, and cannot be refreshed: read the charts again for a new one.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/charts/{dashboard_id}/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dashboard_id": {
                       "type": "number",
-                      "description": "dashboard_id"
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Lists only charts of this type, such as `ResponsiveLine`. Exact match."
                 }
           },
           "required": [
@@ -77,16 +87,331 @@ export const get_domains_by_domain_charts_by_dashboard_id_list: ToolDefinition =
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/charts/{}/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dashboard_id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['type'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/charts/{dashboard_id}/list',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_charts: ToolDefinition = {
+  schema: {
+    name: 'read_charts',
+    description: 'Read charts — Returns the charts on a dashboard with their properties and data sources, each with a data token for loading its data.  Requires a token that can read charts in the domain in the path. The dashboard must be one you can see: one you own, one shared with the domain or with you, or a stock dashboard offered to your scope. Office Manager, Site Manager, Call Center Supervisor, and Reseller can also see dashboards owned by users with a lower scope in their own domain or territory, and Super User can see every dashboard. A dashboard you cannot see returns `403`. A dashboard that is not in this domain, and is not a stock dashboard, returns `404`.  Each chart carries a `data_token`: an access token issued to you, in the dashboard\\\'s domain (your own domain for a stock dashboard), with `Call Center Data` scope. Use it to read the call center data the charts show. Every chart in one response carries the same token. It lasts `expires_in` seconds, a day by default, and cannot be refreshed: read the charts again for a new one.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/charts/{dashboard_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dashboard_id": {
+                      "type": "number",
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "Returns only this chart."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Only charts of this type, such as `ResponsiveLine`. Exact match."
+                },
+                "placeholder_id": {
+                      "type": "string",
+                      "description": "Only charts whose `properties` contain this value as a quoted string."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain",
+                "dashboard_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/charts/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dashboard_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['id', 'type', 'placeholder_id', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/charts/{dashboard_id}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_chart: ToolDefinition = {
+  schema: {
+    name: 'create_chart',
+    description: 'Create chart — Adds a chart to the dashboard in the path.  You need the right to change the dashboard: you own it, or you are an Office Manager in its domain, a Reseller whose territory holds the domain, or a Super User, over an owner with a lower scope than yours. A stock dashboard can be changed only by a Super User. A dashboard that is not in this domain returns `404`; one you may not change returns `403`.  Leave out `id` to have one assigned. The response does not return it, so send your own `id` when you need to know it; an ID already in use returns `409`. Find the chart with `GET /domains/{domain}/charts/{dashboard_id}/list`. — [POST /domains/{domain}/charts/{dashboard_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dashboard_id": {
+                      "type": "number",
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the chart. On create, leave it out to have one assigned; an ID already in use returns `409`. On update, the chart to change, which must be on the dashboard in the path."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Name of the chart."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "How the chart is drawn, such as `ResponsiveLine`, `ResponsiveStat`, or `ResponsiveTable`."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Description of the chart."
+                },
+                "properties": {
+                      "type": "string",
+                      "description": "Display settings, as a JSON string the app defines. No practical length limit."
+                },
+                "data_sources": {
+                      "type": "string",
+                      "description": "What data the chart shows, as a JSON string the app defines. No practical length limit."
+                },
+                "status": {
+                      "type": "number",
+                      "description": "Status value the app defines."
+                }
+          },
+          "required": [
+                "domain",
+                "dashboard_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/charts/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dashboard_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['id', 'name', 'type', 'description', 'properties', 'data_sources', 'status'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/charts/{dashboard_id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_chart: ToolDefinition = {
+  schema: {
+    name: 'update_chart',
+    description: 'Update chart — Changes a chart, named by `id` in the body, on the dashboard in the path. Only the fields you send change. A chart cannot be moved to another dashboard.  You need the right to change the dashboard: you own it, or you are an Office Manager in its domain, a Reseller whose territory holds the domain, or a Super User, over an owner with a lower scope than yours. A stock dashboard can be changed only by a Super User. A dashboard that is not in this domain, or a chart that is not on it, returns `404`; a dashboard you may not change returns `403`. — [PUT /domains/{domain}/charts/{dashboard_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dashboard_id": {
+                      "type": "number",
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the chart. On create, leave it out to have one assigned; an ID already in use returns `409`. On update, the chart to change, which must be on the dashboard in the path."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Name of the chart."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "How the chart is drawn, such as `ResponsiveLine`, `ResponsiveStat`, or `ResponsiveTable`."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Description of the chart."
+                },
+                "properties": {
+                      "type": "string",
+                      "description": "Display settings, as a JSON string the app defines. No practical length limit."
+                },
+                "data_sources": {
+                      "type": "string",
+                      "description": "What data the chart shows, as a JSON string the app defines. No practical length limit."
+                },
+                "status": {
+                      "type": "number",
+                      "description": "Status value the app defines."
+                }
+          },
+          "required": [
+                "domain",
+                "dashboard_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/charts/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dashboard_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['id', 'name', 'type', 'description', 'properties', 'data_sources', 'status'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/charts/{dashboard_id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_chart: ToolDefinition = {
+  schema: {
+    name: 'delete_chart',
+    description: 'Delete chart — Deletes a chart, named by `id`, from the dashboard in the path.  You need the right to change the dashboard: you own it, or you are an Office Manager in its domain, a Reseller whose territory holds the domain, or a Super User, over an owner with a lower scope than yours. A stock dashboard can be changed only by a Super User. A dashboard that is not in this domain, or a chart that is not on it, returns `404`; a dashboard you may not change returns `403`. — [DELETE /domains/{domain}/charts/{dashboard_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dashboard_id": {
+                      "type": "number",
+                      "description": "ID of the dashboard, as returned by `GET /domains/{domain}/users/{user}/dashboards/list`."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the chart to delete."
+                }
+          },
+          "required": [
+                "domain",
+                "dashboard_id",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/charts/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dashboard_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['id'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/charts/{dashboard_id}',
+      pathParams,
+      queryParams,
     });
 
     return {

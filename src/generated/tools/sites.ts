@@ -2,22 +2,62 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-export const get_domains_by_domain_sites_list: ToolDefinition = {
+export const get_domains_by_domain_sites: ToolDefinition = {
   schema: {
-    name: 'get_domains_by_domain_sites_list',
-    description: 'List Sites in Domain — [GET /domains/{domain}/sites/list]',
+    name: 'get_domains_by_domain_sites',
+    description: 'List sites — Returns the domain\\\'s sites, 100 by default, sorted by name. A site is a system extension that holds settings for the users and call queues filed under it, such as dial plan, caller ID, time zone, and emergency address. The site\\\'s name is in `site`, and also in `user` for older clients.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. A Site Manager and a Basic User see every site in the domain, not only their own. Other scopes, and a Reseller outside its territory, get `403`.  Page with `start` and `limit`. Use `fields` to return only the fields you name. The site name is always included. `sort` defaults to `user asc`. `site` returns only that site, with the shorter field set and live counts that `GET /domains/{domain}/sites/{site}` returns. `billing=yes` adds those counts to every site, at the cost of several queries per site.  When a site has no emergency address of its own, `emergency-address-id` is the domain\\\'s and `emergency-address-source` is `domain_level`. Credentials and identity fields of the site\\\'s extension, such as its voicemail PIN, are never returned.  Use `GET /domains/{domain}/sites/count` for a total, and `GET /domains/{domain}/sites/list` for a short form of every site. `PUT` and `DELETE` on this collection path return `405`: address one site by name. — [GET /domains/{domain}/sites]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order by site name. Defaults to `user asc`. Allowed values: \"user asc\", \"user desc\". Default: \"user asc\"",
+                      "enum": [
+                            "user asc",
+                            "user desc"
+                      ],
+                      "default": "user asc"
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "Comma-separated field names to return, such as `site,dial-plan,time-zone`. The site name is always included. Names that are not site fields, and fields a site never returns, are ignored; if none is left, every field is returned."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only the site with this name. The row comes back in the shorter form of a single read, with member, device, and call counts."
+                },
+                "billing": {
+                      "type": "string",
+                      "description": "Add member, device, and call counts to every site, in the shorter form of a single read. Any value turns it on. Costs several queries per site, so page small. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sites',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -25,48 +65,16 @@ export const get_domains_by_domain_sites_list: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/sites/list',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_sites: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_sites',
-    description: 'Read Sites in Domain — [GET /domains/{domain}/sites]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    const queryParamNames = ['limit', 'start', 'sort', 'fields', 'site', 'billing'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
     }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/sites',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -81,34 +89,38 @@ export const get_domains_by_domain_sites: ToolDefinition = {
 export const post_domains_by_domain_sites: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_sites',
-    description: 'Create Site in Domain — [POST /domains/{domain}/sites]',
+    description: 'Create site — Creates a site. Send its name in `site`, and any settings the site\\\'s users should share, such as `dial-plan`, `caller-id-number`, `time-zone`, or `emergency-address-id`.  Requires Office Manager in the domain, Reseller for a domain in your territory, or Super User. Site Manager, Basic User, Super User Read Only, and every other scope get `403`.  The name is the site\\\'s key and cannot be changed later. Use letters, digits, spaces, and `.`, `-`, `_`, `\\\'` only. The create accepts other characters, but a site named with them cannot be read, updated, or deleted by its path. Avoid `*`, which scope checks read as a wildcard. The name shares the domain\\\'s extension namespace:  - a name another site uses returns `409` `Site already exists` - a name a user or other extension uses returns `409` `Extension already exists` - a login already in use returns `409` `Login already exists`, naming the extension that holds it  The login defaults to `<site>@<domain>`. Set `login-username` to choose another. Check a name first with `GET /domains/{domain}/sites/count?site=<name>`.  Settings you leave out are copied from the domain\\\'s defaults. A user created later with `site` set copies the site\\\'s dial plan, dial policy, caller ID, time zone, area code, limits, language, and emergency address, unless the request sets them. Creating a user with a `site` that does not exist also creates that site.  A `202` means the site was published over the service bus (SBUS), not yet created, so a read straight after it can still return `404`. With `synchronous=yes`, the call waits up to 2 seconds. It returns `200` with the site once the site appears, or `202` if it has not appeared yet. — [POST /domains/{domain}/sites]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Site name, and the site's key. Letters, digits, spaces, and `.`, `-`, `_`, `'`. It cannot be changed after create. Pick a name no extension in the domain already has."
                 },
                 "synchronous": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
                 },
-                "site": {
+                "name-first-name": {
                       "type": "string",
-                      "description": "site"
+                      "description": "First name of the site's extension. Defaults to the site name."
                 },
-                "login-username": {
+                "name-last-name": {
                       "type": "string",
-                      "description": "This is the login for the user used to access the portals and other applications. The default will be [user]@[domain] if not set otherwise.  This value is required to be unique across the entire system so 409 will be returned if not unique."
+                      "description": "Last name of the site's extension. Defaults to `Site`."
                 },
                 "email": {
                       "type": "string",
-                      "description": "This is the email adresses or list of email addresses sepertaed with a semi-colon."
+                      "description": "Email address or addresses for the site, separated by semicolons"
                 },
                 "time-zone": {
                       "type": "string",
@@ -339,64 +351,47 @@ export const post_domains_by_domain_sites: ToolDefinition = {
                 },
                 "dial-plan": {
                       "type": "string",
-                      "description": "This is the dial plan set for the user. Dial plans are used to control action and forward options that will be used when dialing out from the user."
+                      "description": "Dial plan users filed under the site copy when they are created"
                 },
                 "dial-policy": {
                       "type": "string",
-                      "description": "This value is the dial policy/permission for this user whch will control the destinations this user can dial. Generally dial policys are preconfigured at system level and selected at user level."
+                      "description": "Dial policy users filed under the site copy when they are created"
                 },
-                "voicemail-user-control-enabled": {
+                "caller-id-name": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Caller ID name users filed under the site copy when they are created"
                 },
-                "phone-numbers-to-allow-enabled": {
+                "caller-id-number": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Caller ID number users filed under the site copy when they are created"
                 },
-                "phone-numbers-to-reject-enabled": {
+                "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Emergency caller ID number users filed under the site copy when they are created"
                 },
-                "call-screening-enabled": {
+                "area-code": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Area code users filed under the site copy when they are created. It completes 7-digit dialing."
                 },
                 "language-token": {
                       "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
+                      "description": "Language code users filed under the site copy when they are created"
                 },
                 "limits-max-data-storage-kilobytes": {
                       "type": "number",
-                      "description": "This is the maximum value in kilobytes that is allowed to be stored in the user's voicemail, audio greetings and fax storage."
+                      "description": "Storage limit in kilobytes users filed under the site copy when they are created"
                 },
                 "limits-max-active-calls-total": {
                       "type": "number",
-                      "description": "This is the maximum number of active calls allowed for the user."
+                      "description": "Active-call limit users filed under the site copy when they are created"
                 },
-                "directory-announce-in-dial-by-name-enabled": {
+                "emergency-address-id": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "Emergency address for the site. It must be an address ID that exists for the domain."
+                },
+                "voicemail-user-control-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -405,7 +400,7 @@ export const post_domains_by_domain_sites: ToolDefinition = {
                 },
                 "voicemail-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -414,25 +409,16 @@ export const post_domains_by_domain_sites: ToolDefinition = {
                 },
                 "voicemail-receive-broadcast-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "reject-anonymous-calls-enabled": {
+                "voicemail-playback-announce-date-time-received": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-datetime-received": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -441,7 +427,7 @@ export const post_domains_by_domain_sites: ToolDefinition = {
                 },
                 "voicemail-playback-announce-caller-id": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -450,81 +436,92 @@ export const post_domains_by_domain_sites: ToolDefinition = {
                 },
                 "voicemail-playback-sort-newest-to-oldest": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "phone-numbers-to-allow-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "caller-id-number": {
+                "phone-numbers-to-reject-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
-                "caller-id-name": {
+                "call-screening-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
-                "caller-id-number-emergency": {
+                "reject-anonymous-calls-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 },
-                "area-code": {
-                      "type": "number",
-                      "description": "This is a area code for the user. I will be used when user dial's 7 digits to translate it to full 10 or 11 digit number."
+                "directory-announce-in-dial-by-name-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
                 "directory-name-visible-in-list-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "emergency-address-id": {
-                      "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
-                },
                 "music-on-hold-randomized-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
                 },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This read only setting is the current active call count for this user."
-                },
-                "created-datetime": {
+                "login-username": {
                       "type": "string",
-                      "description": "This datetime is when the user was created."
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was last modified."
-                },
-                "recording-configuration": {
-                      "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "yes-with-transcription",
-                            "yes-with-transcription-and-sentiment",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Login for the site's system extension. Defaults to `<site>@<domain>` on create. It must be unused on the platform."
                 }
           },
           "required": [
                 "domain",
-                "site",
-                "email"
+                "site"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/sites',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -532,7 +529,7 @@ export const post_domains_by_domain_sites: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'site', 'login-username', 'email', 'time-zone', 'dial-plan', 'dial-policy', 'voicemail-user-control-enabled', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'directory-announce-in-dial-by-name-enabled', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'reject-anonymous-calls-enabled', 'voicemail-playback-announce-datetime-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'caller-id-number', 'caller-id-name', 'caller-id-number-emergency', 'area-code', 'directory-name-visible-in-list-enabled', 'emergency-address-id', 'music-on-hold-randomized-enabled', 'active-calls-total-current', 'created-datetime', 'last-modified-datetime', 'recording-configuration'];
+    const bodyParamNames = ['site', 'synchronous', 'name-first-name', 'name-last-name', 'email', 'time-zone', 'dial-plan', 'dial-policy', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'area-code', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'emergency-address-id', 'voicemail-user-control-enabled', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'voicemail-playback-announce-date-time-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'reject-anonymous-calls-enabled', 'directory-announce-in-dial-by-name-enabled', 'directory-name-visible-in-list-enabled', 'music-on-hold-randomized-enabled', 'login-username'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -553,58 +550,20 @@ export const post_domains_by_domain_sites: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_sites_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_sites_count',
-    description: 'Count Sites in Domain — [GET /domains/{domain}/sites/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/sites/count',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_domains_by_domain_sites_by_site: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_sites_by_site',
-    description: 'Read Specific Site in Domain — [GET /domains/{domain}/sites/{site}]',
+    description: 'Read site — Returns one site with its settings and live counts of users, call queues, devices, registered devices, and active calls.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. A Site Manager and a Basic User see every site in the domain, not only their own. Other scopes, and a Reseller outside its territory, get `403`.  This read returns a shorter field set than the list: the name in `site` and `user`, the site\\\'s limits, dial plan and dial policy, caller ID, area code, time zone, language, emergency address, and the counts `count-users-total`, `count-call-queues`, `count-devices-total`, `count-devices-registered`, and `active-calls-total-current`. When the site has no emergency address of its own, `emergency-address-id` is the domain\\\'s and `emergency-address-source` is `domain_level`.  A name with no site returns `404`. So does a site created a moment ago, until its create is applied. — [GET /domains/{domain}/sites/{site}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "site": {
                       "type": "string",
-                      "description": "site"
+                      "description": "Site name, exactly as returned in `user` by `GET /domains/{domain}/sites`. Letters, digits, spaces, and `.`, `-`, `_`, `'`, `*`. Names are matched exactly."
                 }
           },
           "required": [
@@ -612,6 +571,12 @@ export const get_domains_by_domain_sites_by_site: ToolDefinition = {
                 "site"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sites/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'site'];
@@ -637,34 +602,29 @@ export const get_domains_by_domain_sites_by_site: ToolDefinition = {
 export const put_domains_by_domain_sites_by_site: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_sites_by_site',
-    description: 'Update Site in Domain — [PUT /domains/{domain}/sites/{site}]',
+    description: 'Update site — Changes a site\\\'s settings. Send only the fields to change.  Requires Office Manager in the domain, Reseller for a domain in your territory, or Super User. A Site Manager can update only the site it belongs to, and gets `403` for any other. Basic User, Super User Read Only, and every other scope get `403`.  The name is the key and cannot be changed. A `site` in the body is ignored. To rename a site, create the new one, move its members to it, and delete the old one.  The update writes the site\\\'s own settings only. Users and call queues already filed under the site keep the values they copied from it when they were created.  A `202` means the change was published over the service bus (SBUS), not yet applied. Each core server applies it when the event arrives, so a read straight after the `202` can still show the old state. `synchronous` is ignored.  A name with no site returns `404`, including a site created a moment ago whose create is not applied yet. `PUT /domains/{domain}/sites`, with no name in the path, returns `405`. — [PUT /domains/{domain}/sites/{site}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "site": {
                       "type": "string",
-                      "description": "site"
+                      "description": "Site name, exactly as returned in `user` by `GET /domains/{domain}/sites`. Letters, digits, spaces, and `.`, `-`, `_`, `'`, `*`. Names are matched exactly."
                 },
-                "synchronous": {
+                "name-first-name": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "First name of the site's extension. Defaults to the site name."
                 },
-                "login-username": {
+                "name-last-name": {
                       "type": "string",
-                      "description": "This is the login for the user used to access the portals and other applications. The default will be [user]@[domain] if not set otherwise.  This value is required to be unique across the entire system so 409 will be returned if not unique."
+                      "description": "Last name of the site's extension. Defaults to `Site`."
                 },
                 "email": {
                       "type": "string",
-                      "description": "This is the email adresses or list of email addresses sepertaed with a semi-colon."
+                      "description": "Email address or addresses for the site, separated by semicolons"
                 },
                 "time-zone": {
                       "type": "string",
@@ -895,64 +855,47 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
                 },
                 "dial-plan": {
                       "type": "string",
-                      "description": "This is the dial plan set for the user. Dial plans are used to control action and forward options that will be used when dialing out from the user."
+                      "description": "Dial plan users filed under the site copy when they are created"
                 },
                 "dial-policy": {
                       "type": "string",
-                      "description": "This value is the dial policy/permission for this user whch will control the destinations this user can dial. Generally dial policys are preconfigured at system level and selected at user level."
+                      "description": "Dial policy users filed under the site copy when they are created"
                 },
-                "voicemail-user-control-enabled": {
+                "caller-id-name": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Caller ID name users filed under the site copy when they are created"
                 },
-                "phone-numbers-to-allow-enabled": {
+                "caller-id-number": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Caller ID number users filed under the site copy when they are created"
                 },
-                "phone-numbers-to-reject-enabled": {
+                "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Emergency caller ID number users filed under the site copy when they are created"
                 },
-                "call-screening-enabled": {
+                "area-code": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
+                      "description": "Area code users filed under the site copy when they are created. It completes 7-digit dialing."
                 },
                 "language-token": {
                       "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
+                      "description": "Language code users filed under the site copy when they are created"
                 },
                 "limits-max-data-storage-kilobytes": {
                       "type": "number",
-                      "description": "This is the maximum value in kilobytes that is allowed to be stored in the user's voicemail, audio greetings and fax storage."
+                      "description": "Storage limit in kilobytes users filed under the site copy when they are created"
                 },
                 "limits-max-active-calls-total": {
                       "type": "number",
-                      "description": "This is the maximum number of active calls allowed for the user."
+                      "description": "Active-call limit users filed under the site copy when they are created"
                 },
-                "directory-announce-in-dial-by-name-enabled": {
+                "emergency-address-id": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "Emergency address for the site. It must be an address ID that exists for the domain."
+                },
+                "voicemail-user-control-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -961,7 +904,7 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
                 },
                 "voicemail-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -970,25 +913,16 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
                 },
                 "voicemail-receive-broadcast-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "reject-anonymous-calls-enabled": {
+                "voicemail-playback-announce-date-time-received": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "voicemail-playback-announce-datetime-received": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -997,7 +931,7 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
                 },
                 "voicemail-playback-announce-caller-id": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -1006,81 +940,92 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
                 },
                 "voicemail-playback-sort-newest-to-oldest": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "phone-numbers-to-allow-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "caller-id-number": {
+                "phone-numbers-to-reject-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
-                "caller-id-name": {
+                "call-screening-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
-                "caller-id-number-emergency": {
+                "reject-anonymous-calls-enabled": {
                       "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 },
-                "area-code": {
-                      "type": "number",
-                      "description": "This is a area code for the user. I will be used when user dial's 7 digits to translate it to full 10 or 11 digit number."
+                "directory-announce-in-dial-by-name-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
                 },
                 "directory-name-visible-in-list-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "emergency-address-id": {
-                      "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
-                },
                 "music-on-hold-randomized-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
                 },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This read only setting is the current active call count for this user."
-                },
-                "created-datetime": {
+                "login-username": {
                       "type": "string",
-                      "description": "This datetime is when the user was created."
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This datetime is when the user was last modified."
-                },
-                "recording-configuration": {
-                      "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "yes-with-transcription",
-                            "yes-with-transcription-and-sentiment",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Login for the site's system extension. Defaults to `<site>@<domain>` on create. It must be unused on the platform."
                 }
           },
           "required": [
                 "domain",
-                "site",
-                "email"
+                "site"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/sites/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'site'];
@@ -1088,7 +1033,7 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'login-username', 'email', 'time-zone', 'dial-plan', 'dial-policy', 'voicemail-user-control-enabled', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'directory-announce-in-dial-by-name-enabled', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'reject-anonymous-calls-enabled', 'voicemail-playback-announce-datetime-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'caller-id-number', 'caller-id-name', 'caller-id-number-emergency', 'area-code', 'directory-name-visible-in-list-enabled', 'emergency-address-id', 'music-on-hold-randomized-enabled', 'active-calls-total-current', 'created-datetime', 'last-modified-datetime', 'recording-configuration'];
+    const bodyParamNames = ['name-first-name', 'name-last-name', 'email', 'time-zone', 'dial-plan', 'dial-policy', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'area-code', 'language-token', 'limits-max-data-storage-kilobytes', 'limits-max-active-calls-total', 'emergency-address-id', 'voicemail-user-control-enabled', 'voicemail-enabled', 'voicemail-receive-broadcast-enabled', 'voicemail-playback-announce-date-time-received', 'voicemail-playback-announce-caller-id', 'voicemail-playback-sort-newest-to-oldest', 'phone-numbers-to-allow-enabled', 'phone-numbers-to-reject-enabled', 'call-screening-enabled', 'reject-anonymous-calls-enabled', 'directory-announce-in-dial-by-name-enabled', 'directory-name-visible-in-list-enabled', 'music-on-hold-randomized-enabled', 'login-username'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1098,6 +1043,193 @@ export const put_domains_by_domain_sites_by_site: ToolDefinition = {
       pathTemplate: '/domains/{domain}/sites/{site}',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_sites_list: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_sites_list',
+    description: 'List site summaries — Returns every site in the domain with a short set of fields: the name in `site` and `user`, `domain`, `name-first-name`, `name-last-name`, `directory-name-number-dtmf-mapping`, and `emergency-address-id`.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. A Site Manager and a Basic User see every site in the domain, not only their own. Other scopes, and a Reseller outside its territory, get `403`.  Unlike `GET /domains/{domain}/sites`, this has no default limit. Send `start` and `limit` to page. `sort` defaults to `user asc`. `fields` is ignored.  When a site has no emergency address of its own, `emergency-address-id` is the domain\\\'s and `emergency-address-source` is `domain_level`. — [GET /domains/{domain}/sites/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most sites to return. Without it, every site is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order by site name. Defaults to `user asc`. Allowed values: \"user asc\", \"user desc\". Default: \"user asc\"",
+                      "enum": [
+                            "user asc",
+                            "user desc"
+                      ],
+                      "default": "user asc"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sites/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/sites/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_sites_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_sites_count',
+    description: 'Count sites — Returns the number of sites in the domain as `total`.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. A Site Manager and a Basic User see every site in the domain, not only their own. Other scopes, and a Reseller outside its territory, get `403`.  Every site counts, whatever `limit` a list would apply. Send `site` to check one name: `total` is `1` when a site has that name and `0` when not. A `0` says only that no site has the name. A create can still return `409` when a user or other extension already has it. — [GET /domains/{domain}/sites/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Count only the site with this exact name, so `total` is `0` or `1`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sites/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/sites/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_site: ToolDefinition = {
+  schema: {
+    name: 'delete_site',
+    description: 'Delete site — Deletes a site: the system extension that holds its settings, and the records that extension owns.  Requires Office Manager in the domain, Reseller for a domain in your territory, or Super User. Site Manager, Basic User, Super User Read Only, and every other scope get `403`.  A site that still has members is refused with `409`, and the message gives how many. Members are the users, call queues, and other extensions filed under the site. Move them first, or send `force=yes` to clear the site from every member and then delete it. Members keep their own settings, including values they copied from the site when they were created, and their devices are not touched.  Deleting the site also removes what its own extension owns: its devices, time frames, emergency addresses, contacts, conferences, recording settings, and CDR schedules, among other records. Phone numbers routed to the site\\\'s extension return to inventory. The site\\\'s group chat is archived last, after everything else succeeds. The site\\\'s provisioning defaults are not removed.  A `202` means the change was published over the service bus (SBUS), not yet applied. Each core server applies it when the event arrives, so a read straight after the `202` can still show the old state. `DELETE /domains/{domain}/sites`, with no name in the path, returns `405`. — [DELETE /domains/{domain}/sites/{site}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Site name, exactly as returned in `user` by `GET /domains/{domain}/sites`. Letters, digits, spaces, and `.`, `-`, `_`, `'`, `*`. Names are matched exactly."
+                },
+                "force": {
+                      "type": "string",
+                      "description": "`yes` clears the site from every member, however many, then deletes it. `no`, the default, refuses a site that has members with `409`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "site"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/sites/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'site'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['force'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/sites/{site}',
+      pathParams,
+      queryParams,
     });
 
     return {

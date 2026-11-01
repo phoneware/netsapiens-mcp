@@ -5,19 +5,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_quotas: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_quotas',
-    description: 'Get Quota for Domain — [GET /domains/{domain}/quotas]',
+    description: 'Read domain recording quota — Returns the recording quota stored for one domain: how many recordings it can keep, how much space and recorded time they can use, and how long they are kept. Requires Reseller or Super User scope. A Reseller can read only domains in its own territory.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. The response is an array with at most one row. It is empty when the domain has no quota of its own, which means it uses the platform default. Read that with `GET /domains/default/quotas`.  This path reads one Recording server, so `quota-in-sync` is always `unknown`. A Super User can compare every Recording server with `GET /quotas/{domain}`. — [GET /domains/{domain}/quotas]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain the quota belongs to, such as `example.com`. `~` means your own domain. `default` addresses the platform default quota, which every domain without a quota of its own uses. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/quotas',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -43,13 +49,17 @@ export const get_domains_by_domain_quotas: ToolDefinition = {
 export const get_resellers_by_reseller_quotas: ToolDefinition = {
   schema: {
     name: 'get_resellers_by_reseller_quotas',
-    description: 'Get Quota for Domains in Reseller — [GET /resellers/{reseller}/quotas]',
+    description: 'List reseller recording quotas — Lists the recording quotas of every domain in a territory that has a quota of its own. Domains not listed use the platform default, which is not part of any territory. Requires Reseller, Super User, or Super User Read Only scope. A Reseller can list only its own territory.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. The list is not paged. Send `domain` to read one domain, or use `GET /resellers/{reseller}/quotas/count` for the total.  This path reads one Recording server, so `quota-in-sync` is always `unknown`. A Super User can compare every Recording server with `GET /quotas`. — [GET /resellers/{reseller}/quotas]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain. It must be in the territory, or the request returns `404`. `default` returns `403`."
                 }
           },
           "required": [
@@ -57,16 +67,28 @@ export const get_resellers_by_reseller_quotas: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/quotas',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/resellers/{reseller}/quotas',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -81,19 +103,25 @@ export const get_resellers_by_reseller_quotas: ToolDefinition = {
 export const get_domains_by_domain_quotas_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_quotas_count',
-    description: 'Count Quotas for Domain — [GET /domains/{domain}/quotas/count]',
+    description: 'Count domain recording quotas — Counts the recording quotas stored for one domain, which is `1` when the domain has a quota of its own and `0` when it uses the platform default. `default` counts the platform default itself. Requires Reseller or Super User scope. A Reseller can count only domains in its own territory. — [GET /domains/{domain}/quotas/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain the quota belongs to, such as `example.com`. `~` means your own domain. `default` addresses the platform default quota, which every domain without a quota of its own uses. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/quotas/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -119,19 +147,560 @@ export const get_domains_by_domain_quotas_count: ToolDefinition = {
 export const get_resellers_by_reseller_quotas_count: ToolDefinition = {
   schema: {
     name: 'get_resellers_by_reseller_quotas_count',
-    description: 'Count Quotas for Reseller — [GET /resellers/{reseller}/quotas/count]',
+    description: 'Count reseller recording quotas — Counts the domains in a territory that have a recording quota of its own. Requires Reseller, Super User, or Super User Read Only scope. A Reseller can count only its own territory. Send `domain` to check one domain, which counts `0` or `1`. — [GET /resellers/{reseller}/quotas/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain. It must be in the territory, or the request returns `404`. `default` returns `403`."
                 }
           },
           "required": [
                 "reseller"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/quotas/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/quotas/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_domain_quota: ToolDefinition = {
+  schema: {
+    name: 'create_domain_quota',
+    description: 'Create domain recording quota — Sets a recording quota for one domain. Requires Reseller or Super User scope. A Reseller can set quotas only for domains in its own territory. Only a Super User can set the platform default (`default`).  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain already has a quota, the limits you send replace those values and the others are kept, the same as `PUT`. Send all four limits when you create a quota.  The quota is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [POST /domains/{domain}/quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `~` means your own domain. `default` addresses the platform default quota, which every domain without a quota of its own uses. A domain that does not exist returns `404`."
+                },
+                "count-limit": {
+                      "type": "number",
+                      "description": "Maximum number of recordings the domain can keep. `0` means unlimited."
+                },
+                "size-limit": {
+                      "type": "number",
+                      "description": "Maximum total size of the domain's recordings, in kilobytes. `0` means unlimited."
+                },
+                "time-limit": {
+                      "type": "number",
+                      "description": "Maximum total length of the domain's recordings, in seconds. `0` means unlimited."
+                },
+                "age-limit": {
+                      "type": "number",
+                      "description": "Number of days a recording is kept before it can be removed. `0` means unlimited."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/quotas',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['count-limit', 'size-limit', 'time-limit', 'age-limit'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/quotas',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_domain_quota: ToolDefinition = {
+  schema: {
+    name: 'update_domain_quota',
+    description: 'Update domain recording quota — Changes the recording quota of one domain. Requires Reseller or Super User scope. A Reseller can change quotas only for domains in its own territory. Only a Super User can change the platform default (`default`).  Send only the limits you want to change; the others are kept. `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain has no quota yet, one is created with the limits you send.  The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [PUT /domains/{domain}/quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `~` means your own domain. `default` addresses the platform default quota, which every domain without a quota of its own uses. A domain that does not exist returns `404`."
+                },
+                "count-limit": {
+                      "type": "number",
+                      "description": "Maximum number of recordings the domain can keep. `0` means unlimited."
+                },
+                "size-limit": {
+                      "type": "number",
+                      "description": "Maximum total size of the domain's recordings, in kilobytes. `0` means unlimited."
+                },
+                "time-limit": {
+                      "type": "number",
+                      "description": "Maximum total length of the domain's recordings, in seconds. `0` means unlimited."
+                },
+                "age-limit": {
+                      "type": "number",
+                      "description": "Number of days a recording is kept before it can be removed. `0` means unlimited."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/quotas',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['count-limit', 'size-limit', 'time-limit', 'age-limit'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/quotas',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_domain_quota: ToolDefinition = {
+  schema: {
+    name: 'delete_domain_quota',
+    description: 'Delete domain recording quota — Removes a domain\\\'s own recording quota, so the domain uses the platform default again. This is not the same as setting every limit to `0`, which makes the domain unlimited. Requires Reseller or Super User scope. A Reseller can delete quotas only for domains in its own territory. Only a Super User can delete the platform default (`default`).  Deleting a quota that does not exist is not an error. A Super User can delete the quota of a domain that has already been removed. The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [DELETE /domains/{domain}/quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `~` means your own domain. `default` addresses the platform default quota, which every domain without a quota of its own uses. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/quotas',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/quotas',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_platform_quotas: ToolDefinition = {
+  schema: {
+    name: 'count_platform_quotas',
+    description: 'Count recording quotas — Counts the recording quotas across the platform, including the platform default. Requires Super User or Super User Read Only scope. The count comes from one Recording server and does not compare them; use `GET /quotas` for that. Send `domain` to check one domain, which counts `0` or `1`. — [GET /quotas/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain. `default` counts the platform default. A domain that does not exist returns `404`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /quotas/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/quotas/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_quotas: ToolDefinition = {
+  schema: {
+    name: 'list_quotas',
+    description: 'List recording quotas — Lists the recording quota of every domain that has one, and the platform default, across the platform. Requires Super User or Super User Read Only scope. A Reseller uses `GET /resellers/{reseller}/quotas`.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. The platform default is returned with `domain` set to `*`. Domains not listed use it.  Every Recording server stores its own copy of each quota, so this read asks all of them and returns one row per domain per Recording server, sorted by `domain` and then `quota-server`. Each row carries `quota-in-sync`, which says whether the Recording servers agree about that domain. Send `local-only=yes` to read one Recording server only. `start` and `limit` apply on each Recording server. Get the total with `GET /quotas/count`. — [GET /quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of quotas to read from each Recording server. Defaults to `2000`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of quotas to skip on each Recording server before the first one returned. Defaults to `0`. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Field and direction that decide which quotas fall inside `start` and `limit`, such as `size-limit desc`. Fields are `domain`, `count-limit`, `size-limit`, `time-limit`, and `age-limit`; directions are `asc` and `desc`. An unknown field is ignored. Defaults to `domain asc`. The rows returned are still sorted by `domain` and `quota-server`. Default: \"domain asc\"",
+                      "default": "domain asc"
+                },
+                "local-only": {
+                      "type": "string",
+                      "description": "`yes` answers from one Recording server only, with one row per domain and `quota-in-sync` set to `unknown`. Leave it out, or send `no`, to read every Recording server and compare them. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain, one row per Recording server. `default` reads the platform default. A domain that does not exist returns `404`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /quotas',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'start', 'sort', 'local-only', 'domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/quotas',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_platform_quota: ToolDefinition = {
+  schema: {
+    name: 'create_platform_quota',
+    description: 'Create recording quota — Sets a recording quota for the domain named by `domain` in the body, or the platform default when `domain` is `default` or `*`. Requires Super User scope; Super User Read Only is refused.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain already has a quota, the limits you send replace those values and the others are kept. Send all four limits when you create a quota. To change or delete a quota, use `/quotas/{domain}`. `PUT` and `DELETE` on this collection return `405`.  The quota is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [POST /quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /quotas',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/quotas',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_platform_quota: ToolDefinition = {
+  schema: {
+    name: 'read_platform_quota',
+    description: 'Read recording quota — Returns the recording quota of one domain, or of the platform default with `default`, as one row per Recording server. Requires Super User or Super User Read Only scope. A Reseller uses `/resellers/{reseller}/quotas/{domain}`.  A domain\\\'s quota is stored on every Recording server. Every server is asked, and each row carries `quota-server` (the server it came from) and `quota-in-sync`, which says whether all the servers that answered agree. A server that disagrees shows which copy to fix: send a `PUT` with the intended limits to bring every server back in line.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. Send `local-only=yes` to read one Recording server only.  A domain with no quota on any server returns `404`; it uses the platform default (`default`). — [GET /quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `default` addresses the platform default quota, which is returned with `domain` set to `*`. A domain that does not exist returns `404`."
+                },
+                "local-only": {
+                      "type": "string",
+                      "description": "`yes` answers from one Recording server only, with one row per domain and `quota-in-sync` set to `unknown`. Leave it out, or send `no`, to read every Recording server and compare them. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /quotas/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['local-only'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/quotas/{domain}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_platform_quota: ToolDefinition = {
+  schema: {
+    name: 'update_platform_quota',
+    description: 'Update recording quota — Changes the recording quota of one domain, or of the platform default with `default`. Requires Super User scope; Super User Read Only is refused.  Send only the limits you want to change; the others are kept. `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain has no quota yet, one is created with the limits you send.  The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. To check that every Recording server has it, read `GET /quotas/{domain}` and look for `quota-in-sync` set to `yes`. — [PUT /quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `default` addresses the platform default quota, which is returned with `domain` set to `*`. A domain that does not exist returns `404`."
+                },
+                "count-limit": {
+                      "type": "number",
+                      "description": "Maximum number of recordings the domain can keep. `0` means unlimited."
+                },
+                "size-limit": {
+                      "type": "number",
+                      "description": "Maximum total size of the domain's recordings, in kilobytes. `0` means unlimited."
+                },
+                "time-limit": {
+                      "type": "number",
+                      "description": "Maximum total length of the domain's recordings, in seconds. `0` means unlimited."
+                },
+                "age-limit": {
+                      "type": "number",
+                      "description": "Number of days a recording is kept before it can be removed. `0` means unlimited."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /quotas/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['count-limit', 'size-limit', 'time-limit', 'age-limit'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/quotas/{domain}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_platform_quota: ToolDefinition = {
+  schema: {
+    name: 'delete_platform_quota',
+    description: 'Delete recording quota — Removes a domain\\\'s own recording quota, so the domain uses the platform default again. This is not the same as setting every limit to `0`, which makes the domain unlimited. `default` removes the platform default itself. Requires Super User scope; Super User Read Only is refused.  Deleting a quota that does not exist is not an error, and the quota of a domain that has already been removed can still be deleted. The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [DELETE /quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. `default` addresses the platform default quota, which is returned with `domain` set to `*`. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /quotas/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/quotas/{domain}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_reseller_quota: ToolDefinition = {
+  schema: {
+    name: 'create_reseller_quota',
+    description: 'Create reseller recording quota — Sets a recording quota for one domain in a territory, named by `domain` in the body. Requires Reseller or Super User scope. A Reseller can use only its own territory, and the domain must be in the territory. Super User Read Only is refused.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain already has a quota, the limits you send replace those values and the others are kept. Send all four limits when you create a quota. To change or delete a quota, use `/resellers/{reseller}/quotas/{domain}`. `PUT` and `DELETE` on this collection return `405`.  The quota is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [POST /resellers/{reseller}/quotas]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "reseller"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /resellers/{}/quotas',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
@@ -140,8 +709,177 @@ export const get_resellers_by_reseller_quotas_count: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/resellers/{reseller}/quotas',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_reseller_quota: ToolDefinition = {
+  schema: {
+    name: 'read_reseller_quota',
+    description: 'Read reseller recording quota — Returns the recording quota of one domain in a territory, as a single object. Requires Reseller, Super User, or Super User Read Only scope. A Reseller can use only its own territory.  `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. A domain with no quota of its own returns `404`; it uses the platform default. This path reads one Recording server, so `quota-in-sync` is always `unknown`. — [GET /resellers/{reseller}/quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. It must be in the territory named by `reseller`, or the request returns `404`. `default` returns `403`: the platform default quota is managed through `/quotas/default`."
+                }
+          },
+          "required": [
+                "reseller",
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/quotas/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
       method: 'GET',
-      pathTemplate: '/resellers/{reseller}/quotas/count',
+      pathTemplate: '/resellers/{reseller}/quotas/{domain}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_reseller_quota: ToolDefinition = {
+  schema: {
+    name: 'update_reseller_quota',
+    description: 'Update reseller recording quota — Changes the recording quota of one domain in a territory. Requires Reseller or Super User scope. A Reseller can use only its own territory, and the domain must be in the territory. Super User Read Only is refused.  Send only the limits you want to change; the others are kept. `count-limit` is a number of recordings, `size-limit` is in kilobytes, `time-limit` is in seconds, and `age-limit` is in days. `0` means unlimited. If the domain has no quota yet, one is created with the limits you send.  The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [PUT /resellers/{reseller}/quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. It must be in the territory named by `reseller`, or the request returns `404`. `default` returns `403`: the platform default quota is managed through `/quotas/default`."
+                },
+                "count-limit": {
+                      "type": "number",
+                      "description": "Maximum number of recordings the domain can keep. `0` means unlimited."
+                },
+                "size-limit": {
+                      "type": "number",
+                      "description": "Maximum total size of the domain's recordings, in kilobytes. `0` means unlimited."
+                },
+                "time-limit": {
+                      "type": "number",
+                      "description": "Maximum total length of the domain's recordings, in seconds. `0` means unlimited."
+                },
+                "age-limit": {
+                      "type": "number",
+                      "description": "Number of days a recording is kept before it can be removed. `0` means unlimited."
+                }
+          },
+          "required": [
+                "reseller",
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /resellers/{}/quotas/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['count-limit', 'size-limit', 'time-limit', 'age-limit'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/resellers/{reseller}/quotas/{domain}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_reseller_quota: ToolDefinition = {
+  schema: {
+    name: 'delete_reseller_quota',
+    description: 'Delete reseller recording quota — Removes the recording quota of one domain in a territory, so the domain uses the platform default again. This is not the same as setting every limit to `0`, which makes the domain unlimited. Requires Reseller or Super User scope. A Reseller can use only its own territory, and the domain must be in the territory.  Deleting a quota that does not exist is not an error. The change is applied to every Recording server. A `202` means it is accepted and applied shortly after. — [DELETE /resellers/{reseller}/quotas/{domain}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the quota belongs to, such as `example.com`. It must be in the territory named by `reseller`, or the request returns `404`. `default` returns `403`: the platform default quota is managed through `/quotas/default`."
+                }
+          },
+          "required": [
+                "reseller",
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /resellers/{}/quotas/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/resellers/{reseller}/quotas/{domain}',
       pathParams,
     });
 

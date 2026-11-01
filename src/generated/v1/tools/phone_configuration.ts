@@ -15,8 +15,13 @@ export const v1_phoneconfiguration_count: ToolDefinition = {
       }
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=phoneconfiguration&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("phoneconfiguration", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("phoneconfiguration", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -42,8 +47,13 @@ export const v1_phoneconfiguration_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=phoneconfiguration&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("phoneconfiguration", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("phoneconfiguration", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -70,8 +80,13 @@ export const v1_phoneconfiguration_delete: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=phoneconfiguration&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("phoneconfiguration", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("phoneconfiguration", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -98,8 +113,13 @@ export const v1_phoneconfiguration_read: ToolDefinition = {
       }
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=phoneconfiguration&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("phoneconfiguration", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("phoneconfiguration", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

@@ -2,44 +2,20 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-export const get_video_resellers: ToolDefinition = {
-  schema: {
-    name: 'get_video_resellers',
-    description: 'Read Iotum Video Domain Resellers — Read a Iotum Company (domain) — [GET /video/resellers]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/video/resellers',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_domains_by_domain_users_by_user_video: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_video',
-    description: 'Read Iotum Video Host — Read a Iotum Host — [GET /domains/{domain}/users/{user}/video]',
+    description: 'Read video host for user — Returns a user\\\'s video host: the account the user hosts video conferences with, as the video service reports it.  Requires a token for this user. Office Manager, Reseller, and Super User can read the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. Create one with `POST /domains/{domain}/users/{user}/host`. `GET /domains/{domain}/users/{user}/host` returns the same host. — [GET /domains/{domain}/users/{user}/video]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -47,6 +23,12 @@ export const get_domains_by_domain_users_by_user_video: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/video',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -69,199 +51,28 @@ export const get_domains_by_domain_users_by_user_video: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_video_hosts: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_video_hosts',
-    description: 'Read All Iotum Video Hosts in a Domain — [GET /domains/{domain}/video/hosts]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/video/hosts',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_users_by_user_video_conference: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_users_by_user_video_conference',
-    description: 'Read Iotum Video Host Conferences — Read a Iotum Host — [GET /domains/{domain}/users/{user}/video/conference]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain",
-                "user"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/video/conference',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const post_domains_by_domain_users_by_user_video_conference: ToolDefinition = {
-  schema: {
-    name: 'post_domains_by_domain_users_by_user_video_conference',
-    description: 'Create a Ad-hoc Conference — [POST /domains/{domain}/users/{user}/video/conference]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "participants": {
-                      "type": "array",
-                      "description": "participants"
-                }
-          },
-          "required": [
-                "domain",
-                "user"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['participants'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/video/conference',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_users_by_user_video_contacts: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_users_by_user_video_contacts',
-    description: 'Read Iotum Video Host Contacts — Read a Iotum Host — [GET /domains/{domain}/users/{user}/video/contacts]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain",
-                "user"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/video/contacts',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_domains_by_domain_video: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_video',
-    description: 'Read Iotum Video Company — Read a Iotum Company (domain) — [GET /domains/{domain}/video]',
+    description: 'Read domain video account — Returns the domain\\\'s account at the video service, as the video service returns it, with the domain\\\'s video hostname in `iotum_domain`.  Any user can read its own domain\\\'s video account. Office Manager, Reseller, and Super User scopes can read the domains they manage. — [GET /domains/{domain}/video]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/video',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -284,24 +95,361 @@ export const get_domains_by_domain_video: ToolDefinition = {
   },
 };
 
-export const post_domains_by_domain_video: ToolDefinition = {
+export const get_domains_by_domain_users_by_user_video_contacts: ToolDefinition = {
   schema: {
-    name: 'post_domains_by_domain_video',
-    description: 'Create Iotum Video Company — Read a Iotum Company (domain) — [POST /domains/{domain}/video]',
+    name: 'get_domains_by_domain_users_by_user_video_contacts',
+    description: 'List video contacts for user — Lists the contacts in a user\\\'s video address book: the people the user can invite to a video conference.  Requires a token for this user. Office Manager, Reseller, and Super User can read the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. Add contacts with `POST /domains/{domain}/users/{user}/host/contacts`. `GET /domains/{domain}/users/{user}/host/contacts` returns the same list. — [GET /domains/{domain}/users/{user}/video/contacts]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/video/contacts',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/video/contacts',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_video_products: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_video_products',
+    description: 'List domain video subscriptions — Returns the subscriptions of the domain\\\'s video account, plans and add-ons, as the video service returns them.  Any user can read its own domain\\\'s video account. Office Manager, Reseller, and Super User scopes can read the domains they manage.  To read one subscription by its slug, use **Read video subscription**. To see what the account can subscribe to, use **List available video products**. — [GET /domains/{domain}/video/products]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/video/products',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/video/products',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_video_availableproducts: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_video_availableproducts',
+    description: 'List available video products — Returns the plans and add-ons the platform offers at the video service, as the video service returns them. The catalogue is the same for every domain; the domain in the path only decides who can read it.  Any user can read its own domain\\\'s video account. Office Manager, Reseller, and Super User scopes can read the domains they manage. The domain must have an active video account.  Use a product\\\'s `slug` with **Create video subscription** or **Update domain video plans**. — [GET /domains/{domain}/video/availableproducts]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/video/availableproducts',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/video/availableproducts',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_users_by_user_video_conference: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_users_by_user_video_conference',
+    description: 'List video conferences for user — Lists the video conferences a user hosts, as the video service reports them.  Requires a token for this user. Office Manager, Reseller, and Super User can read the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. Results come one page at a time: pass `page` for a later page. Start a conference with `POST` on this path. `PUT` and `DELETE` on this path return `405`. — [GET /domains/{domain}/users/{user}/video/conference]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "page": {
+                      "type": "string",
+                      "description": "Page of results to return, sent to the video service as its `next_page` value. Leave it out for the first page."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/video/conference',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['page'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/video/conference',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const post_domains_by_domain_users_by_user_video_conference: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_users_by_user_video_conference',
+    description: 'Start ad hoc video conference — Creates a video conference hosted by the user, starting now or at `start`, and invites the participants you list. The conference is titled `Conference`, lasts 30 minutes, and uses the user\\\'s time zone.  Requires a token for this user. Office Manager, Reseller, and Super User can change the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. The user must have a video host. A participant is an email address or an extension in the same domain. An extension with no video host stops the whole request with `404`. When the video service rejects a value you sent, the request returns `400` with the service\\\'s message. When the video service fails or does not answer, it returns `502` or `504`. `PUT` and `DELETE` on this path return `405`. — [POST /domains/{domain}/users/{user}/video/conference]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "participants": {
+                      "type": "string",
+                      "description": "Who to invite. Each entry is an email address, or an extension in the host's domain that has a video host. An extension is invited through its video host, and an email address by email. No participant is a moderator."
+                },
+                "start": {
+                      "type": "string",
+                      "description": "When the conference starts, sent to the video service as it is. Defaults to now."
+                },
+                "secure": {
+                      "type": "boolean",
+                      "description": "Sent to the video service as its `secure_url` setting."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/video/conference',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['participants', 'start', 'secure'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/video/conference',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_video_resellers: ToolDefinition = {
+  schema: {
+    name: 'get_video_resellers',
+    description: 'List video service resellers — Returns the reseller accounts under the platform\\\'s own account at the video service, as the video service returns them.  Requires Super User scope. — [GET /video/resellers]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /video/resellers',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/video/resellers',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_video_hosts: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_video_hosts',
+    description: 'List video hosts in domain — Returns every host of the domain\\\'s video account, as the video service returns them. A host is a user\\\'s video identity.  Requires Office Manager scope or higher for the domain.  To read one user\\\'s host, use `GET /domains/{domain}/users/{user}/video`. — [GET /domains/{domain}/video/hosts]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/video/hosts',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/video/hosts',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const post_domains_by_domain_video: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_video',
+    description: 'Create domain video account — Creates an account for the domain at the video service and links the domain to it. Returns the video service\\\'s answer.  Requires Reseller scope for a domain in your territory, or Super User scope.  A domain has one video account. If it already has one, the request returns `409`. The domain\\\'s video hostname is set from `subdomain` and the territory\\\'s video hostname suffix, and is applied to the domain shortly after the response.  Next, subscribe the account to a plan with **Create video subscription** or **Update domain video plans**. — [POST /domains/{domain}/video]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "name": {
                       "type": "string",
-                      "description": "name"
+                      "description": "Display name of the account at the video service, usually the organization's name."
                 },
                 "subdomain": {
                       "type": "string",
-                      "description": "subdomain"
+                      "description": "Subdomain the domain's meetings open on at the video service, such as `example`. The domain's video hostname, returned as `iotum_domain` by **Read domain video account**, is this value followed by the territory's video hostname suffix, when the territory has one."
                 }
           },
           "required": [
@@ -310,6 +458,12 @@ export const post_domains_by_domain_video: ToolDefinition = {
                 "subdomain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/video',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -341,23 +495,29 @@ export const post_domains_by_domain_video: ToolDefinition = {
 export const put_domains_by_domain_video: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_video',
-    description: 'Update Domain\\\'s Iotum Company — Update the details of a Domain\\\'s Iotum Company — [PUT /domains/{domain}/video]',
+    description: 'Update domain video account — Changes the display name of the domain\\\'s account at the video service, and returns the account as the video service answers.  Requires Reseller scope for a domain in your territory, or Super User scope.  The change is made at the video service before the response. To change the account\\\'s plans, use **Update domain video plans**. — [PUT /domains/{domain}/video]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "company-name": {
                       "type": "string",
-                      "description": "company-name"
+                      "description": "New display name of the account at the video service."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/video',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -389,19 +549,25 @@ export const put_domains_by_domain_video: ToolDefinition = {
 export const delete_domains_by_domain_video: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_video',
-    description: 'Delete a Video Company — [DELETE /domains/{domain}/video]',
+    description: 'Delete domain video account — Deletes the domain\\\'s account at the video service and unlinks the domain and its users from it.  Requires Reseller scope for a domain in your territory, or Super User scope.  The account is deleted at the video service before the response. The domain\\\'s video hostname and default plan, and every user\\\'s video host, are cleared shortly after. A domain whose video service is suspended returns `400`. — [DELETE /domains/{domain}/video]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/video',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -424,137 +590,73 @@ export const delete_domains_by_domain_video: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_video_products: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_video_products',
-    description: 'Read Iotum Video Company Products — Read the products (plans and add-ons) a domain\\\'s company is currently using — [GET /domains/{domain}/video/products]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/video/products',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_video_availableproducts: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_video_availableproducts',
-    description: 'Read Iotum Video Available Products — Read all available products for the company via the reseller — [GET /domains/{domain}/video/availableproducts]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/video/availableproducts',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const post_domains_by_domain_users_by_user_host: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_host',
-    description: 'Create a Host — [POST /domains/{domain}/users/{user}/host]',
+    description: 'Create video host for user — Creates a video host for a user, so the user can host video conferences, and links it to the user.  Requires a token for this user. Office Manager, Reseller, and Super User can change the video host of any user in a domain they manage. Only Office Manager scope or higher can set `plan_slug` or `role`.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user that does not exist returns `404`. A user that already has a video host returns `409`: change it with `PUT` instead. Fields you leave out are filled from the user: `name` from the first and last name, `email` from the first email address, and the language from the user\\\'s language when the video portal supports it. The video service sends no welcome email unless you ask for one. Add-ons cannot be set. The host is created at once, and linking it to the user is applied shortly after. When the video service rejects a value you sent, the request returns `400` with the service\\\'s message. When the video service fails or does not answer, it returns `502` or `504`. `POST /domains/{domain}/users/{user}/video` does the same. — [POST /domains/{domain}/users/{user}/host]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "name": {
                       "type": "string",
-                      "description": "name"
+                      "description": "Name shown for the host. Defaults to the user's first and last name."
                 },
                 "email": {
                       "type": "string",
-                      "description": "email"
+                      "description": "Email address of the host. Defaults to the user's first email address."
                 },
                 "password": {
                       "type": "string",
-                      "description": "password"
+                      "description": "Write-only. Password for signing in to the video portal directly. Leave it out for a host that signs in only through the platform."
                 },
                 "role": {
                       "type": "string",
-                      "description": "role"
+                      "description": "Role of the host in the domain's video account, as the video service defines it. Office Manager scope or higher only."
                 },
                 "auto_record": {
-                      "type": "string",
-                      "description": "auto_record"
+                      "type": "boolean",
+                      "description": "Whether the host's conferences are recorded automatically."
                 },
                 "plan_slug": {
                       "type": "string",
-                      "description": "plan_slug"
+                      "description": "Plan to give the host, by its product slug. `use-domain-default` gives the domain's default plan, and `no-plan` gives none. Leave it out for no plan. Office Manager scope or higher only. List the domain's plans with `GET /domains/{domain}/video/products`."
                 },
-                "add_on_slug": {
-                      "type": "string",
-                      "description": "add_on_slug"
+                "auto_stream": {
+                      "type": "boolean",
+                      "description": "Whether the host's conferences are streamed automatically."
+                },
+                "host_initiated_recording": {
+                      "type": "boolean",
+                      "description": "Whether only the host can start a recording."
+                },
+                "waiting_room": {
+                      "type": "boolean",
+                      "description": "Whether participants wait until the host admits them."
+                },
+                "no_welcome_email": {
+                      "type": "boolean",
+                      "description": "Whether to skip the video service's welcome email. Defaults to `true`."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "name",
-                "email",
-                "password",
-                "auto_record",
-                "plan_slug",
-                "add_on_slug"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/host',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -562,7 +664,7 @@ export const post_domains_by_domain_users_by_user_host: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['name', 'email', 'password', 'role', 'auto_record', 'plan_slug', 'add_on_slug'];
+    const bodyParamNames = ['name', 'email', 'password', 'role', 'auto_record', 'plan_slug', 'auto_stream', 'host_initiated_recording', 'waiting_room', 'no_welcome_email'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -586,49 +688,92 @@ export const post_domains_by_domain_users_by_user_host: ToolDefinition = {
 export const put_domains_by_domain_users_by_user_host: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_host',
-    description: 'Update User\\\'s Iotum Host — Update a user\\\'s Iotum Host. — [PUT /domains/{domain}/users/{user}/host]',
+    description: 'Update video host for user — Changes a user\\\'s video host. Only the fields you send change.  Requires a token for this user. Office Manager, Reseller, and Super User can change the video host of any user in a domain they manage. Only Office Manager scope or higher can set `plan_slug` or `role`.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. If the user has no video host yet, the request creates one as `POST /domains/{domain}/users/{user}/host` would, and returns `202`. Otherwise it returns `200` with the video service\\\'s answer. Add-ons cannot be set: any add-ons on the host are removed. When the video service rejects a value you sent, the request returns `400` with the service\\\'s message. When the video service fails or does not answer, it returns `502` or `504`. `PUT /domains/{domain}/users/{user}/video` does the same. — [PUT /domains/{domain}/users/{user}/host]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "default-plan": {
+                "name": {
                       "type": "string",
-                      "description": "default-plan"
+                      "description": "Name shown for the host."
                 },
-                "plans": {
-                      "type": "array",
-                      "description": "plans"
+                "email": {
+                      "type": "string",
+                      "description": "Email address of the host."
                 },
-                "default-addons": {
-                      "type": "array",
-                      "description": "default-addons"
+                "password": {
+                      "type": "string",
+                      "description": "Write-only. New password for signing in to the video portal directly."
                 },
-                "add-ons": {
-                      "type": "array",
-                      "description": "add-ons"
+                "role": {
+                      "type": "string",
+                      "description": "Role of the host in the domain's video account, as the video service defines it. Office Manager scope or higher only."
+                },
+                "auto_record": {
+                      "type": "boolean",
+                      "description": "Whether the host's conferences are recorded automatically."
+                },
+                "plan_slug": {
+                      "type": "string",
+                      "description": "Plan to give the host, by its product slug. `no-plan` removes the plan. Leave it out to keep the current plan. Office Manager scope or higher only. List the domain's plans with `GET /domains/{domain}/video/products`."
+                },
+                "diff_user": {
+                      "type": "string",
+                      "description": "Public user name of the host in the video portal. A new host gets the extension."
+                },
+                "locale": {
+                      "type": "string",
+                      "description": "Language of the host's video portal. Any other value is ignored. Allowed values: \"en_US\", \"en-US\", \"en_GB\", \"en-GB\", \"en_AU\", \"en-AU\", \"es_MX\", \"fr_CA\", \"pt_BR\"",
+                      "enum": [
+                            "en_US",
+                            "en-US",
+                            "en_GB",
+                            "en-GB",
+                            "en_AU",
+                            "en-AU",
+                            "es_MX",
+                            "fr_CA",
+                            "pt_BR"
+                      ]
+                },
+                "language": {
+                      "type": "string",
+                      "description": "Same as `locale`. Used only when `locale` is not sent. Allowed values: \"en_US\", \"en-US\", \"en_GB\", \"en-GB\", \"en_AU\", \"en-AU\", \"es_MX\", \"fr_CA\", \"pt_BR\"",
+                      "enum": [
+                            "en_US",
+                            "en-US",
+                            "en_GB",
+                            "en-GB",
+                            "en_AU",
+                            "en-AU",
+                            "es_MX",
+                            "fr_CA",
+                            "pt_BR"
+                      ]
                 },
                 "iotum_time_format": {
                       "type": "object",
-                      "description": "iotum_time_format"
+                      "description": "How the video portal shows dates and times for this host. Sent to the video service as it is."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "default-plan",
-                "plans",
-                "default-addons",
-                "add-ons",
-                "iotum_time_format"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/host',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -636,7 +781,7 @@ export const put_domains_by_domain_users_by_user_host: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['default-plan', 'plans', 'default-addons', 'add-ons', 'iotum_time_format'];
+    const bodyParamNames = ['name', 'email', 'password', 'role', 'auto_record', 'plan_slug', 'diff_user', 'locale', 'language', 'iotum_time_format'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -660,17 +805,17 @@ export const put_domains_by_domain_users_by_user_host: ToolDefinition = {
 export const delete_domains_by_domain_users_by_user_host: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_host',
-    description: 'Delete a Host — [DELETE /domains/{domain}/users/{user}/host]',
+    description: 'Delete video host for user — Deletes a user\\\'s video host and unlinks it from the user. The user can no longer host video conferences.  Requires a token for this user. Office Manager, Reseller, and Super User can change the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. The host is deleted at once, and unlinking it from the user is applied shortly after. When the video service cannot delete the host, the request fails and the user keeps the link. `DELETE /domains/{domain}/users/{user}/video` does the same. — [DELETE /domains/{domain}/users/{user}/host]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -678,6 +823,12 @@ export const delete_domains_by_domain_users_by_user_host: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/host',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -703,17 +854,17 @@ export const delete_domains_by_domain_users_by_user_host: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_host_contacts: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_host_contacts',
-    description: 'Create Host Contacts — [POST /domains/{domain}/users/{user}/host/contacts]',
+    description: 'Add video contacts for user — Adds contacts to a user\\\'s video address book, so the user can invite them to video conferences. Send a JSON array with one object per contact.  Requires a token for this user. Office Manager, Reseller, and Super User can change the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. The user must have a video host. Every contact needs a `name`. To link a contact to one in the user\\\'s platform contacts, include that contact\\\'s `contact_id`: the link is applied shortly after. When the video service rejects a value you sent, the request returns `400` with the service\\\'s message. When the video service fails or does not answer, it returns `502` or `504`. `POST /domains/{domain}/users/{user}/video/contacts` does the same. `PUT` and `DELETE` on this path return `405`. — [POST /domains/{domain}/users/{user}/host/contacts]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -721,6 +872,12 @@ export const post_domains_by_domain_users_by_user_host_contacts: ToolDefinition 
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/host/contacts',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -746,25 +903,29 @@ export const post_domains_by_domain_users_by_user_host_contacts: ToolDefinition 
 export const post_domains_by_domain_video_subscription_by_slug: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_video_subscription_by_slug',
-    description: 'Create Iotum Video Subscription — Create a Iotum video subscription to one of the available Iotum products for that company — [POST /domains/{domain}/video/subscription/{slug}]',
+    description: 'Create video subscription — Subscribes the domain\\\'s video account to a plan or add-on from the catalogue.  Requires Reseller scope for a domain in your territory, or Super User scope.  The product must be in **List available video products** and not already subscribed. The video service makes the change before the response. To set the complete list of plans in one request, use **Update domain video plans**. — [POST /domains/{domain}/video/subscription/{slug}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "slug": {
                       "type": "string",
-                      "description": "slug"
+                      "description": "Slug of the plan, as `slug` appears in **List available video products**, such as `video_pro`. Letters, digits, `-`, and `_`."
                 },
                 "switch-plan": {
-                      "type": "boolean",
-                      "description": "If specified and set to the subscription ID of one of the company’s current plans, that plan will be canceled and used in to prorate the initial amount of the new plan (plan switching) If set to null, the current plan(s) of the company will not be canceled and instead the company will be subscribed to the provided plan in addition to their existing plan(s). When omitted (no key/value not present in the request body), the default behavior of switching the company’s current plan with the new plan will be applied."
+                      "type": "string",
+                      "description": "Whether the new plan replaces the account's current plan. `yes` replaces it. `no` adds the new plan alongside the current plans. Left out, the video service's default applies. `true`, `false`, `1`, and `0` are also accepted, and any other value returns `400`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "host-limit": {
                       "type": "number",
-                      "description": "A positive integer value that the new subscription’s host limit should be set to. When subscribing to a product that is using the per-host pricing method, the host_limit value provided will be multiplied by the per-host price of the product to determine and set the total amount of the monthly subscription charges."
+                      "description": "Number of hosts the subscription covers. Passed to the video service as sent."
                 }
           },
           "required": [
@@ -772,6 +933,12 @@ export const post_domains_by_domain_video_subscription_by_slug: ToolDefinition =
                 "slug"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/video/subscription/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'slug'];
@@ -803,17 +970,17 @@ export const post_domains_by_domain_video_subscription_by_slug: ToolDefinition =
 export const delete_domains_by_domain_video_subscription_by_slug: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_video_subscription_by_slug',
-    description: 'Delete Iotum Video Subscription — Delete a subscription to a product for the domain\\\'s company. — [DELETE /domains/{domain}/video/subscription/{slug}]',
+    description: 'Cancel video subscription — Cancels one subscription of the domain\\\'s video account.  Requires Reseller scope for a domain in your territory, or Super User scope.  The video service cancels it before the response. The domain\\\'s default plan is not changed: if you cancel the default plan, set a new one with **Update domain video plans**. — [DELETE /domains/{domain}/video/subscription/{slug}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "slug": {
                       "type": "string",
-                      "description": "slug"
+                      "description": "Slug of the plan, as `slug` appears in **List available video products**, such as `video_pro`. Letters, digits, `-`, and `_`."
                 }
           },
           "required": [
@@ -821,6 +988,12 @@ export const delete_domains_by_domain_video_subscription_by_slug: ToolDefinition
                 "slug"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/video/subscription/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'slug'];
@@ -846,35 +1019,34 @@ export const delete_domains_by_domain_video_subscription_by_slug: ToolDefinition
 export const put_domains_by_domain_video_subscriptions: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_video_subscriptions',
-    description: 'Update Domain\\\'s Iotum Subscriptions — Update the plans and add-ons a domain\\\'s Iotum company is subscribed to. — [PUT /domains/{domain}/video/subscriptions]',
+    description: 'Update domain video plans — Sets the complete list of plans the domain\\\'s video account is subscribed to, and the domain\\\'s default video plan.  Requires Reseller scope for a domain in your territory, or Super User scope.  `plans` is required and is the complete list: plans in it that the account does not have are subscribed, and every current subscription not in it is cancelled, add-ons included. Add-ons cannot be set here.  The video service makes each change before the response. If it refuses one, the request returns that error, the changes it accepted stay in place, and the default plan is not changed; read **List domain video subscriptions** to see the result. On success, the default plan is applied to the domain shortly after. — [PUT /domains/{domain}/video/subscriptions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "plans": {
                       "type": "array",
-                      "description": "plans"
-                },
-                "add-ons": {
-                      "type": "array",
-                      "description": "add-ons"
+                      "description": "Every plan the account keeps, as slugs from **List available video products**. Current subscriptions that are not listed are cancelled. `no-plan` alone cancels every subscription. A comma-separated string is also accepted."
                 },
                 "default-plan": {
                       "type": "string",
-                      "description": "default-plan"
-                },
-                "default-addons": {
-                      "type": "array",
-                      "description": "default-addons"
+                      "description": "Slug of the domain's default video plan. Must be in `plans`. Required when `plans` leaves out the domain's current default plan."
                 }
           },
           "required": [
-                "domain"
+                "domain",
+                "plans"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/video/subscriptions',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -882,7 +1054,7 @@ export const put_domains_by_domain_video_subscriptions: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['plans', 'add-ons', 'default-plan', 'default-addons'];
+    const bodyParamNames = ['plans', 'default-plan'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -892,6 +1064,153 @@ export const put_domains_by_domain_video_subscriptions: ToolDefinition = {
       pathTemplate: '/domains/{domain}/video/subscriptions',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_iotum_video_host_for_user: ToolDefinition = {
+  schema: {
+    name: 'read_iotum_video_host_for_user',
+    description: 'Read video host for user — Returns a user\\\'s video host: the account the user hosts video conferences with, as the video service reports it.  Requires a token for this user. Office Manager, Reseller, and Super User can read the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. Create one with `POST /domains/{domain}/users/{user}/host`. `GET /domains/{domain}/users/{user}/video` returns the same host. — [GET /domains/{domain}/users/{user}/host]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/host',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/host',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_iotum_video_host_contacts_for_user: ToolDefinition = {
+  schema: {
+    name: 'list_iotum_video_host_contacts_for_user',
+    description: 'List video contacts for user — Lists the contacts in a user\\\'s video address book: the people the user can invite to a video conference.  Requires a token for this user. Office Manager, Reseller, and Super User can read the video host of any user in a domain they manage.  The domain must have a video account that is not suspended. Otherwise the request returns `400` with `Not Able to make request`. A user with no video host returns `404`. Add contacts with `POST /domains/{domain}/users/{user}/host/contacts`. `GET /domains/{domain}/users/{user}/video/contacts` returns the same list. — [GET /domains/{domain}/users/{user}/host/contacts]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/host/contacts',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/host/contacts',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_iotum_video_subscription: ToolDefinition = {
+  schema: {
+    name: 'read_iotum_video_subscription',
+    description: 'Read video subscription — Returns one subscription of the domain\\\'s video account, found by its product slug, as the video service returns it.  Any user can read its own domain\\\'s video account. Office Manager, Reseller, and Super User scopes can read the domains they manage.  A product the account is not subscribed to returns `404`. To list every subscription, use **List domain video subscriptions**. — [GET /domains/{domain}/video/subscription/{slug}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "slug": {
+                      "type": "string",
+                      "description": "Slug of the plan, as `slug` appears in **List available video products**, such as `video_pro`. Letters, digits, `-`, and `_`."
+                }
+          },
+          "required": [
+                "domain",
+                "slug"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/video/subscription/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'slug'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/video/subscription/{slug}',
+      pathParams,
     });
 
     return {

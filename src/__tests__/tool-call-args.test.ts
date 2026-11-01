@@ -193,7 +193,10 @@ describe('Tool call arguments and scope resolution', () => {
 
     for (const [name, def] of toolRegistry) {
       const fnStr = def.handler.toString();
-      const props = Object.keys(def.schema.inputSchema?.properties || {});
+      const schemaObj = def.schema.inputSchema;
+      const props = (schemaObj && typeof schemaObj === 'object' && 'properties' in schemaObj && schemaObj.properties && typeof schemaObj.properties === 'object')
+        ? Object.keys(schemaObj.properties)
+        : [];
       const matchPath = fnStr.match(/pathParamNames = \[([^\]]*)\]/);
       const matchQuery = fnStr.match(/queryParamNames = \[([^\]]*)\]/);
       const matchBody = fnStr.match(/bodyParamNames = \[([^\]]*)\]/);

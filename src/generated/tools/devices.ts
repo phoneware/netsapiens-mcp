@@ -5,17 +5,56 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_devices: ToolDefinition = {
   schema: {
     name: 'get_devices',
-    description: 'Get Devices for User — [GET /domains/{domain}/users/{user}/devices]',
+    description: 'List user devices — Returns every device the user owns, with its registration state, SIP settings, and provisioning details.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, Super User, or Super User Read Only for the users you administer. A Site Manager can read only users in its own site.  Page with `start` and `limit`; without `limit` every matching device is returned. Order with `sort`, by SIP registration URI by default. Each device also carries its owner\\\'s name and login, its emergency address, and, when it is linked to a phone, the provisioning fields from the Endpoints server. `error-reading-from-endpoint-module` is `yes` when that lookup failed. Credentials follow one rule: your own devices come back in plain text, and everyone else\\\'s are masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. Lists carry `device-provisioning-password` but not `device-sip-registration-password`.  `GET /domains/{domain}/users/{user}/devices/count` returns the total, and `GET /domains/{domain}/users/{user}/devices/list` returns fewer fields per device. — [GET /domains/{domain}/users/{user}/devices]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "filters": {
+                      "type": "string",
+                      "description": "`video` leaves out web phone, data, and video bridge devices: any SIP registration URI containing `wp`, `data.`, or `video.bridge`. Allowed values: \"video\"",
+                      "enum": [
+                            "video"
+                      ]
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
                 }
           },
           "required": [
@@ -24,16 +63,28 @@ export const get_devices: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/devices',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'start', 'filters', 'include-secrets', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/devices',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,21 +99,21 @@ export const get_devices: ToolDefinition = {
 export const create_device: ToolDefinition = {
   schema: {
     name: 'create_device',
-    description: 'Create Device for User — [POST /domains/{domain}/users/{user}/devices]',
+    description: 'Create user device — Creates a SIP device for the user and, when you send a MAC address and model, links it to a phone on the Endpoints server.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, or Super User for the users you administer. A Basic User or other user-level scope can create devices only for itself, and a Site Manager only for users in its site; anyone else gets `403`.  Only `device` is required. A bare name is qualified with the path domain; a full SIP URI naming another domain returns `404`. Settings you leave out come from the domain\\\'s and territory\\\'s device defaults, and a flag you send wins over the default. If you send no `device-sip-registration-password`, a random 16-character password of letters and digits is generated. A password that looks like a mask, such as `********`, returns `400`. To link a phone, send `device-provisioning-mac-address` with `device-models-model`, and optionally `device-provisioning-line`, which defaults to `1`. A model of `Manual or Softphone` links nothing.  The change is published over the service bus (SBUS) and applied shortly after, so the answer is `202`. With `synchronous=yes` the API waits up to 2 seconds for the device to appear and answers `200` with it. If it has not appeared by then, the answer is still `202`.  A device name that already exists returns `409`. — [POST /domains/{domain}/users/{user}/devices]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "This is the main user extension for the user account."
                 },
                 "synchronous": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -71,15 +122,15 @@ export const create_device: ToolDefinition = {
                 },
                 "device": {
                       "type": "string",
-                      "description": "This is the \"device\" id which will be the first part of the device-sip-registration-uri which can be used to read specific device information."
+                      "description": "Device name, such as `1001a`: the user part of `device-sip-registration-uri`. On create, send it bare, or as a full SIP URI in the path domain; it is qualified with the path domain."
                 },
                 "device-sip-registration-uri": {
                       "type": "string",
-                      "description": "This read-only value is the full SIP uri and will often be sip:[device]@[domain]"
+                      "description": "SIP address the device registers as: `sip:<device>@<domain>`. Read-only."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "This is the current registration status for the device. This value will be registered if its in the value time windoe. Allowed values: \"registered\", \"unregistered\"",
+                      "description": "`registered` while the device's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. Read-only. Allowed values: \"registered\", \"unregistered\"",
                       "enum": [
                             "registered",
                             "unregistered"
@@ -87,16 +138,20 @@ export const create_device: ToolDefinition = {
                 },
                 "device-sip-registration-password": {
                       "type": "string",
-                      "description": "This is the password which would be used for device registration. If left unset on device create it will create a new random password with a default length of 16 characters."
+                      "description": "SIP password the device registers with. Returned on single-device reads, not on lists. In plain text only when your token is the device's own user; every other caller gets it masked: the first 2 and last 2 characters around asterisks, or all asterisks for 8 characters or fewer. A Super User gets it in plain text with `include-secrets=yes`, and that read is audit-logged. On create, a random 16-character password of letters and digits is generated when you send none. On update, sending back the masked value you read keeps the stored password; any other mask-shaped value returns `400`."
                 },
                 "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "This is a override value for emergency caller id value that would be specific to this device and would override the user's set value. Default: \"[*]\"",
+                      "description": "Caller ID number sent on emergency calls from this device. `[*]`, stored when you send nothing, uses the user's emergency caller ID. Default: \"[*]\"",
                       "default": "[*]"
+                },
+                "core-server": {
+                      "type": "string",
+                      "description": "Core server that holds the device's registration."
                 },
                 "device-force-notify-new-voicemails-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -105,7 +160,7 @@ export const create_device: ToolDefinition = {
                 },
                 "device-level-call-recording-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -114,7 +169,7 @@ export const create_device: ToolDefinition = {
                 },
                 "device-push-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -123,28 +178,24 @@ export const create_device: ToolDefinition = {
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "This is the contact value for the device from the last successfull registration."
-                },
-                "device-sip-registration-core-server": {
-                      "type": "string",
-                      "description": "This is the hostname for which the last registration was completed.  This would be used to connect the device from on inbound call."
+                      "description": "Contact header from the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "This date-time will be the last registration time of the device. This time may be slightly delayed to improve replication throughput."
+                      "description": "When the device last registered, RFC 3339 in UTC. Read-only. `null` when it has never registered. It can lag slightly, because registrations are replicated in batches."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "This date-time will be the time at which the device will be treated as unregisted and should be in the future for active registed devices."
+                      "description": "When the device's registration expires, RFC 3339 in UTC. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-expiry-seconds": {
                       "type": "number",
-                      "description": "This is the requested re-register perior for the device. The device will be treated as unregistered if they do not register in this window + a system wide grace period. Default: 60",
+                      "description": "Re-registration period the device is given, in seconds. Defaults to `60`, `30` for a push-enabled app, and `180` for a video bridge. Default: 60",
                       "default": 60
                 },
                 "device-sip-registration-ignore-for-presence-calculation": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -153,7 +204,7 @@ export const create_device: ToolDefinition = {
                 },
                 "device-sip-registration-ignore-report-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -162,15 +213,24 @@ export const create_device: ToolDefinition = {
                 },
                 "device-sip-registration-ip-address": {
                       "type": "string",
-                      "description": "This is the read-only value is the IP:port for the last successfull registration."
+                      "description": "IP address and port of the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "This is the read-only value for the user-agent used during the last successfully registration."
+                      "description": "User agent of the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-no-to-tag-in-cancel": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-transcode-opus": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -179,7 +239,7 @@ export const create_device: ToolDefinition = {
                 },
                 "device-srtp-enabled": {
                       "type": "string",
-                      "description": "This setting will enable SRTP (secure/encrypted audio) on the the device. Yes will force and \"opp. Allowed values: \"yes\", \"no\", \"opportunistic\". Default: \"no\"",
+                      "description": "Encrypted media (SRTP): `yes` requires it, `opportunistic` uses it when the other side supports it, and `no` turns it off. Allowed values: \"yes\", \"no\", \"opportunistic\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no",
@@ -189,7 +249,7 @@ export const create_device: ToolDefinition = {
                 },
                 "auto-answer-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -198,58 +258,63 @@ export const create_device: ToolDefinition = {
                 },
                 "device-sip-allowed-user-agent": {
                       "type": "string",
-                      "description": "This value can be used to restrict registration to a specific User Agent or partial match of User Agent.  This allows for an extra layer of secutiry if you know the expected user agent."
+                      "description": "User agent the device is allowed to register with. Where the core enforces a user agent allowlist, this is filled in automatically when the device's user agent matches the core's `UaAcceptPatterns` setting."
                 },
                 "device-sip-nat-traversal-enabled": {
                       "type": "string",
-                      "description": "This is the main nat transveral setting. In most all device cases \"automatic\" is the correct answe. Allowed values: \"automatic\", \"none\", \"never\", \"fixed\". Default: \"automatic\"",
+                      "description": "Whether the core relays the device's media (RTP): `automatic` relays unless the other side is `never`; `none` leaves it to the other side, with no relay when both are `none`; `never` never relays; `fixed` is like `automatic` without mid-call port changes; `Sdp` relays at once between the addresses in each side's SDP. Defaults to `automatic`. Allowed values: \"automatic\", \"none\", \"never\", \"fixed\", \"Sdp\". Default: \"automatic\"",
                       "enum": [
                             "automatic",
                             "none",
                             "never",
-                            "fixed"
+                            "fixed",
+                            "Sdp"
                       ],
                       "default": "automatic"
                 },
                 "device-sip-latency-seconds-current": {
                       "type": "number",
-                      "description": "This is the latency from the latest registration measured in seconds from the time the core sent a 407 challenge to the 200ok with Auth."
+                      "description": "Latency of the last registration, in seconds: the time from the core's authentication challenge to the device's authenticated answer. Read-only."
                 },
                 "device-sip-latency-seconds-average": {
                       "type": "number",
-                      "description": "This is the average of the last 5 registration attempts measured similiarly to device-sip-latency-seconds-current."
+                      "description": "Average registration latency over recent registrations, in seconds. Read-only."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "This value if set will be the address-id specific to this device for emegeny calling"
+                      "description": "Emergency address used for calls from this device. When the device has none, the user's, site's, or domain's address is returned and `emergency-address-source` says which."
                 },
                 "error-reading-from-endpoint-module": {
                       "type": "string",
-                      "description": "If yes, it means the API had an issue accessing the NDP for mac specific data"
+                      "description": "`yes` when the provisioning lookup on the Endpoints server failed, so the provisioning fields are missing. Otherwise `no`. Read-only. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "login-username": {
                       "type": "string",
-                      "description": "This is a read-only value of the user's login for the owner of the device."
+                      "description": "Login of the device's owner, such as `1001@example.com`. Read-only."
                 },
                 "name-full-name": {
                       "type": "string",
-                      "description": "This is a read-only value of the user's full name for the owner of the device."
+                      "description": "Full name of the device's owner. `Unassigned` for a device no user owns. Read-only."
                 },
                 "device-models-model": {
                       "type": "string",
-                      "description": "This is an optional model that when provided with device-provisioning-mac-address will link this device to the mac address in the device provisioning platform."
+                      "description": "Phone brand and model the device is linked to, such as `Yealink T54W`. Send it with `device-provisioning-mac-address` to link a phone. `Manual or Softphone` links nothing."
                 },
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "This is the mac address that has this device linked to it. This field can be used to link a mac address on device create. Must also provide a device-models-model"
+                      "description": "MAC address of the phone the device is linked to, such as `00005e005301`. Send it with `device-models-model` to link a phone."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "This is the SiPbx Servers primary server config from a list of valid"
+                      "description": "Core server the phone is told to register to, by its server name on the platform. Defaults to the platform's configured core server."
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "This is the transport that will be requested when provising the device. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
                       "enum": [
                             "udp",
                             "tcp",
@@ -259,19 +324,19 @@ export const create_device: ToolDefinition = {
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "The provisioning username for the request to authenticate the configuration request."
+                      "description": "User name the phone presents to fetch its configuration file."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "The provisioning password for the request to authenticate the configuration request."
+                      "description": "Password the phone presents to fetch its configuration file. In plain text only when your token is the device's own user; every other caller gets it masked the same way as `device-sip-registration-password`. A Super User gets it in plain text with `include-secrets=yes`, and that read is audit-logged. On update, sending back the masked value you read keeps the stored password; any other mask-shaped value returns `400`."
                 },
                 "device-provisioning-line": {
                       "type": "number",
-                      "description": "Optional setting to select which line is used on the device when provisionined with device-models-model and device-provisioning-mac-address"
+                      "description": "Line on the phone that carries this device. Set it on create, with `device-provisioning-mac-address` and `device-models-model`. Defaults to `1`."
                 },
                 "device-provisioning-overrides": {
                       "type": "string",
-                      "description": "This is the overrides set for the mac address in the provisioning server on the mac linked to this device."
+                      "description": "Provisioning overrides set on this phone only, as `name=\"value\"` pairs joined by `&`. Brand, domain, and site defaults are not included. No length limit."
                 },
                 "recording-configuration": {
                       "type": "string",
@@ -283,6 +348,50 @@ export const create_device: ToolDefinition = {
                             "no"
                       ],
                       "default": "no"
+                },
+                "geo-country": {
+                      "type": "string",
+                      "description": "Country of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-region": {
+                      "type": "string",
+                      "description": "Region or state of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-city": {
+                      "type": "string",
+                      "description": "City of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-latitude": {
+                      "type": "number",
+                      "description": "Latitude of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-longitude": {
+                      "type": "number",
+                      "description": "Longitude of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Model name the phone's provisioning row stores, such as `Yealink T54W`. Read-only; send `device-models-model` to change it."
+                },
+                "device-sip-registration-transport": {
+                      "type": "string",
+                      "description": "SIP transport of the device's last registration, as the core recorded it. Read-only. Not the same field as `device-provisioning-sip-transport-protocol`."
+                },
+                "emergency-address-source": {
+                      "type": "string",
+                      "description": "Where `emergency-address-id` came from when the device has no address of its own: `user_level`, or the level the user inherited it from. Read-only."
+                },
+                "emergency-address-pretty-printed": {
+                      "type": "string",
+                      "description": "Emergency address as one line of text. Read-only."
+                },
+                "emergency-address-source-ip-address": {
+                      "type": "string",
+                      "description": "IP address recorded with the emergency address. Read-only."
+                },
+                "emergency-address-provisioned-as-endpoint": {
+                      "type": "boolean",
+                      "description": "`true` when `caller-id-number-emergency` is provisioned as an endpoint caller ID with the emergency service. Read-only."
                 }
           },
           "required": [
@@ -292,13 +401,19 @@ export const create_device: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/devices',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'device', 'device-sip-registration-uri', 'device-sip-registration-state', 'device-sip-registration-password', 'caller-id-number-emergency', 'device-force-notify-new-voicemails-enabled', 'device-level-call-recording-enabled', 'device-push-enabled', 'device-sip-registration-contact', 'device-sip-registration-core-server', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-expiry-seconds', 'device-sip-registration-ignore-for-presence-calculation', 'device-sip-registration-ignore-report-enabled', 'device-sip-registration-ip-address', 'device-sip-registration-user-agent', 'device-sip-no-to-tag-in-cancel', 'device-srtp-enabled', 'auto-answer-enabled', 'device-sip-allowed-user-agent', 'device-sip-nat-traversal-enabled', 'device-sip-latency-seconds-current', 'device-sip-latency-seconds-average', 'emergency-address-id', 'error-reading-from-endpoint-module', 'login-username', 'name-full-name', 'device-models-model', 'device-provisioning-mac-address', 'device-provisioning-registration-core-server', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-provisioning-line', 'device-provisioning-overrides', 'recording-configuration'];
+    const bodyParamNames = ['synchronous', 'device', 'user', 'domain', 'device-sip-registration-uri', 'device-sip-registration-state', 'device-sip-registration-password', 'caller-id-number-emergency', 'core-server', 'device-force-notify-new-voicemails-enabled', 'device-level-call-recording-enabled', 'device-push-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-expiry-seconds', 'device-sip-registration-ignore-for-presence-calculation', 'device-sip-registration-ignore-report-enabled', 'device-sip-registration-ip-address', 'device-sip-registration-user-agent', 'device-sip-no-to-tag-in-cancel', 'device-transcode-opus', 'device-srtp-enabled', 'auto-answer-enabled', 'device-sip-allowed-user-agent', 'device-sip-nat-traversal-enabled', 'device-sip-latency-seconds-current', 'device-sip-latency-seconds-average', 'emergency-address-id', 'error-reading-from-endpoint-module', 'login-username', 'name-full-name', 'device-models-model', 'device-provisioning-mac-address', 'device-provisioning-registration-core-server', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-provisioning-line', 'device-provisioning-overrides', 'recording-configuration', 'geo-country', 'geo-region', 'geo-city', 'geo-latitude', 'geo-longitude', 'device-models-brand-and-model', 'device-sip-registration-transport', 'emergency-address-source', 'emergency-address-pretty-printed', 'emergency-address-source-ip-address', 'emergency-address-provisioned-as-endpoint'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -319,250 +434,33 @@ export const create_device: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_devices_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_devices_count',
-    description: 'Count Devices for Domain — [GET /domains/{domain}/devices/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "start": {
-                      "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
-                      "default": 0
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const queryParamNames = ['limit', 'start'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/devices/count',
-      pathParams,
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_resellers_by_reseller_devices_count: ToolDefinition = {
-  schema: {
-    name: 'get_resellers_by_reseller_devices_count',
-    description: 'Count Devices for Reseller — [GET /resellers/{reseller}/devices/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "reseller": {
-                      "type": "string",
-                      "description": "reseller"
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "start": {
-                      "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
-                      "default": 0
-                }
-          },
-          "required": [
-                "reseller"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['reseller'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const queryParamNames = ['limit', 'start'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/resellers/{reseller}/devices/count',
-      pathParams,
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const count_devices: ToolDefinition = {
-  schema: {
-    name: 'count_devices',
-    description: 'Count Devices for User — [GET /domains/{domain}/users/{user}/devices/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "start": {
-                      "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
-                      "default": 0
-                }
-          },
-          "required": [
-                "domain",
-                "user"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const queryParamNames = ['limit', 'start'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/devices/count',
-      pathParams,
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_devices_by_device_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_devices_by_device_count',
-    description: 'Count Devices by Device — [GET /domains/{domain}/devices/{device}/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "device": {
-                      "type": "string",
-                      "description": "device"
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "start": {
-                      "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
-                      "default": 0
-                }
-          },
-          "required": [
-                "domain",
-                "device"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'device'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const queryParamNames = ['limit', 'start'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/devices/{device}/count',
-      pathParams,
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_device: ToolDefinition = {
   schema: {
     name: 'get_device',
-    description: 'Get Specifc Device — [GET /domains/{domain}/users/{user}/devices/{device}]',
+    description: 'Read user device — Returns one of the user\\\'s devices, with its registration state, SIP settings, recording setting, and provisioning details.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, Super User, or Super User Read Only for the users you administer.  Credentials follow one rule: your own device comes back in plain text, and anyone else\\\'s is masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. A single-device read carries both `device-sip-registration-password` and `device-provisioning-password`. A device the user does not own, or one in another domain, returns `404`. — [GET /domains/{domain}/users/{user}/devices/{device}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "device": {
                       "type": "string",
-                      "description": "device"
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -572,16 +470,28 @@ export const get_device: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/devices/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'device'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/devices/{device}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -596,29 +506,29 @@ export const get_device: ToolDefinition = {
 export const update_device: ToolDefinition = {
   schema: {
     name: 'update_device',
-    description: 'Update Device for User — [PUT /domains/{domain}/users/{user}/devices/{device}]',
+    description: 'Update user device — Changes a device\\\'s SIP and provisioning settings. Send only the fields you want to change.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, or Super User for the users you administer. A device that does not exist returns `404`. A full SIP URI in the path must name the path domain; a device in another domain returns `404`. On the user path, a device that belongs to a different user returns `404`. A Basic User or other user-level scope acting on someone else\\\'s device, or a Site Manager acting on a device outside its site, gets `403`. Moving the device to another `user` needs the same right over the new owner.  The change is published over the service bus (SBUS) and applied shortly after, so the answer is `202`. Sending back the masked password you read keeps the stored one. Any other value that looks like a mask, such as `********`, returns `400`: send the real password or leave the field out. When you send `device-provisioning-mac-address` with `device-models-model`, the phone link is updated too; a phone registered to another domain returns `404`.  `check-sync: yes` also reboots the device after the update is applied, so the phone fetches a configuration that already has your change. `no`, `false`, `0`, and `off` reboot nothing. To reboot without changing anything, use `POST /domains/{domain}/users/{user}/devices/{device}/reboot`. — [PUT /domains/{domain}/users/{user}/devices/{device}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "This is the main user extension for the user account."
                 },
                 "device": {
                       "type": "string",
-                      "description": "device"
+                      "description": "Device name, such as `1001a`: the user part of `device-sip-registration-uri`. On create, send it bare, or as a full SIP URI in the path domain; it is qualified with the path domain."
                 },
                 "device-sip-registration-uri": {
                       "type": "string",
-                      "description": "This read-only value is the full SIP uri and will often be sip:[device]@[domain]"
+                      "description": "SIP address the device registers as: `sip:<device>@<domain>`. Read-only."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "This is the current registration status for the device. This value will be registered if its in the value time windoe. Allowed values: \"registered\", \"unregistered\"",
+                      "description": "`registered` while the device's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. Read-only. Allowed values: \"registered\", \"unregistered\"",
                       "enum": [
                             "registered",
                             "unregistered"
@@ -626,16 +536,20 @@ export const update_device: ToolDefinition = {
                 },
                 "device-sip-registration-password": {
                       "type": "string",
-                      "description": "This is the password which would be used for device registration. If left unset on device create it will create a new random password with a default length of 16 characters."
+                      "description": "SIP password the device registers with. Returned on single-device reads, not on lists. In plain text only when your token is the device's own user; every other caller gets it masked: the first 2 and last 2 characters around asterisks, or all asterisks for 8 characters or fewer. A Super User gets it in plain text with `include-secrets=yes`, and that read is audit-logged. On create, a random 16-character password of letters and digits is generated when you send none. On update, sending back the masked value you read keeps the stored password; any other mask-shaped value returns `400`."
                 },
                 "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "This is a override value for emergency caller id value that would be specific to this device and would override the user's set value. Default: \"[*]\"",
+                      "description": "Caller ID number sent on emergency calls from this device. `[*]`, stored when you send nothing, uses the user's emergency caller ID. Default: \"[*]\"",
                       "default": "[*]"
+                },
+                "core-server": {
+                      "type": "string",
+                      "description": "Core server that holds the device's registration."
                 },
                 "device-force-notify-new-voicemails-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -644,7 +558,7 @@ export const update_device: ToolDefinition = {
                 },
                 "device-level-call-recording-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -653,7 +567,7 @@ export const update_device: ToolDefinition = {
                 },
                 "device-push-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -662,28 +576,24 @@ export const update_device: ToolDefinition = {
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "This is the contact value for the device from the last successfull registration."
-                },
-                "device-sip-registration-core-server": {
-                      "type": "string",
-                      "description": "This is the hostname for which the last registration was completed.  This would be used to connect the device from on inbound call."
+                      "description": "Contact header from the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "This date-time will be the last registration time of the device. This time may be slightly delayed to improve replication throughput."
+                      "description": "When the device last registered, RFC 3339 in UTC. Read-only. `null` when it has never registered. It can lag slightly, because registrations are replicated in batches."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "This date-time will be the time at which the device will be treated as unregisted and should be in the future for active registed devices."
+                      "description": "When the device's registration expires, RFC 3339 in UTC. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-expiry-seconds": {
                       "type": "number",
-                      "description": "This is the requested re-register perior for the device. The device will be treated as unregistered if they do not register in this window + a system wide grace period. Default: 60",
+                      "description": "Re-registration period the device is given, in seconds. Defaults to `60`, `30` for a push-enabled app, and `180` for a video bridge. Default: 60",
                       "default": 60
                 },
                 "device-sip-registration-ignore-for-presence-calculation": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -692,7 +602,7 @@ export const update_device: ToolDefinition = {
                 },
                 "device-sip-registration-ignore-report-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -701,15 +611,24 @@ export const update_device: ToolDefinition = {
                 },
                 "device-sip-registration-ip-address": {
                       "type": "string",
-                      "description": "This is the read-only value is the IP:port for the last successfull registration."
+                      "description": "IP address and port of the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "This is the read-only value for the user-agent used during the last successfully registration."
+                      "description": "User agent of the device's last registration. Read-only. `null` when it has never registered."
                 },
                 "device-sip-no-to-tag-in-cancel": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-transcode-opus": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -718,7 +637,7 @@ export const update_device: ToolDefinition = {
                 },
                 "device-srtp-enabled": {
                       "type": "string",
-                      "description": "This setting will enable SRTP (secure/encrypted audio) on the the device. Yes will force and \"opp. Allowed values: \"yes\", \"no\", \"opportunistic\". Default: \"no\"",
+                      "description": "Encrypted media (SRTP): `yes` requires it, `opportunistic` uses it when the other side supports it, and `no` turns it off. Allowed values: \"yes\", \"no\", \"opportunistic\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no",
@@ -728,7 +647,7 @@ export const update_device: ToolDefinition = {
                 },
                 "auto-answer-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -737,58 +656,63 @@ export const update_device: ToolDefinition = {
                 },
                 "device-sip-allowed-user-agent": {
                       "type": "string",
-                      "description": "This value can be used to restrict registration to a specific User Agent or partial match of User Agent.  This allows for an extra layer of secutiry if you know the expected user agent."
+                      "description": "User agent the device is allowed to register with. Where the core enforces a user agent allowlist, this is filled in automatically when the device's user agent matches the core's `UaAcceptPatterns` setting."
                 },
                 "device-sip-nat-traversal-enabled": {
                       "type": "string",
-                      "description": "This is the main nat transveral setting. In most all device cases \"automatic\" is the correct answe. Allowed values: \"automatic\", \"none\", \"never\", \"fixed\". Default: \"automatic\"",
+                      "description": "Whether the core relays the device's media (RTP): `automatic` relays unless the other side is `never`; `none` leaves it to the other side, with no relay when both are `none`; `never` never relays; `fixed` is like `automatic` without mid-call port changes; `Sdp` relays at once between the addresses in each side's SDP. Defaults to `automatic`. Allowed values: \"automatic\", \"none\", \"never\", \"fixed\", \"Sdp\". Default: \"automatic\"",
                       "enum": [
                             "automatic",
                             "none",
                             "never",
-                            "fixed"
+                            "fixed",
+                            "Sdp"
                       ],
                       "default": "automatic"
                 },
                 "device-sip-latency-seconds-current": {
                       "type": "number",
-                      "description": "This is the latency from the latest registration measured in seconds from the time the core sent a 407 challenge to the 200ok with Auth."
+                      "description": "Latency of the last registration, in seconds: the time from the core's authentication challenge to the device's authenticated answer. Read-only."
                 },
                 "device-sip-latency-seconds-average": {
                       "type": "number",
-                      "description": "This is the average of the last 5 registration attempts measured similiarly to device-sip-latency-seconds-current."
+                      "description": "Average registration latency over recent registrations, in seconds. Read-only."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "This value if set will be the address-id specific to this device for emegeny calling"
+                      "description": "Emergency address used for calls from this device. When the device has none, the user's, site's, or domain's address is returned and `emergency-address-source` says which."
                 },
                 "error-reading-from-endpoint-module": {
                       "type": "string",
-                      "description": "If yes, it means the API had an issue accessing the NDP for mac specific data"
+                      "description": "`yes` when the provisioning lookup on the Endpoints server failed, so the provisioning fields are missing. Otherwise `no`. Read-only. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "login-username": {
                       "type": "string",
-                      "description": "This is a read-only value of the user's login for the owner of the device."
+                      "description": "Login of the device's owner, such as `1001@example.com`. Read-only."
                 },
                 "name-full-name": {
                       "type": "string",
-                      "description": "This is a read-only value of the user's full name for the owner of the device."
+                      "description": "Full name of the device's owner. `Unassigned` for a device no user owns. Read-only."
                 },
                 "device-models-model": {
                       "type": "string",
-                      "description": "This is an optional model that when provided with device-provisioning-mac-address will link this device to the mac address in the device provisioning platform."
+                      "description": "Phone brand and model the device is linked to, such as `Yealink T54W`. Send it with `device-provisioning-mac-address` to link a phone. `Manual or Softphone` links nothing."
                 },
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "This is the mac address that has this device linked to it. This field can be used to link a mac address on device create. Must also provide a device-models-model"
+                      "description": "MAC address of the phone the device is linked to, such as `00005e005301`. Send it with `device-models-model` to link a phone."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "This is the SiPbx Servers primary server config from a list of valid"
+                      "description": "Core server the phone is told to register to, by its server name on the platform. Defaults to the platform's configured core server."
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "This is the transport that will be requested when provising the device. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
                       "enum": [
                             "udp",
                             "tcp",
@@ -798,19 +722,19 @@ export const update_device: ToolDefinition = {
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "The provisioning username for the request to authenticate the configuration request."
+                      "description": "User name the phone presents to fetch its configuration file."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "The provisioning password for the request to authenticate the configuration request."
+                      "description": "Password the phone presents to fetch its configuration file. In plain text only when your token is the device's own user; every other caller gets it masked the same way as `device-sip-registration-password`. A Super User gets it in plain text with `include-secrets=yes`, and that read is audit-logged. On update, sending back the masked value you read keeps the stored password; any other mask-shaped value returns `400`."
                 },
                 "device-provisioning-line": {
                       "type": "number",
-                      "description": "Optional setting to select which line is used on the device when provisionined with device-models-model and device-provisioning-mac-address"
+                      "description": "Line on the phone that carries this device. Set it on create, with `device-provisioning-mac-address` and `device-models-model`. Defaults to `1`."
                 },
                 "device-provisioning-overrides": {
                       "type": "string",
-                      "description": "This is the overrides set for the mac address in the provisioning server on the mac linked to this device."
+                      "description": "Provisioning overrides set on this phone only, as `name=\"value\"` pairs joined by `&`. Brand, domain, and site defaults are not included. No length limit."
                 },
                 "recording-configuration": {
                       "type": "string",
@@ -822,6 +746,62 @@ export const update_device: ToolDefinition = {
                             "no"
                       ],
                       "default": "no"
+                },
+                "geo-country": {
+                      "type": "string",
+                      "description": "Country of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-region": {
+                      "type": "string",
+                      "description": "Region or state of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-city": {
+                      "type": "string",
+                      "description": "City of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-latitude": {
+                      "type": "number",
+                      "description": "Latitude of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "geo-longitude": {
+                      "type": "number",
+                      "description": "Longitude of the device's registration IP address, from geolocation. Read-only. `null` when unknown."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Model name the phone's provisioning row stores, such as `Yealink T54W`. Read-only; send `device-models-model` to change it."
+                },
+                "device-sip-registration-transport": {
+                      "type": "string",
+                      "description": "SIP transport of the device's last registration, as the core recorded it. Read-only. Not the same field as `device-provisioning-sip-transport-protocol`."
+                },
+                "emergency-address-source": {
+                      "type": "string",
+                      "description": "Where `emergency-address-id` came from when the device has no address of its own: `user_level`, or the level the user inherited it from. Read-only."
+                },
+                "emergency-address-pretty-printed": {
+                      "type": "string",
+                      "description": "Emergency address as one line of text. Read-only."
+                },
+                "emergency-address-source-ip-address": {
+                      "type": "string",
+                      "description": "IP address recorded with the emergency address. Read-only."
+                },
+                "emergency-address-provisioned-as-endpoint": {
+                      "type": "boolean",
+                      "description": "`true` when `caller-id-number-emergency` is provisioned as an endpoint caller ID with the emergency service. Read-only."
+                },
+                "check-sync": {
+                      "type": "string",
+                      "description": "Ask the endpoint to re-provision itself (SIP `check-sync` NOTIFY) instead of applying this update. **The reboot replaces the update**: when `yes` is sent, the check-sync event is published and every other field in the same body is discarded, so send a reboot as its own request — or use `POST /domains/{domain}/users/{user}/devices/{device}/reboot`, which does the same thing without the surprise. `no` (also `false`, `0`, or omitting the field) applies the update normally and reboots nothing. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "check-sync-event-header": {
+                      "type": "string",
+                      "description": "Only meaningful alongside `check-sync: yes`. Overrides the SIP `Event` header sent with the NOTIFY, which defaults to `check-sync`. Set it only for a vendor that listens on its own value. The v1 spelling `evtCheckSync` is also accepted."
                 }
           },
           "required": [
@@ -831,13 +811,19 @@ export const update_device: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/devices/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'device'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['device-sip-registration-uri', 'device-sip-registration-state', 'device-sip-registration-password', 'caller-id-number-emergency', 'device-force-notify-new-voicemails-enabled', 'device-level-call-recording-enabled', 'device-push-enabled', 'device-sip-registration-contact', 'device-sip-registration-core-server', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-expiry-seconds', 'device-sip-registration-ignore-for-presence-calculation', 'device-sip-registration-ignore-report-enabled', 'device-sip-registration-ip-address', 'device-sip-registration-user-agent', 'device-sip-no-to-tag-in-cancel', 'device-srtp-enabled', 'auto-answer-enabled', 'device-sip-allowed-user-agent', 'device-sip-nat-traversal-enabled', 'device-sip-latency-seconds-current', 'device-sip-latency-seconds-average', 'emergency-address-id', 'error-reading-from-endpoint-module', 'login-username', 'name-full-name', 'device-models-model', 'device-provisioning-mac-address', 'device-provisioning-registration-core-server', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-provisioning-line', 'device-provisioning-overrides', 'recording-configuration'];
+    const bodyParamNames = ['device', 'user', 'domain', 'device-sip-registration-uri', 'device-sip-registration-state', 'device-sip-registration-password', 'caller-id-number-emergency', 'core-server', 'device-force-notify-new-voicemails-enabled', 'device-level-call-recording-enabled', 'device-push-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-expiry-seconds', 'device-sip-registration-ignore-for-presence-calculation', 'device-sip-registration-ignore-report-enabled', 'device-sip-registration-ip-address', 'device-sip-registration-user-agent', 'device-sip-no-to-tag-in-cancel', 'device-transcode-opus', 'device-srtp-enabled', 'auto-answer-enabled', 'device-sip-allowed-user-agent', 'device-sip-nat-traversal-enabled', 'device-sip-latency-seconds-current', 'device-sip-latency-seconds-average', 'emergency-address-id', 'error-reading-from-endpoint-module', 'login-username', 'name-full-name', 'device-models-model', 'device-provisioning-mac-address', 'device-provisioning-registration-core-server', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-provisioning-line', 'device-provisioning-overrides', 'recording-configuration', 'geo-country', 'geo-region', 'geo-city', 'geo-latitude', 'geo-longitude', 'device-models-brand-and-model', 'device-sip-registration-transport', 'emergency-address-source', 'emergency-address-pretty-printed', 'emergency-address-source-ip-address', 'emergency-address-provisioned-as-endpoint', 'check-sync', 'check-sync-event-header'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -861,21 +847,21 @@ export const update_device: ToolDefinition = {
 export const delete_device: ToolDefinition = {
   schema: {
     name: 'delete_device',
-    description: 'Delete Device for User — [DELETE /domains/{domain}/users/{user}/devices/{device}]',
+    description: 'Delete user device — Deletes a device and its call recording configuration.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, or Super User for the users you administer. A device that does not exist returns `404`. A full SIP URI in the path must name the path domain; a device in another domain returns `404`. On the user path, a device that belongs to a different user returns `404`. A Basic User or other user-level scope acting on someone else\\\'s device, or a Site Manager acting on a device outside its site, gets `403`.  The delete is published over the service bus (SBUS) and applied shortly after, so the answer is `202`. The device\\\'s recording configuration is removed at once. A phone linked to the device keeps its provisioning entry. — [DELETE /domains/{domain}/users/{user}/devices/{device}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "device": {
                       "type": "string",
-                      "description": "device"
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
                 }
           },
           "required": [
@@ -884,6 +870,12 @@ export const delete_device: ToolDefinition = {
                 "device"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/devices/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'device'];
@@ -906,16 +898,93 @@ export const delete_device: ToolDefinition = {
   },
 };
 
-export const get_domain_devices: ToolDefinition = {
+export const count_devices: ToolDefinition = {
   schema: {
-    name: 'get_domain_devices',
-    description: 'Get Devices in Domain — [GET /domains/{domain}/devices]',
+    name: 'count_devices',
+    description: 'Count user devices — Returns how many devices the user owns, optionally only the registered ones.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, Super User, or Super User Read Only for the users you administer.  A user that does not exist returns `404`. — [GET /domains/{domain}/users/{user}/devices/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/devices/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['device-sip-registration-state'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/devices/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_devices_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_devices_count',
+    description: 'Count domain devices — Returns how many devices the domain has, optionally only in one site or only the registered ones.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only, in your own domain or one you administer. A Site Manager always counts its own site, and naming another site returns `403`.  The filters match `GET /domains/{domain}/devices`, so the total agrees with that list. — [GET /domains/{domain}/devices/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only devices whose owner is in this site. `*` means no filter. A Site Manager always gets its own site, and naming another site returns `403`."
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
                 }
           },
           "required": [
@@ -923,16 +992,862 @@ export const get_domain_devices: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/devices/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['site', 'device-sip-registration-state'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/devices/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_resellers_by_reseller_devices_count: ToolDefinition = {
+  schema: {
+    name: 'get_resellers_by_reseller_devices_count',
+    description: 'Count territory devices — Returns how many devices the domains in a territory have, optionally only the registered ones.  Requires Reseller for its own territory, or Super User or Super User Read Only for any territory. A Reseller naming another territory gets `403`.  A territory that does not exist returns `404`. — [GET /resellers/{reseller}/devices/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory."
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                }
+          },
+          "required": [
+                "reseller"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/devices/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['device-sip-registration-state'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/devices/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_devices_by_device_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_devices_by_device_count',
+    description: 'Count domain devices by name — Returns `1` when the domain has a device with this name and `0` when it does not.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only, in your own domain or one you administer. A Site Manager counts only devices in its own site. A full SIP URI in another domain counts `0`. — [GET /domains/{domain}/devices/{device}/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "device": {
+                      "type": "string",
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
+                }
+          },
+          "required": [
+                "domain",
+                "device"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/devices/{}/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'device'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/devices/{device}/count',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domain_devices: ToolDefinition = {
+  schema: {
+    name: 'get_domain_devices',
+    description: 'List domain devices — Returns every device in the domain, with its owner, registration state, SIP settings, and provisioning details.  Requires Office Manager, Reseller, Super User, or Super User Read Only, in your own domain or one you administer, or Site Manager for its own site. A Site Manager always gets its own site, and naming another site returns `403`.  Filter with `site`, `device-sip-registration-state`, and `filters`. Page with `start` and `limit`; without `limit` every matching device is returned. Order with `sort`, by SIP registration URI by default. Each device also carries its owner\\\'s name and login, its emergency address, and, when it is linked to a phone, the provisioning fields from the Endpoints server. `error-reading-from-endpoint-module` is `yes` when that lookup failed. Credentials follow one rule: your own devices come back in plain text, and everyone else\\\'s are masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. Lists carry `device-provisioning-password` but not `device-sip-registration-password`.  `GET /domains/{domain}/devices/count` returns the total, and `GET /domains/{domain}/devices/list` returns fewer fields per device. — [GET /domains/{domain}/devices]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only devices whose owner is in this site. `*` means no filter. A Site Manager always gets its own site, and naming another site returns `403`."
+                },
+                "filters": {
+                      "type": "string",
+                      "description": "`video` leaves out web phone, data, and video bridge devices: any SIP registration URI containing `wp`, `data.`, or `video.bridge`. Allowed values: \"video\"",
+                      "enum": [
+                            "video"
+                      ]
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/devices',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'site', 'filters', 'include-secrets', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/devices',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_deviceprofile_image: ToolDefinition = {
+  schema: {
+    name: 'read_deviceprofile_image',
+    description: 'Read device profile image — Returns the product image stored for a phone brand and model, as raw image bytes with the stored `Content-Type`.  No token is needed. Only `GET` is accepted; any other method returns `405`.  The response carries an `ETag` computed from the image itself, and expires after 24 hours. Send the `ETag` back in `If-None-Match` to get `304` with no body while the image is unchanged; a replaced image gets a new `ETag`. A brand and model with no stored image returns `404`. `GET /deviceprofiles/{brand}/{model}` returns the profile, including this image\\\'s URL. — [GET /deviceprofiles/image/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Phone brand, such as `Yealink`, exactly as the device profile stores it."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Phone model, such as `T54W`, exactly as the device profile stores it. Spaces are allowed; periods are not."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /deviceprofiles/image/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/deviceprofiles/image/{brand}/{model}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_devices_2: ToolDefinition = {
+  schema: {
+    name: 'get_devices_2',
+    description: 'List devices — Returns devices across domains: every device on the platform for a Super User or Super User Read Only, or every device in its own territory for a Reseller.  Requires Reseller, Super User, or Super User Read Only. Other scopes get `400` or `403`: read devices per domain with `GET /domains/{domain}/devices` instead.  To keep a platform-wide read fast, the provisioning fields from the Endpoints server and the owner\\\'s name and login are left out. Send `ndp=yes` to include them, at the cost of reading every phone and user row. Page with `start` and `limit`; without `limit` every device is returned. Order with `sort`, by SIP registration URI by default. Filter with `device-sip-registration-state` and `filters`. Credentials follow one rule: your own devices come back in plain text, and everyone else\\\'s are masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. Lists carry `device-provisioning-password` but not `device-sip-registration-password`. — [GET /devices]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "filters": {
+                      "type": "string",
+                      "description": "`video` leaves out web phone, data, and video bridge devices: any SIP registration URI containing `wp`, `data.`, or `video.bridge`. Allowed values: \"video\"",
+                      "enum": [
+                            "video"
+                      ]
+                },
+                "ndp": {
+                      "type": "string",
+                      "description": "`yes` adds the provisioning fields and the owner's name and login to each device. This reads every phone and user row on the server, so page with `limit`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /devices',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'start', 'filters', 'ndp', 'include-secrets', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/devices',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_devices: ToolDefinition = {
+  schema: {
+    name: 'list_domain_devices',
+    description: 'List domain device summaries — Returns a short view of every device in the domain: its name, SIP URI, owner, user agent, and registration state.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only, in your own domain or one you administer. A Site Manager always gets its own site, and naming another site returns `403`.  It is served by the `/list` suffix, which differs from the full read in two ways:  - **Fewer fields.** Only the six fields of `DeviceListItem`, with no provisioning fields and no credentials. - **A different privilege.** `/list` is checked against the `list` privilege, the one `/count` uses, not `read`. So a scope that cannot read the full records can still see these.  Appending `/list` to a single device\\\'s path returns the same fields for that one device.  Filter with `site` and `device-sip-registration-state`, order with `sort`, and page with `start` and `limit`. Use `GET /domains/{domain}/devices` for the full fields. — [GET /domains/{domain}/devices/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only devices whose owner is in this site. `*` means no filter. A Site Manager always gets its own site, and naming another site returns `403`."
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/devices/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'site', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/devices/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_device_domain: ToolDefinition = {
+  schema: {
+    name: 'read_device_domain',
+    description: 'Read domain device — Returns one device in the domain by name, without naming its owner.  Requires Office Manager, Reseller, Super User, or Super User Read Only, in your own domain or one you administer.  The device comes back with the same fields as `GET /domains/{domain}/devices`. Credentials follow one rule: your own device comes back in plain text, and anyone else\\\'s is masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. A single-device read carries both `device-sip-registration-password` and `device-provisioning-password`. `includeSub=yes` switches to a different, older shape: the raw device row with the owner\\\'s name, time zone, site, and department, and no provisioning fields; its credentials follow the same rule. A device the domain does not have, or one in another domain, returns `404`. — [GET /domains/{domain}/devices/{device}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "device": {
+                      "type": "string",
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
+                },
+                "includeSub": {
+                      "type": "string",
+                      "description": "`yes` returns the raw device row plus the owner's name, time zone, site, and department, with no provisioning fields. `no` or leaving it out returns the standard device fields. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "device"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/devices/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'device'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['includeSub', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/devices/{device}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const reboot_devices_bulk: ToolDefinition = {
+  schema: {
+    name: 'reboot_devices_bulk',
+    description: 'Reboot domain devices in bulk — Asks every device named in `device-list` to fetch its configuration again and reboot. This is the bulk form of `POST /domains/{domain}/devices/{device}/reboot`.  Requires Office Manager, Reseller, or Super User, in your own domain or one you administer.  Every name is checked before anything is sent: a full SIP URI in another domain returns `404` and nothing is rebooted. Then one reboot request is published over the service bus (SBUS) per device, and the answer is `202`. A name with no device is not an error: it is published and nothing receives it. Check the names with `GET /domains/{domain}/devices` first if that matters. Delivery to each phone is not confirmed. — [POST /domains/{domain}/devices/reboot]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "device-list": {
+                      "type": "array",
+                      "description": "Devices to reboot. A comma-separated string is accepted too, for parity with the v1 `device_list` parameter."
+                },
+                "check-sync-event-header": {
+                      "type": "string",
+                      "description": "Overrides the SIP `Event` header sent with the NOTIFY. Defaults to `check-sync`. Set it only for a vendor that listens on its own value (e.g. `check-sync;reboot=true`). The v1 spelling `evtCheckSync` is also accepted."
+                }
+          },
+          "required": [
+                "domain",
+                "device-list"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/devices/reboot',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['device-list', 'check-sync-event-header'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/devices/reboot',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const reboot_device: ToolDefinition = {
+  schema: {
+    name: 'reboot_device',
+    description: 'Reboot domain device — Asks the device to fetch its configuration again and reboot, without naming its owner. It publishes a SIP NOTIFY with the `check-sync` event.  Requires Office Manager, Reseller, or Super User, in your own domain or one you administer. It uses the same privilege as a device update. Basic User and Site Manager reboot through `POST /domains/{domain}/users/{user}/devices/{device}/reboot`.  The reboot request was published, not delivered. The API publishes it over the service bus (SBUS) and the core sends the phone a SIP NOTIFY. Nothing reports back: a phone that is off or not registered never sees it, and the answer is the same. Any other device field in the body is applied as an update first, and the reboot follows it.  A device that does not exist, or a full SIP URI in another domain, returns `404`. — [POST /domains/{domain}/devices/{device}/reboot]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "device": {
+                      "type": "string",
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
+                },
+                "check-sync-event-header": {
+                      "type": "string",
+                      "description": "Overrides the SIP `Event` header sent with the NOTIFY. Defaults to `check-sync`. Set it only for a vendor that listens on its own value (e.g. `check-sync;reboot=true`). The v1 spelling `evtCheckSync` is also accepted."
+                }
+          },
+          "required": [
+                "domain",
+                "device"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/devices/{}/reboot',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'device'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['check-sync-event-header'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/devices/{device}/reboot',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_devices: ToolDefinition = {
+  schema: {
+    name: 'list_user_devices',
+    description: 'List user device summaries — Returns a short view of the user\\\'s devices: name, SIP URI, owner, user agent, and registration state.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, Super User, or Super User Read Only for the users you administer.  It is served by the `/list` suffix, which differs from the full read in two ways:  - **Fewer fields.** Only the six fields of `DeviceListItem`, with no provisioning fields and no credentials. - **A different privilege.** `/list` is checked against the `list` privilege, the one `/count` uses, not `read`. So a scope that cannot read the full records can still see these.  Appending `/list` to a single device\\\'s path returns the same fields for that one device.  Use `GET /domains/{domain}/users/{user}/devices` for the full fields. — [GET /domains/{domain}/users/{user}/devices/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/devices/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/devices/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const reboot_device_for_user: ToolDefinition = {
+  schema: {
+    name: 'reboot_device_for_user',
+    description: 'Reboot user device — Asks the device to fetch its configuration again and reboot, by publishing a SIP NOTIFY with the `check-sync` event.  Requires Basic User for your own devices, or Site Manager, Office Manager, Reseller, or Super User for the users you administer. A Site Manager can reboot only devices of users in its own site. It uses the same privilege as a device update.  The reboot request was published, not delivered. The API publishes it over the service bus (SBUS) and the core sends the phone a SIP NOTIFY. Nothing reports back: a phone that is off or not registered never sees it, and the answer is the same. Any other device field in the body is applied as an update first, and the reboot follows it.  A device that does not exist returns `404`. A full SIP URI in the path must name the path domain; a device in another domain returns `404`. A device that belongs to a different user returns `404`. A Basic User or other user-level scope rebooting someone else\\\'s device, or a Site Manager rebooting a device outside its site, gets `403`. `POST /domains/{domain}/devices/reboot` reboots several devices at once. — [POST /domains/{domain}/users/{user}/devices/{device}/reboot]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "device": {
+                      "type": "string",
+                      "description": "Device name, such as `1001a`: the user part of the device's SIP registration URI. The API qualifies it as `sip:1001a@<domain>` with the domain in the path. A full SIP URI is accepted only when it names the path domain; one in another domain returns `404`. `count`, `list`, and `reboot` cannot be used as device names in a path."
+                },
+                "check-sync-event-header": {
+                      "type": "string",
+                      "description": "Overrides the SIP Event header sent with the NOTIFY. Defaults to `check-sync`. Only set this value for a vendor that listens for a specific header value (e.g. `check-sync;reboot=true`). The v1 spelling `evtCheckSync` is also accepted."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "device"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/devices/{}/reboot',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'device'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['check-sync-event-header'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/devices/{device}/reboot',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_devices_reseller: ToolDefinition = {
+  schema: {
+    name: 'list_devices_reseller',
+    description: 'List territory devices — Returns every device in the domains of a territory.  Requires Reseller for its own territory, or Super User or Super User Read Only for any territory. A Reseller naming another territory gets `403`.  The rows have the same fields as `GET /domains/{domain}/devices`. Page with `start` and `limit`; without `limit` every matching device is returned. Order with `sort`, by SIP registration URI by default. Each device also carries its owner\\\'s name and login, its emergency address, and, when it is linked to a phone, the provisioning fields from the Endpoints server. `error-reading-from-endpoint-module` is `yes` when that lookup failed. Credentials follow one rule: your own devices come back in plain text, and everyone else\\\'s are masked, the first 2 and last 2 characters around asterisks, or all asterisks for a value of 8 characters or fewer. A Super User can send `include-secrets=yes` to get them in plain text, and that read is audit-logged; any other scope that sends it gets `403`. Lists carry `device-provisioning-password` but not `device-sip-registration-password`. A territory with no domains, or one that does not exist, returns an empty array.  `GET /resellers/{reseller}/devices/count` returns the total. — [GET /resellers/{reseller}/devices]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory name, such as `example-reseller`. `~` means your own territory. A Reseller can name only its own territory."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most devices to return. There is no default: without `limit` every matching device is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "filters": {
+                      "type": "string",
+                      "description": "`video` leaves out web phone, data, and video bridge devices: any SIP registration URI containing `wp`, `data.`, or `video.bridge`. Allowed values: \"video\"",
+                      "enum": [
+                            "video"
+                      ]
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Super User only. `yes` returns device credentials in plain text instead of masked, and the read is audit-logged. Any other scope that sends `yes` gets `403`. A device's own user always gets its own credentials in plain text and does not need it. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "device-sip-registration-state": {
+                      "type": "string",
+                      "description": "`registered` returns devices whose registration has not expired, plus devices with push enabled. `unregistered` returns the rest. `registered_endpoint`, the stored value, is the same as `registered`. Allowed values: \"registered\", \"unregistered\", \"registered_endpoint\"",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            "registered_endpoint"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated field names, each optionally followed by `asc` or `desc`. Allowed fields: `device`, `device-sip-registration-uri`, `user`, `domain`, `device-sip-registration-state`, `device-sip-registration-user-agent`, `device-sip-registration-ip-address`, `device-sip-registration-contact`, `device-sip-registration-datetime`, `device-sip-registration-expires-datetime`, `device-sip-registration-expiry-seconds`, `device-sip-registration-transport`, `device-sip-latency-seconds-current`, `device-sip-latency-seconds-average`, and `created-datetime`. Any other value returns `400`. Defaults to `device-sip-registration-uri` ascending."
+                }
+          },
+          "required": [
+                "reseller"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/devices',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'filters', 'include-secrets', 'device-sip-registration-state', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/devices',
+      pathParams,
+      queryParams,
     });
 
     return {

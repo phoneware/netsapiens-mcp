@@ -5,16 +5,43 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_dialpolicy: ToolDefinition = {
   schema: {
     name: 'get_dialpolicy',
-    description: 'Read Policies — [GET /dialpolicy]',
+    description: 'List dial policies — Lists dial policies across the platform. A dial policy is a named set of permit and deny rules that decides which numbers a user may call.  Requires Super User, Super User Read Only or Reseller scope. Office Manager and lower scopes answer `403`: use `/domains/{domain}/dialpolicy`.  A Super User sees every policy in every domain. A Reseller sees the policies of domains in its territory plus the shared ones filed under `*` and `admin-only`. Results are sorted by name unless you pass `sort`, and page with `start` and `limit`. Append `/count` for a total, or `/list` for the reduced shape.  To read the rules inside a policy, use `/dialpolicy/{policy}/permission`. — [GET /dialpolicy]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum rows to return. Omitted returns every row. Default: 100",
+                      "default": 100
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "`dialpolicy` or `domain`, optionally followed by ` ASC` or ` DESC`. Separate several with commas. Default `dialpolicy`."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialpolicy',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['start', 'limit', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/dialpolicy',
+      queryParams,
     });
 
     return {
@@ -29,13 +56,13 @@ export const get_dialpolicy: ToolDefinition = {
 export const post_dialpolicy: ToolDefinition = {
   schema: {
     name: 'post_dialpolicy',
-    description: 'Create Dialpolicy Table — [POST /dialpolicy]',
+    description: 'Create dial policy — Creates a dial policy and publishes it over the service bus (SBUS). Send `dialpolicy` and `description`, and `domain` to file the policy under one domain.  Omit `domain`, or send `*` or `admin-only`, to create a shared policy that every domain can use. Shared policies require Super User scope. A Reseller can create a policy for a domain in its territory; any other domain answers `403`.  A `202` means the change was published, not yet applied. Add `synchronous=yes` to wait up to 2 seconds for this server to show the policy: the answer is then `200` with the policy, or still `202` if it did not appear in time.  A policy with the same name under the domain, `*` or `admin-only` answers `409`: choose another name. The name may contain only letters, digits, spaces, `.`, `&`, `-` and `_`, or the policy cannot be addressed by path later. To create a policy for one domain, you can also use `POST /domains/{domain}/dialpolicy`.  Add rules with `POST /domains/{domain}/dialpolicy/{policy}/permission`, or `POST /dialpolicy/{policy}/permission` for a shared policy. — [POST /dialpolicy]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "synchronous": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -44,23 +71,28 @@ export const post_dialpolicy: ToolDefinition = {
                 },
                 "dialpolicy": {
                       "type": "string",
-                      "description": "The Name of the DialPolicy"
+                      "description": "Policy name. Unique within a domain; letters, digits, spaces, `.`, `&`, `-` and `_`"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain that owns the DialPolicy"
+                      "description": "Domain the policy is filed under. `*` or `admin-only` marks a shared policy that every domain can use; only a Super User can create or change one"
                 },
                 "description": {
                       "type": "string",
-                      "description": "The description of the Policy Table"
+                      "description": "Free-text description of the policy, up to 127 characters"
                 }
           },
           "required": [
                 "dialpolicy",
-                "domain",
                 "description"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /dialpolicy',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const bodyParamNames = ['synchronous', 'dialpolicy', 'domain', 'description'];
@@ -86,19 +118,25 @@ export const post_dialpolicy: ToolDefinition = {
 export const get_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'get_dialpolicy_by_policy',
-    description: 'Read Specific Policy — [GET /dialpolicy/{policy}]',
+    description: 'Read dial policy — Reads one dial policy by name. Requires Super User, Super User Read Only or Reseller scope. Office Manager and lower scopes use `/domains/{domain}/dialpolicy/{policy}`.  Policy names are unique only within a domain. When several domains have a policy with this name, the first match is returned: use the domain path to pick one.  A name that matches nothing answers `404`. — [GET /dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 }
           },
           "required": [
                 "policy"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialpolicy/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy'];
@@ -124,34 +162,30 @@ export const get_dialpolicy_by_policy: ToolDefinition = {
 export const put_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'put_dialpolicy_by_policy',
-    description: 'Update Dialpolicy  — [PUT /dialpolicy/{policy}]',
+    description: 'Update shared dial policy — Changes a shared dial policy\\\'s `description` and publishes the change over the service bus (SBUS). This path addresses the policy filed under `*`, or under `admin-only` when there is no `*` policy with this name. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  Send only `description`. A `domain` in the body is ignored. A `202` means the change was published, not yet applied. Rename is not supported: create a new policy instead.  A name with no shared policy answers `404`. To change a domain\\\'s own policy, use `PUT /domains/{domain}/dialpolicy/{policy}`. — [PUT /dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
-                },
-                "dialpolicy": {
-                      "type": "string",
-                      "description": "The Name of the DialPolicy"
-                },
-                "domain": {
-                      "type": "string",
-                      "description": "The domain that owns the DialPolicy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "description": {
                       "type": "string",
-                      "description": "The description of the Policy Table"
+                      "description": "New free-text description of the policy"
                 }
           },
           "required": [
                 "policy",
-                "dialpolicy",
-                "domain",
                 "description"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /dialpolicy/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy'];
@@ -159,7 +193,7 @@ export const put_dialpolicy_by_policy: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['dialpolicy', 'domain', 'description'];
+    const bodyParamNames = ['description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -183,19 +217,25 @@ export const put_dialpolicy_by_policy: ToolDefinition = {
 export const delete_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'delete_dialpolicy_by_policy',
-    description: 'Delete Dialpolicy  — [DELETE /dialpolicy/{policy}]',
+    description: 'Delete shared dial policy — Deletes a shared dial policy and publishes the deletion over the service bus (SBUS). This path addresses the policy filed under `*`, or under `admin-only` when there is no `*` policy with this name. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  A `202` means the deletion was published, not yet applied. Only that one policy is removed; a domain\\\'s policy with the same name is untouched.  A name with no shared policy answers `404`. To delete a domain\\\'s own policy, use `DELETE /domains/{domain}/dialpolicy/{policy}`. — [DELETE /dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 }
           },
           "required": [
                 "policy"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /dialpolicy/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy'];
@@ -221,17 +261,17 @@ export const delete_dialpolicy_by_policy: ToolDefinition = {
 export const get_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_dialpolicy_by_policy',
-    description: 'Read Specific Policy in Domain — [GET /domains/{domain}/dialpolicy/{policy}]',
+    description: 'Read domain dial policy — Reads one dial policy a domain can use: the domain\\\'s own policy with this name, or the shared one under `*` or `admin-only`. Requires Office Manager scope or higher for the domain in the path. Office Manager, Site Manager, Call Center Supervisor and Route Manager scopes read their own domain only. A Reseller reads domains in its territory. Super User and Super User Read Only read any domain.  A name that matches nothing answers `404`. — [GET /domains/{domain}/dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 }
           },
           "required": [
@@ -239,6 +279,12 @@ export const get_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
                 "policy"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy'];
@@ -264,34 +310,35 @@ export const get_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
 export const put_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_dialpolicy_by_policy',
-    description: 'Update Dialpolicy  in Domain — [PUT /domains/{domain}/dialpolicy/{policy}]',
+    description: 'Update domain dial policy — Changes a dial policy\\\'s `description` and publishes the change over the service bus (SBUS). The name resolves to the domain\\\'s own policy first, then to the shared one under `*` or `admin-only`.  Office Manager, Site Manager, Call Center Supervisor and Route Manager scopes can update their own domain\\\'s policies; a Reseller can update domains in its territory. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  Send only `description`. A `domain` in the body is ignored, so an update cannot move a policy to another domain. A `202` means the change was published, not yet applied, and only the resolved policy changes.  A name that matches no policy visible to the domain answers `404`. — [PUT /domains/{domain}/dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "The domain that owns the DialPolicy"
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
-                },
-                "dialpolicy": {
-                      "type": "string",
-                      "description": "The Name of the DialPolicy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "description": {
                       "type": "string",
-                      "description": "The description of the Policy Table"
+                      "description": "New free-text description of the policy"
                 }
           },
           "required": [
                 "domain",
                 "policy",
-                "dialpolicy",
                 "description"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/dialpolicy/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy'];
@@ -299,7 +346,7 @@ export const put_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['dialpolicy', 'domain', 'description'];
+    const bodyParamNames = ['description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -323,17 +370,17 @@ export const put_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
 export const delete_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_dialpolicy_by_policy',
-    description: 'Delete Dialpolicy  in Domain — [DELETE /domains/{domain}/dialpolicy/{policy}]',
+    description: 'Delete domain dial policy — Deletes a dial policy and publishes the deletion over the service bus (SBUS). The name resolves to the domain\\\'s own policy first, then to the shared one under `*` or `admin-only`.  Requires Reseller scope for a domain in its territory, or Super User. Office Manager scopes answer `403`. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  A `202` means the deletion was published, not yet applied. Only the resolved policy is removed; same-named policies in other domains are untouched.  A name that matches no policy visible to the domain answers `404`. — [DELETE /domains/{domain}/dialpolicy/{policy}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 }
           },
           "required": [
@@ -341,6 +388,12 @@ export const delete_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
                 "policy"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/dialpolicy/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy'];
@@ -366,13 +419,23 @@ export const delete_domains_by_domain_dialpolicy_by_policy: ToolDefinition = {
 export const get_dialpolicy_by_policy_permission: ToolDefinition = {
   schema: {
     name: 'get_dialpolicy_by_policy_permission',
-    description: 'Read Permissions in a DialPolicy — [GET /dialpolicy/{policy}/permission]',
+    description: 'List shared dial policy rules — Lists the rules of a shared dial policy, the one filed under `*` or `admin-only`. A rule matches a dialed destination in `permission-match` and either permits or denies the call (`permission-mode`).  Requires Super User, Super User Read Only or Reseller scope. Office Manager and Site Manager scopes answer `403`: they read rules through `/domains/{domain}/dialpolicy/{policy}/permission`.  This path never returns rules filed under a domain. An unknown policy returns an empty array. Append `/count` for the number of rules, or `/list` for the reduced shape. — [GET /dialpolicy/{policy}/permission]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum rules to return. Omitted returns every rule. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -380,16 +443,28 @@ export const get_dialpolicy_by_policy_permission: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialpolicy/{}/permission',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/dialpolicy/{policy}/permission',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -404,30 +479,21 @@ export const get_dialpolicy_by_policy_permission: ToolDefinition = {
 export const create_permission: ToolDefinition = {
   schema: {
     name: 'create_permission',
-    description: 'Add a new permission to a dialpolicy table — [POST /dialpolicy/{policy}/permission]',
+    description: 'Create shared dial policy rule — Adds a rule to a shared dial policy and publishes it over the service bus (SBUS). A rule matches a dialed destination in `permission-match` and either permits or denies the call (`permission-mode`). Requires Super User scope, because a shared policy changes dialing for every domain.  Send `permission-match`, `permission-mode` and `permission-reason`. In `permission-match`, `?` matches one character and `*` matches any run of characters, as in `sip:+1900???????@*`. A `202` means the rule was published, not yet applied. Add `synchronous=yes` to wait up to 2 seconds for this server to show the rule: the answer is then `200` with the rule, or still `202`.  A name with no shared policy answers `404`. To add a rule to a domain\\\'s policy, use `POST /domains/{domain}/dialpolicy/{policy}/permission`. — [POST /dialpolicy/{policy}/permission]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "permission-match": {
                       "type": "string",
-                      "description": "The specific match to check against"
+                      "description": "Destination pattern to match. `?` matches one character and `*` matches any run of characters"
                 },
                 "permission-mode": {
                       "type": "string",
-                      "description": "To allow or deny specific match. Allowed values: \"permit\", \"deny\"",
+                      "description": "`permit` allows a matching call; `deny` blocks it. Allowed values: \"permit\", \"deny\"",
                       "enum": [
                             "permit",
                             "deny"
@@ -435,17 +501,31 @@ export const create_permission: ToolDefinition = {
                 },
                 "permission-reason": {
                       "type": "string",
-                      "description": "The description/reason for making the rule."
+                      "description": "Short label for the rule, up to 31 characters"
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "policy",
-                "synchronous",
                 "permission-match",
                 "permission-mode",
                 "permission-reason"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /dialpolicy/{}/permission',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy'];
@@ -453,7 +533,7 @@ export const create_permission: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'permission-match', 'permission-mode', 'permission-reason'];
+    const bodyParamNames = ['permission-match', 'permission-mode', 'permission-reason', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -477,17 +557,27 @@ export const create_permission: ToolDefinition = {
 export const get_domains_by_domain_dialpolicy_by_policy_permission: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_dialpolicy_by_policy_permission',
-    description: 'Read Permissions in a DialPolicy in Domain — [GET /domains/{domain}/dialpolicy/{policy}/permission]',
+    description: 'List domain dial policy rules — Lists the rules of a dial policy as a domain sees it: rules filed under the domain plus those of the shared policy with this name under `*` or `admin-only`. A rule matches a dialed destination in `permission-match` and either permits or denies the call (`permission-mode`).  Requires Office Manager scope or higher for the domain. Office Manager, Site Manager, Call Center Supervisor and Route Manager scopes read their own domain only; a Reseller reads domains in its territory.  An unknown policy returns an empty array. Append `/count` for the number of rules, or `/list` for the reduced shape. — [GET /domains/{domain}/dialpolicy/{policy}/permission]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum rules to return. Omitted returns every rule. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -496,16 +586,28 @@ export const get_domains_by_domain_dialpolicy_by_policy_permission: ToolDefiniti
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy/{}/permission',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/dialpolicy/{policy}/permission',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -520,34 +622,25 @@ export const get_domains_by_domain_dialpolicy_by_policy_permission: ToolDefiniti
 export const create_permission_domain: ToolDefinition = {
   schema: {
     name: 'create_permission_domain',
-    description: 'Add a new permission to a dialpolicy table in Domain — [POST /domains/{domain}/dialpolicy/{policy}/permission]',
+    description: 'Create domain dial policy rule — Adds a rule to a dial policy the domain can use and publishes it over the service bus (SBUS). A rule matches a dialed destination in `permission-match` and either permits or denies the call (`permission-mode`).  The name resolves to the domain\\\'s own policy first, then to the shared one under `*` or `admin-only`, and the rule is filed under the resolved policy\\\'s domain. Requires Office Manager scope or higher for a policy the domain owns; a Reseller needs the domain in its territory. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  Send `permission-match`, `permission-mode` and `permission-reason`. In `permission-match`, `?` matches one character and `*` matches any run of characters. A `202` means the rule was published, not yet applied. Add `synchronous=yes` to wait up to 2 seconds for this server to show the rule: the answer is then `200` with the rule, or still `202`.  A policy that the domain cannot see answers `404`. — [POST /domains/{domain}/dialpolicy/{policy}/permission]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "permission-match": {
                       "type": "string",
-                      "description": "The specific match to check against"
+                      "description": "Destination pattern to match. `?` matches one character and `*` matches any run of characters"
                 },
                 "permission-mode": {
                       "type": "string",
-                      "description": "To allow or deny specific match. Allowed values: \"permit\", \"deny\"",
+                      "description": "`permit` allows a matching call; `deny` blocks it. Allowed values: \"permit\", \"deny\"",
                       "enum": [
                             "permit",
                             "deny"
@@ -555,18 +648,32 @@ export const create_permission_domain: ToolDefinition = {
                 },
                 "permission-reason": {
                       "type": "string",
-                      "description": "The description/reason for making the rule."
+                      "description": "Short label for the rule, up to 31 characters"
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "domain",
                 "policy",
-                "synchronous",
                 "permission-match",
                 "permission-mode",
                 "permission-reason"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/dialpolicy/{}/permission',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy'];
@@ -574,7 +681,7 @@ export const create_permission_domain: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'permission-match', 'permission-mode', 'permission-reason'];
+    const bodyParamNames = ['permission-match', 'permission-mode', 'permission-reason', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -598,17 +705,17 @@ export const create_permission_domain: ToolDefinition = {
 export const read_permission: ToolDefinition = {
   schema: {
     name: 'read_permission',
-    description: 'Read Specific Permission in a Dialpolicy — [GET /dialpolicy/{policy}/permission/{id}]',
+    description: 'Read shared dial policy rule — Reads one rule of a shared dial policy by its `permission-id`. Requires Super User, Super User Read Only or Reseller scope. Office Manager and Site Manager scopes use `/domains/{domain}/dialpolicy/{policy}/permission/{id}`.  A rule that does not exist answers `404`. — [GET /dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 }
           },
           "required": [
@@ -616,6 +723,12 @@ export const read_permission: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialpolicy/{}/permission/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy', 'id'];
@@ -641,21 +754,21 @@ export const read_permission: ToolDefinition = {
 export const update_permission: ToolDefinition = {
   schema: {
     name: 'update_permission',
-    description: 'Update a permission in a dialpolicy table — [PUT /dialpolicy/{policy}/permission/{id}]',
+    description: 'Update shared dial policy rule — Changes a shared policy rule\\\'s `permission-mode` and `permission-reason` and publishes the change over the service bus (SBUS). Requires Super User scope, because a shared policy changes dialing for every domain.  Send both fields. The match cannot change, because `permission-id` is derived from it: delete the rule and create a new one instead. A `202` means the change was published, not yet applied.  A policy or rule that does not exist answers `404`. — [PUT /dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 },
                 "permission-mode": {
                       "type": "string",
-                      "description": "To allow or deny specific match. Allowed values: \"permit\", \"deny\"",
+                      "description": "`permit` allows a matching call; `deny` blocks it. Allowed values: \"permit\", \"deny\"",
                       "enum": [
                             "permit",
                             "deny"
@@ -663,7 +776,7 @@ export const update_permission: ToolDefinition = {
                 },
                 "permission-reason": {
                       "type": "string",
-                      "description": "The description/reason for making the rule."
+                      "description": "Short label for the rule, up to 31 characters"
                 }
           },
           "required": [
@@ -673,6 +786,12 @@ export const update_permission: ToolDefinition = {
                 "permission-reason"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /dialpolicy/{}/permission/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy', 'id'];
@@ -704,17 +823,17 @@ export const update_permission: ToolDefinition = {
 export const delete_permission: ToolDefinition = {
   schema: {
     name: 'delete_permission',
-    description: 'Delete a permission by ID in a dialpolicy — [DELETE /dialpolicy/{policy}/permission/{id}]',
+    description: 'Delete shared dial policy rule — Deletes one rule of a shared dial policy and publishes the deletion over the service bus (SBUS). Requires Super User scope, because a shared policy changes dialing for every domain.  A `202` means the deletion was published, not yet applied. A policy or rule that does not exist answers `404`. — [DELETE /dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 }
           },
           "required": [
@@ -722,6 +841,12 @@ export const delete_permission: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /dialpolicy/{}/permission/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['policy', 'id'];
@@ -747,21 +872,21 @@ export const delete_permission: ToolDefinition = {
 export const read_permission_domain: ToolDefinition = {
   schema: {
     name: 'read_permission_domain',
-    description: 'Read Specific Permission in a Dialpolicy in Domain — [GET /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
+    description: 'Read domain dial policy rule — Reads one rule of a dial policy as a domain sees it, by its `permission-id`. The rule may be filed under the domain or under the shared policy with this name. Requires Office Manager scope or higher for the domain. Office Manager and Site Manager scopes read their own domain only; a Reseller reads domains in its territory.  A rule that does not exist answers `404`. — [GET /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 }
           },
           "required": [
@@ -770,6 +895,12 @@ export const read_permission_domain: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy/{}/permission/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy', 'id'];
@@ -795,25 +926,25 @@ export const read_permission_domain: ToolDefinition = {
 export const update_permission_domain: ToolDefinition = {
   schema: {
     name: 'update_permission_domain',
-    description: 'Update a permission in a dialpolicy table in Domain — [PUT /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
+    description: 'Update domain dial policy rule — Changes a rule\\\'s `permission-mode` and `permission-reason` and publishes the change over the service bus (SBUS). The name resolves to the domain\\\'s own policy first, then to the shared one under `*` or `admin-only`.  Requires Office Manager scope or higher for a policy the domain owns; a Reseller needs the domain in its territory. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  Send both fields. The match cannot change, because `permission-id` is derived from it: delete the rule and create a new one instead. A `202` means the change was published, not yet applied.  A policy or rule that the domain cannot see answers `404`. — [PUT /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 },
                 "permission-mode": {
                       "type": "string",
-                      "description": "To allow or deny specific match. Allowed values: \"permit\", \"deny\"",
+                      "description": "`permit` allows a matching call; `deny` blocks it. Allowed values: \"permit\", \"deny\"",
                       "enum": [
                             "permit",
                             "deny"
@@ -821,7 +952,7 @@ export const update_permission_domain: ToolDefinition = {
                 },
                 "permission-reason": {
                       "type": "string",
-                      "description": "The description/reason for making the rule."
+                      "description": "Short label for the rule, up to 31 characters"
                 }
           },
           "required": [
@@ -832,6 +963,12 @@ export const update_permission_domain: ToolDefinition = {
                 "permission-reason"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/dialpolicy/{}/permission/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy', 'id'];
@@ -863,21 +1000,21 @@ export const update_permission_domain: ToolDefinition = {
 export const delete_permission_domain: ToolDefinition = {
   schema: {
     name: 'delete_permission_domain',
-    description: 'Delete a permission by ID in a dialpolicy in Domain — [DELETE /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
+    description: 'Delete domain dial policy rule — Deletes one rule and publishes the deletion over the service bus (SBUS). The name resolves to the domain\\\'s own policy first, then to the shared one under `*` or `admin-only`.  Requires Office Manager scope or higher for a policy the domain owns; a Reseller needs the domain in its territory. A shared policy, one filed under `*` or `admin-only`, changes dialing for every domain, so any write to it requires Super User scope.  A `202` means the deletion was published, not yet applied. A policy or rule that the domain cannot see answers `404`. — [DELETE /domains/{domain}/dialpolicy/{policy}/permission/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "policy": {
                       "type": "string",
-                      "description": "policy"
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The rule's `permission-id`: the base64url encoding of `permission-match`, without `=` padding. Take it from a read of the policy's permissions."
                 }
           },
           "required": [
@@ -886,6 +1023,12 @@ export const delete_permission_domain: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/dialpolicy/{}/permission/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'policy', 'id'];
@@ -896,6 +1039,262 @@ export const delete_permission_domain: ToolDefinition = {
     const response = await client.request({
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/dialpolicy/{policy}/permission/{id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_polocies: ToolDefinition = {
+  schema: {
+    name: 'count_polocies',
+    description: 'Count dial policies — Counts the dial policies that `GET /dialpolicy` would return. Requires Super User, Super User Read Only or Reseller scope.  A Super User counts every policy in every domain. A Reseller counts the policies of domains in its territory plus the shared ones under `*` and `admin-only`. `/count` works on every dial policy collection path, including `/domains/{domain}/dialpolicy/count`. — [GET /dialpolicy/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialpolicy/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialpolicy/count',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_dial_policies: ToolDefinition = {
+  schema: {
+    name: 'list_domain_dial_policies',
+    description: 'List domain dial policies, reduced — Lists the dial policies a domain can use, in a reduced shape: `dialpolicy`, `domain` and `description`. The response includes policies filed under the domain, plus the shared policies filed under `*` and `admin-only`. Requires Office Manager scope or higher for the domain. Office Manager, Site Manager, Call Center Supervisor and Route Manager scopes read their own domain only; a Reseller reads domains in its territory.  `/list` is authorized by the `list` privilege, the same one `/count` uses, rather than `read`. A scope that holds `list` but not `read` can still enumerate the collection. Appending `/list` to a keyed path returns the same reduced shape for one record. `/dialpolicy/list` does the same across the platform, for Super User, Super User Read Only and Reseller scopes. — [GET /domains/{domain}/dialpolicy/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialpolicy/list',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_policies_domain: ToolDefinition = {
+  schema: {
+    name: 'read_policies_domain',
+    description: 'List domain dial policies — Lists the dial policies a domain can use. The response includes policies filed under the domain, plus the shared policies filed under `*` (system-wide) and `admin-only`.  Requires Office Manager scope or higher for the domain in the path. Office Manager, Site Manager, Call Center Supervisor and Route Manager scopes read their own domain only. A Reseller reads domains in its territory. Super User and Super User Read Only read any domain.  Append `/count` for a total, or `/list` for the reduced shape. To read the rules inside a policy, use `/domains/{domain}/dialpolicy/{policy}/permission`. — [GET /domains/{domain}/dialpolicy]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum rows to return. Omitted returns every row. Default: 100",
+                      "default": 100
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "`dialpolicy` or `domain`, optionally followed by ` ASC` or ` DESC`. Separate several with commas. Default `dialpolicy`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start', 'limit', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialpolicy',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_dialpolicy_in_domain: ToolDefinition = {
+  schema: {
+    name: 'create_dialpolicy_in_domain',
+    description: 'Create domain dial policy — Creates a dial policy filed under the domain in the path and publishes it over the service bus (SBUS). A dial policy is a named set of permit and deny rules that decides which numbers a user may call.  Requires Super User scope, or Reseller scope for a domain in its territory. Office Manager and Site Manager scopes answer `403`.  Send `dialpolicy` and `description`. The domain comes from the path; a `domain` in the body is ignored. A `202` means the change was published, not yet applied. Add `synchronous=yes` to wait up to 2 seconds for this server to show the policy: the answer is then `200` with the policy, or still `202` if it did not appear in time.  A policy with the same name under the domain, `*` or `admin-only` answers `409`: choose another name. The name may contain only letters, digits, spaces, `.`, `&`, `-` and `_`, or the policy cannot be addressed by path later.  Add rules with `POST /domains/{domain}/dialpolicy/{policy}/permission`. To create a shared policy, use `POST /dialpolicy`. — [POST /domains/{domain}/dialpolicy]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain to file the policy under, or `~` for your token's own domain. A domain that does not exist answers `404`."
+                },
+                "dialpolicy": {
+                      "type": "string",
+                      "description": "Policy name. Letters, digits, spaces, `.`, `&`, `-` and `_`"
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Free-text description of the policy"
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "dialpolicy",
+                "description"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/dialpolicy',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['dialpolicy', 'description', 'synchronous'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/dialpolicy',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_dial_policy_permissions: ToolDefinition = {
+  schema: {
+    name: 'list_domain_dial_policy_permissions',
+    description: 'List domain dial policy rules, reduced — Lists a dial policy\\\'s rules as a domain sees them, in a reduced shape: `permission-id`, `dialpolicy`, `permission-match`, `permission-mode` and `domain`. Requires Office Manager scope or higher for the domain. Office Manager and Site Manager scopes read their own domain only; a Reseller reads domains in its territory.  `/list` is authorized by the `list` privilege, the same one `/count` uses, rather than `read`. A scope that holds `list` but not `read` can still enumerate the collection. Appending `/list` to a keyed path returns the same reduced shape for one record. `/dialpolicy/{policy}/permission/list` does the same for a shared policy, for Super User, Super User Read Only and Reseller scopes. `/count` on these paths returns the number of rules. — [GET /domains/{domain}/dialpolicy/{policy}/permission/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "policy": {
+                      "type": "string",
+                      "description": "Dial policy name, as returned in `dialpolicy`. URL-encode spaces (`US%20and%20Canada`)."
+                }
+          },
+          "required": [
+                "domain",
+                "policy"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialpolicy/{}/permission/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'policy'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialpolicy/{policy}/permission/list',
       pathParams,
     });
 

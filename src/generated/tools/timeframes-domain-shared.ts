@@ -5,13 +5,50 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_timeframes: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_timeframes',
-    description: 'Read All Timeframes for Domain (Shared) — [GET /domains/{domain}/timeframes]',
+    description: 'List domain time frames — Returns the domain\\\'s shared time frames with their entries. Answer rules of every user in the domain can use them.  Any Basic User, Site Manager, or Office Manager in the domain can read its shared time frames. A Reseller can read the domains in its territory, and a Super User any domain.  Each time frame carries its date ranges, days of week entry, or holidays, with the next dates it applies (`timeframe-next-observance-datetime`) and `end_on`. Page with `limit` and `start`; `limit` defaults to `100`. Time frames created before IDs existed are converted on the fly and added after the page. A domain with no time frames returns `[]`.  `GET /domains/{domain}/timeframes/list` returns only names and state, and `GET /domains/{domain}/users/{user}/timeframes` returns a user\\\'s own time frames. — [GET /domains/{domain}/timeframes]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most time frames to return, a whole number. Defaults to `100`. Anything but digits returns `400`. Legacy time frames that have no ID yet are added after the page, whatever the limit. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Time frames to skip before the first one returned, a whole number. Defaults to `0`. Anything but digits returns `400`. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Order of the result. `name asc|desc` orders by `timeframe-name`. `ends_on asc|desc` orders by `end_on`, time frames that never end last in ascending order, and also orders each time frame's entries by recurrence end date. The `user`, `user_name`, and `owner` values order the per-user rows of `users=all`. Any other value returns `400`. Allowed values: \"name asc\", \"name desc\", \"ends_on asc\", \"ends_on desc\", \"user asc\", \"user desc\", \"user_name asc\", \"user_name desc\", \"owner asc\", \"owner desc\"",
+                      "enum": [
+                            "name asc",
+                            "name desc",
+                            "ends_on asc",
+                            "ends_on desc",
+                            "user asc",
+                            "user desc",
+                            "user_name asc",
+                            "user_name desc",
+                            "owner asc",
+                            "owner desc"
+                      ]
+                },
+                "order": {
+                      "type": "string",
+                      "description": "Storage order of the time frames before paging: comma-separated `id`, `domain`, `user`, `name`, or `type`, each optionally followed by `asc` or `desc`. Any other value returns `400`. Use `sort` to order the result."
+                },
+                "users": {
+                      "type": "string",
+                      "description": "`all` returns, instead of the time frames, one row per user of the domain with how many time frames it owns (`time_frame` `all`, `domain`, `user`, `count`, `user_name`), the domain's shared row first. Requires Office Manager, Call Center Supervisor, Site Manager (its own site's users only), Reseller, or Super User; others get `403`. Sort those rows with `sort=user asc|desc` or `user_name asc|desc`. Allowed values: \"all\"",
+                      "enum": [
+                            "all"
+                      ]
                 }
           },
           "required": [
@@ -19,16 +56,28 @@ export const get_domains_by_domain_timeframes: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/timeframes',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'start', 'sort', 'order', 'users'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/timeframes',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,17 +92,17 @@ export const get_domains_by_domain_timeframes: ToolDefinition = {
 export const get_domains_by_domain_timeframes_by_id: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_timeframes_by_id',
-    description: 'Read Specific Timeframe for Domain (Shared) — [GET /domains/{domain}/timeframes/{id}]',
+    description: 'Read domain time frame — Returns one shared time frame of the domain, by ID or by name.  Any Basic User, Site Manager, or Office Manager in the domain can read its shared time frames. A Reseller can read the domains in its territory, and a Super User any domain.  By ID you get the time frame with its entries. By name you get the legacy view: the time ranges generated for it, the shape answer rules were first built on. Prefer the ID. An unknown ID or name returns `404`. — [GET /domains/{domain}/timeframes/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "id": {
                       "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to read"
+                      "description": "Time frame to act on, in one of two forms: - a time frame ID, 32 lowercase hexadecimal characters, such as `94d4b86a0e8bedd0bb61feaa0aa0a4db`. Take it from `timeframe-id` - a time frame name, such as `Business Hours`. Anything that is not 32 lowercase hexadecimal characters is read as a name An ID returns the time frame with its entries (`RecurringTimeframe`). A name returns the legacy view of the same time frame: its generated time ranges, in the `Timeframe` shape. A time frame whose name is itself 32 lowercase hexadecimal characters can be reached only by ID."
                 }
           },
           "required": [
@@ -61,6 +110,12 @@ export const get_domains_by_domain_timeframes_by_id: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/timeframes/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -104,6 +159,12 @@ export const delete_domains_by_domain_timeframes_by_id_4: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -153,6 +214,12 @@ export const put_domains_by_domain_timeframes_by_id_8: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
@@ -169,6 +236,94 @@ export const put_domains_by_domain_timeframes_by_id_8: ToolDefinition = {
       pathTemplate: '/domains/{domain}/timeframes/{id}',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_timeframes_domain_all_users: ToolDefinition = {
+  schema: {
+    name: 'count_timeframes_domain_all_users',
+    description: 'Count domain time frames — Returns `total`, the number of time frames the path\\\'s owner has: on this domain path the owner is `*`, so it counts the domain\\\'s shared time frames, not every user\\\'s. Use `/domains/{domain}/users/{user}/timeframes/count` for one user\\\'s time frames, or `GET /domains/{domain}/timeframes?users=all` for a per-user count.  Requires the `list` privilege on time frames, which Basic User, Site Manager, and Office Manager hold in their domain, and Reseller and Super User more widely. The owner must be one you can reach, or the call returns `403`. — [GET /domains/{domain}/timeframes/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/timeframes/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/timeframes/count',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_timeframes: ToolDefinition = {
+  schema: {
+    name: 'list_domain_timeframes',
+    description: 'List domain time frame names — Returns the name and state of each shared time frame of the domain: whether an answer rule uses it (`selected`) and whether every range in it is in the past (`expired`). Requires the `list` privilege on time frames, which Basic User, Site Manager, and Office Manager hold in their domain, and Reseller and Super User more widely. The owner must be one you can reach, or the call returns `403`.  `/list` is a suffix on the collection path. It returns names and state only, and it is authorised by the `list` privilege, the one `/count` uses. On a keyed path, `/timeframes/{id}/list`, it returns only that time frame, by ID or by name. **Changed in v46**: rows used to be name strings with the state appended; they are now objects with `selected` and `expired` fields. — [GET /domains/{domain}/timeframes/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/timeframes/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/timeframes/list',
+      pathParams,
     });
 
     return {

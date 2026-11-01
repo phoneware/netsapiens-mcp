@@ -36,8 +36,13 @@ export const v1_cdr2_countbydomain: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -81,8 +86,13 @@ export const v1_cdr2_countbygroup: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -122,8 +132,13 @@ export const v1_cdr2_countbyterritory: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -167,8 +182,13 @@ export const v1_cdr2_countbyuser: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -182,8 +202,13 @@ export const v1_cdr2_optimizecdrs: ToolDefinition = {
       "properties": {}
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=optimize",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "optimize", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "optimize", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -197,8 +222,13 @@ export const v1_cdr2_purgecdrs: ToolDefinition = {
       "properties": {}
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=purge",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "purge", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "purge", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -238,8 +268,13 @@ export const v1_cdr2_readbydomain: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -289,8 +324,13 @@ export const v1_cdr2_readbygroup: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -342,8 +382,13 @@ export const v1_cdr2_readbyid: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -383,8 +428,13 @@ export const v1_cdr2_readbyterritory: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -428,8 +478,13 @@ export const v1_cdr2_readbyuser: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -465,8 +520,13 @@ export const v1_cdr2_reportbydomain: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -502,8 +562,13 @@ export const v1_cdr2_reportbygroup: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -544,8 +609,13 @@ export const v1_cdr2_reportbygrouptype: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -581,8 +651,13 @@ export const v1_cdr2_reportbyhostname: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -618,8 +693,13 @@ export const v1_cdr2_reportbyreseller: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -671,8 +751,13 @@ export const v1_cdr2_update: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=cdr2&action=update",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("cdr2", "update", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("cdr2", "update", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

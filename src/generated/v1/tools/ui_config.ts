@@ -43,8 +43,13 @@ export const v1_uiconfig_count: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfig&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfig", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfig", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -66,8 +71,13 @@ export const v1_uiconfigdef_count: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfigdef&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfigdef", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfigdef", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -125,8 +135,13 @@ export const v1_uiconfig_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfig&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfig", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfig", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -200,8 +215,13 @@ export const v1_uiconfigdef_create_definition: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfigdef&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfigdef", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfigdef", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -243,8 +263,13 @@ export const v1_uiconfig_delete: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfig&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfig", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfig", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -266,8 +291,13 @@ export const v1_uiconfigdef_delete_definition: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfigdef&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfigdef", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfigdef", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -315,8 +345,13 @@ export const v1_uiconfig_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfig&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfig", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfig", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -338,8 +373,13 @@ export const v1_uiconfigdef_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfigdef&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfigdef", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfigdef", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -393,8 +433,13 @@ export const v1_uiconfig_update: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=uiconfig&action=update",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("uiconfig", "update", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("uiconfig", "update", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

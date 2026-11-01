@@ -42,8 +42,13 @@ export const v1_messagesession_accept: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=accept",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "accept", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "accept", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -70,8 +75,13 @@ export const v1_messagesession_delete: ToolDefinition = {
       }
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -103,8 +113,13 @@ export const v1_messagesession_end: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=dispatch",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "dispatch", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "dispatch", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -159,8 +174,13 @@ export const v1_messagesession_leave: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=leave",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "leave", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "leave", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -211,8 +231,13 @@ export const v1_messagesession_read: ToolDefinition = {
       }
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -267,8 +292,13 @@ export const v1_messagesession_update: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=messagesession&action=update",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("messagesession", "update", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("messagesession", "update", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

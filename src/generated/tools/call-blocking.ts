@@ -5,19 +5,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_number_filters: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_number_filters',
-    description: 'Read blocked numbers for a Domain — [GET /domains/{domain}/number-filters]',
+    description: 'Read domain blocked numbers — Returns the domain\\\'s blocked-number list. Calls to the domain from a number on the list are rejected.  Requires Office Manager scope for your own domain, or Reseller or Super User scope.  The domain list is kept on the domain\\\'s system user `domain`, so the entry carries `"user": "domain"`. The list belongs to the default answering rule (time frame `*`), so the response has at most one entry. Numbers are returned as strings, so a leading zero is kept. To read one user\\\'s list, use **Read user blocked numbers**. — [GET /domains/{domain}/number-filters]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/number-filters',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -43,17 +49,17 @@ export const get_domains_by_domain_number_filters: ToolDefinition = {
 export const post_domains_by_domain_number_filters: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_number_filters',
-    description: 'Add blocked numbers for a Domain — [POST /domains/{domain}/number-filters]',
+    description: 'Add domain blocked numbers — Adds numbers to the domain\\\'s blocked-number list, kept on the domain\\\'s system user `domain`.  Requires Office Manager scope for your own domain, or Reseller or Super User scope.  Send the numbers in `phone-numbers-to-reject.parameters`. Each one is added to the list, or updated if it is already there. Numbers you leave out stay on the list. A single number in place of the list is taken as a one-item list.  To pause or resume the whole list, send `phone-numbers-to-reject` with `enabled` set to `no` or `yes` and an empty `parameters` list. Every number already on the list takes that setting.  The list always belongs to the default answering rule. A `time-frame` in the request is ignored. A `202` means the change is accepted and applied shortly after. `PUT` on the same path behaves the same way. — [POST /domains/{domain}/number-filters]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phone-numbers-to-reject": {
                       "type": "object",
-                      "description": "This is a list of numbers that would be blocked and rejected before any forward or sim ring features are attempted."
+                      "description": "Numbers to block, and whether blocking is on."
                 }
           },
           "required": [
@@ -61,6 +67,12 @@ export const post_domains_by_domain_number_filters: ToolDefinition = {
                 "phone-numbers-to-reject"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/number-filters',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -92,17 +104,17 @@ export const post_domains_by_domain_number_filters: ToolDefinition = {
 export const delete_domains_by_domain_number_filters: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_number_filters',
-    description: 'Delete blocked numbers for a Domain — [DELETE /domains/{domain}/number-filters]',
+    description: 'Remove domain blocked numbers — Removes numbers from the domain\\\'s blocked-number list.  Requires Office Manager scope for your own domain, or Reseller or Super User scope.  Send the numbers to remove in `phone-numbers-to-reject.parameters`. Only those numbers are removed, and the rest of the list stays. A single number in place of the list is taken as a one-item list. A number that is not on the list is ignored.  The list always belongs to the default answering rule. A `time-frame` in the request is ignored. A `202` means the change is accepted and applied shortly after. — [DELETE /domains/{domain}/number-filters]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phone-numbers-to-reject": {
                       "type": "object",
-                      "description": "This is a list of numbers that would be blocked and rejected before any forward or sim ring features are attempted."
+                      "description": "Numbers to remove."
                 }
           },
           "required": [
@@ -110,6 +122,12 @@ export const delete_domains_by_domain_number_filters: ToolDefinition = {
                 "phone-numbers-to-reject"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/number-filters',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -160,6 +178,12 @@ export const get_domains_by_domain_users_by_usernumber_filters: ToolDefinition =
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{user}number-filters',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
@@ -184,21 +208,21 @@ export const get_domains_by_domain_users_by_usernumber_filters: ToolDefinition =
 export const post_domains_by_domain_users_by_user_number_filters: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_number_filters',
-    description: 'Add blocked numbers for a User — [POST /domains/{domain}/users/{user}/number-filters]',
+    description: 'Add user blocked numbers — Adds numbers to one user\\\'s blocked-number list. Calls from these numbers are rejected before any forwarding or simultaneous ring is tried.  Requires Basic User scope or higher. A Basic User can change only their own list, and a Site Manager only the lists of users in their own site.  Send the numbers in `phone-numbers-to-reject.parameters`. Each one is added to the list, or updated if it is already there. Numbers you leave out stay on the list. A single number in place of the list is taken as a one-item list.  To pause or resume the whole list, send `phone-numbers-to-reject` with `enabled` set to `no` or `yes` and an empty `parameters` list. Every number already on the list takes that setting.  The list always belongs to the default answering rule. A `time-frame` in the request is ignored. A `202` means the change is accepted and applied shortly after. `PUT` on the same path behaves the same way. — [POST /domains/{domain}/users/{user}/number-filters]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose blocked numbers you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "phone-numbers-to-reject": {
                       "type": "object",
-                      "description": "This is a list of numbers that would be blocked and rejected before any forward or sim ring features are attempted."
+                      "description": "Numbers to block, and whether blocking is on."
                 }
           },
           "required": [
@@ -207,6 +231,12 @@ export const post_domains_by_domain_users_by_user_number_filters: ToolDefinition
                 "phone-numbers-to-reject"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/number-filters',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -238,21 +268,21 @@ export const post_domains_by_domain_users_by_user_number_filters: ToolDefinition
 export const delete_domains_by_domain_users_by_user_number_filters: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_number_filters',
-    description: 'Delete blocked numbers for a User — [DELETE /domains/{domain}/users/{user}/number-filters]',
+    description: 'Remove user blocked numbers — Removes numbers from one user\\\'s blocked-number list.  Requires Basic User scope or higher. A Basic User can change only their own list, and a Site Manager only the lists of users in their own site.  Send the numbers to remove in `phone-numbers-to-reject.parameters`. Only those numbers are removed, and the rest of the list stays. A single number in place of the list is taken as a one-item list. A number that is not on the list is ignored.  The list always belongs to the default answering rule. A `time-frame` in the request is ignored. A `202` means the change is accepted and applied shortly after. — [DELETE /domains/{domain}/users/{user}/number-filters]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose blocked numbers you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "phone-numbers-to-reject": {
                       "type": "object",
-                      "description": "This is a list of numbers that would be blocked and rejected before any forward or sim ring features are attempted."
+                      "description": "Numbers to remove."
                 }
           },
           "required": [
@@ -261,6 +291,12 @@ export const delete_domains_by_domain_users_by_user_number_filters: ToolDefiniti
                 "phone-numbers-to-reject"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/number-filters',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -278,6 +314,55 @@ export const delete_domains_by_domain_users_by_user_number_filters: ToolDefiniti
       pathTemplate: '/domains/{domain}/users/{user}/number-filters',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_blocked_numbers_user: ToolDefinition = {
+  schema: {
+    name: 'read_blocked_numbers_user',
+    description: 'Read user blocked numbers — Returns one user\\\'s blocked-number list. Calls from a number on the list are rejected before any forwarding, simultaneous ring, or voicemail is tried.  Requires Basic User scope or higher. A Basic User can read only their own list, and a Site Manager only the lists of users in their own site.  The list belongs to the default answering rule (time frame `*`), so the response has at most one entry. Numbers are returned as strings, so a leading zero is kept. The response is an empty array when the user has no answering rule. — [GET /domains/{domain}/users/{user}/number-filters]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose blocked numbers you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/number-filters',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/number-filters',
+      pathParams,
     });
 
     return {

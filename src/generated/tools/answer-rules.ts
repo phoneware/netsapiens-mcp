@@ -5,17 +5,22 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_answerrules: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_answerrules',
-    description: 'Read Answerrules for a User — [GET /domains/{domain}/users/{user}/answerrules]',
+    description: 'List answer rules — Lists a user\\\'s answer rules with every feature and time range, in the order they are checked.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  The list includes rules that apply to every user in the domain (`user` is `*`). `is-active` marks the rule handling calls right now, in the user\\\'s time zone. For the time frames and order only, use `GET /domains/{domain}/users/{user}/answerrules/list`. To count rules, use `/answerrules/count`. — [GET /domains/{domain}/users/{user}/answerrules]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rules to return. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -24,16 +29,28 @@ export const get_domains_by_domain_users_by_user_answerrules: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/answerrules',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/answerrules',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,115 +65,104 @@ export const get_domains_by_domain_users_by_user_answerrules: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_answerrules: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_answerrules',
-    description: 'Add a Answerrule for a User — [POST /domains/{domain}/users/{user}/answerrules]',
+    description: 'Create answer rule — Creates an answer rule that decides how calls to the user are handled while one time frame applies.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  Send `time-frame` and at least one feature. The time frame must already exist for the user or the domain; `*` or `Default` creates the default rule. `enabled` defaults to `yes`. A new rule is checked after the user\\\'s existing rules. Change the order with `PUT /domains/{domain}/users/{user}/answerrules/reorder`.  A time frame that already has a rule for this user returns `409`. Change that rule with `PUT /domains/{domain}/users/{user}/answerrules/{timeframe}` instead. — [POST /domains/{domain}/users/{user}/answerrules]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "time-frame": {
+                      "type": "string",
+                      "description": "Time frame the rule applies to, such as `Business Hours`. `*` or `Default` creates the default rule. The time frame must already exist for the user or the domain. A time frame that already has a rule for this user returns `409`."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Whether the rule is used at all. A disabled rule is skipped when calls are matched. Defaults to `yes`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "simultaneous-ring": {
+                      "type": "object",
+                      "description": "The simultaneous ring feature of an answer rule."
+                },
+                "do-not-disturb": {
+                      "type": "object",
+                      "description": "An answer rule feature that is only switched on or off."
+                },
+                "forward-always": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-on-active": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-on-busy": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-no-answer": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-when-unregistered": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-on-dnd": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "forward-on-spam-call": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "prompt-no-answer": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "call-screening": {
+                      "type": "object",
+                      "description": "An answer rule feature that is only switched on or off."
+                },
+                "phone-numbers-to-allow": {
+                      "type": "object",
+                      "description": "An answer rule list of caller numbers."
+                },
+                "phone-numbers-to-reject": {
+                      "type": "object",
+                      "description": "An answer rule list of caller numbers."
                 },
                 "synchronous": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
-                },
-                "time-frame": {
-                      "type": "string",
-                      "description": "This is the timeframe that also is needed to make this set of answer rules unique. * is teh default and if no timeframes are setup this is is how to set anserrules."
-                },
-                "enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "is-active": {
-                      "type": "boolean",
-                      "description": "This is read only option that will be true if this timeframe is active for this user when taking into account current settings, date/time and all timeframes."
-                },
-                "order": {
-                      "type": "number",
-                      "description": "This is to allow for a priority based order of different timeframes. The default is to add it in value higher (lower priority) than the lowest priority timeframe. Timeframe * will get 99 if not already set. Default: 99",
-                      "default": 99
-                },
-                "simultaneous-ring": {
-                      "type": "object",
-                      "description": "simultaneous-ring"
-                },
-                "do-not-disturb": {
-                      "type": "object",
-                      "description": "When enabled this feature will block all inbound ringing and send the call to voicemails if enabled."
-                },
-                "forward-always": {
-                      "type": "object",
-                      "description": "forward-always"
-                },
-                "forward-on-active": {
-                      "type": "object",
-                      "description": "forward-on-active"
-                },
-                "forward-on-busy": {
-                      "type": "object",
-                      "description": "forward-on-busy"
-                },
-                "forward-no-answer": {
-                      "type": "object",
-                      "description": "forward-no-answer"
-                },
-                "forward-when-unregistered": {
-                      "type": "object",
-                      "description": "forward-when-unregistered"
-                },
-                "forward-on-dnd": {
-                      "type": "object",
-                      "description": "forward-on-dnd"
-                },
-                "forward-on-spam-call": {
-                      "type": "object",
-                      "description": "forward-on-spam-call"
-                },
-                "call-screening": {
-                      "type": "object",
-                      "description": "When enabled this feature will enable the call screening application asking the caller to record their name before attempting the connection based on other answer rules."
-                },
-                "phone-numbers-to-allow": {
-                      "type": "object",
-                      "description": "phone-numbers-to-allow"
-                },
-                "new-position": {
-                      "type": "string",
-                      "description": "This will move the answerrule to the top or bottom in the priority list. Top having the most priority, and bottom having the least priority. Allowed values: \"top\", \"bottom\"",
-                      "enum": [
-                            "top",
-                            "bottom"
-                      ]
-                },
-                "phone-numbers-to-reject": {
-                      "type": "object",
-                      "description": "phone-numbers-to-reject"
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "synchronous",
-                "time-frame",
-                "enabled",
-                "is-active"
+                "time-frame"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/answerrules',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -164,7 +170,7 @@ export const post_domains_by_domain_users_by_user_answerrules: ToolDefinition = 
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'time-frame', 'enabled', 'is-active', 'order', 'simultaneous-ring', 'do-not-disturb', 'forward-always', 'forward-on-active', 'forward-on-busy', 'forward-no-answer', 'forward-when-unregistered', 'forward-on-dnd', 'forward-on-spam-call', 'call-screening', 'phone-numbers-to-allow', 'new-position', 'phone-numbers-to-reject'];
+    const bodyParamNames = ['time-frame', 'enabled', 'simultaneous-ring', 'do-not-disturb', 'forward-always', 'forward-on-active', 'forward-on-busy', 'forward-no-answer', 'forward-when-unregistered', 'forward-on-dnd', 'forward-on-spam-call', 'prompt-no-answer', 'call-screening', 'phone-numbers-to-allow', 'phone-numbers-to-reject', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -185,57 +191,20 @@ export const post_domains_by_domain_users_by_user_answerrules: ToolDefinition = 
   },
 };
 
-export const get_domains_by_domain_users_by_user_answerrules_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_users_by_user_answerrules_count',
-    description: 'Count Answerrules for a User — [GET /domains/{domain}/users/{user}/answerrules/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain",
-                "user"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/answerrules/count',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_domains_users_answerrules: ToolDefinition = {
   schema: {
     name: 'get_domains_users_answerrules',
-    description: 'Read Answerrules for my  User — [GET /domains/~/users/~/answerrules]',
+    description: 'Read Answerrules for my User — [GET /domains/~/users/~/answerrules]',
     inputSchema: {
           "type": "object",
           "properties": {}
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/answerrules',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const response = await client.request({
@@ -255,21 +224,21 @@ export const get_domains_users_answerrules: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_answerrules_by_timeframe',
-    description: 'Read Specifc Timeframe Answerrule for User — [GET /domains/{domain}/users/{user}/answerrules/{timeframe}]',
+    description: 'Read answer rule — Reads the user\\\'s answer rule for one time frame, with every feature and time range.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  Use `*` for the default rule. A time frame with no rule for this user returns `404`. — [GET /domains/{domain}/users/{user}/answerrules/{timeframe}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "timeframe": {
                       "type": "string",
-                      "description": "timeframe"
+                      "description": "Time frame of the answer rule, such as `Business Hours`. `*` is the default rule, which applies when no other rule matches. Encode a space as `%20` and `*` as `%2A`."
                 }
           },
           "required": [
@@ -278,6 +247,12 @@ export const get_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolD
                 "timeframe"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/answerrules/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'timeframe'];
@@ -303,105 +278,103 @@ export const get_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolD
 export const put_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_answerrules_by_timeframe',
-    description: 'Update a Answerrule for a User — [PUT /domains/{domain}/users/{user}/answerrules/{timeframe}]',
+    description: 'Update answer rule — Changes the user\\\'s answer rule for one time frame.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  Send only what changes. A feature you leave out keeps its settings. For `phone-numbers-to-allow` and `phone-numbers-to-reject`, numbers you send are added; send `remove: yes` to drop them. `new-position` moves the rule to the top or bottom of the order. To set the full order, use `PUT /domains/{domain}/users/{user}/answerrules/reorder`. — [PUT /domains/{domain}/users/{user}/answerrules/{timeframe}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "timeframe": {
                       "type": "string",
-                      "description": "timeframe"
+                      "description": "Time frame of the answer rule, such as `Business Hours`. `*` is the default rule, which applies when no other rule matches. Encode a space as `%20` and `*` as `%2A`."
                 },
                 "enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "Whether the rule is used at all. A disabled rule is skipped when calls are matched. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "yes"
-                },
-                "is-active": {
-                      "type": "boolean",
-                      "description": "This is read only option that will be true if this timeframe is active for this user when taking into account current settings, date/time and all timeframes."
-                },
-                "order": {
-                      "type": "number",
-                      "description": "This is to allow for a priority based order of different timeframes. The default is to add it in value higher (lower priority) than the lowest priority timeframe. Timeframe * will get 99 if not already set. Default: 99",
-                      "default": 99
+                      ]
                 },
                 "simultaneous-ring": {
                       "type": "object",
-                      "description": "simultaneous-ring"
+                      "description": "The simultaneous ring feature of an answer rule."
                 },
                 "do-not-disturb": {
                       "type": "object",
-                      "description": "When enabled this feature will block all inbound ringing and send the call to voicemails if enabled."
+                      "description": "An answer rule feature that is only switched on or off."
                 },
                 "forward-always": {
                       "type": "object",
-                      "description": "forward-always"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-on-active": {
                       "type": "object",
-                      "description": "forward-on-active"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-on-busy": {
                       "type": "object",
-                      "description": "forward-on-busy"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-no-answer": {
                       "type": "object",
-                      "description": "forward-no-answer"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-when-unregistered": {
                       "type": "object",
-                      "description": "forward-when-unregistered"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-on-dnd": {
                       "type": "object",
-                      "description": "forward-on-dnd"
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "forward-on-spam-call": {
                       "type": "object",
-                      "description": "forward-on-spam-call"
+                      "description": "An answer rule feature that sends calls to a destination."
+                },
+                "prompt-no-answer": {
+                      "type": "object",
+                      "description": "An answer rule feature that sends calls to a destination."
                 },
                 "call-screening": {
                       "type": "object",
-                      "description": "When enabled this feature will enable the call screening application asking the caller to record their name before attempting the connection based on other answer rules."
+                      "description": "An answer rule feature that is only switched on or off."
                 },
                 "phone-numbers-to-allow": {
                       "type": "object",
-                      "description": "phone-numbers-to-allow"
+                      "description": "An answer rule list of caller numbers."
+                },
+                "phone-numbers-to-reject": {
+                      "type": "object",
+                      "description": "An answer rule list of caller numbers."
                 },
                 "new-position": {
                       "type": "string",
-                      "description": "This will move the answerrule to the top or bottom in the priority list. Top having the most priority, and bottom having the least priority. Allowed values: \"top\", \"bottom\"",
+                      "description": "Moves the rule to the top (checked first) or the bottom (checked last) of the user's rules. Allowed values: \"top\", \"bottom\"",
                       "enum": [
                             "top",
                             "bottom"
                       ]
-                },
-                "phone-numbers-to-reject": {
-                      "type": "object",
-                      "description": "phone-numbers-to-reject"
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "timeframe",
-                "enabled",
-                "is-active"
+                "timeframe"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/answerrules/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'timeframe'];
@@ -409,7 +382,7 @@ export const put_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolD
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['enabled', 'is-active', 'order', 'simultaneous-ring', 'do-not-disturb', 'forward-always', 'forward-on-active', 'forward-on-busy', 'forward-no-answer', 'forward-when-unregistered', 'forward-on-dnd', 'forward-on-spam-call', 'call-screening', 'phone-numbers-to-allow', 'new-position', 'phone-numbers-to-reject'];
+    const bodyParamNames = ['enabled', 'simultaneous-ring', 'do-not-disturb', 'forward-always', 'forward-on-active', 'forward-on-busy', 'forward-no-answer', 'forward-when-unregistered', 'forward-on-dnd', 'forward-on-spam-call', 'prompt-no-answer', 'call-screening', 'phone-numbers-to-allow', 'phone-numbers-to-reject', 'new-position'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -433,21 +406,21 @@ export const put_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolD
 export const delete_domains_by_domain_users_by_user_answerrules_by_timeframe: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_answerrules_by_timeframe',
-    description: 'Delete a Answerrule for a User  — [DELETE /domains/{domain}/users/{user}/answerrules/{timeframe}]',
+    description: 'Delete answer rule — Deletes the user\\\'s answer rule for one time frame, with all its features. The time frame itself is kept.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  The default rule `*` cannot be deleted and returns `400`. Turn its features off with `PUT /domains/{domain}/users/{user}/answerrules/{timeframe}` instead. — [DELETE /domains/{domain}/users/{user}/answerrules/{timeframe}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "timeframe": {
                       "type": "string",
-                      "description": "timeframe"
+                      "description": "Time frame of the answer rule, such as `Business Hours`. `*` is the default rule, which applies when no other rule matches. Encode a space as `%20` and `*` as `%2A`."
                 }
           },
           "required": [
@@ -456,6 +429,12 @@ export const delete_domains_by_domain_users_by_user_answerrules_by_timeframe: To
                 "timeframe"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/answerrules/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'timeframe'];
@@ -481,17 +460,17 @@ export const delete_domains_by_domain_users_by_user_answerrules_by_timeframe: To
 export const put_domains_by_domain_users_by_user_answerrules_reorder: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_answerrules_reorder',
-    description: 'Reorder Answerrules for my User — To reorder the answerrules, give an array of time frames used in the user\\\'s current answerrules in the order desired. Please be sure to include all time frames and no extraneous ones. Be sure to include "Default" when necessary which is named "*". — [PUT /domains/{domain}/users/{user}/answerrules/reorder]',
+    description: 'Reorder answer rules — Sets the order in which the user\\\'s answer rules are checked. The first rule whose time frame matches handles the call.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user.  Send every current rule exactly once, in the new order, including the default rule `*`. A missing rule returns `400`. A time frame that has no rule, or one listed twice, returns `404`. To move one rule to the top or bottom, send `new-position` to `PUT /domains/{domain}/users/{user}/answerrules/{timeframe}`. — [PUT /domains/{domain}/users/{user}/answerrules/reorder]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 }
           },
           "required": [
@@ -499,6 +478,12 @@ export const put_domains_by_domain_users_by_user_answerrules_reorder: ToolDefini
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/answerrules/reorder',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -510,6 +495,120 @@ export const put_domains_by_domain_users_by_user_answerrules_reorder: ToolDefini
       method: 'PUT',
       pathTemplate: '/domains/{domain}/users/{user}/answerrules/reorder',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_users_by_user_answerrules_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_users_by_user_answerrules_count',
+    description: 'Count answer rules — Counts the answer rules set on the user.  Requires Basic User scope or higher for your own rules. Site Manager can manage the users in its site, Office Manager any user in its domain, Reseller any user in its territory, and Super User any user. Call Center Supervisor can also count the rules of a Call Center Agent.  The count includes rules that apply to every user in the domain (`user` is `*`), the same rules `GET /domains/{domain}/users/{user}/answerrules` returns. A user that does not exist answers `total` `0`. — [GET /domains/{domain}/users/{user}/answerrules/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/answerrules/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/answerrules/count',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_answerrules: ToolDefinition = {
+  schema: {
+    name: 'list_user_answerrules',
+    description: 'List answer rule summaries — Lists the user\\\'s answer rules by time frame, order and whether each is enabled, without features or time ranges. It answers faster than the full read.  Requires the `list` privilege for answer rules, which `/count` uses too. Basic User and higher hold it for their own rules, Site Manager for its site, Office Manager for its domain, Reseller for its territory, and Super User for every user.  The list includes rules that apply to every user in the domain (`user` is `*`). Page with `limit` and `start`. Append `/list` to `/answerrules/{timeframe}` for one rule in this shape. For features and time ranges, use `GET /domains/{domain}/users/{user}/answerrules`. — [GET /domains/{domain}/users/{user}/answerrules/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose answer rules you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rules to return. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/answerrules/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/answerrules/list',
+      pathParams,
+      queryParams,
     });
 
     return {

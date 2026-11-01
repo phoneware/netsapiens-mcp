@@ -26,8 +26,13 @@ export const v1_callqueuestat_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=callqueuestat&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("callqueuestat", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("callqueuestat", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

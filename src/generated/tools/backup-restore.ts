@@ -5,13 +5,13 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const post_domains_by_domain_backup: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_backup',
-    description: 'Manually Backup a Domain — [POST /domains/{domain}/backup]',
+    description: 'Back up domain — Runs a manual backup of one domain now, on the server that answers the request. The domain\\\'s databases are backed up and its stored files copied to backup storage, and the response reports both.  Requires Reseller or Super User scope. A Reseller can back up only a domain in its own territory. This path accepts only `POST`; any other method returns `405`.  A request body is optional. A `domain` in the body must name the domain in the path, or the request returns `400`. To name the domain in the body instead, use `POST /backup`.  The call waits for the backup to finish, which can take up to 5 minutes for a large domain. `backup-index` identifies the new restore point. To see it, use `GET /domains/{domain}/restore`. — [POST /domains/{domain}/backup]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain to back up, such as `example.com`. `~` means your own domain. On `POST /backup`, backs up only this domain instead of every domain on the server, with the same access as `POST /domains/{domain}/backup`. On `POST /domains/{domain}/backup`, it must name the domain in the path, or the request returns `400`."
                 }
           },
           "required": [
@@ -19,16 +19,28 @@ export const post_domains_by_domain_backup: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/backup',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['domain'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/backup',
       pathParams,
+      body,
     });
 
     return {
@@ -43,16 +55,33 @@ export const post_domains_by_domain_backup: ToolDefinition = {
 export const post_backup: ToolDefinition = {
   schema: {
     name: 'post_backup',
-    description: 'Request a Full System backup — [POST /backup]',
+    description: 'Start full system backup — Starts the backup job now for every domain on the server that answers the request. The job runs in the background, and the call returns as soon as it starts.  Requires Super User scope. Super User Read Only and every other scope get `403`. This path accepts only `POST`; any other method returns `405`.  To back up one domain instead, send its name in `domain`. The request then works like **Back up domain**: it needs the same access, waits for the backup to finish, and returns the same response. A Reseller can name only a domain in its own territory; any other returns `403`. A domain that does not exist returns `404`.  Only one backup runs at a time: if one is already in progress, the request returns `409`, so retry after it finishes. When backup storage is not configured on the server, the request returns `502` with the message `missing configs`. Contact support to set it up. — [POST /backup]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain to back up, such as `example.com`. `~` means your own domain. On `POST /backup`, backs up only this domain instead of every domain on the server, with the same access as `POST /domains/{domain}/backup`. On `POST /domains/{domain}/backup`, it must name the domain in the path, or the request returns `400`."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /backup',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['domain'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/backup',
+      body,
     });
 
     return {
@@ -67,63 +96,61 @@ export const post_backup: ToolDefinition = {
 export const get_restore: ToolDefinition = {
   schema: {
     name: 'get_restore',
-    description: 'Read Available Restore Points — [GET /restore]',
+    description: 'List restore points — Lists the backups you can restore a domain from, grouped by the server that holds them, newest first. Name the domain in the query string.  Requires Reseller, Super User, or Super User Read Only scope.  Send every filter as a query parameter; this request takes no body. `domain` is required, and without it the request returns `400`. Each restore point carries a `confirmation-value`. To restore one, send it with the point\\\'s server hostname, `type`, and `day` (as `index`) to `PUT /restore`.  A domain with no restore points returns an empty array. When the backup service is unavailable or slow, the request returns `502` or `504` instead. To name the domain in the path instead, use `GET /domains/{domain}/restore`. — [GET /restore]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "hostname": {
-                      "type": "string",
-                      "description": "FQDN of the server the files were uploaded from."
-                },
                 "domain": {
                       "type": "string",
-                      "description": "The domain name of the domain being restored."
+                      "description": "Domain whose restore points to list, such as `example.com`. Without it, the request returns `400`."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "Server whose backups to list, as returned in the restore-point list. Omit it to list every server that holds a backup of the domain."
                 },
                 "type": {
                       "type": "string",
-                      "description": "This will specify the kind of backup that was used. This will either be \"nightly\" or \"manual\"."
+                      "description": "Kind of backup to list. Omit it to list both. Allowed values: \"nightly\", \"manual\"",
+                      "enum": [
+                            "nightly",
+                            "manual"
+                      ]
                 },
                 "index": {
-                      "type": "string",
-                      "description": "The index number of the backup. This can be found within the defaulted file name on AWS."
+                      "type": "number",
+                      "description": "Restore point to list, matched against its `day`. Nightly backups use `0` (Sunday) to `6`. Manual backups use the `backup-index` the backup returned."
                 },
-                "geo": {
+                "show-file-details": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Set to `yes` to include `files`, the stored files behind each restore point. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
-                },
-                "show-file-details": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
                 }
           },
           "required": [
-                "hostname",
-                "domain",
-                "type",
-                "index",
-                "geo"
+                "domain"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /restore',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['hostname', 'domain', 'type', 'index', 'geo', 'show-file-details'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
+    const queryParamNames = ['domain', 'hostname', 'type', 'index', 'show-file-details'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
     }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/restore',
-      body,
+      queryParams,
     });
 
     return {
@@ -138,46 +165,42 @@ export const get_restore: ToolDefinition = {
 export const put_restore: ToolDefinition = {
   schema: {
     name: 'put_restore',
-    description: 'Restore a Specifc Domain Backup — [PUT /restore]',
+    description: 'Restore domain from backup — Restores a domain from one of its backups. This overwrites the domain\\\'s current data: the backup\\\'s database files are imported, the domain\\\'s stored files are restored, and the domain is reloaded.  Requires Reseller or Super User scope.  List the restore points with `GET /restore` first. Send the chosen point\\\'s server as `hostname`, its `type`, its `day` as `index`, and its `confirmation-value`, together with `domain`, in the body. A `domain` in the query string is ignored, so a body without one returns `400`. A missing field returns `400` naming it. Values that do not identify exactly one current restore point also return `400`.  The call waits for the restore to finish, which can take up to 5 minutes. With `geo` set to `yes`, the restore is queued instead, and the response carries only `logs`. — [PUT /restore]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "hostname": {
                       "type": "string",
-                      "description": "FQDN of the server the files were uploaded from."
+                      "description": "Server that holds the backup, as keyed in the restore-point list."
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain name of the domain being restored."
+                      "description": "Domain to restore, such as `example.com`. Send it in the body: a `domain` in the query string is ignored."
                 },
                 "type": {
                       "type": "string",
-                      "description": "This will specify the kind of backup that was used. This will either be \"nightly\" or \"manual\"."
+                      "description": "Kind of backup, from the restore point's `type`. Allowed values: \"nightly\", \"manual\"",
+                      "enum": [
+                            "nightly",
+                            "manual"
+                      ]
                 },
                 "index": {
-                      "type": "string",
-                      "description": "The index number of the backup. This can be found within the defaulted file name on AWS."
+                      "type": "number",
+                      "description": "Restore point to restore, from its `day`. Nightly backups use `0` to `6`. Manual backups use the `backup-index` the backup returned."
                 },
                 "confirmation-value": {
                       "type": "string",
-                      "description": "First read restore data with the following call: get_restore. his will give you the confirmation value"
+                      "description": "The restore point's `confirmation-value`, from the restore-point list. It proves you picked the point that exists now."
                 },
                 "geo": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` or `no`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
-                },
-                "show-file-details": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
                 }
           },
           "required": [
@@ -185,12 +208,18 @@ export const put_restore: ToolDefinition = {
                 "domain",
                 "type",
                 "index",
-                "geo"
+                "confirmation-value"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /restore',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['hostname', 'domain', 'type', 'index', 'confirmation-value', 'geo', 'show-file-details'];
+    const bodyParamNames = ['hostname', 'domain', 'type', 'index', 'confirmation-value', 'geo'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -198,6 +227,164 @@ export const put_restore: ToolDefinition = {
     const response = await client.request({
       method: 'PUT',
       pathTemplate: '/restore',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_restore_points: ToolDefinition = {
+  schema: {
+    name: 'list_domain_restore_points',
+    description: 'List domain restore points — Lists the backups you can restore the domain in the path from, grouped by the server that holds them, newest first.  Requires Reseller, Super User, or Super User Read Only scope.  Each restore point carries a `confirmation-value`. To restore one, send it with the point\\\'s server hostname, `type`, and `day` (as `index`) to `PUT /domains/{domain}/restore`.  A domain with no restore points returns an empty array. When the backup service is unavailable or slow, the request returns `502` or `504` instead. — [GET /domains/{domain}/restore]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "Server whose backups to list, as returned in the restore-point list. Omit it to list every server that holds a backup of the domain."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Kind of backup to list. Omit it to list both. Allowed values: \"nightly\", \"manual\"",
+                      "enum": [
+                            "nightly",
+                            "manual"
+                      ]
+                },
+                "index": {
+                      "type": "number",
+                      "description": "Restore point to list, matched against its `day`. Nightly backups use `0` (Sunday) to `6`. Manual backups use the `backup-index` the backup returned."
+                },
+                "show-file-details": {
+                      "type": "string",
+                      "description": "Set to `yes` to include `files`, the stored files behind each restore point. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/restore',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['hostname', 'type', 'index', 'show-file-details'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/restore',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const restore_domain_backup: ToolDefinition = {
+  schema: {
+    name: 'restore_domain_backup',
+    description: 'Restore domain from backup by path — Restores the domain in the path from one of its backups. This overwrites the domain\\\'s current data: the backup\\\'s database files are imported, the domain\\\'s stored files are restored, and the domain is reloaded.  Requires Reseller or Super User scope.  List the restore points with `GET /domains/{domain}/restore` first. Send the chosen point\\\'s server as `hostname`, its `type`, its `day` as `index`, and its `confirmation-value` in the body. A missing field returns `400` naming it. Values that do not identify exactly one current restore point also return `400`.  The call waits for the restore to finish, which can take up to 5 minutes. With `geo` set to `yes`, the restore is queued instead, and the response carries only `logs`. — [PUT /domains/{domain}/restore]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "Server that holds the backup, as keyed in the restore-point list."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Kind of backup, from the restore point's `type`. Allowed values: \"nightly\", \"manual\"",
+                      "enum": [
+                            "nightly",
+                            "manual"
+                      ]
+                },
+                "index": {
+                      "type": "number",
+                      "description": "Restore point to restore, from its `day`. Nightly backups use `0` to `6`. Manual backups use the `backup-index` the backup returned."
+                },
+                "confirmation-value": {
+                      "type": "string",
+                      "description": "The restore point's `confirmation-value`, from the restore-point list. It proves you picked the point that exists now."
+                },
+                "geo": {
+                      "type": "string",
+                      "description": "`yes` queues the restore and answers at once, without waiting for it to finish. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "hostname",
+                "type",
+                "index",
+                "confirmation-value"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/restore',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['hostname', 'type', 'index', 'confirmation-value', 'geo'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/restore',
+      pathParams,
       body,
     });
 

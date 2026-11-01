@@ -47,8 +47,13 @@ export const v1_upload_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=upload&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("upload", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("upload", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -95,8 +100,13 @@ export const v1_upload_upload: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=upload&action=upload",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("upload", "upload", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("upload", "upload", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
