@@ -53,12 +53,20 @@ export class UpstreamTimeoutError extends Error {
   this.name = 'UpstreamTimeoutError';
  }
 }
-
 export class UpstreamGrantRejectedError extends Error {
  readonly status: number;
  constructor(message = 'Upstream refresh grant rejected', status = 400) {
   super(message);
   this.name = 'UpstreamGrantRejectedError';
+  this.status = status;
+ }
+}
+
+export class UpstreamUnavailableError extends Error {
+ readonly status: number;
+ constructor(message = 'Upstream unavailable', status = 500) {
+  super(message);
+  this.name = 'UpstreamUnavailableError';
   this.status = status;
  }
 }
@@ -987,7 +995,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  }
 
  async exchangeRefreshToken(
-  _client: OAuthClientInformationFull,
+  client: OAuthClientInformationFull,
   refreshToken: string,
  ): Promise<OAuthTokens> {
   const stored = await this.store.sessions.getByRefreshToken(refreshToken);
@@ -995,6 +1003,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
     refreshFingerprint: refreshToken.slice(0, 8),
    });
+   throw new InvalidGrantError('Invalid refresh token');
+  }
+
+  const expectedClientId = client?.client_id;
+  if (expectedClientId && stored.clientId && client.client_id !== stored.clientId) {
+   logger.warn('Refresh token client mismatch', { expected: expectedClientId, actual: stored.clientId });
    throw new InvalidGrantError('Invalid refresh token');
   }
 
@@ -1020,11 +1034,19 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     nsTokens.nsUserRole = stored.nsUserRole;
     nsTokens.nsApiUrl = stored.nsApiUrl;
    } catch (err) {
-    logger.warn('Upstream NS refresh-grant failed during MCP refresh', {
+    if (err instanceof UpstreamGrantRejectedError) {
+     logger.warn('Upstream NS refresh grant rejected by NetSapiens during refresh', {
+      username: stored.nsUsername,
+      error: err.message,
+     });
+     await this.store.sessions.deleteByRefreshToken(refreshToken);
+     throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+    }
+    logger.warn('Upstream NS refresh failed with transient error during refresh', {
      username: stored.nsUsername,
      error: err instanceof Error ? err.message : String(err),
     });
-    throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+    throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
    }
   } else {
    logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
@@ -1071,7 +1093,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     ageSec: Math.round(ageMs / 1000),
     hadRefreshToken: !!stored.nsRefreshToken,
    });
-   await this.store.sessions.delete(token);
+   // Do not delete the token document here per C1; allow subsequent refresh.
    throw new InvalidTokenError('Access token expired');
   }
 
@@ -1100,7 +1122,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
      }
 
-     if (err instanceof RetryableRefreshError || err instanceof LeaseLostError) {
+     if (err instanceof RetryableRefreshError || err instanceof LeaseLostError || err instanceof UpstreamUnavailableError || err instanceof UpstreamTimeoutError) {
       if (!latest.nsExpiresAt || Date.now() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS) {
        stored = latest;
       } else {
@@ -1420,17 +1442,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    };
   } catch (err: unknown) {
    if (axios.isAxiosError(err)) {
-    const status = err.response?.status;
-    if (status === 400 || status === 401) {
-     const desc = err.response?.data?.error_description || err.response?.data?.error || err.message;
-     throw new UpstreamGrantRejectedError(`Upstream refresh grant rejected (${status}): ${desc}`, status);
+    const status = err.response?.status ?? 500;
+    const data = err.response?.data;
+    const errorCode = (typeof data === 'object' && data && (data as Record<string, unknown>).error) ? String((data as Record<string, unknown>).error).toLowerCase() : '';
+    const errorDesc = (typeof data === 'object' && data && (data as Record<string, unknown>).error_description) ? String((data as Record<string, unknown>).error_description).toLowerCase() : '';
+    const combined = `${errorCode} ${errorDesc} ${String(err.message)}`.toLowerCase();
+    const desc = (typeof data === 'object' && data && ((data as Record<string, unknown>).error_description || (data as Record<string, unknown>).error || (data as Record<string, unknown>).message)) || err.message;
+    const isDefinitive = status === 400 && (combined.includes('invalid_grant') || combined.includes('interaction_required') || !data);
+    if (isDefinitive) {
+     throw new UpstreamGrantRejectedError(`Upstream refresh grant rejected (${status}): ${String(desc)}`, status);
     }
     if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.message?.toLowerCase().includes('timeout')) {
      throw new UpstreamTimeoutError(`Upstream refresh request timed out: ${err.message}`);
     }
+    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status}): ${String(desc)}`, status);
    }
    throw err;
-  }
+ }
  }
 
  async invalidateToken(mcpToken: string): Promise<void> {

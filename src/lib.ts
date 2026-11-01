@@ -2,7 +2,16 @@
 export { NetSapiensClient } from './netsapiens-client.js';
 export { CURATED_CATALOG } from './tools/curated/catalog.js';
 export { withStructuredContent } from './tools/index.js';
-export { NetSapiensAuthProvider, signValue, inspectSigned, sealValue, openSealed } from './auth/netsapiens-auth-provider.js';
+export {
+  NetSapiensAuthProvider,
+  signValue,
+  inspectSigned,
+  sealValue,
+  openSealed,
+  UpstreamGrantRejectedError,
+  UpstreamTimeoutError,
+  UpstreamUnavailableError,
+} from './auth/netsapiens-auth-provider.js';
 export { parsePlatforms } from './auth/platforms.js';
 export type { NetSapiensPlatform } from './auth/platforms.js';
 export { LoopbackTolerantClientsStore } from './auth/loopback-redirect.js';
