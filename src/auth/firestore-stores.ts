@@ -18,7 +18,7 @@ import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/au
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
-import type { RefreshRotationResult } from './kit/ledger.js';
+import type { RefreshRotationResult, StoredRefreshFamily } from './kit/ledger.js';
 import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
@@ -369,7 +369,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
  async refreshNsToken(
   accessToken: string,
   doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
-  opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number; operation?: LegacyOperationContext },
+  opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number; operation?: LegacyOperationContext; force?: boolean },
  ): Promise<StoredToken> {
   const op = this.resolveOp(opts);
   if (this.fenceConfig?.enforce && !op) {
@@ -425,6 +425,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         waitMs: opts?.maxWaitMs ?? 15_000,
         pollIntervalMs: opts?.pollIntervalMs ?? 150,
         completeOperation: false,
+        force: opts?.force ?? false,
       },
     );
   } catch (err) {
@@ -435,6 +436,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   }
 
   const accessRef = this.accessDocRef(accessToken);
+  const upstreamRef = this.upstreamDocRef(familyId);
   return await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
@@ -449,6 +451,17 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     }
     const snap = await transaction.get(accessRef);
     if (!snap.exists) {
+      const familySnap = await transaction.get(this.familyDocRef(familyId));
+      if (familySnap.exists) {
+        const familyData = familySnap.data() as StoredRefreshFamily;
+        if (familyData.currentAccessToken) {
+          const currentAccessSnap = await transaction.get(this.accessDocRef(familyData.currentAccessToken));
+          if (currentAccessSnap.exists) {
+            guard?.bufferCompletion(this.localNow());
+            return currentAccessSnap.data() as StoredToken;
+          }
+        }
+      }
       throw new Error('Token document was deleted/revoked during refresh');
     }
     const current = snap.data() as StoredToken;
@@ -460,6 +473,19 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     };
     guard?.bufferCompletion(this.localNow());
     transaction.set(accessRef, cleanDoc(updated));
+    transaction.set(
+      upstreamRef,
+      {
+        leaseUntil: null,
+        leaseOwner: null,
+        ambiguousOutcome: null,
+        ambiguousReason: null,
+        ambiguousAt: null,
+        ambiguousOperationId: null,
+        updatedAt: this.localNow(),
+      },
+      { merge: true },
+    );
     return updated;
   });
  }
@@ -673,19 +699,13 @@ export class FirestoreAuthCodeStore {
   if (data.used || this.localNow() > data.expiresAt) return undefined;
   if (data.serverBaseUrl || expected?.serverBaseUrl) {
    if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
-    logger.warn('Auth code challenge rejected: serverBaseUrl mismatch (cross-server auth code)', {
-     codeServer: data.serverBaseUrl,
-     expectedServer: expected?.serverBaseUrl,
-    });
+    logger.warn('Auth code challenge rejected: serverBaseUrl mismatch');
     return undefined;
    }
   }
   const codeClientId = data.clientId ?? data.pending?.clientId;
   if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
-   logger.warn('Auth code challenge rejected: clientId mismatch', {
-    codeClientId,
-    expectedClientId: expected.clientId,
-   });
+   logger.warn('Auth code challenge rejected: clientId mismatch');
    return undefined;
   }
   return data.pending.codeChallenge;
@@ -717,19 +737,13 @@ export class FirestoreAuthCodeStore {
    }
    if (data.serverBaseUrl || expected?.serverBaseUrl) {
     if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
-     logger.warn('Auth code redemption rejected: serverBaseUrl mismatch (cross-server auth code)', {
-      codeServer: data.serverBaseUrl,
-      expectedServer: expected?.serverBaseUrl,
-     });
+     logger.warn('Auth code redemption rejected: serverBaseUrl mismatch');
      return undefined;
     }
    }
    const codeClientId = data.clientId ?? data.pending?.clientId;
    if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
-    logger.warn('Auth code redemption rejected: clientId mismatch', {
-     codeClientId,
-     expectedClientId: expected.clientId,
-    });
+    logger.warn('Auth code redemption rejected: clientId mismatch');
     return undefined;
    }
    guard?.bufferCompletion();

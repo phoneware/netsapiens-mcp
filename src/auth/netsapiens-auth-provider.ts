@@ -1582,11 +1582,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       });
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
+       logger.warn('Upstream NS refresh grant rejected');
        await this.tokenStore.delete(token);
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
-      logger.warn('Cross-instance NS token refresh failed with non-fatal error', { error: String(err) });
+      logger.warn('Cross-instance NS token refresh failed with non-fatal error');
       if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
        this.tokenStore.clearCache();
       }
@@ -1609,11 +1609,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       stored = (await this.tokenStore.get(token)) ?? stored;
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
+       logger.warn('Upstream NS refresh grant rejected');
        await this.tokenStore.delete(token);
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
-      logger.warn('In-memory NS token refresh failed with non-fatal error', { error: String(err) });
+      logger.warn('In-memory NS token refresh failed with non-fatal error');
       if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
        this.tokenStore.clearCache();
       }
@@ -1721,32 +1721,31 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  }
 
  async forceRefreshUpstream(mcpToken: string): Promise<string | undefined> {
-  const op = requestOperationContext.getStore();
-  const stored = this.tokenStore instanceof FirestoreTokenStore
-   ? await this.tokenStore.getByAccessToken(mcpToken, { operation: op })
-   : await this.tokenStore.get(mcpToken);
-  if (!stored || !stored.nsRefreshToken) return undefined;
-  if (this.hooks?.onVerify) {
-   try {
-    await this.hooks.onVerify(stored);
-   } catch (err: unknown) {
-    if (err instanceof InvalidTokenError) {
-     await this.withOperation('revocation', async (opCtx) => {
-      await (this.tokenStore as any).delete(mcpToken, { operation: opCtx });
-     });
-     return undefined;
-    }
-    throw new TemporarilyUnavailableError('Verification service temporarily unavailable, please retry');
-   }
-  }
   return await this.withOperation('upstream_refresh', async (opCtx) => {
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(mcpToken, { operation: opCtx })
+    : await this.tokenStore.get(mcpToken);
+   if (!stored || !stored.nsRefreshToken) return undefined;
+   if (this.hooks?.onVerify) {
+    try {
+     await this.hooks.onVerify(stored);
+    } catch (err: unknown) {
+     if (err instanceof InvalidTokenError) {
+      await this.withOperation('revocation', async (innerOpCtx) => {
+       await (this.tokenStore as any).delete(mcpToken, { operation: innerOpCtx });
+      });
+      return undefined;
+     }
+     throw new TemporarilyUnavailableError('Verification service temporarily unavailable, please retry');
+    }
+   }
    if ('refreshNsToken' in this.tokenStore && typeof (this.tokenStore as unknown as { refreshNsToken: unknown }).refreshNsToken === 'function') {
     try {
      const storeWithRefresh = this.tokenStore as FirestoreTokenStore;
      const refreshed = await storeWithRefresh.refreshNsToken(
       mcpToken,
       (current: StoredToken) => this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
-      { operation: opCtx },
+      { operation: opCtx, force: true },
      );
      return refreshed.nsAccessToken;
     } catch (err: unknown) {
@@ -1757,9 +1756,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     }
    } else {
     try {
-     await this.refreshUpstreamNsToken(mcpToken, stored);
-     const latest = await this.tokenStore.get(mcpToken);
-     return latest?.nsAccessToken;
+     const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
+     await this.tokenStore.update(mcpToken, {
+      nsAccessToken: refreshed.access_token,
+      nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+      nsExpiresAt: refreshed.expires_in ? this.nowProvider() + refreshed.expires_in * 1000 : undefined,
+     });
+     return refreshed.access_token;
     } catch (err: unknown) {
      if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
       await (this.tokenStore as any).delete(mcpToken, { operation: opCtx });

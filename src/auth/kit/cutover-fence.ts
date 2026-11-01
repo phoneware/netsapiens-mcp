@@ -705,6 +705,21 @@ export async function releaseLegacyOperation(
         `Cannot release operation ${ctx.id} in phase ${opRecord.phase}: operation has pending or ambiguous upstream claim`,
       );
     }
+    if (opRecord.id !== ctx.id) {
+      throw new CutoverFenceError(
+        `Operation id mismatch on release: expected ${ctx.id}, got ${opRecord.id}`,
+      );
+    }
+    if (opRecord.namespace !== ctx.namespace) {
+      throw new CutoverFenceError(
+        `Operation namespace mismatch on release: expected ${ctx.namespace}, got ${opRecord.namespace}`,
+      );
+    }
+    if (opRecord.kind !== ctx.kind) {
+      throw new CutoverFenceError(
+        `Operation kind mismatch on release: expected ${ctx.kind}, got ${opRecord.kind}`,
+      );
+    }
 
     if (opRecord.epoch !== control.epoch) {
       throw new CutoverFenceError(

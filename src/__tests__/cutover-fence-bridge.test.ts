@@ -952,6 +952,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
     process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    process.env.MCP_BASE_URL = 'http://localhost';
     await transitionCutoverFenceState(db, namespace, {
       fromState: 'legacy_open',
       toState: 'closing',
@@ -1574,73 +1575,161 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     let grantCallCount = 0;
+
+    // Pairing 1: exchangeRefreshToken (leaseholder) vs verifyAccessToken (transparent refresh waiter)
+    let releaseBarrier1: () => void = () => {};
+    const barrierPromise1 = new Promise<void>((r) => { releaseBarrier1 = r; });
+
     vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
       grantCallCount++;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await barrierPromise1;
       return {
-        access_token: 'concurrent-ns-access-token',
-        refresh_token: 'concurrent-ns-refresh-token',
+        access_token: 'concurrent-ns-access-token-1',
+        refresh_token: 'concurrent-ns-refresh-token-1',
         expires_in: 3600,
         username: 'testuser',
         nsApiUrl: 'https://test.example.com',
       };
     });
 
-    const testAccessToken = 'concurrent-access-' + randomBytes(8).toString('hex');
-    const testRefreshToken = 'concurrent-refresh-' + randomBytes(8).toString('hex');
+    const testAccessToken1 = 'crosspath-access-1-' + randomBytes(8).toString('hex');
+    const testRefreshToken1 = 'crosspath-refresh-1-' + randomBytes(8).toString('hex');
 
-    await tokenStore.issue({
-      accessToken: testAccessToken,
-      refreshToken: testRefreshToken,
+    const token1 = await tokenStore.issue({
+      accessToken: testAccessToken1,
+      refreshToken: testRefreshToken1,
       clientId: 'concurrent_client',
       expiresAt: virtualNow + 3600 * 1000,
-      nsAccessToken: 'ns-token-expiring',
-      nsRefreshToken: 'ns-refresh-expiring',
+      nsAccessToken: 'ns-token-expiring-1',
+      nsRefreshToken: 'ns-refresh-expiring-1',
       nsExpiresAt: virtualNow + 30 * 1000,
       nsUsername: 'testuser',
       nsApiUrl: 'https://test.example.com',
       serverBaseUrl: 'http://localhost',
     });
-
     const clientInfo = { client_id: 'concurrent_client' } as any;
+    const p1Verify = authProvider.verifyAccessToken(testAccessToken1);
 
-    // Pairing 1: Concurrent exchangeRefreshToken vs exchangeRefreshToken on same family
-    const [tokenExchange1, tokenExchange2] = await Promise.all([
-      authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
-      authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
-    ]);
+    const upstreamDoc1 = db.collection('mcp_tokens_upstream').doc(docId(token1.refreshFamilyId!));
+    for (let i = 0; i < 30; i++) {
+      const snap = await upstreamDoc1.get();
+      if (snap.data()?.leaseUntil > virtualNow) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
-    expect(tokenExchange1.access_token).toBeDefined();
-    expect(tokenExchange2.access_token).toBe(tokenExchange1.access_token);
-    expect(tokenExchange2.refresh_token).toBe(tokenExchange1.refresh_token);
+    const p1Forced = authProvider.forceRefreshUpstream(testAccessToken1);
+    await new Promise((r) => setTimeout(r, 60));
+
+    releaseBarrier1();
+
+    const [resVerify1, resForced1] = await Promise.all([p1Verify, p1Forced]);
+    expect(resVerify1).toBeDefined();
+    expect(resForced1).toBe('concurrent-ns-access-token-1');
     expect(grantCallCount).toBe(1);
 
-    // Pairing 2: Concurrent verifyAccessToken (transparent refresh) vs forceRefreshUpstream on same family
-    const testAccessTokenB = 'crosspath-access-b-' + randomBytes(8).toString('hex');
-    const testRefreshTokenB = 'crosspath-refresh-b-' + randomBytes(8).toString('hex');
+    // Pairing 2: exchangeRefreshToken vs forceRefreshUpstream on same family
+    let releaseBarrier2: () => void = () => {};
+    const barrierPromise2 = new Promise<void>((r) => { releaseBarrier2 = r; });
 
-    await tokenStore.issue({
-      accessToken: testAccessTokenB,
-      refreshToken: testRefreshTokenB,
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
+      grantCallCount++;
+      await barrierPromise2;
+      return {
+        access_token: 'concurrent-ns-access-token-2',
+        refresh_token: 'concurrent-ns-refresh-token-2',
+        expires_in: 3600,
+        username: 'testuser',
+        nsApiUrl: 'https://test.example.com',
+      };
+    });
+
+    const testAccessToken2 = 'crosspath-access-2-' + randomBytes(8).toString('hex');
+    const testRefreshToken2 = 'crosspath-refresh-2-' + randomBytes(8).toString('hex');
+
+    const token2 = await tokenStore.issue({
+      accessToken: testAccessToken2,
+      refreshToken: testRefreshToken2,
       clientId: 'concurrent_client',
       expiresAt: virtualNow + 3600 * 1000,
-      nsAccessToken: 'ns-token-expiring-b',
-      nsRefreshToken: 'ns-refresh-expiring-b',
+      nsAccessToken: 'ns-token-expiring-2',
+      nsRefreshToken: 'ns-refresh-expiring-2',
       nsExpiresAt: virtualNow + 30 * 1000,
       nsUsername: 'testuser',
       nsApiUrl: 'https://test.example.com',
       serverBaseUrl: 'http://localhost',
     });
 
-    const grantCountBefore = grantCallCount;
-    const [verifyResult, forcedResult] = await Promise.all([
-      authProvider.verifyAccessToken(testAccessTokenB),
-      authProvider.forceRefreshUpstream(testAccessTokenB),
-    ]);
+    const grantBefore2 = grantCallCount;
+    const p2Exchange = authProvider.exchangeRefreshToken(clientInfo, testRefreshToken2);
 
-    expect(verifyResult).toBeDefined();
-    expect(forcedResult).toBe('concurrent-ns-access-token');
-    expect(grantCallCount - grantCountBefore).toBe(1);
+    const upstreamDoc2 = db.collection('mcp_tokens_upstream').doc(docId(token2.refreshFamilyId!));
+    for (let i = 0; i < 30; i++) {
+      const snap = await upstreamDoc2.get();
+      if (snap.data()?.leaseUntil > virtualNow) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const p2Forced = authProvider.forceRefreshUpstream(testAccessToken2);
+    await new Promise((r) => setTimeout(r, 60));
+
+    releaseBarrier2();
+
+    const [resExchange2, resForced2] = await Promise.all([p2Exchange, p2Forced]);
+    expect(resExchange2.access_token).toBeDefined();
+    expect(resForced2).toBe('concurrent-ns-access-token-2');
+    expect(grantCallCount - grantBefore2).toBe(1);
+
+    // Pairing 3: verifyAccessToken vs forceRefreshUpstream on same family
+    let releaseBarrier3: () => void = () => {};
+    const barrierPromise3 = new Promise<void>((r) => { releaseBarrier3 = r; });
+
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
+      grantCallCount++;
+      await barrierPromise3;
+      return {
+        access_token: 'concurrent-ns-access-token-3',
+        refresh_token: 'concurrent-ns-refresh-token-3',
+        expires_in: 3600,
+        username: 'testuser',
+        nsApiUrl: 'https://test.example.com',
+      };
+    });
+
+    const testAccessToken3 = 'crosspath-access-3-' + randomBytes(8).toString('hex');
+    const testRefreshToken3 = 'crosspath-refresh-3-' + randomBytes(8).toString('hex');
+
+    const token3 = await tokenStore.issue({
+      accessToken: testAccessToken3,
+      refreshToken: testRefreshToken3,
+      clientId: 'concurrent_client',
+      expiresAt: virtualNow + 3600 * 1000,
+      nsAccessToken: 'ns-token-expiring-3',
+      nsRefreshToken: 'ns-refresh-expiring-3',
+      nsExpiresAt: virtualNow + 30 * 1000,
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const grantBefore3 = grantCallCount;
+    const p3Verify = authProvider.verifyAccessToken(testAccessToken3);
+
+    const upstreamDoc3 = db.collection('mcp_tokens_upstream').doc(docId(token3.refreshFamilyId!));
+    for (let i = 0; i < 30; i++) {
+      const snap = await upstreamDoc3.get();
+      if (snap.data()?.leaseUntil > virtualNow) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const p3Forced = authProvider.forceRefreshUpstream(testAccessToken3);
+    await new Promise((r) => setTimeout(r, 60));
+
+    releaseBarrier3();
+
+    const [resVerify3, resForced3] = await Promise.all([p3Verify, p3Forced]);
+    expect(resVerify3).toBeDefined();
+    expect(resForced3).toBe('concurrent-ns-access-token-3');
+    expect(grantCallCount - grantBefore3).toBe(1);
 
     const control = await getCutoverFenceRecord(db, namespace);
     expect(control?.activeOperations).toBe(0);
@@ -1734,6 +1823,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       collection: 'mcp_tokens',
       fence: { namespace, enforce: true },
     });
+    let observedActiveCountDuringVerify = -1;
 
     const authProvider = new NetSapiensAuthProvider({
       nsApiUrl: 'https://test.example.com',
@@ -1744,10 +1834,17 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       collections: { tokens: 'mcp_tokens' },
       fence: { namespace, enforce: true },
       serverBaseUrl: 'http://localhost',
+      hooks: {
+        onVerify: async () => {
+          const c = await getCutoverFenceRecord(db, namespace);
+          observedActiveCountDuringVerify = c?.activeOperations ?? -1;
+        },
+      },
     });
 
     const testAccessToken = 'sse-test-token-' + randomBytes(8).toString('hex');
     const testRefreshToken = 'sse-refresh-token-' + randomBytes(8).toString('hex');
+    const sessionId = 'sse-session-' + randomBytes(8).toString('hex');
 
     await tokenStore.issue({
       accessToken: testAccessToken,
@@ -1761,13 +1858,23 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     const { app } = createApp(authProvider);
+    const server = app.listen(0);
+    const port = (server.address() as any).port;
+    const controller = new AbortController();
 
-    const reqPromise = request(app)
-      .get('/mcp')
-      .set('Authorization', `Bearer ${testAccessToken}`)
-      .set('Accept', 'text/event-stream');
+    const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
+      headers: {
+        Authorization: `Bearer ${testAccessToken}`,
+        Accept: 'text/event-stream',
+        'mcp-session-id': sessionId,
+      },
+      signal: controller.signal,
+    });
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    const sseResp = await fetchPromise;
+    expect([200, 404]).toContain(sseResp.status);
+
+    expect(observedActiveCountDuringVerify).toBe(1);
 
     let activeOps = 1;
     for (let i = 0; i < 30; i++) {
@@ -1780,7 +1887,8 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     }
     expect(activeOps).toBe(0);
 
-    reqPromise.abort();
+    controller.abort();
+    await new Promise<void>((r) => server.close(() => r()));
   });
 
   it('32. Pre-send failure after claim preserves upstream_pending, makes zero upstream calls on subsequent retry, and prevents sealing (Reset Section 8)', async () => {
@@ -1815,9 +1923,10 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       now: () => virtualNow,
     });
 
-    let grantCallCount = 0;
+    let attempts = 0;
     vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
-      throw new Error('Crash before HTTP transmission');
+      attempts++;
+      throw new Error('Process killed before HTTP transmission');
     });
 
     const testAccessToken = 'presend-access-' + randomBytes(8).toString('hex');
@@ -1839,7 +1948,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const familyId = issued.refreshFamilyId!;
 
     await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow();
-    expect(grantCallCount).toBe(0);
+    expect(attempts).toBe(1);
 
     const upstreamSnap = await db.collection('mcp_tokens_upstream').doc(docId(familyId)).get();
     expect(upstreamSnap.exists).toBe(true);
@@ -1847,7 +1956,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     virtualNow += 60_000;
 
     await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow(UpstreamUnavailableError);
-    expect(grantCallCount).toBe(0);
+    expect(attempts).toBe(1);
 
     await transitionCutoverFenceState(db, namespace, {
       fromState: 'legacy_open',

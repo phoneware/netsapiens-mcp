@@ -391,7 +391,6 @@ function wireApp(
        };
       });
       res.once('finish', resolveFn);
-      res.once('close', resolveFn);
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {

@@ -284,6 +284,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         );
       }
 
+      const activeLease = current.leaseUntil && current.leaseUntil > now;
+      if (activeLease) {
+        return { status: 'leased' as const, current };
+      }
+
       if (this.fence?.enforce && current.ambiguousOperationId) {
         const priorOpRef = getCutoverOperationDocRef(this.db, this.fence.namespace, current.ambiguousOperationId);
         const priorOpSnap = await transaction.get(priorOpRef);
@@ -302,11 +307,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       const isExpiring = !current.expiresAt || current.expiresAt - skewMs <= now;
       if (!force && !isExpiring) {
         return { status: 'fresh' as const, grant: current.grant };
-      }
-
-      const activeLease = current.leaseUntil && current.leaseUntil > now;
-      if (activeLease) {
-        return { status: 'leased' as const, current };
       }
 
       const op = options?.operation ?? requestOperationContext.getStore();
