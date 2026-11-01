@@ -18,8 +18,13 @@ export const v1_site_list: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=site&action=list",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("site", "list", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("site", "list", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

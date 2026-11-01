@@ -5,13 +5,31 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_autoattendants: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_autoattendants',
-    description: 'Read Auto Attendants — [GET /domains/{domain}/autoattendants]',
+    description: 'List auto attendants in domain — Lists a domain\\\'s auto attendants: each one\\\'s name, user, starting tier, time frames, and the path that reads it in full.  Requires Office Manager, Site Manager, Reseller, or Super User scope. A Site Manager sees only attendants of users in their site, whatever `site` it sends.  An attendant answering several time frames is one row, with each time frame in `timeframes`. Returns 100 rows unless you send `limit`. The response is an array, empty when there are none. To see an attendant\\\'s menu, use its `read-path` with **Read auto attendant**. **List auto attendants with list access** returns the same rows to Basic User scope and higher, and **Count auto attendants in domain** counts them. — [GET /domains/{domain}/autoattendants]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only auto attendants whose user is in this site."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Comma-separated extensions to leave out, such as `8000,8001`. `no` or `false` leaves nothing out."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -19,16 +37,28 @@ export const get_domains_by_domain_autoattendants: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/autoattendants',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['site', 'filter_users', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/autoattendants',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,37 +73,56 @@ export const get_domains_by_domain_autoattendants: ToolDefinition = {
 export const post_domains_by_domain_autoattendants: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_autoattendants',
-    description: 'Create Auto Attendant — [POST /domains/{domain}/autoattendants]',
+    description: 'Create auto attendant — Creates an auto attendant: a menu that answers calls to `user` and sends each key press to a destination.  Requires Office Manager, Site Manager, Reseller, or Super User scope.  When `user` does not exist, it is created as an attendant user with its own dial plan. When it exists, the menu is added to its dial plan, and its answering rule for `time-frame` is changed to send calls to the menu. The menu always starts at tier `Prompt_100`, and submenus and greetings take the next free numbers. A tier\\\'s `audio` is read aloud by text to speech and saved as its greeting. It can be sent inside the tier or beside it, the way **Read auto attendant** returns it.  The response is `202`: the attendant is accepted and applied shortly after. Send `synchronous=yes` to wait for it: the response is `200` with the new attendant, or `202` if it is not applied within about five seconds.  A user whose answering rule for the time frame already sends calls to an auto attendant returns `409`. To change the menu, use **Update auto attendant**. — [POST /domains/{domain}/autoattendants]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "attendant-name": {
                       "type": "string",
-                      "description": "This is the main name for the auto attendant. Should be used to explain the main purpose for the auto attendant."
+                      "description": "Name of the auto attendant, shown in lists. Without it the attendant has an empty name until **Update auto attendant** sets one."
                 },
                 "user": {
                       "type": "string",
-                      "description": "user"
+                      "description": "Extension that answers as the auto attendant, such as `8000`. An extension that does not exist is created as an attendant user with its own dial plan. An existing user keeps its dial plan, and the menu is added to it. It becomes `{user}` in the attendant's path."
                 },
                 "time-frame": {
                       "type": "string",
-                      "description": "time-frame"
+                      "description": "Time frame whose calls go to the attendant. The user's answering rule for it is set to send calls to the menu. Leave it out, or send `Default` or `*`, for the user's default answering rule. Default: \"Default\"",
+                      "default": "Default"
+                },
+                "audio": {
+                      "type": "object",
+                      "description": "A greeting to make by text to speech."
                 },
                 "auto-attendant": {
                       "type": "object",
-                      "description": "auto-attendant"
+                      "description": "One tier of an auto attendant menu, as sent to create or update it. Only the fields you send are changed."
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits up to about five seconds for the attendant to be applied and answers `200` with it, or `202` if it is not applied by then. `no`, the default, answers `202` as soon as the request is accepted. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "domain",
-                "attendant-name",
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/autoattendants',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -81,7 +130,7 @@ export const post_domains_by_domain_autoattendants: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['attendant-name', 'user', 'time-frame', 'auto-attendant'];
+    const bodyParamNames = ['attendant-name', 'user', 'time-frame', 'audio', 'auto-attendant', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -105,21 +154,21 @@ export const post_domains_by_domain_autoattendants: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_autoattendants_by_prompt',
-    description: 'Read Specific Auto Attendant — [GET /domains/{domain}/users/{user}/autoattendants/{prompt}]',
+    description: 'Read auto attendant — Returns one auto attendant: its name, starting tier, greetings, and what every key does, with submenus in full.  Requires Office Manager, Site Manager, Reseller, or Super User scope. A Site Manager can read only attendants of users in their site.  Each greeting has a `file-access-url` that plays it without a token until it expires. A tier with no greeting has an empty `audio` array. A submenu\\\'s greeting sits beside its `auto-attendant`, and an attendant with intro greetings lists them in `intro-greetings`, one per time frame.  A `{prompt}` that is not one of the user\\\'s attendants returns `404`. To find an attendant\\\'s `{prompt}`, use **List auto attendants in domain**. — [GET /domains/{domain}/users/{user}/autoattendants/{prompt}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension that answers as the auto attendant, such as `8000`. It is the `user` in the attendant's `read-path`. `~` means your own user."
                 },
                 "prompt": {
                       "type": "string",
-                      "description": "prompt"
+                      "description": "Tier of the menu, such as `Prompt_100`. Use the attendant's `starting-prompt` from **List auto attendants in domain**. An attendant made with **Create auto attendant** always starts at `Prompt_100`."
                 }
           },
           "required": [
@@ -128,6 +177,12 @@ export const get_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolD
                 "prompt"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/autoattendants/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'prompt'];
@@ -153,38 +208,47 @@ export const get_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolD
 export const put_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_autoattendants_by_prompt',
-    description: 'Update Specific Auto Attendant — [PUT /domains/{domain}/users/{user}/autoattendants/{prompt}]',
+    description: 'Update auto attendant — Changes one tier of an auto attendant\\\'s menu, and renames the attendant. Only the fields you send are changed: keys you leave out keep their destination, and `"remove": "yes"` takes a key out.  Requires Office Manager, Site Manager, Reseller, or Super User scope. A Site Manager can change only attendants of users in their site.  `{prompt}` names the tier the body\\\'s `auto-attendant` describes: the attendant\\\'s `starting-prompt`, or a submenu\\\'s tier. It must be `Prompt_<n>` and already exist, or the response is `404`. `attendant-name` renames the attendant and is accepted on the starting tier only. The time frame is not changed by an update. A `PUT` or `DELETE` on `/domains/{domain}/autoattendants`, without the user and tier in the path, returns `405`.  The response is `202`: the change is accepted and applied shortly after. — [PUT /domains/{domain}/users/{user}/autoattendants/{prompt}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension that answers as the auto attendant, such as `8000`. It is the `user` in the attendant's `read-path`. `~` means your own user."
                 },
                 "prompt": {
                       "type": "string",
-                      "description": "prompt"
+                      "description": "Tier to change, `Prompt_<n>`, such as `Prompt_100`. Use the attendant's `starting-prompt` from **List auto attendants in domain**, or a submenu's tier. Any other value, or a tier the user does not have, returns `404`."
                 },
                 "attendant-name": {
                       "type": "string",
-                      "description": "This is the main name for the auto attendant. Should be used to explain the main purpose for the auto attendant."
+                      "description": "New name of the auto attendant. Only on the attendant's starting tier: on a submenu tier it returns `400`."
+                },
+                "audio": {
+                      "type": "object",
+                      "description": "A greeting to make by text to speech."
                 },
                 "auto-attendant": {
                       "type": "object",
-                      "description": "auto-attendant"
+                      "description": "One tier of an auto attendant menu, as sent to create or update it. Only the fields you send are changed."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "prompt",
-                "attendant-name"
+                "prompt"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/autoattendants/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'prompt'];
@@ -192,7 +256,7 @@ export const put_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolD
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['attendant-name', 'auto-attendant'];
+    const bodyParamNames = ['attendant-name', 'audio', 'auto-attendant'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -216,21 +280,21 @@ export const put_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolD
 export const delete_domains_by_domain_users_by_user_autoattendants_by_prompt: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_autoattendants_by_prompt',
-    description: 'Delete Specific Auto Attendant — [DELETE /domains/{domain}/users/{user}/autoattendants/{prompt}]',
+    description: 'Delete auto attendant — Deletes one auto attendant: the `{prompt}` tier with its submenus and intro greetings.  Requires Office Manager, Site Manager, Reseller, or Super User scope. A Site Manager can delete only attendants of users in their site.  Every answering rule of the user that sent calls to the attendant stops forwarding, so its calls go to the user\\\'s other settings again. The rest of the user\\\'s dial plan, its other attendants, and the user itself are not changed. A submenu that another attendant also starts at is kept. Naming a submenu\\\'s tier deletes that submenu only, and the key that opened it stays: change the key with **Update auto attendant**. A `PUT` or `DELETE` on `/domains/{domain}/autoattendants`, without the user and tier in the path, returns `405`.  The response is `202`: the deletion is accepted and applied shortly after. — [DELETE /domains/{domain}/users/{user}/autoattendants/{prompt}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension that answers as the auto attendant, such as `8000`. It is the `user` in the attendant's `read-path`. `~` means your own user."
                 },
                 "prompt": {
                       "type": "string",
-                      "description": "prompt"
+                      "description": "Tier to change, `Prompt_<n>`, such as `Prompt_100`. Use the attendant's `starting-prompt` from **List auto attendants in domain**, or a submenu's tier. Any other value, or a tier the user does not have, returns `404`."
                 }
           },
           "required": [
@@ -239,6 +303,12 @@ export const delete_domains_by_domain_users_by_user_autoattendants_by_prompt: To
                 "prompt"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/autoattendants/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'prompt'];
@@ -250,6 +320,132 @@ export const delete_domains_by_domain_users_by_user_autoattendants_by_prompt: To
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/users/{user}/autoattendants/{prompt}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_auto_attendants_in_domain: ToolDefinition = {
+  schema: {
+    name: 'count_auto_attendants_in_domain',
+    description: 'Count auto attendants in domain — Counts a domain\\\'s auto attendants: the rows **List auto attendants in domain** returns without paging.  Requires Basic User scope or higher. A Site Manager counts only attendants of users in their site, whatever `site` it sends.  Takes the same `site` and `filter_users` filters as the list. A domain with no auto attendants returns `{"total": 0}`. — [GET /domains/{domain}/autoattendants/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only auto attendants whose user is in this site."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Comma-separated extensions to leave out, such as `8000,8001`. `no` or `false` leaves nothing out."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/autoattendants/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['site', 'filter_users'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/autoattendants/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_auto_attendants: ToolDefinition = {
+  schema: {
+    name: 'list_domain_auto_attendants',
+    description: 'List auto attendants with list access — Lists a domain\\\'s auto attendants in the same shape as **List auto attendants in domain**, with list access only.  Requires Basic User scope or higher. A Site Manager sees only attendants of users in their site, whatever `site` it sends.  `/list` is checked against the list privilege, not read, so a scope that cannot read an attendant, such as Basic User, can still list them. Returns 100 rows unless you send `limit`. Append `/list` to an attendant\\\'s path, `/domains/{domain}/users/{user}/autoattendants/{prompt}/list`, to get its row alone. — [GET /domains/{domain}/autoattendants/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only auto attendants whose user is in this site."
+                },
+                "filter_users": {
+                      "type": "string",
+                      "description": "Comma-separated extensions to leave out, such as `8000,8001`. `no` or `false` leaves nothing out."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/autoattendants/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['site', 'filter_users', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/autoattendants/list',
+      pathParams,
+      queryParams,
     });
 
     return {

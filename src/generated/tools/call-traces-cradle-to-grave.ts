@@ -5,33 +5,91 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_sip_flow: ToolDefinition = {
   schema: {
     name: 'get_sip_flow',
-    description: 'Get Call Trace (SIPFlow) For Call — [GET /sipflow]',
+    description: 'Get call trace — Builds the trace of a call from the SIP servers\\\' event logs and returns it in the rendering you pick with `type`. Name the call by its SIP call IDs and a time window. To trace a call by its CDR instead, use `GET /domains/{domain}/cdrs/{id}/sipflow`.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. Every call ID you send must match a CDR in your scope inside the window; call IDs that do not are ignored, and if none remain the answer is `404`.  **Share links.** Send `k` instead of `start_time`, `end_time`, and `callids` to open a stored trace made with `POST /domains/{domain}/cdrs/{id}/sipflow/store`. A share link needs no token, is read-only, and stops working when the share expires or is revoked. A share stored on another server of the cluster is opened by adding `location`.  **What is included.** The trace follows transfers, forks, and conference bridges from your call IDs and adds those calls; `sql` lists every call ID it covered. The window is widened to cover the whole of every call found. A trace holds both parties\\\' numbers, every hop\\\'s address, and the raw SIP messages, so treat it as call metadata. In `cradle_to_grave`, steps outside your scope are removed: by territory for a Reseller, and by domain for the other scopes below Super User.  **Renderings.** The documented response is JSON. `call_trace`, `cradle_to_grave`, and `csv` answer inside an `event` envelope, and `call_trace_details` answers the bare object. The other renderings answer a file of their own media type:  - `type=csv&download=yes`: a CSV file (`text/csv`, `trace.csv`) - `type=call_trace&download=yes`: the SVG diagram (`image/svg+xml`, `sipflow.svg`) - `type=call_trace_html`: an HTML viewer page (`text/html`); add `download=yes` for `sip_flow.html` - `type=call_trace_text`: plain text (`text/plain`); add `download=yes` for `sipflow.txt` In `call_trace_text`, each block header shows its time as `YYYY-MM-DD_HH:MM:SS` in UTC, and `csv` rows show the same form, with the millisecond Unix time in `UnixTsm`.  A long call can take a minute or more to build.  **Example requests**  - Ladder diagram: `GET /sipflow?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10&type=call_trace` - Trace details: `GET /sipflow?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10&type=call_trace_details` - Cradle to grave: `GET /sipflow?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10&type=cradle_to_grave` - CSV file: `GET /sipflow?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10&type=csv&download=yes` - Share link: `GET /sipflow?k=202609019f86d081884c7d659a2feaa0c55ad015&type=call_trace_html` — [GET /sipflow]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "start_time": {
                       "type": "string",
-                      "description": "start_time"
+                      "description": "Start of the window to search, RFC 3339 with an offset. A legacy `YYYY-MM-DD HH:MM:SS` value is also accepted. Required unless `k` is sent. An unparsable value returns `400`."
                 },
                 "end_time": {
                       "type": "string",
-                      "description": "end_time"
+                      "description": "End of the window to search. Same forms as `start_time`. Required unless `k` is sent."
                 },
                 "callids": {
                       "type": "string",
-                      "description": "callids"
+                      "description": "Comma-separated SIP call IDs of the call: the `Call-ID` header value, as the CDR shows it in `call-orig-call-id` or `call-term-call-id`. Each must match a CDR in your scope inside the window; the rest are ignored. Related calls are added automatically. Required unless `k` is sent."
                 },
                 "servers": {
                       "type": "string",
-                      "description": "servers"
+                      "description": "Comma-separated hostnames of cluster servers to read events from, used with `search_callids=no` to skip the related-call search. Leave it out otherwise: the servers come from the call's CDRs."
                 },
                 "type": {
                       "type": "string",
-                      "description": "call_trace,cradle_to_grave,csv"
+                      "description": "Rendering to return. Defaults to `call_trace`. - `call_trace`: the ladder diagram as a base64 SVG in `svg` - `call_trace_details`: devices and messages as JSON - `call_trace_html`: a self-contained HTML viewer (`text/html`) - `call_trace_text`: the raw SIP messages and log lines (`text/plain`) - `cradle_to_grave`: the call-progress summary in `cradle` - `csv`: the event rows, encoded in `csv`, or a `text/csv` file with `download=yes`. Allowed values: \"call_trace\", \"call_trace_details\", \"call_trace_html\", \"call_trace_text\", \"cradle_to_grave\", \"csv\". Default: \"call_trace\"",
+                      "enum": [
+                            "call_trace",
+                            "call_trace_details",
+                            "call_trace_html",
+                            "call_trace_text",
+                            "cradle_to_grave",
+                            "csv"
+                      ],
+                      "default": "call_trace"
                 },
                 "download": {
                       "type": "string",
-                      "description": "Set to yes to download the file instead of getting base64 data in JSON."
+                      "description": "`yes` to receive the rendering as a file attachment instead of inline. Applies to `call_trace` (`sipflow.svg`), `call_trace_html` (`sip_flow.html`), `call_trace_text` (`sipflow.txt`), and `csv` (`trace.csv`). Without it, `call_trace` and `csv` answer JSON. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key from `POST ../sipflow/store`. Opens that stored trace with no token, read-only; `start_time`, `end_time`, `callids`, and the search options are then ignored."
+                },
+                "location": {
+                      "type": "string",
+                      "description": "Base64 of the `store-location` hostname the share answer gave. Send it with `k` when the share was stored on another server of the cluster. A hostname that is not a known server of this cluster answers `404`."
+                },
+                "search_callids": {
+                      "type": "string",
+                      "description": "`no` to trace only the call IDs you sent, without following related calls. `false` and `0` also turn it off. Defaults to `yes`. Allowed values: \"yes\", \"no\", \"true\", \"false\", \"1\", \"0\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "true",
+                            "false",
+                            "1",
+                            "0"
+                      ],
+                      "default": "yes"
+                },
+                "margin": {
+                      "type": "number",
+                      "description": "Seconds added before `start_time` and after `end_time` when reading events. A whole number. Defaults to `10`. Default: 10",
+                      "default": 10
+                },
+                "ds": {
+                      "type": "string",
+                      "description": "Event sources to read, comma-separated: `diag` for the SIP servers, `ncs` for the conferencing servers. Defaults to `diag`. A conference bridge found on the way adds its conferencing server. Allowed values: \"diag\", \"ncs\", \"diag,ncs\". Default: \"diag\"",
+                      "enum": [
+                            "diag",
+                            "ncs",
+                            "diag,ncs"
+                      ],
+                      "default": "diag"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Defaults to the platform setting, `no` unless changed. An ad hoc monitor bridge is always followed. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           },
           "required": [
@@ -40,8 +98,14 @@ export const get_sip_flow: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['start_time', 'end_time', 'callids', 'servers', 'type', 'download'];
+    const queryParamNames = ['start_time', 'end_time', 'callids', 'servers', 'type', 'download', 'k', 'location', 'search_callids', 'margin', 'ds', 'show_attendees'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -94,6 +158,12 @@ export const get_cradle2grave: ToolDefinition = {
                 "type"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const queryParamNames = ['start_time', 'end_time', 'callids', 'servers', 'type'];
@@ -154,6 +224,12 @@ export const get_call_trace: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const queryParamNames = ['start_time', 'end_time', 'callids', 'servers', 'type', 'download'];
     const queryParams: Record<string, unknown> = {};
@@ -164,6 +240,1266 @@ export const get_call_trace: ToolDefinition = {
       method: 'GET',
       pathTemplate: '/sipflow',
       queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_cradle2grave_by_id: ToolDefinition = {
+  schema: {
+    name: 'get_cradle2grave_by_id',
+    description: 'Get cradle to grave by CDR ID — Summarizes one call\\\'s progress from start to finish, step by step: the call, each ring, answer, transfer, and release. The call IDs, window, and server come from the CDR, so you send only its ID.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. The CDR must also name `{domain}` as a party domain, or the answer is `404`.  Steps outside your scope are removed: a Reseller keeps the steps whose domain is in its territory, and the other scopes below Super User keep the steps of their own domain. Super User and Super User Read Only see every step.  This is `GET /domains/{domain}/cdrs/{id}/sipflow?type=cradle_to_grave`. The route fixes `type`, so a `type` you send is ignored. Push-notification events are not call progress, so they do not appear. — [GET /domains/{domain}/cdrs/{id}/cradle2grave]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM` or any date, to pick which monthly CDR table to search first. Without it, the current and previous months are searched."
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Defaults to the platform setting, `no` unless changed. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/{}/cradle2grave',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['date', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/cdrs/{id}/cradle2grave',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_sip_flow_by_id: ToolDefinition = {
+  schema: {
+    name: 'get_sip_flow_by_id',
+    description: 'Get call trace by CDR ID — Builds the trace of one call from its CDR and returns it in the rendering you pick with `type`. The call IDs, time window, and server come from the CDR, so you send only its ID. The default rendering is `call_trace_details`, structured JSON for your own viewer, with no `event` envelope.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. The CDR must also name `{domain}` as a party domain, or the answer is `404`.  The CDR is looked up in the current and previous months\\\' tables unless you send `date`. The trace follows transfers, forks, and bridges. A trace holds both parties\\\' numbers and the raw SIP messages, so treat it as call metadata. In `cradle_to_grave`, steps outside your scope are removed.  The documented response is JSON. The other renderings answer a file of their own media type:  - `type=csv&download=yes`: a CSV file (`text/csv`) - `type=call_trace&download=yes`: the SVG diagram (`image/svg+xml`) - `type=call_trace_html`: an HTML viewer page (`text/html`); add `download=yes` for `sip_flow_<id>.html` - `type=call_trace_text`: plain text (`text/plain`)  In `call_trace_text`, each block header shows its time as `YYYY-MM-DD_HH:MM:SS` in UTC, and `csv` rows show the same form, with the millisecond Unix time in `UnixTsm`.  `GET /domains/{domain}/sipflow/{id}` is the same call. To share the trace with someone who has no token, use `POST /domains/{domain}/cdrs/{id}/sipflow/store`. For the call-progress summary alone, use `GET /domains/{domain}/cdrs/{id}/cradle2grave`. — [GET /domains/{domain}/cdrs/{id}/sipflow]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Rendering to return. Defaults to `call_trace_details`. - `call_trace_details`: devices and messages as JSON - `call_trace`: the ladder diagram as a base64 SVG in `svg` - `call_trace_html`: a self-contained HTML viewer (`text/html`) - `call_trace_text`: the raw SIP messages and log lines (`text/plain`) - `cradle_to_grave`: the call-progress summary in `cradle` - `csv`: the event rows, encoded in `csv`, or a `text/csv` file with `download=yes`. Allowed values: \"call_trace\", \"call_trace_details\", \"call_trace_html\", \"call_trace_text\", \"cradle_to_grave\", \"csv\". Default: \"call_trace_details\"",
+                      "enum": [
+                            "call_trace",
+                            "call_trace_details",
+                            "call_trace_html",
+                            "call_trace_text",
+                            "cradle_to_grave",
+                            "csv"
+                      ],
+                      "default": "call_trace_details"
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` to receive the rendering as a file attachment. An HTML download is named `sip_flow_<id>.html`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM` or any date, to pick which monthly CDR table to search first. The neighbouring months are searched too. Without it, the current and previous months are searched, so send it for an older call."
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Defaults to the platform setting, `no` unless changed. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/{}/sipflow',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['type', 'download', 'date', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/cdrs/{id}/sipflow',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_cdr_call_trace_share: ToolDefinition = {
+  schema: {
+    name: 'create_cdr_call_trace_share',
+    description: 'Share call trace by CDR ID — Stores a copy of one call\\\'s trace and returns a key that opens it without a token, for passing to support or pasting into a ticket. The call is taken from its CDR ID, the same way as for the by-CDR read.  Requires the `create` privilege on call traces: by default Office Manager, Reseller, and Super User. Super User Read Only and scopes without the privilege get `403`. You can share only a call in your scope: Super User any call, a Reseller calls with a party domain in its territory, a domain-tier scope calls with its own domain as a party domain, and a user-tier scope calls where its user is the originating or terminating party. A call outside your scope answers the same `404` as one that does not exist. The CDR must also name `{domain}` as a party domain.  Every share expires: after `ttl` seconds, capped at `NsTraceShareMaxTtl` (30 days by default), or after `NsTraceShareTempTtl` (15 minutes by default) when you send no `ttl`. The answer gives the moment it stops working twice: `expires` as a Unix time and `expires-datetime` as RFC 3339. Revoke a share early with `DELETE /sipflow/share/{k}`. Until then, anyone with the key can read the whole trace, read-only, including other parties\\\' numbers and the raw SIP messages. Open it with `GET /sipflow?k=<key>` in any rendering, or `GET /sipflow/download/<key>.txt` for plain text.  The copy is stored on the server you call, named in `store-location`, before the answer is sent: `200` means the link works now. Only `POST` is served on this path; any other method gets `405`. `POST /domains/{domain}/sipflow/{id}/store` is the same call. — [POST /domains/{domain}/cdrs/{id}/sipflow/store]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "ttl": {
+                      "type": "number",
+                      "description": "Lifetime of the share, in seconds. Without it, the share lives for `NsTraceShareTempTtl`, 900 seconds (15 minutes) by default. A value above `NsTraceShareMaxTtl`, 30 days by default, is lowered to it. A value that is not a positive number is ignored."
+                },
+                "temp": {
+                      "type": "string",
+                      "description": "Accepted for older clients. `true` means the same as sending no `ttl`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM`, to pick which monthly CDR table to search first."
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/cdrs/{}/sipflow/store',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['ttl', 'temp', 'date'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/cdrs/{id}/sipflow/store',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_call_trace_by_cdr_domain: ToolDefinition = {
+  schema: {
+    name: 'read_call_trace_by_cdr_domain',
+    description: 'Get call trace by CDR ID in domain — Builds the trace of one call from its CDR and returns it in the rendering you pick with `type`. The default is `call_trace_details`, structured JSON for your own viewer, with no `event` envelope.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. The CDR must also name `{domain}` as a party domain, or the answer is `404`.  The documented response is JSON. The other renderings answer a file of their own media type:  - `type=csv&download=yes`: a CSV file (`text/csv`) - `type=call_trace&download=yes`: the SVG diagram (`image/svg+xml`) - `type=call_trace_html`: an HTML viewer page (`text/html`); add `download=yes` for `sip_flow_<id>.html` - `type=call_trace_text`: plain text (`text/plain`)  In `call_trace_text`, each block header shows its time as `YYYY-MM-DD_HH:MM:SS` in UTC, and `csv` rows show the same form, with the millisecond Unix time in `UnixTsm`.  It is the same call as `GET /domains/{domain}/cdrs/{id}/sipflow`. To share the trace, use `POST /domains/{domain}/sipflow/{id}/store`. — [GET /domains/{domain}/sipflow/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Rendering to return: `call_trace_details` (the default), `call_trace`, `call_trace_html`, `call_trace_text`, `cradle_to_grave`, or `csv`. See `GET /domains/{domain}/cdrs/{id}/sipflow`. Allowed values: \"call_trace\", \"call_trace_details\", \"call_trace_html\", \"call_trace_text\", \"cradle_to_grave\", \"csv\". Default: \"call_trace_details\"",
+                      "enum": [
+                            "call_trace",
+                            "call_trace_details",
+                            "call_trace_html",
+                            "call_trace_text",
+                            "cradle_to_grave",
+                            "csv"
+                      ],
+                      "default": "call_trace_details"
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM` or any date, to pick which monthly CDR table to search first. Without it, the current and previous months are searched."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` to receive the rendering as a file attachment. An HTML download is named `sip_flow_<id>.html`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sipflow/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['type', 'date', 'download', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/sipflow/{id}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const export_call_trace_domain_query: ToolDefinition = {
+  schema: {
+    name: 'export_call_trace_domain_query',
+    description: 'Export call trace in domain by link — Exports a call\\\'s trace as a file: the ladder diagram as SVG, or the event rows as CSV. Name the call by its SIP call IDs and a time window, as in `GET /sipflow`, or send a share key `k` for a stored trace. `{domain}` must be a party domain of the call. It takes the same fields as `POST /domains/{domain}/sipflow/export`, as query parameters.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. Every call ID you send must match a CDR in your scope inside the window; the rest are ignored, and if none remain the answer is `404`. A share key needs no token and exports read-only; with a token, the stored call must be in your scope.  The answer is a file in the media type `export_format` picks:  - `image` (the default): the SVG ladder diagram, `image/svg+xml`, sent inline - `csv`: the event rows with a header row, `text/csv`, as an attachment - `base64`: base64 of the PHP-serialized raw rows, `text/plain`. The cluster\\\'s servers use this format with each other; integrations should use `csv`. Times in CSV and base64 rows, and in the `call_trace_text` block headers, are `YYYY-MM-DD_HH:MM:SS` in UTC (an underscore, no offset); the millisecond Unix time is the `UnixTsm` column.  For JSON renderings, use `GET /domains/{domain}/cdrs/{id}/sipflow`.  **Example requests**  - SVG diagram: `GET /domains/{domain}/sipflow/export?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10` - Shared trace as SVG: `GET /domains/{domain}/sipflow/export?k=202609019f86d081884c7d659a2feaa0c55ad015` — [GET /domains/{domain}/sipflow/export]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start_time": {
+                      "type": "string",
+                      "description": "Start of the window to search, RFC 3339. A legacy `YYYY-MM-DD HH:MM:SS` value is also accepted. Required unless `k` is sent."
+                },
+                "end_time": {
+                      "type": "string",
+                      "description": "End of the window. Same forms as `start_time`. Required unless `k` is sent."
+                },
+                "callids": {
+                      "type": "string",
+                      "description": "Comma-separated SIP call IDs. Each must match a CDR in your scope inside the window; the rest are ignored. Required unless `k` is sent."
+                },
+                "export_format": {
+                      "type": "string",
+                      "description": "`image` (the default) for SVG, `csv` for a CSV file, or `base64` for the raw rows the cluster's servers exchange. Allowed values: \"image\", \"csv\", \"base64\". Default: \"image\"",
+                      "enum": [
+                            "image",
+                            "csv",
+                            "base64"
+                      ],
+                      "default": "image"
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key. Exports the stored trace with no token, read-only; the search fields are then ignored."
+                },
+                "search_callids": {
+                      "type": "string",
+                      "description": "`no` to trace only the call IDs you sent. Defaults to `yes`. Allowed values: \"yes\", \"no\", \"true\", \"false\", \"1\", \"0\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "true",
+                            "false",
+                            "1",
+                            "0"
+                      ],
+                      "default": "yes"
+                },
+                "margin": {
+                      "type": "number",
+                      "description": "Seconds added before `start_time` and after `end_time`. A whole number. Defaults to `10`. Default: 10",
+                      "default": 10
+                },
+                "ds": {
+                      "type": "string",
+                      "description": "Event sources, comma-separated: `diag` or `ncs`. Defaults to `diag`. Allowed values: \"diag\", \"ncs\", \"diag,ncs\". Default: \"diag\"",
+                      "enum": [
+                            "diag",
+                            "ncs",
+                            "diag,ncs"
+                      ],
+                      "default": "diag"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sipflow/export',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start_time', 'end_time', 'callids', 'export_format', 'k', 'search_callids', 'margin', 'ds', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/sipflow/export',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const export_call_trace_domain: ToolDefinition = {
+  schema: {
+    name: 'export_call_trace_domain',
+    description: 'Export call trace in domain — Exports a call\\\'s trace as a file: the ladder diagram as SVG, or the event rows as CSV. Name the call by its SIP call IDs and a time window, as in `GET /sipflow`, or send a share key `k` for a stored trace. `{domain}` must be a party domain of the call. `GET` takes the same fields as query parameters.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. Every call ID you send must match a CDR in your scope inside the window; the rest are ignored, and if none remain the answer is `404`. A share key needs no token and exports read-only; with a token, the stored call must be in your scope.  The answer is a file in the media type `export_format` picks:  - `image` (the default): the SVG ladder diagram, `image/svg+xml`, sent inline - `csv`: the event rows with a header row, `text/csv`, as an attachment - `base64`: base64 of the PHP-serialized raw rows, `text/plain`. The cluster\\\'s servers use this format with each other; integrations should use `csv`. Times in CSV and base64 rows, and in the `call_trace_text` block headers, are `YYYY-MM-DD_HH:MM:SS` in UTC (an underscore, no offset); the millisecond Unix time is the `UnixTsm` column.  For JSON renderings, use `GET /domains/{domain}/cdrs/{id}/sipflow`. — [POST /domains/{domain}/sipflow/export]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start_time": {
+                      "type": "string",
+                      "description": "Start of the window to search, RFC 3339. A legacy `YYYY-MM-DD HH:MM:SS` value is also accepted. Required unless `k` is sent."
+                },
+                "end_time": {
+                      "type": "string",
+                      "description": "End of the window. Same forms as `start_time`. Required unless `k` is sent."
+                },
+                "callids": {
+                      "type": "string",
+                      "description": "Comma-separated SIP call IDs to trace. Each must match a CDR in your scope inside the window; the rest are ignored. Related calls are added automatically. Required unless `k` is sent."
+                },
+                "export_format": {
+                      "type": "string",
+                      "description": "`image` for the SVG diagram (`image/svg+xml`, the default), `csv` for a CSV file of the event rows (`text/csv`), or `base64` for the raw rows in the form the cluster's servers exchange (`text/plain`). Allowed values: \"image\", \"csv\", \"base64\". Default: \"image\"",
+                      "enum": [
+                            "image",
+                            "csv",
+                            "base64"
+                      ],
+                      "default": "image"
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key. Exports the stored trace it opens, with no token needed, read-only; the search fields are then ignored."
+                },
+                "search_callids": {
+                      "type": "string",
+                      "description": "`no` to trace only the call IDs you sent, without following related calls. `false` and `0` also turn it off. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "margin": {
+                      "type": "number",
+                      "description": "Seconds added before `start_time` and after `end_time` when reading events. Default: 10",
+                      "default": 10
+                },
+                "ds": {
+                      "type": "string",
+                      "description": "Event sources, comma-separated: `diag` for the SIP servers, `ncs` for the conferencing servers. Allowed values: \"diag\", \"ncs\", \"diag,ncs\". Default: \"diag\"",
+                      "enum": [
+                            "diag",
+                            "ncs",
+                            "diag,ncs"
+                      ],
+                      "default": "diag"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "servers": {
+                      "type": "string",
+                      "description": "Comma-separated hostnames of cluster servers to read, used with `search_callids=no`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/sipflow/export',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['start_time', 'end_time', 'callids', 'export_format', 'k', 'search_callids', 'margin', 'ds', 'show_attendees', 'servers'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/sipflow/export',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_call_trace_share_domain: ToolDefinition = {
+  schema: {
+    name: 'delete_call_trace_share_domain',
+    description: 'Revoke call trace share in domain — Revokes a call trace share, so its key stops working at once, before it would expire. Use it when a share link went somewhere it should not.  Requires the `delete` privilege on call traces: by default Office Manager, Reseller, and Super User. Super User Read Only and scopes without the privilege get `403`. A share key never authorizes a revoke; you always need a token. Below Super User, the shared call must name `{domain}` as a party domain and be in your scope: Super User any call, a Reseller calls with a party domain in its territory, a domain-tier scope calls with its own domain as a party domain, and a user-tier scope calls where its user is a party. A key that does not exist, has expired, or is for a call outside your scope answers the same `404`.  The share is removed at once from the server you call: call the server named in the share\\\'s `store-location`. `200` means the share is gone. Only `DELETE` is served on this path; any other method gets `405`.  `DELETE /sipflow/share/{k}` is the same call without the domain. — [DELETE /domains/{domain}/sipflow/share/{k}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key to revoke, the `key` a share answer gave: 8 digits, then 32 lowercase hexadecimal characters."
+                }
+          },
+          "required": [
+                "domain",
+                "k"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/sipflow/share/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'k'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/sipflow/share/{k}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_call_trace_share_domain: ToolDefinition = {
+  schema: {
+    name: 'create_call_trace_share_domain',
+    description: 'Share call trace — Stores a copy of one call\\\'s trace and returns a key that opens it without a token. The call is taken from its CDR ID.  Requires the `create` privilege on call traces: by default Office Manager, Reseller, and Super User. Super User Read Only and scopes without the privilege get `403`. You can share only a call in your scope: Super User any call, a Reseller calls with a party domain in its territory, a domain-tier scope calls with its own domain as a party domain, and a user-tier scope calls where its user is the originating or terminating party. A call outside your scope answers the same `404` as one that does not exist. The CDR must also name `{domain}` as a party domain.  Every share expires: after `ttl` seconds, capped at `NsTraceShareMaxTtl` (30 days by default), or after `NsTraceShareTempTtl` (15 minutes by default) when you send no `ttl`. The answer gives the moment it stops working twice: `expires` as a Unix time and `expires-datetime` as RFC 3339. Revoke a share early with `DELETE /sipflow/share/{k}`. Until then, anyone with the key can read the whole trace, read-only, including other parties\\\' numbers and the raw SIP messages. Open it with `GET /sipflow?k=<key>` in any rendering, or `GET /sipflow/download/<key>.txt` for plain text.  The copy is stored on the server you call, named in `store-location`, before the answer is sent: `200` means the link works now. Only `POST` is served on this path; any other method gets `405`. It is the same call as `POST /domains/{domain}/cdrs/{id}/sipflow/store`. — [POST /domains/{domain}/sipflow/{id}/store]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "ttl": {
+                      "type": "number",
+                      "description": "Lifetime of the share, in seconds. Without it, the share lives for `NsTraceShareTempTtl`, 900 seconds (15 minutes) by default. A value above `NsTraceShareMaxTtl`, 30 days by default, is lowered to it. A value that is not a positive number is ignored."
+                },
+                "temp": {
+                      "type": "string",
+                      "description": "Accepted for older clients. `true` means the same as sending no `ttl`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM`, to pick which monthly CDR table to search first."
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/sipflow/{}/store',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['ttl', 'temp', 'date'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/sipflow/{id}/store',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_call_trace_by_cdr: ToolDefinition = {
+  schema: {
+    name: 'read_call_trace_by_cdr',
+    description: 'Get call trace by CDR ID without domain — Builds the trace of one call from its CDR and returns it in the rendering you pick with `type`. The default is `call_trace_details`, with no `event` envelope. The path names no domain, so the call only has to be in your scope.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it.  The documented response is JSON. The other renderings answer a file of their own media type:  - `type=csv&download=yes`: a CSV file (`text/csv`) - `type=call_trace&download=yes`: the SVG diagram (`image/svg+xml`) - `type=call_trace_html`: an HTML viewer page (`text/html`); add `download=yes` for `sip_flow_<id>.html` - `type=call_trace_text`: plain text (`text/plain`)  In `call_trace_text`, each block header shows its time as `YYYY-MM-DD_HH:MM:SS` in UTC, and `csv` rows show the same form, with the millisecond Unix time in `UnixTsm`.  Prefer `GET /domains/{domain}/cdrs/{id}/sipflow`, which names the domain. `event` is not an ID here: `POST /sipflow/event` injects an event. — [GET /sipflow/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Rendering to return: `call_trace_details` (the default), `call_trace`, `call_trace_html`, `call_trace_text`, `cradle_to_grave`, or `csv`. Allowed values: \"call_trace\", \"call_trace_details\", \"call_trace_html\", \"call_trace_text\", \"cradle_to_grave\", \"csv\". Default: \"call_trace_details\"",
+                      "enum": [
+                            "call_trace",
+                            "call_trace_details",
+                            "call_trace_html",
+                            "call_trace_text",
+                            "cradle_to_grave",
+                            "csv"
+                      ],
+                      "default": "call_trace_details"
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM` or any date, to pick which monthly CDR table to search first."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` to receive the rendering as a file attachment. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['type', 'date', 'download', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/sipflow/{id}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const download_call_trace_share_text: ToolDefinition = {
+  schema: {
+    name: 'download_call_trace_share_text',
+    description: 'Download shared call trace as text — Returns a shared call trace as plain text (`text/plain`): the raw SIP messages and log lines in time order, separated by dashed lines. Each block header shows its time as `YYYY-MM-DD_HH:MM:SS` in UTC, with no offset. The link ends in `.txt` for tools that accept only a file URL, such as an AI assistant you paste it into.  Needs no token: the share key in the path is the credential. A share link is read-only and expires; after that, or once it is revoked, the answer is `404`. Until then, anyone with the link can read the trace, including other parties\\\' numbers and the raw SIP messages, so pass it only to people who should see the call.  This is `GET /sipflow?k={k}&type=call_trace_text`, and the route fixes `type`. Send `download=yes` to receive it as `sipflow.txt`. For a share stored on another server of the cluster, add `location`. Create a share with `POST /domains/{domain}/cdrs/{id}/sipflow/store`. Only `GET` is served on this path; any other method gets `405`. — [GET /sipflow/download/{k}.txt]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "k": {
+                      "type": "string",
+                      "description": "Share key, the `key` a share answer gave: 8 digits, then 32 lowercase hexadecimal characters."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` to receive the text as a `sipflow.txt` attachment. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "location": {
+                      "type": "string",
+                      "description": "Base64 of the `store-location` hostname the share answer gave, when the share is stored on another server of the cluster. A hostname that is not a known server of this cluster answers `404`."
+                }
+          },
+          "required": [
+                "k"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow/download/{k}.txt',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['k'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['download', 'location'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/sipflow/download/{k}.txt',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const inject_call_trace_event: ToolDefinition = {
+  schema: {
+    name: 'inject_call_trace_event',
+    description: 'Inject event into call trace — Writes one event row into a call\\\'s trace, so another application can place what it knows about the call in the same timeline as the SIP messages: an IVR choice, a media decision, or a push notification. The event appears in every rendering of the trace except `cradle_to_grave`.  Requires Super User scope. Super User Read Only gets `403`, because this is a write.  The row is written right away to the event log of the server you call; it is not published to the cluster. `201` means it is stored. A trace is read from the event logs of the servers its CDR names, so call the server that handled the call, or the event does not show. The day\\\'s event table is created by the SIP server, never by the API: an `event_time` whose day has no table returns `409`. A trace that has already been built is cached and does not show a new event until the cache expires, so write events before the trace is first viewed.  Stamp `event_time` when the event happens, not when you send it, as RFC 3339 with an offset (converted to UTC) or `YYYY-MM-DD HH:MM:SS` in UTC, and include milliseconds. The trace sorts on that time, so a delivery delay cannot move the event. The answer\\\'s `event-time` is RFC 3339 in UTC, to the second; the milliseconds are in `event-ts`. — [POST /sipflow/event]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "orig_callid": {
+                      "type": "string",
+                      "description": "SIP call ID of the call the event belongs to. No control characters."
+                },
+                "event_type": {
+                      "type": "string",
+                      "description": "Label for the event, such as `app`, `ivr`, `media`, or `push`. `push` rows are drawn on a push-notification lifeline. No control characters."
+                },
+                "event_text": {
+                      "type": "string",
+                      "description": "Body of the event, rendered as written with line breaks kept. At most 60,000 bytes. A longer value is refused, never shortened."
+                },
+                "servedCallId": {
+                      "type": "string",
+                      "description": "Second call ID to file the event under. Defaults to `orig_callid`. The trace finds the event under either one."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "Hostname stamped on the event. Defaults to the hostname of the server you call. It also picks the `<hostname>_event_YYYYMMDD` table when there is no plain `event_YYYYMMDD` table. It never sends the event to another server."
+                },
+                "event_time": {
+                      "type": "string",
+                      "description": "When the event happened. Send RFC 3339 with an offset, which is converted to UTC, or `YYYY-MM-DD HH:MM:SS`, read as UTC. Defaults to now. Include milliseconds so the event sorts into place. An impossible date, such as `2026-02-30`, returns `400`. It also picks the day's event table."
+                },
+                "event_ts": {
+                      "type": "string",
+                      "description": "Sort key, in milliseconds since the Unix epoch. Defaults to `event_time`. Send `event_time` instead: a backdated `event_ts` with the default `event_time` can fall outside the trace window, and then the event does not show."
+                }
+          },
+          "required": [
+                "orig_callid",
+                "event_type",
+                "event_text"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /sipflow/event',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['orig_callid', 'event_type', 'event_text', 'servedCallId', 'hostname', 'event_time', 'event_ts'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/sipflow/event',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const search_call_trace_events: ToolDefinition = {
+  schema: {
+    name: 'search_call_trace_events',
+    description: 'Search raw call trace events — Searches the raw event rows that call traces are built from. Where the other trace endpoints render one call, this one returns matching rows as they were logged: by call ID, by text inside the event (a SIP header, a number, an IP address), by event type, or by time alone.  Each core server keeps only its own events. By default every core server is searched at the same time and the rows are merged into one list, newest first. Set `hostname` to search one core server. Each row\\\'s `server` says which server it came from.  Requires Super User or Super User Read Only scope. The rows are raw SIP messages from every domain.  The search is limited so it cannot overload the event database:  - **Window**: at most 6 hours. With no `datetime-start` or `datetime-end`, it covers the 30 minutes before the request. A longer window returns `400`; it is never shortened for you. - **Query time**: each server stops its search after 10 seconds. - **Request time**: the whole request, including collecting rows from every server, stops after 15 seconds. A server that has not connected within 2 seconds, or answered within 15, is left out. - **Rows**: `limit`, 1000 by default and 10000 at most, across all servers. When there are more matches, `X-NS-Result-Truncated` is `true`.  When some servers do not answer, you still get `200` with the rows from the ones that did, and `X-NS-Fanout-Missing` names the ones left out. When none answer, you get `504` if they all ran out of time, otherwise `502`. — [GET /sipflow/events]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "datetime-start": {
+                      "type": "string",
+                      "description": "Start of the window, inclusive. RFC 3339 with an offset (converted to UTC), or `YYYY-MM-DD HH:MM:SS` in UTC. Defaults to 30 minutes before `datetime-end`."
+                },
+                "datetime-end": {
+                      "type": "string",
+                      "description": "End of the window, exclusive. Same formats as `datetime-start`. Defaults to now. Must be after `datetime-start` and no more than 6 hours later."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "Core server to search. Leave blank or set `all` to search every core server and merge the rows. Any other value must be the name of a core server in this cluster."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Call IDs to match, comma-separated, up to 50. A row matches when its `orig-callid` or `served-callid` is one of them."
+                },
+                "search": {
+                      "type": "string",
+                      "description": "Text to find anywhere in `event-text`, up to 255 characters. Matched as written, including `%` and `_`."
+                },
+                "event-type": {
+                      "type": "string",
+                      "description": "Event types to match, comma-separated, up to 20."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return, 1 to 10000. Defaults to 1000. Default: 100",
+                      "default": 100
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "`desc` for newest first (default) or `asc` for oldest first. Allowed values: \"desc\", \"asc\". Default: \"desc\"",
+                      "enum": [
+                            "desc",
+                            "asc"
+                      ],
+                      "default": "desc"
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow/events',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['datetime-start', 'datetime-end', 'hostname', 'callid', 'search', 'event-type', 'limit', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/sipflow/events',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const export_call_trace_query: ToolDefinition = {
+  schema: {
+    name: 'export_call_trace_query',
+    description: 'Export call trace by link — Exports a call\\\'s trace as a file: the ladder diagram as SVG, or the event rows as CSV. Name the call by its SIP call IDs and a time window, as in `GET /sipflow`, or send a share key `k` for a stored trace. It takes the same fields as `POST /sipflow/export`, as query parameters, so a link can embed the diagram: `GET /sipflow/export?k=<key>` renders a shared trace as an image.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. Every call ID you send must match a CDR in your scope inside the window; the rest are ignored, and if none remain the answer is `404`. A share key needs no token and exports read-only; with a token, the stored call must be in your scope.  The answer is a file in the media type `export_format` picks:  - `image` (the default): the SVG ladder diagram, `image/svg+xml`, sent inline - `csv`: the event rows with a header row, `text/csv`, as an attachment - `base64`: base64 of the PHP-serialized raw rows, `text/plain`. The cluster\\\'s servers use this format with each other; integrations should use `csv`. Times in CSV and base64 rows, and in the `call_trace_text` block headers, are `YYYY-MM-DD_HH:MM:SS` in UTC (an underscore, no offset); the millisecond Unix time is the `UnixTsm` column.  For JSON renderings, use `GET /sipflow`.  **Example requests**  - SVG diagram: `GET /sipflow/export?start_time=2026-09-01T14:30:00+00:00&end_time=2026-09-01T14:34:10+00:00&callids=0f1e2d3c4b5a69788796a5b4c3d2e1f0@192.0.2.10` - Shared trace as SVG: `GET /sipflow/export?k=202609019f86d081884c7d659a2feaa0c55ad015` — [GET /sipflow/export]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "start_time": {
+                      "type": "string",
+                      "description": "Start of the window to search, RFC 3339. A legacy `YYYY-MM-DD HH:MM:SS` value is also accepted. Required unless `k` is sent."
+                },
+                "end_time": {
+                      "type": "string",
+                      "description": "End of the window. Same forms as `start_time`. Required unless `k` is sent."
+                },
+                "callids": {
+                      "type": "string",
+                      "description": "Comma-separated SIP call IDs. Each must match a CDR in your scope inside the window; the rest are ignored. Required unless `k` is sent."
+                },
+                "export_format": {
+                      "type": "string",
+                      "description": "`image` (the default) for SVG, `csv` for a CSV file, or `base64` for the raw rows the cluster's servers exchange. Allowed values: \"image\", \"csv\", \"base64\". Default: \"image\"",
+                      "enum": [
+                            "image",
+                            "csv",
+                            "base64"
+                      ],
+                      "default": "image"
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key. Exports the stored trace with no token, read-only; the search fields are then ignored."
+                },
+                "search_callids": {
+                      "type": "string",
+                      "description": "`no` to trace only the call IDs you sent. Defaults to `yes`. Allowed values: \"yes\", \"no\", \"true\", \"false\", \"1\", \"0\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "true",
+                            "false",
+                            "1",
+                            "0"
+                      ],
+                      "default": "yes"
+                },
+                "margin": {
+                      "type": "number",
+                      "description": "Seconds added before `start_time` and after `end_time`. A whole number. Defaults to `10`. Default: 10",
+                      "default": 10
+                },
+                "ds": {
+                      "type": "string",
+                      "description": "Event sources, comma-separated: `diag` or `ncs`. Defaults to `diag`. Allowed values: \"diag\", \"ncs\", \"diag,ncs\". Default: \"diag\"",
+                      "enum": [
+                            "diag",
+                            "ncs",
+                            "diag,ncs"
+                      ],
+                      "default": "diag"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /sipflow/export',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['start_time', 'end_time', 'callids', 'export_format', 'k', 'search_callids', 'margin', 'ds', 'show_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/sipflow/export',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const export_call_trace: ToolDefinition = {
+  schema: {
+    name: 'export_call_trace',
+    description: 'Export call trace — Exports a call\\\'s trace as a file: the ladder diagram as SVG, or the event rows as CSV. Name the call by its SIP call IDs and a time window, as in `GET /sipflow`, or send a share key `k` for a stored trace. `GET /sipflow/export` takes the same fields as query parameters.  Super User and Super User Read Only see every trace. A Reseller sees calls that have a party domain (originating, terminating, or `by`) in its territory. Office Manager and the other domain-tier scopes see calls that have their own domain as a party domain. User-tier scopes see only calls where their own user is the originating or terminating party. A call outside your scope answers the same `404` as a call that does not exist. A scope without the call-trace privilege gets `403`; by default Office Manager, Reseller, Super User, and Super User Read Only hold it. Every call ID you send must match a CDR in your scope inside the window; the rest are ignored, and if none remain the answer is `404`. A share key needs no token and exports read-only; with a token, the stored call must be in your scope.  The answer is a file in the media type `export_format` picks:  - `image` (the default): the SVG ladder diagram, `image/svg+xml`, sent inline - `csv`: the event rows with a header row, `text/csv`, as an attachment - `base64`: base64 of the PHP-serialized raw rows, `text/plain`. The cluster\\\'s servers use this format with each other; integrations should use `csv`. Times in CSV and base64 rows, and in the `call_trace_text` block headers, are `YYYY-MM-DD_HH:MM:SS` in UTC (an underscore, no offset); the millisecond Unix time is the `UnixTsm` column.  For JSON renderings, use `GET /sipflow`. — [POST /sipflow/export]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "start_time": {
+                      "type": "string",
+                      "description": "Start of the window to search, RFC 3339. A legacy `YYYY-MM-DD HH:MM:SS` value is also accepted. Required unless `k` is sent."
+                },
+                "end_time": {
+                      "type": "string",
+                      "description": "End of the window. Same forms as `start_time`. Required unless `k` is sent."
+                },
+                "callids": {
+                      "type": "string",
+                      "description": "Comma-separated SIP call IDs to trace. Each must match a CDR in your scope inside the window; the rest are ignored. Related calls are added automatically. Required unless `k` is sent."
+                },
+                "export_format": {
+                      "type": "string",
+                      "description": "`image` for the SVG diagram (`image/svg+xml`, the default), `csv` for a CSV file of the event rows (`text/csv`), or `base64` for the raw rows in the form the cluster's servers exchange (`text/plain`). Allowed values: \"image\", \"csv\", \"base64\". Default: \"image\"",
+                      "enum": [
+                            "image",
+                            "csv",
+                            "base64"
+                      ],
+                      "default": "image"
+                },
+                "k": {
+                      "type": "string",
+                      "description": "Share key. Exports the stored trace it opens, with no token needed, read-only; the search fields are then ignored."
+                },
+                "search_callids": {
+                      "type": "string",
+                      "description": "`no` to trace only the call IDs you sent, without following related calls. `false` and `0` also turn it off. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "margin": {
+                      "type": "number",
+                      "description": "Seconds added before `start_time` and after `end_time` when reading events. Default: 10",
+                      "default": 10
+                },
+                "ds": {
+                      "type": "string",
+                      "description": "Event sources, comma-separated: `diag` for the SIP servers, `ncs` for the conferencing servers. Allowed values: \"diag\", \"ncs\", \"diag,ncs\". Default: \"diag\"",
+                      "enum": [
+                            "diag",
+                            "ncs",
+                            "diag,ncs"
+                      ],
+                      "default": "diag"
+                },
+                "show_attendees": {
+                      "type": "string",
+                      "description": "`yes` to follow a conference bridge and include every attendee's legs. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "servers": {
+                      "type": "string",
+                      "description": "Comma-separated hostnames of cluster servers to read, used with `search_callids=no`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /sipflow/export',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['start_time', 'end_time', 'callids', 'export_format', 'k', 'search_callids', 'margin', 'ds', 'show_attendees', 'servers'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/sipflow/export',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_call_trace_share: ToolDefinition = {
+  schema: {
+    name: 'delete_call_trace_share',
+    description: 'Revoke call trace share — Revokes a call trace share, so its key stops working at once, before it would expire. Use it when a share link went somewhere it should not.  Requires the `delete` privilege on call traces: by default Office Manager, Reseller, and Super User. Super User Read Only and scopes without the privilege get `403`. A share key never authorizes a revoke; you always need a token. The shared call must be in your scope: Super User any call, a Reseller calls with a party domain in its territory, a domain-tier scope calls with its own domain as a party domain, and a user-tier scope calls where its user is a party. A key that does not exist, has expired, or is for a call outside your scope answers the same `404`.  The share is removed at once from the server you call: call the server named in the share\\\'s `store-location`. `200` means the share is gone. Only `DELETE` is served on this path; any other method gets `405`.  `DELETE /domains/{domain}/sipflow/share/{k}` is the same call, confined to one domain. — [DELETE /sipflow/share/{k}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "k": {
+                      "type": "string",
+                      "description": "Share key to revoke, the `key` a share answer gave: 8 digits, then 32 lowercase hexadecimal characters."
+                }
+          },
+          "required": [
+                "k"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /sipflow/share/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['k'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/sipflow/share/{k}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_call_trace_share: ToolDefinition = {
+  schema: {
+    name: 'create_call_trace_share',
+    description: 'Share call trace without domain — Stores a copy of one call\\\'s trace and returns a key that opens it without a token. The call is taken from its CDR ID. The path names no domain, so the call only has to be in your scope.  Requires the `create` privilege on call traces: by default Office Manager, Reseller, and Super User. Super User Read Only and scopes without the privilege get `403`. You can share only a call in your scope: Super User any call, a Reseller calls with a party domain in its territory, a domain-tier scope calls with its own domain as a party domain, and a user-tier scope calls where its user is the originating or terminating party. A call outside your scope answers the same `404` as one that does not exist.  Every share expires: after `ttl` seconds, capped at `NsTraceShareMaxTtl` (30 days by default), or after `NsTraceShareTempTtl` (15 minutes by default) when you send no `ttl`. The answer gives the moment it stops working twice: `expires` as a Unix time and `expires-datetime` as RFC 3339. Revoke a share early with `DELETE /sipflow/share/{k}`. Until then, anyone with the key can read the whole trace, read-only, including other parties\\\' numbers and the raw SIP messages. Open it with `GET /sipflow?k=<key>` in any rendering, or `GET /sipflow/download/<key>.txt` for plain text.  The copy is stored on the server you call, named in `store-location`, before the answer is sent: `200` means the link works now. Only `POST` is served on this path; any other method gets `405`. Prefer `POST /domains/{domain}/cdrs/{id}/sipflow/store`, which names the domain. — [POST /sipflow/{id}/store]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "id": {
+                      "type": "string",
+                      "description": "ID of the call's CDR, as `id` in `GET /domains/{domain}/cdrs`. Letters and digits only."
+                },
+                "ttl": {
+                      "type": "number",
+                      "description": "Lifetime of the share, in seconds. Without it, the share lives for `NsTraceShareTempTtl`, 900 seconds (15 minutes) by default. A value above `NsTraceShareMaxTtl`, 30 days by default, is lowered to it. A value that is not a positive number is ignored."
+                },
+                "temp": {
+                      "type": "string",
+                      "description": "Accepted for older clients. `true` means the same as sending no `ttl`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month the call was made in, as `YYYYMM`, to pick which monthly CDR table to search first."
+                }
+          },
+          "required": [
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /sipflow/{}/store',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['ttl', 'temp', 'date'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/sipflow/{id}/store',
+      pathParams,
+      body,
     });
 
     return {

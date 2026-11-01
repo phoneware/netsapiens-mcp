@@ -5,21 +5,37 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_voicemails: ToolDefinition = {
   schema: {
     name: 'read_voicemails',
-    description: 'Read Voicemail for User by Folder — [GET /domains/{domain}/users/{user}/voicemails/{folder}]',
+    description: 'List voicemail in folder — Lists the voicemail messages in one folder of a user\\\'s mailbox, newest first, with caller details and the transcript where there is one.  Every user can read its own mailbox, and Call Center Supervisor only its own. Site Manager can read the mailboxes of users at its own site, Office Manager and Route Manager any mailbox in its domain, Reseller and Route Manager Reseller any in their territory, and Super User any. Office Manager Read-Only and Super User Read Only read as their parent scope does. Any other mailbox returns `403`.  Every list or read that returns messages is recorded in the compliance access log: who read, whose mailbox, and the callers named in the messages. Returns up to 100 messages by default; page with `limit` and `start`. Count them with `GET /domains/{domain}/users/{user}/voicemails/{folder}/count`. Faxes in the `new` folder are not listed. `file-access-url` is a signed link that plays the file with no token, for 24 hours by default; see `GET /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/play`. — [GET /domains/{domain}/users/{user}/voicemails/{folder}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User (extension) whose voicemail you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
                 },
                 "folder": {
                       "type": "string",
-                      "description": "Options include new, save, and trash"
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -29,64 +45,28 @@ export const read_voicemails: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voicemails/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'folder'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
     }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}',
       pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_users_by_user_voicemails_by_folder_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_users_by_user_voicemails_by_folder_count',
-    description: 'Count Voicemail for User by Folder — [GET /domains/{domain}/users/{user}/voicemails/{folder}/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "folder": {
-                      "type": "string",
-                      "description": "Options include new, save, and trash"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "folder"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'folder'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}/count',
-      pathParams,
+      queryParams,
     });
 
     return {
@@ -101,25 +81,31 @@ export const get_domains_by_domain_users_by_user_voicemails_by_folder_count: Too
 export const read_voicemail: ToolDefinition = {
   schema: {
     name: 'read_voicemail',
-    description: 'Read Specific Voicemail for User  — [GET /domains/{domain}/users/{user}/voicemails/{folder}/{filename}]',
+    description: 'Read voicemail message — Reads one voicemail message by its file name, with caller details and the transcript where there is one.  Every user can read its own mailbox, and Call Center Supervisor only its own. Site Manager can read the mailboxes of users at its own site, Office Manager and Route Manager any mailbox in its domain, Reseller and Route Manager Reseller any in their territory, and Super User any. Office Manager Read-Only and Super User Read Only read as their parent scope does. Any other mailbox returns `403`.  The read is recorded in the compliance access log. Returns a single object, not an array. The call returns exactly the message named, in every folder including `trash`; `.wav` may be left off the name. A name that is not in the folder returns `404`. — [GET /domains/{domain}/users/{user}/voicemails/{folder}/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User (extension) whose voicemail you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
                 },
                 "folder": {
                       "type": "string",
-                      "description": "Options include new, save, and trash"
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
                 },
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "The message's `filename` as the list returns it, such as `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b.wav`. The `.wav` may be left off: `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b` names the same message."
                 }
           },
           "required": [
@@ -129,6 +115,12 @@ export const read_voicemail: ToolDefinition = {
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voicemails/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'folder', 'filename'];
@@ -154,25 +146,31 @@ export const read_voicemail: ToolDefinition = {
 export const delete_voicemail: ToolDefinition = {
   schema: {
     name: 'delete_voicemail',
-    description: 'Delete Voicemail  — [DELETE /domains/{domain}/users/{user}/voicemails/{folder}/{filename}]',
+    description: 'Delete voicemail message — Deletes a voicemail message. From `new` or `saved`, the message moves to `trash`. From `trash`, it is removed for good.  Every user can change its own mailbox, and Call Center Supervisor only its own. Site Manager can change the mailboxes of users at its own site, Office Manager and Route Manager any mailbox in its domain, Reseller and Route Manager Reseller any in their territory, and Super User any. The read-only scopes never change voicemail and get `403`.  The change is made on the server that handles the request, before the response, and copied to the other servers over the service bus (SBUS) file journal. The call answers `202` by default. `.wav` may be left off `filename`. A name that is not in the folder returns `404`. Restore a message from `trash` with `PATCH` on `/domains/{domain}/users/{user}/voicemails/trash/{filename}/save`. — [DELETE /domains/{domain}/users/{user}/voicemails/{folder}/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "folder": {
                       "type": "string",
-                      "description": "Options include new, save, and trash"
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
                 },
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "The message's `filename` as the list returns it, such as `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b.wav`. The `.wav` may be left off."
                 }
           },
           "required": [
@@ -182,6 +180,12 @@ export const delete_voicemail: ToolDefinition = {
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/voicemails/{}/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'folder', 'filename'];
@@ -207,25 +211,31 @@ export const delete_voicemail: ToolDefinition = {
 export const save_voicemail: ToolDefinition = {
   schema: {
     name: 'save_voicemail',
-    description: 'Move Voicemail to save folder — [PATCH /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/save]',
+    description: 'Save voicemail message — Moves a voicemail message to the `saved` folder: from `new` it marks the message as heard and kept, and from `trash` it restores it. A message already in `saved` stays where it is.  Every user can change its own mailbox, and Call Center Supervisor only its own. Site Manager can change the mailboxes of users at its own site, Office Manager and Route Manager any mailbox in its domain, Reseller and Route Manager Reseller any in their territory, and Super User any. The read-only scopes never change voicemail and get `403`.  The move is made on the server that handles the request, before the response, and copied to the other servers over the service bus (SBUS) file journal. The call answers `202` and takes no body. `.wav` may be left off `filename`. A name that is not in the folder returns `404`. `voicemail-forward-new-destination` is refused here with `400`: forward with `PATCH` on `.../forward`. Only `PATCH` and `PUT` are accepted. — [PATCH /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/save]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "folder": {
                       "type": "string",
-                      "description": "Options include new, save, and trash"
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
                 },
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "The message's `filename` as the list returns it, such as `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b.wav`. The `.wav` may be left off: `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b` names the same message."
                 }
           },
           "required": [
@@ -235,6 +245,12 @@ export const save_voicemail: ToolDefinition = {
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/voicemails/{}/{}/save',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'folder', 'filename'];
@@ -260,29 +276,35 @@ export const save_voicemail: ToolDefinition = {
 export const forward_voicemail: ToolDefinition = {
   schema: {
     name: 'forward_voicemail',
-    description: 'Forward Voicemail to another user — [PATCH /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/forward]',
+    description: 'Forward voicemail message — Copies a voicemail message into the `new` folder of another mailbox, and emails that user the new-voicemail notice. Your copy stays where it is. The recipient\\\'s copy shows who forwarded it in `voicemail-forward-from`: the user, or `user@domain` when the message came from another domain.  Name the recipient in `voicemail-forward-new-destination`: a bare user (extension) such as `1002` means that user in the path\\\'s domain, and `user@domain`, such as `1002@acme.example.com`, names a mailbox in that domain. The mailbox the message is in cannot be the recipient.  Any user may forward a message from its own mailbox to any mailbox in its own domain. Otherwise your scope must be able to change both mailboxes: Site Manager within its site, Office Manager and Route Manager within their own domain, Reseller and Route Manager Reseller within their territory, and Super User anywhere. So a recipient in another domain needs Reseller (a domain in its territory) or Super User. Anything else returns `403`. Office Manager Read-Only and Super User Read Only never forward.  The copy and its metadata are written on the server that handles the request and copied to the other servers over the service bus (SBUS) file journal. The call answers `202`. Each forward is recorded in the compliance access log as a disclosure of the message to the recipient. Only `PATCH` and `PUT` are accepted.  A missing or malformed recipient, or the message\\\'s own mailbox, returns `400`. A recipient that does not exist returns `404`, one without voicemail returns `409`, and one without room for the message returns `507`. A message that is not in the folder returns `404`. — [PATCH /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/forward]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "folder": {
                       "type": "string",
-                      "description": "Options include new, save, and trash"
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
                 },
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "The message's `filename` as the list returns it, such as `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b.wav`. The `.wav` may be left off: `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b` names the same message."
                 },
                 "voicemail-forward-new-destination": {
                       "type": "string",
-                      "description": "Should be a user extension where there voicemail will be moved that user's voicemail as a new message."
+                      "description": "Recipient: a bare user (extension) in the path's domain, such as `1002`, or `user@domain`, such as `1002@acme.example.com`. The user must exist and have voicemail on, and must not be the mailbox the message is in. Another domain needs Reseller (a domain in its territory) or Super User."
                 }
           },
           "required": [
@@ -293,6 +315,12 @@ export const forward_voicemail: ToolDefinition = {
                 "voicemail-forward-new-destination"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/voicemails/{}/{}/forward',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'folder', 'filename'];
@@ -310,6 +338,161 @@ export const forward_voicemail: ToolDefinition = {
       pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}/{filename}/forward',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_users_by_user_voicemails_by_folder_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_users_by_user_voicemails_by_folder_count',
+    description: 'Count voicemail in folder — Counts the voicemail messages in one folder of a user\\\'s mailbox and reports their total size.  Every user can read its own mailbox, and Call Center Supervisor only its own. Site Manager can read the mailboxes of users at its own site, Office Manager and Route Manager any mailbox in its domain, Reseller and Route Manager Reseller any in their territory, and Super User any. Office Manager Read-Only and Super User Read Only read as their parent scope does. Any other mailbox returns `403`.  `size` is the total size in bytes of the messages\\\' audio. A count is not recorded in the access log, since it returns no message content. Only `GET` is allowed; another method returns `405`. — [GET /domains/{domain}/users/{user}/voicemails/{folder}/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "folder": {
+                      "type": "string",
+                      "description": "Voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and returns `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "folder"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voicemails/{}/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'folder'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}/count',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const play_voicemail: ToolDefinition = {
+  schema: {
+    name: 'play_voicemail',
+    description: 'Play voicemail — Streams one voicemail message, or the PDF or JPEG image of a fax in a voicemail folder, so a browser or an `<audio>` element can play it.  Call it one of two ways:  - **With a session.** Send a bearer token, or let the browser send its session cookie. The access is the same as for reading the file. Every user can play their own mailbox, and Call Center Supervisor only its own. Site Manager can play the mailboxes of users at its own site, and Office Manager, Office Manager Read-Only, and Route Manager any mailbox in their domain. Reseller and Route Manager Reseller can play any mailbox in their territory, and Super User and Super User Read Only any mailbox. Any other mailbox answers `403`. - **With a signed link.** Every read of the file returns `file-access-url`, which is this path with `expires` and `signature` added. Anyone holding the link can play that one file, with no token, until it expires (24 hours by default). Treat the link like the file itself.  The message is found in any folder, so a link still plays a message that was saved or moved to the trash after the link was made.  Without `download`, the file is sent inline and a single range request (`Range: bytes=...`) is answered with `206`, so a player can seek. A range that starts past the end of the file answers `416`. The response is never cached by a shared cache.  Each play or download of a voicemail or fax is recorded in the compliance access log, once per listen: seeking within the same message adds no entries. A play through a signed link is recorded with the listener unknown. A fax document is always recorded as a download. — [GET /domains/{domain}/users/{user}/voicemails/{folder}/{filename}/play]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "The user (extension) whose voicemail you play, such as `1001`. Use `~` for yourself. A user that does not exist answers `404`."
+                },
+                "folder": {
+                      "type": "string",
+                      "description": "The voicemail folder: `new`, `saved`, or `trash`. `save` is the same folder as `saved`. Any other value is not a route and answers `404`. Allowed values: \"new\", \"saved\", \"save\", \"trash\"",
+                      "enum": [
+                            "new",
+                            "saved",
+                            "save",
+                            "trash"
+                      ]
+                },
+                "filename": {
+                      "type": "string",
+                      "description": "The message's `filename` as the list returns it, such as `vm-20260901143000123456-0e4a6c8b2d1f3a5c7e9b0d2f4a6c8e1b.wav`. You can leave off `.wav`. A fax keeps its `.pdf` or `.jpg` extension."
+                },
+                "expires": {
+                      "type": "string",
+                      "description": "The expiry of a signed link, in Unix seconds. Copy it from `file-access-url`; never set it yourself. Leave it out when you call with a token or a session cookie."
+                },
+                "signature": {
+                      "type": "string",
+                      "description": "The signature of a signed link, from `file-access-url`. With it the call needs no token, and it plays only the file the path names until `expires`. An expired link answers `403` with `Link has expired`; a changed path or expiry answers `403` with `Invalid signature`. Leave it out when you call with a token or a session cookie."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` sends the file as a download (`Content-Disposition: attachment`) and turns off range requests. Left out or blank, the file is sent inline so a browser or an `<audio>` element plays it. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "convert": {
+                      "type": "string",
+                      "description": "Transcodes a voice message before it is sent: `aac` (`audio/aac`) or `ogg` (`audio/ogg`). Left out, the stored WAV file is sent (`audio/wav`). Ignored for a fax document. Allowed values: \"aac\", \"ogg\"",
+                      "enum": [
+                            "aac",
+                            "ogg"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "folder",
+                "filename"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voicemails/{}/{}/play',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'folder', 'filename'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['expires', 'signature', 'download', 'convert'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/voicemails/{folder}/{filename}/play',
+      pathParams,
+      queryParams,
     });
 
     return {

@@ -5,40 +5,63 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_meetings_by_id: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_meetings_by_id',
-    description: 'Read Meeting — [GET /domains/{domain}/users/{user}/meetings/{id}]',
+    description: 'Read meeting — Returns one meeting with its attendees, as seen by the user in the path.  Access is checked against the meeting\\\'s owner: any user in the owner\\\'s domain can read it, and Office Manager, Reseller, and Super User can read it in the domains they manage. When you are the user in the path and you are on the meeting, you are checked as yourself, so an attendee from another domain reads the meeting through its own path. `meeting-passcode` is shown only to the meeting\\\'s owner, its hosts, and Office Manager or higher for its domain. Everyone else gets it masked with asterisks; `include-secret=yes` does not change that.  The meeting is returned when the user in the path owns it or is on it, or when it is open to anyone with its ID (`meeting-join-require-invite-enabled` is `0`) and not locked. When you read as yourself with a token that can write, the read also joins you: it adds you as an attendee of an open meeting you are not on, adds you as a host of your own meeting when you are missing from its attendees, and with `isInit=1` starts an instance. Reading on behalf of another user never changes the meeting. `attendees` is a JSON-encoded string. — [GET /domains/{domain}/users/{user}/meetings/{meeting}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The meeting is read as this user."
                 },
-                "id": {
+                "meeting": {
                       "type": "string",
-                      "description": "id"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                },
+                "attendee_id": {
+                      "type": "string",
+                      "description": "Read the meeting as this attendee: adds `attendee_id`, `attendee_name`, `attendee_email`, `attendee_audio_id`, and `attendee_role`. When the attendee list is hidden and the attendee is not a host or presenter, `attendees` then holds only that attendee and the hosts and presenters."
+                },
+                "isInit": {
+                      "type": "string",
+                      "description": "`1` starts a new instance of the meeting when none is running, and returns its `meeting-instance-id`. Only when you read as yourself with a token that can write. Allowed values: \"1\"",
+                      "enum": [
+                            "1"
+                      ]
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "id"
+                "meeting"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
+    const pathParamNames = ['domain', 'user', 'meeting'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['attendee_id', 'isInit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/meetings/{id}',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -53,484 +76,224 @@ export const get_domains_by_domain_users_by_user_meetings_by_id: ToolDefinition 
 export const post_domains_by_domain_users_by_user_meetings_by_id: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_meetings_by_id',
-    description: 'Create a Meeting with Id — API v1 create meeting passing in newly requested meeting Id — [POST /domains/{domain}/users/{user}/meetings/{id}]',
+    description: 'Create meeting with ID — Creates a meeting with the meeting ID in the path, usually one reserved with `POST /domains/{domain}/users/{user}/meetings/getId`.  Requires a token for the user in the path, or Office Manager scope or higher for the domain. The ID must be free: an ID in use, or reserved with `getId` for a different user, returns `409`.  The meeting is owned by the user in the path. Creating it also sets up its audio bridge and invites everyone in `attendees` by email. Omitted settings take their defaults: the start is now, the length is 60 minutes, and the participant limit comes from the domain\\\'s configuration. The response is the new meeting. When the create has not been applied yet, it holds the fields that were accepted. — [POST /domains/{domain}/users/{user}/meetings/{meeting}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The new meeting's owner. Use the same user the ID was reserved for."
                 },
-                "id": {
+                "meeting": {
                       "type": "string",
-                      "description": "Meeting Id to create"
-                },
-                "description": {
-                      "type": "string",
-                      "description": "description"
-                },
-                "current_timestamp": {
-                      "type": "string",
-                      "description": "This is the time stamp that the formated via RFC 3339. Allowed values: \"YYYY-MM-DDTHH:MM:SS.ssZ\"",
-                      "enum": [
-                            "YYYY-MM-DDTHH:MM:SS.ssZ"
-                      ]
-                },
-                "meeting-calendar-invite-id": {
-                      "type": "string",
-                      "description": "meeting-calendar-invite-id"
-                },
-                "meeting-ordinal-sequence": {
-                      "type": "number",
-                      "description": "meeting-ordinal-sequence"
-                },
-                "core-server": {
-                      "type": "string",
-                      "description": "core-server"
-                },
-                "chat-session-id": {
-                      "type": "string",
-                      "description": "chat-session-id"
-                },
-                "meeting-registration-id": {
-                      "type": "string",
-                      "description": "meeting-registration-id"
-                },
-                "meeting-instance-id": {
-                      "type": "string",
-                      "description": "meeting-instance-id"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 },
                 "meeting-name": {
                       "type": "string",
-                      "description": "meeting-name"
+                      "description": "Name of the meeting, shown in invitations and in the app. Required on a create."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Longer text about the meeting, shown in invitations."
                 },
                 "meeting-type": {
                       "type": "string",
-                      "description": "meeting-type"
-                },
-                "limits-max-participants": {
-                      "type": "number",
-                      "description": "limits-max-participants"
-                },
-                "meeting-status": {
-                      "type": "string",
-                      "description": "meeting-status"
+                      "description": "`conference` is a meeting where everyone can take part. `presentation` is a webinar: guests register themselves with the meeting's `meeting-registration-id`. Allowed values: \"conference\", \"presentation\"",
+                      "enum": [
+                            "conference",
+                            "presentation"
+                      ]
                 },
                 "meeting-schedule-start-datetime": {
                       "type": "string",
-                      "description": "This is the time stamp that the formated via RFC 3339. Allowed values: \"YYYY-MM-DDTHH:MM:SS.ssZ\"",
-                      "enum": [
-                            "YYYY-MM-DDTHH:MM:SS.ssZ"
-                      ]
+                      "description": "When the meeting starts, in RFC 3339 form. Unix seconds are also accepted. Omit it on a create to start the meeting now."
                 },
                 "timezone": {
                       "type": "string",
-                      "description": "This is the time zone that the user is primarily located in. Allowed values: \"US/Alaska\", \"US/Central\", \"US/Eastern\", \"US/Hawaii\", \"US/Mountain\", \"US/Pacific\", \"Africa/Addis_Ababa\", \"Africa/Algiers\", \"Africa/Brazzaville\", \"Africa/Cairo\", \"Africa/Casablanca\", \"Africa/Dakar\", \"Africa/Dar_es_Salaam\", \"Africa/Djibouti\", \"Africa/Johannesburg\", \"Africa/Khartoum\", \"Africa/Kigali\", \"Africa/Kinshasa\", \"Africa/Lagos\", \"Africa/Nairobi\", \"Africa/Timbuktu\", \"Africa/Tripoli\", \"Africa/Tunis\", \"America/Antigua\", \"America/Aruba\", \"America/Belize\", \"America/Bogota\", \"America/Buenos_Aires\", \"America/Cancun\", \"America/Caracas\", \"America/Cayman\", \"America/Chihuahua\", \"America/Costa_Rica\", \"America/Denver\", \"America/Detroit\", \"America/Edmonton\", \"America/El_Salvador\", \"America/Ensenada\", \"America/Grenada\", \"America/Guadeloupe\", \"America/Guatemala\", \"America/Havana\", \"America/Indianapolis\", \"America/Jamaica\", \"America/Juneau\", \"America/La_Paz\", \"America/Lima\", \"America/Los_Angeles\", \"America/Louisville\", \"America/Martinique\", \"America/Mazatlan\", \"America/Mendoza\", \"America/Menominee\", \"America/Merida\", \"America/Mexico_City\", \"America/Miquelon\", \"America/Moncton\", \"America/Monterrey\", \"America/Montevideo\", \"America/Montreal\", \"America/Montserrat\", \"America/Nassau\", \"America/New_York\", \"America/Panama\", \"America/Phoenix\", \"America/Port-au-Prince\", \"America/Port_of_Spain\", \"America/Regina\", \"America/Santiago\", \"America/Santo_Domingo\", \"America/Sao_Paulo\", \"America/Thule\", \"America/Thunder_Bay\", \"America/Tijuana\", \"America/Toronto\", \"America/Vancouver\", \"America/Winnipeg\", \"America/Yellowknife\", \"Antarctica/South_Pole\", \"Arctic/Longyearbyen\", \"Asia/Amman\", \"Asia/Baghdad\", \"Asia/Bahrain\", \"Asia/Bangkok\", \"Asia/Beirut\", \"Asia/Brunei\", \"Asia/Calcutta\", \"Asia/Colombo\", \"Asia/Dacca\", \"Asia/Damascus\", \"Asia/Dhaka\", \"Asia/Dubai\", \"Asia/Gaza\", \"Asia/Hong_Kong\", \"Asia/Istanbul\", \"Asia/Jakarta\", \"Asia/Jerusalem\", \"Asia/Kabul\", \"Asia/Katmandu\", \"Asia/Kuala_Lumpur\", \"Asia/Kuching\", \"Asia/Kuwait\", \"Asia/Macau\", \"Asia/Manila\", \"Asia/Muscat\", \"Asia/Phnom_Penh\", \"Asia/Rangoon\", \"Asia/Riyadh\", \"Asia/Saigon\", \"Asia/Seoul\", \"Asia/Shanghai\", \"Asia/Singapore\", \"Asia/Taipei\", \"Asia/Tehran\", \"Asia/Tel_Aviv\", \"Asia/Thimphu\", \"Asia/Tokyo\", \"Asia/Ulan_Bator\", \"Asia/Vientiane\", \"Asia/Vladivostok\", \"Atlantic/Azores\", \"Atlantic/Bermuda\", \"Atlantic/Canary\", \"Atlantic/Cape_Verde\", \"Atlantic/Faeroe\", \"Atlantic/Reykjavik\", \"Australia/ACT\", \"Australia/Adelaide\", \"Australia/Brisbane\", \"Australia/Canberra\", \"Australia/Darwin\", \"Australia/LHI\", \"Australia/Melbourne\", \"Australia/North\", \"Australia/NSW\", \"Australia/Perth\", \"Australia/Queensland\", \"Australia/South\", \"Australia/Sydney\", \"Australia/Tasmania\", \"Australia/Victoria\", \"Australia/West\", \"Canada/Atlantic\", \"Canada/Central\", \"Canada/Eastern\", \"Canada/Mountain\", \"Canada/Newfoundland\", \"Canada/Pacific\", \"Canada/Saskatchewan\", \"Canada/Yukon\", \"Cuba\", \"Etc/GMT\", \"Etc/GMT+1\", \"Etc/GMT+10\", \"Etc/GMT+11\", \"Etc/GMT+12\", \"Etc/GMT+2\", \"Etc/GMT+3\", \"Etc/GMT+4\", \"Etc/GMT+5\", \"Etc/GMT+6\", \"Etc/GMT+7\", \"Etc/GMT+8\", \"Etc/GMT+9\", \"Etc/GMT-1\", \"Etc/GMT-10\", \"Etc/GMT-11\", \"Etc/GMT-12\", \"Etc/GMT-13\", \"Etc/GMT-14\", \"Etc/GMT-2\", \"Etc/GMT-3\", \"Etc/GMT-4\", \"Etc/GMT-5\", \"Etc/GMT-6\", \"Etc/GMT-7\", \"Etc/GMT-8\", \"Etc/GMT-9\", \"Etc/Greenwich\", \"Europe/Amsterdam\", \"Europe/Athens\", \"Europe/Belfast\", \"Europe/Belgrade\", \"Europe/Berlin\", \"Europe/Brussels\", \"Europe/Bucharest\", \"Europe/Budapest\", \"Europe/Copenhagen\", \"Europe/Dublin\", \"Europe/Helsinki\", \"Europe/Istanbul\", \"Europe/Kiev\", \"Europe/Lisbon\", \"Europe/Ljubljana\", \"Europe/London\", \"Europe/Madrid\", \"Europe/Malta\", \"Europe/Monaco\", \"Europe/Moscow\", \"Europe/Oslo\", \"Europe/Paris\", \"Europe/Prague\", \"Europe/Rome\", \"Europe/Sofia\", \"Europe/Stockholm\", \"Europe/Vienna\", \"Europe/Warsaw\", \"Europe/Zurich\", \"Greenwich\", \"Pacific/Auckland\", \"Pacific/Easter\", \"Pacific/Fiji\", \"Pacific/Galapagos\", \"Pacific/Gambier\", \"Pacific/Guam\", \"Pacific/Honolulu\", \"Pacific/Marquesas\", \"Pacific/Midway\", \"Pacific/Palau\", \"Pacific/Rarotonga\", \"Pacific/Tahiti\"",
-                      "enum": [
-                            "US/Alaska",
-                            "US/Central",
-                            "US/Eastern",
-                            "US/Hawaii",
-                            "US/Mountain",
-                            "US/Pacific",
-                            "Africa/Addis_Ababa",
-                            "Africa/Algiers",
-                            "Africa/Brazzaville",
-                            "Africa/Cairo",
-                            "Africa/Casablanca",
-                            "Africa/Dakar",
-                            "Africa/Dar_es_Salaam",
-                            "Africa/Djibouti",
-                            "Africa/Johannesburg",
-                            "Africa/Khartoum",
-                            "Africa/Kigali",
-                            "Africa/Kinshasa",
-                            "Africa/Lagos",
-                            "Africa/Nairobi",
-                            "Africa/Timbuktu",
-                            "Africa/Tripoli",
-                            "Africa/Tunis",
-                            "America/Antigua",
-                            "America/Aruba",
-                            "America/Belize",
-                            "America/Bogota",
-                            "America/Buenos_Aires",
-                            "America/Cancun",
-                            "America/Caracas",
-                            "America/Cayman",
-                            "America/Chihuahua",
-                            "America/Costa_Rica",
-                            "America/Denver",
-                            "America/Detroit",
-                            "America/Edmonton",
-                            "America/El_Salvador",
-                            "America/Ensenada",
-                            "America/Grenada",
-                            "America/Guadeloupe",
-                            "America/Guatemala",
-                            "America/Havana",
-                            "America/Indianapolis",
-                            "America/Jamaica",
-                            "America/Juneau",
-                            "America/La_Paz",
-                            "America/Lima",
-                            "America/Los_Angeles",
-                            "America/Louisville",
-                            "America/Martinique",
-                            "America/Mazatlan",
-                            "America/Mendoza",
-                            "America/Menominee",
-                            "America/Merida",
-                            "America/Mexico_City",
-                            "America/Miquelon",
-                            "America/Moncton",
-                            "America/Monterrey",
-                            "America/Montevideo",
-                            "America/Montreal",
-                            "America/Montserrat",
-                            "America/Nassau",
-                            "America/New_York",
-                            "America/Panama",
-                            "America/Phoenix",
-                            "America/Port-au-Prince",
-                            "America/Port_of_Spain",
-                            "America/Regina",
-                            "America/Santiago",
-                            "America/Santo_Domingo",
-                            "America/Sao_Paulo",
-                            "America/Thule",
-                            "America/Thunder_Bay",
-                            "America/Tijuana",
-                            "America/Toronto",
-                            "America/Vancouver",
-                            "America/Winnipeg",
-                            "America/Yellowknife",
-                            "Antarctica/South_Pole",
-                            "Arctic/Longyearbyen",
-                            "Asia/Amman",
-                            "Asia/Baghdad",
-                            "Asia/Bahrain",
-                            "Asia/Bangkok",
-                            "Asia/Beirut",
-                            "Asia/Brunei",
-                            "Asia/Calcutta",
-                            "Asia/Colombo",
-                            "Asia/Dacca",
-                            "Asia/Damascus",
-                            "Asia/Dhaka",
-                            "Asia/Dubai",
-                            "Asia/Gaza",
-                            "Asia/Hong_Kong",
-                            "Asia/Istanbul",
-                            "Asia/Jakarta",
-                            "Asia/Jerusalem",
-                            "Asia/Kabul",
-                            "Asia/Katmandu",
-                            "Asia/Kuala_Lumpur",
-                            "Asia/Kuching",
-                            "Asia/Kuwait",
-                            "Asia/Macau",
-                            "Asia/Manila",
-                            "Asia/Muscat",
-                            "Asia/Phnom_Penh",
-                            "Asia/Rangoon",
-                            "Asia/Riyadh",
-                            "Asia/Saigon",
-                            "Asia/Seoul",
-                            "Asia/Shanghai",
-                            "Asia/Singapore",
-                            "Asia/Taipei",
-                            "Asia/Tehran",
-                            "Asia/Tel_Aviv",
-                            "Asia/Thimphu",
-                            "Asia/Tokyo",
-                            "Asia/Ulan_Bator",
-                            "Asia/Vientiane",
-                            "Asia/Vladivostok",
-                            "Atlantic/Azores",
-                            "Atlantic/Bermuda",
-                            "Atlantic/Canary",
-                            "Atlantic/Cape_Verde",
-                            "Atlantic/Faeroe",
-                            "Atlantic/Reykjavik",
-                            "Australia/ACT",
-                            "Australia/Adelaide",
-                            "Australia/Brisbane",
-                            "Australia/Canberra",
-                            "Australia/Darwin",
-                            "Australia/LHI",
-                            "Australia/Melbourne",
-                            "Australia/North",
-                            "Australia/NSW",
-                            "Australia/Perth",
-                            "Australia/Queensland",
-                            "Australia/South",
-                            "Australia/Sydney",
-                            "Australia/Tasmania",
-                            "Australia/Victoria",
-                            "Australia/West",
-                            "Canada/Atlantic",
-                            "Canada/Central",
-                            "Canada/Eastern",
-                            "Canada/Mountain",
-                            "Canada/Newfoundland",
-                            "Canada/Pacific",
-                            "Canada/Saskatchewan",
-                            "Canada/Yukon",
-                            "Cuba",
-                            "Etc/GMT",
-                            "Etc/GMT+1",
-                            "Etc/GMT+10",
-                            "Etc/GMT+11",
-                            "Etc/GMT+12",
-                            "Etc/GMT+2",
-                            "Etc/GMT+3",
-                            "Etc/GMT+4",
-                            "Etc/GMT+5",
-                            "Etc/GMT+6",
-                            "Etc/GMT+7",
-                            "Etc/GMT+8",
-                            "Etc/GMT+9",
-                            "Etc/GMT-1",
-                            "Etc/GMT-10",
-                            "Etc/GMT-11",
-                            "Etc/GMT-12",
-                            "Etc/GMT-13",
-                            "Etc/GMT-14",
-                            "Etc/GMT-2",
-                            "Etc/GMT-3",
-                            "Etc/GMT-4",
-                            "Etc/GMT-5",
-                            "Etc/GMT-6",
-                            "Etc/GMT-7",
-                            "Etc/GMT-8",
-                            "Etc/GMT-9",
-                            "Etc/Greenwich",
-                            "Europe/Amsterdam",
-                            "Europe/Athens",
-                            "Europe/Belfast",
-                            "Europe/Belgrade",
-                            "Europe/Berlin",
-                            "Europe/Brussels",
-                            "Europe/Bucharest",
-                            "Europe/Budapest",
-                            "Europe/Copenhagen",
-                            "Europe/Dublin",
-                            "Europe/Helsinki",
-                            "Europe/Istanbul",
-                            "Europe/Kiev",
-                            "Europe/Lisbon",
-                            "Europe/Ljubljana",
-                            "Europe/London",
-                            "Europe/Madrid",
-                            "Europe/Malta",
-                            "Europe/Monaco",
-                            "Europe/Moscow",
-                            "Europe/Oslo",
-                            "Europe/Paris",
-                            "Europe/Prague",
-                            "Europe/Rome",
-                            "Europe/Sofia",
-                            "Europe/Stockholm",
-                            "Europe/Vienna",
-                            "Europe/Warsaw",
-                            "Europe/Zurich",
-                            "Greenwich",
-                            "Pacific/Auckland",
-                            "Pacific/Easter",
-                            "Pacific/Fiji",
-                            "Pacific/Galapagos",
-                            "Pacific/Gambier",
-                            "Pacific/Guam",
-                            "Pacific/Honolulu",
-                            "Pacific/Marquesas",
-                            "Pacific/Midway",
-                            "Pacific/Palau",
-                            "Pacific/Rarotonga",
-                            "Pacific/Tahiti"
-                      ]
+                      "description": "Time zone the meeting was scheduled in, such as `US/Eastern`. Used for the calendar invitation."
                 },
                 "meeting-schedule-duration-minutes": {
                       "type": "number",
-                      "description": "meeting-schedule-duration-minutes"
+                      "description": "Planned length in minutes. Defaults to `60` on a create."
                 },
                 "meeting-schedule-recurrence-rule": {
                       "type": "string",
-                      "description": "meeting-schedule-recurrence-rule"
+                      "description": "Repeat rule for a recurring meeting, as an RFC 5545 `RRULE` (with any `EXDATE`), such as `FREQ=WEEKLY;BYDAY=TU;UNTIL=20261215T150000Z`. An `UNTIL` without a trailing `Z` is read as UTC. Empty for a one-time meeting."
+                },
+                "limits-max-participants": {
+                      "type": "number",
+                      "description": "Most participants the meeting allows. Omit it on a create to use the domain's configured maximum for the meeting type."
                 },
                 "meeting-video-allowed-from": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "Who can share video. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
-                            "yes",
-                            "no"
+                            "everyone",
+                            "host",
+                            "presenters"
                       ]
                 },
                 "meeting-audio-allowed-from": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "Who can share audio. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
-                            "yes",
-                            "no"
+                            "everyone",
+                            "host",
+                            "presenters"
                       ]
                 },
                 "meeting-chat-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` turns on chat in the meeting. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
                 },
                 "meeting-chat-history-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` keeps the chat history after the meeting. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
                 },
                 "meeting-question-answer-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` turns on questions and answers. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
                 },
                 "meeting-recording-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` records the meeting. On a change, turning it on starts recording now unless `meeting-require-host-to-begin-enabled` is sent as `1`, and turning it off stops recording. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
                 },
                 "meeting-join-require-invite-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` admits only invited attendees. `0` lets anyone with the meeting ID join while the meeting is not locked. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
                 },
                 "meeting-join-require-passcode-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "type": "number",
+                      "description": "`1` requires `meeting-passcode` to join. Sending `0` clears the passcode. Allowed values: 0, 1",
                       "enum": [
-                            "yes",
-                            "no"
+                            0,
+                            1
                       ]
-                },
-                "meeting-require-host-to-begin-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-allow-changes-from-hosts-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-hide-attendee-list-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-lock-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-lock-allowed": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-room-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "meeting-dial-in-number-blob": {
-                      "type": "string",
-                      "description": "meeting-dial-in-number-blob"
                 },
                 "meeting-passcode": {
                       "type": "string",
-                      "description": "meeting-passcode"
+                      "description": "Passcode attendees enter to join. Kept only when `meeting-join-require-passcode-enabled` is `1`. A masked value (asterisks, as a read returns it to someone who may not see the passcode) is refused on a create and leaves the passcode unchanged on a change."
                 },
-                "meeting-previous-presenter-attendee-id": {
+                "meeting-require-host-to-begin-enabled": {
+                      "type": "number",
+                      "description": "`1` keeps attendees waiting until a host joins. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-allow-changes-from-hosts-enabled": {
+                      "type": "number",
+                      "description": "`1` lets hosts other than the owner change the meeting in the app. The API does not check it: every host can change the meeting through the API. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-hide-attendee-list-enabled": {
+                      "type": "number",
+                      "description": "`1` hides the attendee list from attendees who are not hosts or presenters. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-lock-enabled": {
+                      "type": "number",
+                      "description": "`1` locks the meeting: only attendees already connected can stay or rejoin. Takes effect on a change. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-room-enabled": {
+                      "type": "number",
+                      "description": "`1` makes this a permanent room rather than a scheduled meeting. List rooms with `type=room`. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-status": {
                       "type": "string",
-                      "description": "meeting-previous-presenter-attendee-id"
+                      "description": "Set on a change only. `started` starts recording when recording is on. `ended` ends the current instance and resets the meeting. Allowed values: \"started\", \"ended\"",
+                      "enum": [
+                            "started",
+                            "ended"
+                      ]
+                },
+                "meeting-video-layout": {
+                      "type": "string",
+                      "description": "Default video layout for the meeting."
                 },
                 "meeting-presenter-attendee-id": {
                       "type": "string",
-                      "description": "meeting-presenter-attendee-id"
+                      "description": "Attendee ID of the attendee presenting now. Empty when nobody is."
                 },
-                "meeting-video-layout ": {
-                      "type": "number",
-                      "description": "meeting-video-layout "
-                },
-                "last-modified-datetime": {
+                "meeting-dial-in-number-blob": {
                       "type": "string",
-                      "description": "This is the time stamp that the formated via RFC 3339. Allowed values: \"YYYY-MM-DDTHH:MM:SS.ssZ\"",
-                      "enum": [
-                            "YYYY-MM-DDTHH:MM:SS.ssZ"
-                      ]
+                      "description": "Phone numbers audio-only attendees dial to join. Filled from the domain's configuration when a meeting is created without an ID."
                 },
-                "meeting-instance-actual-start-datetime": {
+                "meeting-registration-id": {
                       "type": "string",
-                      "description": "This is the time stamp that the formated via RFC 3339. Allowed values: \"YYYY-MM-DDTHH:MM:SS.ssZ\"",
-                      "enum": [
-                            "YYYY-MM-DDTHH:MM:SS.ssZ"
-                      ]
+                      "description": "Registration ID guests use to register for a `presentation` meeting: 8 letters or digits. Generated when omitted or not in that form. Ignored for other meeting types."
+                },
+                "attendees": {
+                      "type": "array",
+                      "description": "People to invite. On a change, the list replaces the stored one: attendees left out are removed, and new ones are invited by email."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "id",
-                "meeting-name"
+                "meeting"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/meetings/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
+    const pathParamNames = ['domain', 'user', 'meeting'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'current_timestamp', 'meeting-calendar-invite-id', 'meeting-ordinal-sequence', 'core-server', 'chat-session-id', 'meeting-registration-id', 'meeting-instance-id', 'meeting-name', 'meeting-type', 'limits-max-participants', 'meeting-status', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-lock-allowed', 'meeting-room-enabled', 'meeting-dial-in-number-blob', 'meeting-passcode', 'meeting-previous-presenter-attendee-id', 'meeting-presenter-attendee-id', 'meeting-video-layout ', 'last-modified-datetime', 'meeting-instance-actual-start-datetime'];
+    const bodyParamNames = ['meeting-name', 'description', 'meeting-type', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'limits-max-participants', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-passcode', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-room-enabled', 'meeting-status', 'meeting-video-layout', 'meeting-presenter-attendee-id', 'meeting-dial-in-number-blob', 'meeting-registration-id', 'attendees'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
     }
     const response = await client.request({
       method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/meetings/{id}',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}',
       pathParams,
       body,
     });
@@ -547,17 +310,51 @@ export const post_domains_by_domain_users_by_user_meetings_by_id: ToolDefinition
 export const get_domains_by_domain_users_by_user_meetings: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_meetings',
-    description: 'Read Meetings for User — [GET /domains/{domain}/users/{user}/meetings]',
+    description: 'List meetings for user — Returns the upcoming meetings a user owns or is invited to, soonest first.  Requires Basic User scope or higher. Any user can list the meetings of another user in its own domain, and Office Manager, Reseller, and Super User can list them in the domains they manage. `meeting-passcode` is shown only to the meeting\\\'s owner, its hosts, and Office Manager or higher for its domain. Everyone else gets it masked with asterisks; `include-secret=yes` does not change that.  Each occurrence of a recurring meeting is its own row, with `meeting-instance-schedule-start-datetime` set. Meetings and occurrences whose scheduled end has passed are left out. `type=room` returns the user\\\'s permanent rooms instead. `limit` defaults to `100`.  For identity fields only, use `GET /domains/{domain}/users/{user}/meetings/list`. — [GET /domains/{domain}/users/{user}/meetings]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The list holds meetings this user owns or is an attendee of."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "`room` returns the user's permanent rooms, whatever their schedule. `meeting` returns scheduled meetings only. Omit it for both. Allowed values: \"room\", \"meeting\"",
+                      "enum": [
+                            "room",
+                            "meeting"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Leaves out meetings the user owns that start at or before this time, as Unix seconds or an RFC 3339 date and time. Meetings the user is invited to are not filtered by it. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Not applied with `type=room` or `return_instances=false`. Default: 100",
+                      "default": 100
+                },
+                "offset": {
+                      "type": "number",
+                      "description": "Rows to skip before the first one returned, for paging. Not applied with `type=room` or `return_instances=false`."
+                },
+                "return_instances": {
+                      "type": "string",
+                      "description": "`false` returns one row per meeting, including meetings already over, without sorting or paging, instead of one row per upcoming occurrence. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "include_attendees": {
+                      "type": "string",
+                      "description": "Any value adds `attendees`, `attendee_count`, and `active_attendee_count` to each row."
                 }
           },
           "required": [
@@ -566,16 +363,28 @@ export const get_domains_by_domain_users_by_user_meetings: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['type', 'start', 'limit', 'offset', 'return_instances', 'include_attendees'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/meetings',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -590,313 +399,57 @@ export const get_domains_by_domain_users_by_user_meetings: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_meetings: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_meetings',
-    description: 'Create a Meeting — Create a new meeting wit — [POST /domains/{domain}/users/{user}/meetings]',
+    description: 'Create meeting — Schedules a meeting, or creates a permanent room, with a generated meeting ID.  Requires a token for the user in the path, or Office Manager scope or higher for the domain. A Basic User creates meetings only for itself.  The meeting is owned by the user in the path. Creating it also sets up its audio bridge and invites everyone in `attendees` by email. Omitted settings take their defaults: the start is now, the length is 60 minutes, and the participant limit comes from the domain\\\'s configuration. The response is the new meeting as a one-item array. When the create has not been applied yet, the item holds the fields that were accepted.  To choose the ID yourself, reserve one with `POST /domains/{domain}/users/{user}/meetings/getId`, then create the meeting with `POST /domains/{domain}/users/{user}/meetings/{meeting}`. — [POST /domains/{domain}/users/{user}/meetings]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "description": {
-                      "type": "string",
-                      "description": "The description about the meeting"
-                },
-                "current_timestamp": {
-                      "type": "string",
-                      "description": "The current timestamp value of the meeting"
-                },
-                "meeting-calendar-invite-id": {
-                      "type": "string",
-                      "description": "The read only value for the meeting to use with calendar integration"
-                },
-                "meeting-ordinal-sequence": {
-                      "type": "number",
-                      "description": "The read only value for the meeting with manage the calendar integrations"
-                },
-                "core-server": {
-                      "type": "string",
-                      "description": "The core server which the meeting was created on and events are driven from"
-                },
-                "chat-session-id": {
-                      "type": "string",
-                      "description": "The read only value identifying the meeting chat room session"
-                },
-                "meeting-registration-id": {
-                      "type": "string",
-                      "description": "The token value for guest to use to register for a webinar"
-                },
-                "meeting-instance-id": {
-                      "type": "string",
-                      "description": "The instance value of a meeting with used to associate with a recording or differentiating recurring meetings"
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The new meeting's owner."
                 },
                 "meeting-name": {
                       "type": "string",
-                      "description": "The descriptive name of the meeting"
+                      "description": "Name of the meeting, shown in invitations and in the app. Required on a create."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Longer text about the meeting, shown in invitations."
                 },
                 "meeting-type": {
                       "type": "string",
-                      "description": "The meeting category either the standard meeting 'conference' or a webinar style meeting by using 'presentation'. Allowed values: \"presentation\", \"conference\". Default: \"conference\"",
+                      "description": "`conference` is a meeting where everyone can take part. `presentation` is a webinar: guests register themselves with the meeting's `meeting-registration-id`. Allowed values: \"conference\", \"presentation\"",
                       "enum": [
-                            "presentation",
-                            "conference"
-                      ],
-                      "default": "conference"
-                },
-                "limits-max-participants": {
-                      "type": "number",
-                      "description": "The maximum number of participants allows in the meeting"
-                },
-                "meeting-status": {
-                      "type": "string",
-                      "description": "The current status of the meeting"
+                            "conference",
+                            "presentation"
+                      ]
                 },
                 "meeting-schedule-start-datetime": {
                       "type": "string",
-                      "description": "The scheduled start time for the meeting"
+                      "description": "When the meeting starts, in RFC 3339 form. Unix seconds are also accepted. Omit it on a create to start the meeting now."
                 },
                 "timezone": {
                       "type": "string",
-                      "description": "This is the time zone that the user is primarily located in. Allowed values: \"US/Alaska\", \"US/Central\", \"US/Eastern\", \"US/Hawaii\", \"US/Mountain\", \"US/Pacific\", \"Africa/Addis_Ababa\", \"Africa/Algiers\", \"Africa/Brazzaville\", \"Africa/Cairo\", \"Africa/Casablanca\", \"Africa/Dakar\", \"Africa/Dar_es_Salaam\", \"Africa/Djibouti\", \"Africa/Johannesburg\", \"Africa/Khartoum\", \"Africa/Kigali\", \"Africa/Kinshasa\", \"Africa/Lagos\", \"Africa/Nairobi\", \"Africa/Timbuktu\", \"Africa/Tripoli\", \"Africa/Tunis\", \"America/Antigua\", \"America/Aruba\", \"America/Belize\", \"America/Bogota\", \"America/Buenos_Aires\", \"America/Cancun\", \"America/Caracas\", \"America/Cayman\", \"America/Chihuahua\", \"America/Costa_Rica\", \"America/Denver\", \"America/Detroit\", \"America/Edmonton\", \"America/El_Salvador\", \"America/Ensenada\", \"America/Grenada\", \"America/Guadeloupe\", \"America/Guatemala\", \"America/Havana\", \"America/Indianapolis\", \"America/Jamaica\", \"America/Juneau\", \"America/La_Paz\", \"America/Lima\", \"America/Los_Angeles\", \"America/Louisville\", \"America/Martinique\", \"America/Mazatlan\", \"America/Mendoza\", \"America/Menominee\", \"America/Merida\", \"America/Mexico_City\", \"America/Miquelon\", \"America/Moncton\", \"America/Monterrey\", \"America/Montevideo\", \"America/Montreal\", \"America/Montserrat\", \"America/Nassau\", \"America/New_York\", \"America/Panama\", \"America/Phoenix\", \"America/Port-au-Prince\", \"America/Port_of_Spain\", \"America/Regina\", \"America/Santiago\", \"America/Santo_Domingo\", \"America/Sao_Paulo\", \"America/Thule\", \"America/Thunder_Bay\", \"America/Tijuana\", \"America/Toronto\", \"America/Vancouver\", \"America/Winnipeg\", \"America/Yellowknife\", \"Antarctica/South_Pole\", \"Arctic/Longyearbyen\", \"Asia/Amman\", \"Asia/Baghdad\", \"Asia/Bahrain\", \"Asia/Bangkok\", \"Asia/Beirut\", \"Asia/Brunei\", \"Asia/Calcutta\", \"Asia/Colombo\", \"Asia/Dacca\", \"Asia/Damascus\", \"Asia/Dhaka\", \"Asia/Dubai\", \"Asia/Gaza\", \"Asia/Hong_Kong\", \"Asia/Istanbul\", \"Asia/Jakarta\", \"Asia/Jerusalem\", \"Asia/Kabul\", \"Asia/Katmandu\", \"Asia/Kuala_Lumpur\", \"Asia/Kuching\", \"Asia/Kuwait\", \"Asia/Macau\", \"Asia/Manila\", \"Asia/Muscat\", \"Asia/Phnom_Penh\", \"Asia/Rangoon\", \"Asia/Riyadh\", \"Asia/Saigon\", \"Asia/Seoul\", \"Asia/Shanghai\", \"Asia/Singapore\", \"Asia/Taipei\", \"Asia/Tehran\", \"Asia/Tel_Aviv\", \"Asia/Thimphu\", \"Asia/Tokyo\", \"Asia/Ulan_Bator\", \"Asia/Vientiane\", \"Asia/Vladivostok\", \"Atlantic/Azores\", \"Atlantic/Bermuda\", \"Atlantic/Canary\", \"Atlantic/Cape_Verde\", \"Atlantic/Faeroe\", \"Atlantic/Reykjavik\", \"Australia/ACT\", \"Australia/Adelaide\", \"Australia/Brisbane\", \"Australia/Canberra\", \"Australia/Darwin\", \"Australia/LHI\", \"Australia/Melbourne\", \"Australia/North\", \"Australia/NSW\", \"Australia/Perth\", \"Australia/Queensland\", \"Australia/South\", \"Australia/Sydney\", \"Australia/Tasmania\", \"Australia/Victoria\", \"Australia/West\", \"Canada/Atlantic\", \"Canada/Central\", \"Canada/Eastern\", \"Canada/Mountain\", \"Canada/Newfoundland\", \"Canada/Pacific\", \"Canada/Saskatchewan\", \"Canada/Yukon\", \"Cuba\", \"Etc/GMT\", \"Etc/GMT+1\", \"Etc/GMT+10\", \"Etc/GMT+11\", \"Etc/GMT+12\", \"Etc/GMT+2\", \"Etc/GMT+3\", \"Etc/GMT+4\", \"Etc/GMT+5\", \"Etc/GMT+6\", \"Etc/GMT+7\", \"Etc/GMT+8\", \"Etc/GMT+9\", \"Etc/GMT-1\", \"Etc/GMT-10\", \"Etc/GMT-11\", \"Etc/GMT-12\", \"Etc/GMT-13\", \"Etc/GMT-14\", \"Etc/GMT-2\", \"Etc/GMT-3\", \"Etc/GMT-4\", \"Etc/GMT-5\", \"Etc/GMT-6\", \"Etc/GMT-7\", \"Etc/GMT-8\", \"Etc/GMT-9\", \"Etc/Greenwich\", \"Europe/Amsterdam\", \"Europe/Athens\", \"Europe/Belfast\", \"Europe/Belgrade\", \"Europe/Berlin\", \"Europe/Brussels\", \"Europe/Bucharest\", \"Europe/Budapest\", \"Europe/Copenhagen\", \"Europe/Dublin\", \"Europe/Helsinki\", \"Europe/Istanbul\", \"Europe/Kiev\", \"Europe/Lisbon\", \"Europe/Ljubljana\", \"Europe/London\", \"Europe/Madrid\", \"Europe/Malta\", \"Europe/Monaco\", \"Europe/Moscow\", \"Europe/Oslo\", \"Europe/Paris\", \"Europe/Prague\", \"Europe/Rome\", \"Europe/Sofia\", \"Europe/Stockholm\", \"Europe/Vienna\", \"Europe/Warsaw\", \"Europe/Zurich\", \"Greenwich\", \"Pacific/Auckland\", \"Pacific/Easter\", \"Pacific/Fiji\", \"Pacific/Galapagos\", \"Pacific/Gambier\", \"Pacific/Guam\", \"Pacific/Honolulu\", \"Pacific/Marquesas\", \"Pacific/Midway\", \"Pacific/Palau\", \"Pacific/Rarotonga\", \"Pacific/Tahiti\"",
-                      "enum": [
-                            "US/Alaska",
-                            "US/Central",
-                            "US/Eastern",
-                            "US/Hawaii",
-                            "US/Mountain",
-                            "US/Pacific",
-                            "Africa/Addis_Ababa",
-                            "Africa/Algiers",
-                            "Africa/Brazzaville",
-                            "Africa/Cairo",
-                            "Africa/Casablanca",
-                            "Africa/Dakar",
-                            "Africa/Dar_es_Salaam",
-                            "Africa/Djibouti",
-                            "Africa/Johannesburg",
-                            "Africa/Khartoum",
-                            "Africa/Kigali",
-                            "Africa/Kinshasa",
-                            "Africa/Lagos",
-                            "Africa/Nairobi",
-                            "Africa/Timbuktu",
-                            "Africa/Tripoli",
-                            "Africa/Tunis",
-                            "America/Antigua",
-                            "America/Aruba",
-                            "America/Belize",
-                            "America/Bogota",
-                            "America/Buenos_Aires",
-                            "America/Cancun",
-                            "America/Caracas",
-                            "America/Cayman",
-                            "America/Chihuahua",
-                            "America/Costa_Rica",
-                            "America/Denver",
-                            "America/Detroit",
-                            "America/Edmonton",
-                            "America/El_Salvador",
-                            "America/Ensenada",
-                            "America/Grenada",
-                            "America/Guadeloupe",
-                            "America/Guatemala",
-                            "America/Havana",
-                            "America/Indianapolis",
-                            "America/Jamaica",
-                            "America/Juneau",
-                            "America/La_Paz",
-                            "America/Lima",
-                            "America/Los_Angeles",
-                            "America/Louisville",
-                            "America/Martinique",
-                            "America/Mazatlan",
-                            "America/Mendoza",
-                            "America/Menominee",
-                            "America/Merida",
-                            "America/Mexico_City",
-                            "America/Miquelon",
-                            "America/Moncton",
-                            "America/Monterrey",
-                            "America/Montevideo",
-                            "America/Montreal",
-                            "America/Montserrat",
-                            "America/Nassau",
-                            "America/New_York",
-                            "America/Panama",
-                            "America/Phoenix",
-                            "America/Port-au-Prince",
-                            "America/Port_of_Spain",
-                            "America/Regina",
-                            "America/Santiago",
-                            "America/Santo_Domingo",
-                            "America/Sao_Paulo",
-                            "America/Thule",
-                            "America/Thunder_Bay",
-                            "America/Tijuana",
-                            "America/Toronto",
-                            "America/Vancouver",
-                            "America/Winnipeg",
-                            "America/Yellowknife",
-                            "Antarctica/South_Pole",
-                            "Arctic/Longyearbyen",
-                            "Asia/Amman",
-                            "Asia/Baghdad",
-                            "Asia/Bahrain",
-                            "Asia/Bangkok",
-                            "Asia/Beirut",
-                            "Asia/Brunei",
-                            "Asia/Calcutta",
-                            "Asia/Colombo",
-                            "Asia/Dacca",
-                            "Asia/Damascus",
-                            "Asia/Dhaka",
-                            "Asia/Dubai",
-                            "Asia/Gaza",
-                            "Asia/Hong_Kong",
-                            "Asia/Istanbul",
-                            "Asia/Jakarta",
-                            "Asia/Jerusalem",
-                            "Asia/Kabul",
-                            "Asia/Katmandu",
-                            "Asia/Kuala_Lumpur",
-                            "Asia/Kuching",
-                            "Asia/Kuwait",
-                            "Asia/Macau",
-                            "Asia/Manila",
-                            "Asia/Muscat",
-                            "Asia/Phnom_Penh",
-                            "Asia/Rangoon",
-                            "Asia/Riyadh",
-                            "Asia/Saigon",
-                            "Asia/Seoul",
-                            "Asia/Shanghai",
-                            "Asia/Singapore",
-                            "Asia/Taipei",
-                            "Asia/Tehran",
-                            "Asia/Tel_Aviv",
-                            "Asia/Thimphu",
-                            "Asia/Tokyo",
-                            "Asia/Ulan_Bator",
-                            "Asia/Vientiane",
-                            "Asia/Vladivostok",
-                            "Atlantic/Azores",
-                            "Atlantic/Bermuda",
-                            "Atlantic/Canary",
-                            "Atlantic/Cape_Verde",
-                            "Atlantic/Faeroe",
-                            "Atlantic/Reykjavik",
-                            "Australia/ACT",
-                            "Australia/Adelaide",
-                            "Australia/Brisbane",
-                            "Australia/Canberra",
-                            "Australia/Darwin",
-                            "Australia/LHI",
-                            "Australia/Melbourne",
-                            "Australia/North",
-                            "Australia/NSW",
-                            "Australia/Perth",
-                            "Australia/Queensland",
-                            "Australia/South",
-                            "Australia/Sydney",
-                            "Australia/Tasmania",
-                            "Australia/Victoria",
-                            "Australia/West",
-                            "Canada/Atlantic",
-                            "Canada/Central",
-                            "Canada/Eastern",
-                            "Canada/Mountain",
-                            "Canada/Newfoundland",
-                            "Canada/Pacific",
-                            "Canada/Saskatchewan",
-                            "Canada/Yukon",
-                            "Cuba",
-                            "Etc/GMT",
-                            "Etc/GMT+1",
-                            "Etc/GMT+10",
-                            "Etc/GMT+11",
-                            "Etc/GMT+12",
-                            "Etc/GMT+2",
-                            "Etc/GMT+3",
-                            "Etc/GMT+4",
-                            "Etc/GMT+5",
-                            "Etc/GMT+6",
-                            "Etc/GMT+7",
-                            "Etc/GMT+8",
-                            "Etc/GMT+9",
-                            "Etc/GMT-1",
-                            "Etc/GMT-10",
-                            "Etc/GMT-11",
-                            "Etc/GMT-12",
-                            "Etc/GMT-13",
-                            "Etc/GMT-14",
-                            "Etc/GMT-2",
-                            "Etc/GMT-3",
-                            "Etc/GMT-4",
-                            "Etc/GMT-5",
-                            "Etc/GMT-6",
-                            "Etc/GMT-7",
-                            "Etc/GMT-8",
-                            "Etc/GMT-9",
-                            "Etc/Greenwich",
-                            "Europe/Amsterdam",
-                            "Europe/Athens",
-                            "Europe/Belfast",
-                            "Europe/Belgrade",
-                            "Europe/Berlin",
-                            "Europe/Brussels",
-                            "Europe/Bucharest",
-                            "Europe/Budapest",
-                            "Europe/Copenhagen",
-                            "Europe/Dublin",
-                            "Europe/Helsinki",
-                            "Europe/Istanbul",
-                            "Europe/Kiev",
-                            "Europe/Lisbon",
-                            "Europe/Ljubljana",
-                            "Europe/London",
-                            "Europe/Madrid",
-                            "Europe/Malta",
-                            "Europe/Monaco",
-                            "Europe/Moscow",
-                            "Europe/Oslo",
-                            "Europe/Paris",
-                            "Europe/Prague",
-                            "Europe/Rome",
-                            "Europe/Sofia",
-                            "Europe/Stockholm",
-                            "Europe/Vienna",
-                            "Europe/Warsaw",
-                            "Europe/Zurich",
-                            "Greenwich",
-                            "Pacific/Auckland",
-                            "Pacific/Easter",
-                            "Pacific/Fiji",
-                            "Pacific/Galapagos",
-                            "Pacific/Gambier",
-                            "Pacific/Guam",
-                            "Pacific/Honolulu",
-                            "Pacific/Marquesas",
-                            "Pacific/Midway",
-                            "Pacific/Palau",
-                            "Pacific/Rarotonga",
-                            "Pacific/Tahiti"
-                      ]
+                      "description": "Time zone the meeting was scheduled in, such as `US/Eastern`. Used for the calendar invitation."
                 },
                 "meeting-schedule-duration-minutes": {
                       "type": "number",
-                      "description": "The scheduled length of the meeting"
+                      "description": "Planned length in minutes. Defaults to `60` on a create."
                 },
                 "meeting-schedule-recurrence-rule": {
                       "type": "string",
-                      "description": "The read only value describing the recuring nature of the meeting using RFC 5545"
+                      "description": "Repeat rule for a recurring meeting, as an RFC 5545 `RRULE` (with any `EXDATE`), such as `FREQ=WEEKLY;BYDAY=TU;UNTIL=20261215T150000Z`. An `UNTIL` without a trailing `Z` is read as UTC. Empty for a one-time meeting."
+                },
+                "limits-max-participants": {
+                      "type": "number",
+                      "description": "Most participants the meeting allows. Omit it on a create to use the domain's configured maximum for the meeting type."
                 },
                 "meeting-video-allowed-from": {
                       "type": "string",
-                      "description": "The value indicating which attendee types can share video. Allowed values: \"everyone\", \"host\", \"presenters\"",
+                      "description": "Who can share video. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
                             "everyone",
                             "host",
@@ -905,7 +458,7 @@ export const post_domains_by_domain_users_by_user_meetings: ToolDefinition = {
                 },
                 "meeting-audio-allowed-from": {
                       "type": "string",
-                      "description": "The value indicating which attendee types can share audio. Allowed values: \"everyone\", \"host\", \"presenters\"",
+                      "description": "Who can share audio. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
                             "everyone",
                             "host",
@@ -914,107 +467,136 @@ export const post_domains_by_domain_users_by_user_meetings: ToolDefinition = {
                 },
                 "meeting-chat-enabled": {
                       "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
+                      "description": "`1` turns on chat in the meeting. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-chat-history-enabled": {
                       "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
+                      "description": "`1` keeps the chat history after the meeting. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-question-answer-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` turns on questions and answers. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-recording-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` records the meeting. On a change, turning it on starts recording now unless `meeting-require-host-to-begin-enabled` is sent as `1`, and turning it off stops recording. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-join-require-invite-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` admits only invited attendees. `0` lets anyone with the meeting ID join while the meeting is not locked. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-join-require-passcode-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-require-host-to-begin-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-allow-changes-from-hosts-enabled": {
-                      "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
-                },
-                "meeting-hide-attendee-list-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-lock-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-lock-allowed": {
-                      "type": "string",
-                      "description": "The value indicating if the meeting is allowed to be locked"
-                },
-                "meeting-room-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-dial-in-number-blob": {
-                      "type": "string",
-                      "description": "The number for audio-only users to dial in to the meeting"
+                      "description": "`1` requires `meeting-passcode` to join. Sending `0` clears the passcode. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-passcode": {
                       "type": "string",
-                      "description": "The passcode used to enter meeting if it is required"
+                      "description": "Passcode attendees enter to join. Kept only when `meeting-join-require-passcode-enabled` is `1`. A masked value (asterisks, as a read returns it to someone who may not see the passcode) is refused on a create and leaves the passcode unchanged on a change."
                 },
-                "meeting-previous-presenter-attendee-id": {
+                "meeting-require-host-to-begin-enabled": {
+                      "type": "number",
+                      "description": "`1` keeps attendees waiting until a host joins. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-allow-changes-from-hosts-enabled": {
+                      "type": "number",
+                      "description": "`1` lets hosts other than the owner change the meeting in the app. The API does not check it: every host can change the meeting through the API. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-hide-attendee-list-enabled": {
+                      "type": "number",
+                      "description": "`1` hides the attendee list from attendees who are not hosts or presenters. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-lock-enabled": {
+                      "type": "number",
+                      "description": "`1` locks the meeting: only attendees already connected can stay or rejoin. Takes effect on a change. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-room-enabled": {
+                      "type": "number",
+                      "description": "`1` makes this a permanent room rather than a scheduled meeting. List rooms with `type=room`. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-status": {
                       "type": "string",
-                      "description": "The value of the previous attendee that prsented their screen"
+                      "description": "Set on a change only. `started` starts recording when recording is on. `ended` ends the current instance and resets the meeting. Allowed values: \"started\", \"ended\"",
+                      "enum": [
+                            "started",
+                            "ended"
+                      ]
+                },
+                "meeting-video-layout": {
+                      "type": "string",
+                      "description": "Default video layout for the meeting."
                 },
                 "meeting-presenter-attendee-id": {
                       "type": "string",
-                      "description": "The value of the current attendee that is sharing their screen"
+                      "description": "Attendee ID of the attendee presenting now. Empty when nobody is."
                 },
-                "meeting-video-layout ": {
+                "meeting-dial-in-number-blob": {
                       "type": "string",
-                      "description": "The current meeting layout default for entire meeting. Allowed values: \"spotlight\", \"conversation\", \"grid\"",
-                      "enum": [
-                            "spotlight",
-                            "conversation",
-                            "grid"
-                      ]
+                      "description": "Phone numbers audio-only attendees dial to join. Filled from the domain's configuration when a meeting is created without an ID."
                 },
-                "last-modified-datetime": {
+                "meeting-registration-id": {
                       "type": "string",
-                      "description": "The timestamp of the last time the meeting was modified"
+                      "description": "Registration ID guests use to register for a `presentation` meeting: 8 letters or digits. Generated when omitted or not in that form. Ignored for other meeting types."
                 },
-                "meeting-instance-actual-start-datetime": {
-                      "type": "string",
-                      "description": "The timestamp the current meeting instance was started"
+                "attendees": {
+                      "type": "array",
+                      "description": "People to invite. On a change, the list replaces the stored one: attendees left out are removed, and new ones are invited by email."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "current_timestamp",
-                "meeting-status",
-                "meeting-schedule-start-datetime",
-                "timezone",
-                "meeting-room-enabled"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/meetings',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -1022,7 +604,7 @@ export const post_domains_by_domain_users_by_user_meetings: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'current_timestamp', 'meeting-calendar-invite-id', 'meeting-ordinal-sequence', 'core-server', 'chat-session-id', 'meeting-registration-id', 'meeting-instance-id', 'meeting-name', 'meeting-type', 'limits-max-participants', 'meeting-status', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-lock-allowed', 'meeting-room-enabled', 'meeting-dial-in-number-blob', 'meeting-passcode', 'meeting-previous-presenter-attendee-id', 'meeting-presenter-attendee-id', 'meeting-video-layout ', 'last-modified-datetime', 'meeting-instance-actual-start-datetime'];
+    const bodyParamNames = ['meeting-name', 'description', 'meeting-type', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'limits-max-participants', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-passcode', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-room-enabled', 'meeting-status', 'meeting-video-layout', 'meeting-presenter-attendee-id', 'meeting-dial-in-number-blob', 'meeting-registration-id', 'attendees'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1046,17 +628,17 @@ export const post_domains_by_domain_users_by_user_meetings: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_meetings_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_meetings_count',
-    description: 'Count Domains Meetings — [GET /domains/{domain}/users/{user}/meetings/count]',
+    description: 'Count meetings in domain — Counts every meeting record in the domain in the path, for all users and in every state, including ended and cancelled meetings.  Requires Basic User scope or higher for a user in the domain. The user in the path is used only to check access; it does not narrow the count. — [GET /domains/{domain}/users/{user}/meetings/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. Used only to check access."
                 }
           },
           "required": [
@@ -1064,6 +646,12 @@ export const get_domains_by_domain_users_by_user_meetings_count: ToolDefinition 
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -1089,39 +677,45 @@ export const get_domains_by_domain_users_by_user_meetings_count: ToolDefinition 
 export const get_domains_by_domain_users_by_user_meetings_by_meeting_id_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_meetings_by_meeting_id_count',
-    description: 'Count Meeting — [GET /domains/{domain}/users/{user}/meetings/{meeting_id}/count]',
+    description: 'Count meeting — Checks whether a meeting exists in the domain in the path: `total` is `1` when it does and `0` when it does not.  When the meeting exists, access is checked against its owner, so you need list rights over the owner: any user in the owner\\\'s domain, or Office Manager, Reseller, or Super User for that domain. A meeting that does not exist is checked against the user in the path. — [GET /domains/{domain}/users/{user}/meetings/{meeting}/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. Not used to narrow the count."
                 },
-                "meeting_id": {
+                "meeting": {
                       "type": "string",
-                      "description": "Meeting Id which to query meeting total"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "meeting_id"
+                "meeting"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'meeting_id'];
+    const pathParamNames = ['domain', 'user', 'meeting'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting_id}/count',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/count',
       pathParams,
     });
 
@@ -1137,32 +731,38 @@ export const get_domains_by_domain_users_by_user_meetings_by_meeting_id_count: T
 export const post_meetings_register_by_meeting_registration_id: ToolDefinition = {
   schema: {
     name: 'post_meetings_register_by_meeting_registration_id',
-    description: 'Register Meeting — [POST /meetings/register/{meeting_registration_id}]',
+    description: 'Register for meeting — Registers a guest for a `presentation` meeting with the registration ID from the meeting\\\'s registration link, and emails the guest the meeting details.  Needs no token: the registration ID is the credential. Each client address can register 10 times a minute per registration ID; more returns `429`.  A guest whose email address is already on the meeting is not added twice. The details are emailed at most once a minute per address. The response is the meeting with only the registrant in `attendees`. `meeting-passcode` is always masked here. `PUT` on this path does the same. — [POST /meetings/register/{registration_id}]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "meeting_registration_id": {
+                "registration_id": {
                       "type": "string",
-                      "description": "meeting_registration_id"
+                      "description": "Registration ID from the meeting's registration link: 8 letters or digits, such as `k4Rt9xQ2`. It is the meeting's `meeting-registration-id`."
                 },
                 "name": {
                       "type": "string",
-                      "description": "Name of attendee"
+                      "description": "Name of the guest registering, 1 to 128 characters."
                 },
                 "email": {
                       "type": "string",
-                      "description": "Email address for attendee"
+                      "description": "Email address the meeting details are sent to. A guest already on the meeting with this address is not added again."
                 }
           },
           "required": [
-                "meeting_registration_id",
+                "registration_id",
                 "name",
                 "email"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /meetings/register/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['meeting_registration_id'];
+    const pathParamNames = ['registration_id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
@@ -1174,7 +774,7 @@ export const post_meetings_register_by_meeting_registration_id: ToolDefinition =
     }
     const response = await client.request({
       method: 'POST',
-      pathTemplate: '/meetings/register/{meeting_registration_id}',
+      pathTemplate: '/meetings/register/{registration_id}',
       pathParams,
       body,
     });
@@ -1191,293 +791,61 @@ export const post_meetings_register_by_meeting_registration_id: ToolDefinition =
 export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_meetings_by_meeting',
-    description: 'Update a Meeting — [PUT /domains/{domain}/users/{user}/meetings/{meeting}]',
+    description: 'Update meeting — Changes a meeting\\\'s settings, schedule, or attendees. Send only the fields to change.  Only the meeting\\\'s owner, its hosts, Office Manager for the meeting\\\'s domain, Reseller for its territory, and Super User can change it. Anyone else gets `403`. A host who is not the owner puts its own user in the path.  Some fields act at once: `meeting-lock-enabled` locks or unlocks the meeting for the attendees connected now, `meeting-recording-enabled` starts or stops recording, `meeting-status` `ended` ends the current instance, and `attendees` replaces the attendee list and emails the new attendees. Each change raises `meeting-ordinal-sequence` so calendar invitations update in place. Sending back the masked `meeting-passcode` a read returned leaves the passcode unchanged. A change never moves the meeting to another owner or domain.  `202` means the change is accepted and applied shortly after. — [PUT /domains/{domain}/users/{user}/meetings/{meeting}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account."
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The owner, or your own user when you are a host."
                 },
                 "meeting": {
                       "type": "string",
-                      "description": "meeting"
-                },
-                "id": {
-                      "type": "number",
-                      "description": "The meeting id"
-                },
-                "description": {
-                      "type": "string",
-                      "description": "The description about the meeting"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 },
                 "meeting-name": {
                       "type": "string",
-                      "description": "The descriptive name of the meeting"
+                      "description": "Name of the meeting, shown in invitations and in the app. Required on a create."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Longer text about the meeting, shown in invitations."
                 },
                 "meeting-type": {
                       "type": "string",
-                      "description": "The meeting category either the standard meeting 'conference' or a webinar style meeting by using 'presentation'. Allowed values: \"presentation\", \"conference\". Default: \"conference\"",
+                      "description": "`conference` is a meeting where everyone can take part. `presentation` is a webinar: guests register themselves with the meeting's `meeting-registration-id`. Allowed values: \"conference\", \"presentation\"",
                       "enum": [
-                            "presentation",
-                            "conference"
-                      ],
-                      "default": "conference"
-                },
-                "limits-max-participants": {
-                      "type": "number",
-                      "description": "The maximum number of participants allows in the meeting"
-                },
-                "meeting-status": {
-                      "type": "string",
-                      "description": "The current status of the meeting"
+                            "conference",
+                            "presentation"
+                      ]
                 },
                 "meeting-schedule-start-datetime": {
                       "type": "string",
-                      "description": "The scheduled start time for the meeting"
+                      "description": "When the meeting starts, in RFC 3339 form. Unix seconds are also accepted. Omit it on a create to start the meeting now."
                 },
                 "timezone": {
                       "type": "string",
-                      "description": "This is the time zone that the user is primarily located in. Allowed values: \"US/Alaska\", \"US/Central\", \"US/Eastern\", \"US/Hawaii\", \"US/Mountain\", \"US/Pacific\", \"Africa/Addis_Ababa\", \"Africa/Algiers\", \"Africa/Brazzaville\", \"Africa/Cairo\", \"Africa/Casablanca\", \"Africa/Dakar\", \"Africa/Dar_es_Salaam\", \"Africa/Djibouti\", \"Africa/Johannesburg\", \"Africa/Khartoum\", \"Africa/Kigali\", \"Africa/Kinshasa\", \"Africa/Lagos\", \"Africa/Nairobi\", \"Africa/Timbuktu\", \"Africa/Tripoli\", \"Africa/Tunis\", \"America/Antigua\", \"America/Aruba\", \"America/Belize\", \"America/Bogota\", \"America/Buenos_Aires\", \"America/Cancun\", \"America/Caracas\", \"America/Cayman\", \"America/Chihuahua\", \"America/Costa_Rica\", \"America/Denver\", \"America/Detroit\", \"America/Edmonton\", \"America/El_Salvador\", \"America/Ensenada\", \"America/Grenada\", \"America/Guadeloupe\", \"America/Guatemala\", \"America/Havana\", \"America/Indianapolis\", \"America/Jamaica\", \"America/Juneau\", \"America/La_Paz\", \"America/Lima\", \"America/Los_Angeles\", \"America/Louisville\", \"America/Martinique\", \"America/Mazatlan\", \"America/Mendoza\", \"America/Menominee\", \"America/Merida\", \"America/Mexico_City\", \"America/Miquelon\", \"America/Moncton\", \"America/Monterrey\", \"America/Montevideo\", \"America/Montreal\", \"America/Montserrat\", \"America/Nassau\", \"America/New_York\", \"America/Panama\", \"America/Phoenix\", \"America/Port-au-Prince\", \"America/Port_of_Spain\", \"America/Regina\", \"America/Santiago\", \"America/Santo_Domingo\", \"America/Sao_Paulo\", \"America/Thule\", \"America/Thunder_Bay\", \"America/Tijuana\", \"America/Toronto\", \"America/Vancouver\", \"America/Winnipeg\", \"America/Yellowknife\", \"Antarctica/South_Pole\", \"Arctic/Longyearbyen\", \"Asia/Amman\", \"Asia/Baghdad\", \"Asia/Bahrain\", \"Asia/Bangkok\", \"Asia/Beirut\", \"Asia/Brunei\", \"Asia/Calcutta\", \"Asia/Colombo\", \"Asia/Dacca\", \"Asia/Damascus\", \"Asia/Dhaka\", \"Asia/Dubai\", \"Asia/Gaza\", \"Asia/Hong_Kong\", \"Asia/Istanbul\", \"Asia/Jakarta\", \"Asia/Jerusalem\", \"Asia/Kabul\", \"Asia/Katmandu\", \"Asia/Kuala_Lumpur\", \"Asia/Kuching\", \"Asia/Kuwait\", \"Asia/Macau\", \"Asia/Manila\", \"Asia/Muscat\", \"Asia/Phnom_Penh\", \"Asia/Rangoon\", \"Asia/Riyadh\", \"Asia/Saigon\", \"Asia/Seoul\", \"Asia/Shanghai\", \"Asia/Singapore\", \"Asia/Taipei\", \"Asia/Tehran\", \"Asia/Tel_Aviv\", \"Asia/Thimphu\", \"Asia/Tokyo\", \"Asia/Ulan_Bator\", \"Asia/Vientiane\", \"Asia/Vladivostok\", \"Atlantic/Azores\", \"Atlantic/Bermuda\", \"Atlantic/Canary\", \"Atlantic/Cape_Verde\", \"Atlantic/Faeroe\", \"Atlantic/Reykjavik\", \"Australia/ACT\", \"Australia/Adelaide\", \"Australia/Brisbane\", \"Australia/Canberra\", \"Australia/Darwin\", \"Australia/LHI\", \"Australia/Melbourne\", \"Australia/North\", \"Australia/NSW\", \"Australia/Perth\", \"Australia/Queensland\", \"Australia/South\", \"Australia/Sydney\", \"Australia/Tasmania\", \"Australia/Victoria\", \"Australia/West\", \"Canada/Atlantic\", \"Canada/Central\", \"Canada/Eastern\", \"Canada/Mountain\", \"Canada/Newfoundland\", \"Canada/Pacific\", \"Canada/Saskatchewan\", \"Canada/Yukon\", \"Cuba\", \"Etc/GMT\", \"Etc/GMT+1\", \"Etc/GMT+10\", \"Etc/GMT+11\", \"Etc/GMT+12\", \"Etc/GMT+2\", \"Etc/GMT+3\", \"Etc/GMT+4\", \"Etc/GMT+5\", \"Etc/GMT+6\", \"Etc/GMT+7\", \"Etc/GMT+8\", \"Etc/GMT+9\", \"Etc/GMT-1\", \"Etc/GMT-10\", \"Etc/GMT-11\", \"Etc/GMT-12\", \"Etc/GMT-13\", \"Etc/GMT-14\", \"Etc/GMT-2\", \"Etc/GMT-3\", \"Etc/GMT-4\", \"Etc/GMT-5\", \"Etc/GMT-6\", \"Etc/GMT-7\", \"Etc/GMT-8\", \"Etc/GMT-9\", \"Etc/Greenwich\", \"Europe/Amsterdam\", \"Europe/Athens\", \"Europe/Belfast\", \"Europe/Belgrade\", \"Europe/Berlin\", \"Europe/Brussels\", \"Europe/Bucharest\", \"Europe/Budapest\", \"Europe/Copenhagen\", \"Europe/Dublin\", \"Europe/Helsinki\", \"Europe/Istanbul\", \"Europe/Kiev\", \"Europe/Lisbon\", \"Europe/Ljubljana\", \"Europe/London\", \"Europe/Madrid\", \"Europe/Malta\", \"Europe/Monaco\", \"Europe/Moscow\", \"Europe/Oslo\", \"Europe/Paris\", \"Europe/Prague\", \"Europe/Rome\", \"Europe/Sofia\", \"Europe/Stockholm\", \"Europe/Vienna\", \"Europe/Warsaw\", \"Europe/Zurich\", \"Greenwich\", \"Pacific/Auckland\", \"Pacific/Easter\", \"Pacific/Fiji\", \"Pacific/Galapagos\", \"Pacific/Gambier\", \"Pacific/Guam\", \"Pacific/Honolulu\", \"Pacific/Marquesas\", \"Pacific/Midway\", \"Pacific/Palau\", \"Pacific/Rarotonga\", \"Pacific/Tahiti\"",
-                      "enum": [
-                            "US/Alaska",
-                            "US/Central",
-                            "US/Eastern",
-                            "US/Hawaii",
-                            "US/Mountain",
-                            "US/Pacific",
-                            "Africa/Addis_Ababa",
-                            "Africa/Algiers",
-                            "Africa/Brazzaville",
-                            "Africa/Cairo",
-                            "Africa/Casablanca",
-                            "Africa/Dakar",
-                            "Africa/Dar_es_Salaam",
-                            "Africa/Djibouti",
-                            "Africa/Johannesburg",
-                            "Africa/Khartoum",
-                            "Africa/Kigali",
-                            "Africa/Kinshasa",
-                            "Africa/Lagos",
-                            "Africa/Nairobi",
-                            "Africa/Timbuktu",
-                            "Africa/Tripoli",
-                            "Africa/Tunis",
-                            "America/Antigua",
-                            "America/Aruba",
-                            "America/Belize",
-                            "America/Bogota",
-                            "America/Buenos_Aires",
-                            "America/Cancun",
-                            "America/Caracas",
-                            "America/Cayman",
-                            "America/Chihuahua",
-                            "America/Costa_Rica",
-                            "America/Denver",
-                            "America/Detroit",
-                            "America/Edmonton",
-                            "America/El_Salvador",
-                            "America/Ensenada",
-                            "America/Grenada",
-                            "America/Guadeloupe",
-                            "America/Guatemala",
-                            "America/Havana",
-                            "America/Indianapolis",
-                            "America/Jamaica",
-                            "America/Juneau",
-                            "America/La_Paz",
-                            "America/Lima",
-                            "America/Los_Angeles",
-                            "America/Louisville",
-                            "America/Martinique",
-                            "America/Mazatlan",
-                            "America/Mendoza",
-                            "America/Menominee",
-                            "America/Merida",
-                            "America/Mexico_City",
-                            "America/Miquelon",
-                            "America/Moncton",
-                            "America/Monterrey",
-                            "America/Montevideo",
-                            "America/Montreal",
-                            "America/Montserrat",
-                            "America/Nassau",
-                            "America/New_York",
-                            "America/Panama",
-                            "America/Phoenix",
-                            "America/Port-au-Prince",
-                            "America/Port_of_Spain",
-                            "America/Regina",
-                            "America/Santiago",
-                            "America/Santo_Domingo",
-                            "America/Sao_Paulo",
-                            "America/Thule",
-                            "America/Thunder_Bay",
-                            "America/Tijuana",
-                            "America/Toronto",
-                            "America/Vancouver",
-                            "America/Winnipeg",
-                            "America/Yellowknife",
-                            "Antarctica/South_Pole",
-                            "Arctic/Longyearbyen",
-                            "Asia/Amman",
-                            "Asia/Baghdad",
-                            "Asia/Bahrain",
-                            "Asia/Bangkok",
-                            "Asia/Beirut",
-                            "Asia/Brunei",
-                            "Asia/Calcutta",
-                            "Asia/Colombo",
-                            "Asia/Dacca",
-                            "Asia/Damascus",
-                            "Asia/Dhaka",
-                            "Asia/Dubai",
-                            "Asia/Gaza",
-                            "Asia/Hong_Kong",
-                            "Asia/Istanbul",
-                            "Asia/Jakarta",
-                            "Asia/Jerusalem",
-                            "Asia/Kabul",
-                            "Asia/Katmandu",
-                            "Asia/Kuala_Lumpur",
-                            "Asia/Kuching",
-                            "Asia/Kuwait",
-                            "Asia/Macau",
-                            "Asia/Manila",
-                            "Asia/Muscat",
-                            "Asia/Phnom_Penh",
-                            "Asia/Rangoon",
-                            "Asia/Riyadh",
-                            "Asia/Saigon",
-                            "Asia/Seoul",
-                            "Asia/Shanghai",
-                            "Asia/Singapore",
-                            "Asia/Taipei",
-                            "Asia/Tehran",
-                            "Asia/Tel_Aviv",
-                            "Asia/Thimphu",
-                            "Asia/Tokyo",
-                            "Asia/Ulan_Bator",
-                            "Asia/Vientiane",
-                            "Asia/Vladivostok",
-                            "Atlantic/Azores",
-                            "Atlantic/Bermuda",
-                            "Atlantic/Canary",
-                            "Atlantic/Cape_Verde",
-                            "Atlantic/Faeroe",
-                            "Atlantic/Reykjavik",
-                            "Australia/ACT",
-                            "Australia/Adelaide",
-                            "Australia/Brisbane",
-                            "Australia/Canberra",
-                            "Australia/Darwin",
-                            "Australia/LHI",
-                            "Australia/Melbourne",
-                            "Australia/North",
-                            "Australia/NSW",
-                            "Australia/Perth",
-                            "Australia/Queensland",
-                            "Australia/South",
-                            "Australia/Sydney",
-                            "Australia/Tasmania",
-                            "Australia/Victoria",
-                            "Australia/West",
-                            "Canada/Atlantic",
-                            "Canada/Central",
-                            "Canada/Eastern",
-                            "Canada/Mountain",
-                            "Canada/Newfoundland",
-                            "Canada/Pacific",
-                            "Canada/Saskatchewan",
-                            "Canada/Yukon",
-                            "Cuba",
-                            "Etc/GMT",
-                            "Etc/GMT+1",
-                            "Etc/GMT+10",
-                            "Etc/GMT+11",
-                            "Etc/GMT+12",
-                            "Etc/GMT+2",
-                            "Etc/GMT+3",
-                            "Etc/GMT+4",
-                            "Etc/GMT+5",
-                            "Etc/GMT+6",
-                            "Etc/GMT+7",
-                            "Etc/GMT+8",
-                            "Etc/GMT+9",
-                            "Etc/GMT-1",
-                            "Etc/GMT-10",
-                            "Etc/GMT-11",
-                            "Etc/GMT-12",
-                            "Etc/GMT-13",
-                            "Etc/GMT-14",
-                            "Etc/GMT-2",
-                            "Etc/GMT-3",
-                            "Etc/GMT-4",
-                            "Etc/GMT-5",
-                            "Etc/GMT-6",
-                            "Etc/GMT-7",
-                            "Etc/GMT-8",
-                            "Etc/GMT-9",
-                            "Etc/Greenwich",
-                            "Europe/Amsterdam",
-                            "Europe/Athens",
-                            "Europe/Belfast",
-                            "Europe/Belgrade",
-                            "Europe/Berlin",
-                            "Europe/Brussels",
-                            "Europe/Bucharest",
-                            "Europe/Budapest",
-                            "Europe/Copenhagen",
-                            "Europe/Dublin",
-                            "Europe/Helsinki",
-                            "Europe/Istanbul",
-                            "Europe/Kiev",
-                            "Europe/Lisbon",
-                            "Europe/Ljubljana",
-                            "Europe/London",
-                            "Europe/Madrid",
-                            "Europe/Malta",
-                            "Europe/Monaco",
-                            "Europe/Moscow",
-                            "Europe/Oslo",
-                            "Europe/Paris",
-                            "Europe/Prague",
-                            "Europe/Rome",
-                            "Europe/Sofia",
-                            "Europe/Stockholm",
-                            "Europe/Vienna",
-                            "Europe/Warsaw",
-                            "Europe/Zurich",
-                            "Greenwich",
-                            "Pacific/Auckland",
-                            "Pacific/Easter",
-                            "Pacific/Fiji",
-                            "Pacific/Galapagos",
-                            "Pacific/Gambier",
-                            "Pacific/Guam",
-                            "Pacific/Honolulu",
-                            "Pacific/Marquesas",
-                            "Pacific/Midway",
-                            "Pacific/Palau",
-                            "Pacific/Rarotonga",
-                            "Pacific/Tahiti"
-                      ]
+                      "description": "Time zone the meeting was scheduled in, such as `US/Eastern`. Used for the calendar invitation."
                 },
                 "meeting-schedule-duration-minutes": {
                       "type": "number",
-                      "description": "The scheduled length of the meeting"
+                      "description": "Planned length in minutes. Defaults to `60` on a create."
                 },
                 "meeting-schedule-recurrence-rule": {
                       "type": "string",
-                      "description": "The read only value describing the recuring nature of the meeting using RFC 5545"
+                      "description": "Repeat rule for a recurring meeting, as an RFC 5545 `RRULE` (with any `EXDATE`), such as `FREQ=WEEKLY;BYDAY=TU;UNTIL=20261215T150000Z`. An `UNTIL` without a trailing `Z` is read as UTC. Empty for a one-time meeting."
+                },
+                "limits-max-participants": {
+                      "type": "number",
+                      "description": "Most participants the meeting allows. Omit it on a create to use the domain's configured maximum for the meeting type."
                 },
                 "meeting-video-allowed-from": {
                       "type": "string",
-                      "description": "The value indicating which attendee types can share video. Allowed values: \"everyone\", \"host\", \"presenters\"",
+                      "description": "Who can share video. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
                             "everyone",
                             "host",
@@ -1486,7 +854,7 @@ export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefini
                 },
                 "meeting-audio-allowed-from": {
                       "type": "string",
-                      "description": "The value indicating which attendee types can share audio. Allowed values: \"everyone\", \"host\", \"presenters\"",
+                      "description": "Who can share audio. Allowed values: \"everyone\", \"host\", \"presenters\"",
                       "enum": [
                             "everyone",
                             "host",
@@ -1495,96 +863,137 @@ export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefini
                 },
                 "meeting-chat-enabled": {
                       "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
+                      "description": "`1` turns on chat in the meeting. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-chat-history-enabled": {
                       "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
+                      "description": "`1` keeps the chat history after the meeting. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-question-answer-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` turns on questions and answers. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-recording-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` records the meeting. On a change, turning it on starts recording now unless `meeting-require-host-to-begin-enabled` is sent as `1`, and turning it off stops recording. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-join-require-invite-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` admits only invited attendees. `0` lets anyone with the meeting ID join while the meeting is not locked. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-join-require-passcode-enabled": {
                       "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-require-host-to-begin-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-allow-changes-from-hosts-enabled": {
-                      "type": "number",
-                      "description": "Default: 1",
-                      "default": 1
-                },
-                "meeting-hide-attendee-list-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-lock-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "meeting-lock-allowed": {
-                      "type": "string",
-                      "description": "The value indicating if the meeting is allowed to be locked"
-                },
-                "meeting-room-enabled": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
+                      "description": "`1` requires `meeting-passcode` to join. Sending `0` clears the passcode. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
                 },
                 "meeting-passcode": {
                       "type": "string",
-                      "description": "The passcode used to enter meeting if it is required"
+                      "description": "Passcode attendees enter to join. Kept only when `meeting-join-require-passcode-enabled` is `1`. A masked value (asterisks, as a read returns it to someone who may not see the passcode) is refused on a create and leaves the passcode unchanged on a change."
                 },
-                "meeting-previous-presenter-attendee-id": {
+                "meeting-require-host-to-begin-enabled": {
+                      "type": "number",
+                      "description": "`1` keeps attendees waiting until a host joins. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-allow-changes-from-hosts-enabled": {
+                      "type": "number",
+                      "description": "`1` lets hosts other than the owner change the meeting in the app. The API does not check it: every host can change the meeting through the API. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-hide-attendee-list-enabled": {
+                      "type": "number",
+                      "description": "`1` hides the attendee list from attendees who are not hosts or presenters. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-lock-enabled": {
+                      "type": "number",
+                      "description": "`1` locks the meeting: only attendees already connected can stay or rejoin. Takes effect on a change. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-room-enabled": {
+                      "type": "number",
+                      "description": "`1` makes this a permanent room rather than a scheduled meeting. List rooms with `type=room`. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "meeting-status": {
                       "type": "string",
-                      "description": "The value of the previous attendee that prsented their screen"
+                      "description": "Set on a change only. `started` starts recording when recording is on. `ended` ends the current instance and resets the meeting. Allowed values: \"started\", \"ended\"",
+                      "enum": [
+                            "started",
+                            "ended"
+                      ]
+                },
+                "meeting-video-layout": {
+                      "type": "string",
+                      "description": "Default video layout for the meeting."
                 },
                 "meeting-presenter-attendee-id": {
                       "type": "string",
-                      "description": "The value of the current attendee that is sharing their screen"
+                      "description": "Attendee ID of the attendee presenting now. Empty when nobody is."
                 },
-                "meeting-video-layout ": {
+                "meeting-dial-in-number-blob": {
                       "type": "string",
-                      "description": "The current meeting layout default for entire meeting. Allowed values: \"spotlight\", \"conversation\", \"grid\"",
-                      "enum": [
-                            "spotlight",
-                            "conversation",
-                            "grid"
-                      ]
+                      "description": "Phone numbers audio-only attendees dial to join. Filled from the domain's configuration when a meeting is created without an ID."
+                },
+                "meeting-registration-id": {
+                      "type": "string",
+                      "description": "Registration ID guests use to register for a `presentation` meeting: 8 letters or digits. Generated when omitted or not in that form. Ignored for other meeting types."
+                },
+                "attendees": {
+                      "type": "array",
+                      "description": "People to invite. On a change, the list replaces the stored one: attendees left out are removed, and new ones are invited by email."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "meeting",
-                "id",
-                "meeting-status",
-                "meeting-schedule-start-datetime",
-                "timezone",
-                "meeting-room-enabled"
+                "meeting"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/meetings/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'meeting'];
@@ -1592,7 +1001,7 @@ export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefini
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['id', 'domain', 'user', 'description', 'meeting-name', 'meeting-type', 'limits-max-participants', 'meeting-status', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-lock-allowed', 'meeting-room-enabled', 'meeting-passcode', 'meeting-previous-presenter-attendee-id', 'meeting-presenter-attendee-id', 'meeting-video-layout '];
+    const bodyParamNames = ['meeting-name', 'description', 'meeting-type', 'meeting-schedule-start-datetime', 'timezone', 'meeting-schedule-duration-minutes', 'meeting-schedule-recurrence-rule', 'limits-max-participants', 'meeting-video-allowed-from', 'meeting-audio-allowed-from', 'meeting-chat-enabled', 'meeting-chat-history-enabled', 'meeting-question-answer-enabled', 'meeting-recording-enabled', 'meeting-join-require-invite-enabled', 'meeting-join-require-passcode-enabled', 'meeting-passcode', 'meeting-require-host-to-begin-enabled', 'meeting-allow-changes-from-hosts-enabled', 'meeting-hide-attendee-list-enabled', 'meeting-lock-enabled', 'meeting-room-enabled', 'meeting-status', 'meeting-video-layout', 'meeting-presenter-attendee-id', 'meeting-dial-in-number-blob', 'meeting-registration-id', 'attendees'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1616,42 +1025,39 @@ export const put_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefini
 export const delete_domains_by_domain_users_by_user_meetings_by_meeting: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_meetings_by_meeting',
-    description: 'Delete a Meeting — [DELETE /domains/{domain}/users/{user}/meetings/{meeting}]',
+    description: 'Delete meeting — Cancels a meeting, cancels one occurrence of it, removes it for good, or removes some of its attendees. The `type` field in the body chooses which.  Only the meeting\\\'s owner, its hosts, Office Manager for the meeting\\\'s domain, Reseller for its territory, and Super User can change it. Anyone else gets `403`. A host who is not the owner puts its own user in the path.  - `meeting` marks the meeting cancelled, removes its audio bridge, and emails a cancellation to the attendees. It returns `412` while anyone is connected. - `instance` cancels one occurrence of a recurring meeting, named by `meeting-instance-schedule-start-datetime`. - `record` removes the meeting, its attendees, and its audio bridge. - `attendee` removes the attendees listed in `attendeeids`.  `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/users/{user}/meetings/{meeting}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The owner, or your own user when you are a host."
                 },
                 "meeting": {
                       "type": "string",
-                      "description": "the meeting id to perfom the delete on"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 },
                 "type": {
                       "type": "string",
-                      "description": "the type of delete to perform. Allowed values: \"instance\", \"attendee\", \"meeting\", \"record\"",
+                      "description": "What to delete: `meeting` cancels the meeting, `instance` cancels one occurrence of a recurring meeting, `record` removes the meeting and its attendees for good, and `attendee` removes the attendees in `attendeeids`. Allowed values: \"meeting\", \"instance\", \"record\", \"attendee\"",
                       "enum": [
-                            "instance",
-                            "attendee",
                             "meeting",
-                            "record"
+                            "instance",
+                            "record",
+                            "attendee"
                       ]
                 },
                 "meeting-instance-schedule-start-datetime": {
-                      "type": "string",
-                      "description": "This is the time stamp that the formated via RFC 3339. Allowed values: \"YYYY-MM-DDTHH:MM:SS.ssZ\"",
-                      "enum": [
-                            "YYYY-MM-DDTHH:MM:SS.ssZ"
-                      ]
+                      "type": "number",
+                      "description": "Required with `type` `instance`. Scheduled start of the occurrence to cancel, in Unix seconds."
                 },
                 "attendeeids": {
                       "type": "array",
-                      "description": "Required with delete type attendee"
+                      "description": "Required with `type` `attendee`. Attendee IDs to remove, 6 letters or digits each. A comma-separated string is also accepted."
                 }
           },
           "required": [
@@ -1661,6 +1067,12 @@ export const delete_domains_by_domain_users_by_user_meetings_by_meeting: ToolDef
                 "type"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/meetings/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'meeting'];
@@ -1692,17 +1104,17 @@ export const delete_domains_by_domain_users_by_user_meetings_by_meeting: ToolDef
 export const post_domains_by_domain_users_by_user_meetings_get_id: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_meetings_get_id',
-    description: 'Request a Meeting ID — API v1 request Id prior to create meeting — [POST /domains/{domain}/users/{user}/meetings/getId]',
+    description: 'Reserve meeting ID — Reserves an unused meeting ID for the user in the path, for a client that needs the ID before it creates the meeting, such as to put the join link in a calendar entry.  Requires a token for the user in the path, or Office Manager scope or higher for the domain.  The ID is held for that user for a limited time; create the meeting with `POST /domains/{domain}/users/{user}/meetings/{meeting}` and the same user in the path. The response also suggests a registration ID and lists the domain\\\'s dial-in numbers. Send no body. `GET` on this path is not this operation: it returns the user\\\'s meetings. — [POST /domains/{domain}/users/{user}/meetings/getId]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The ID is reserved for this user."
                 }
           },
           "required": [
@@ -1710,6 +1122,12 @@ export const post_domains_by_domain_users_by_user_meetings_get_id: ToolDefinitio
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/meetings/getId',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -1720,6 +1138,469 @@ export const post_domains_by_domain_users_by_user_meetings_get_id: ToolDefinitio
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/meetings/getId',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_meetings: ToolDefinition = {
+  schema: {
+    name: 'list_user_meetings',
+    description: 'List meetings for user (identity only) — Returns a reduced view of a user\\\'s upcoming meetings, enough to pick one: its ID, name, owner, and start. Dial-in numbers, sharing, and recording options are on `GET /domains/{domain}/users/{user}/meetings`.  `/list` is authorized by the `list` privilege rather than `read`, and shares it with `/count`, so a scope that may not read full meetings can still list them. Rows are the same meetings and occurrences the full list returns, but `limit` defaults to `10` here. — [GET /domains/{domain}/users/{user}/meetings/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. The list holds meetings this user owns or is an attendee of."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "`room` returns the user's permanent rooms. `meeting` returns scheduled meetings only. Omit it for both. Allowed values: \"room\", \"meeting\"",
+                      "enum": [
+                            "room",
+                            "meeting"
+                      ]
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most items to return. Defaults to `10`. Default: 100",
+                      "default": 100
+                },
+                "offset": {
+                      "type": "number",
+                      "description": "Items to skip before the first one returned, for paging."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['type', 'limit', 'offset'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_meeting_as_attendee: ToolDefinition = {
+  schema: {
+    name: 'read_meeting_as_attendee',
+    description: 'Read meeting as attendee — Returns the meeting as one attendee sees it, with that attendee\\\'s `attendee_id`, `attendee_name`, `attendee_email`, `attendee_audio_id`, and `attendee_role` added. When the attendee list is hidden and the attendee is not a host or presenter, `attendees` holds only that attendee and the hosts and presenters.  Access is checked against the meeting\\\'s owner: any user in the owner\\\'s domain can read it, and Office Manager, Reseller, and Super User can read it in the domains they manage. When you are the user in the path and you are on the meeting, you are checked as yourself, so an attendee from another domain reads the meeting through its own path. `meeting-passcode` is shown only to the meeting\\\'s owner, its hosts, and Office Manager or higher for its domain. Everyone else gets it masked with asterisks; `include-secret=yes` does not change that.  The response differs from `GET /domains/{domain}/users/{user}/meetings/{meeting}`: the meeting is wrapped in a one-item `meeting` array, and five fields keep their legacy names: `name`, `type`, `capacity`, `status`, and `duration`. — [GET /domains/{domain}/users/{user}/meetings/{meeting}/attendee/{attendee}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "meeting": {
+                      "type": "string",
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                },
+                "attendee": {
+                      "type": "string",
+                      "description": "Attendee ID: 6 letters or digits, such as `a1b2c3`. It is the `attendee_id` of an entry in the meeting's `attendees`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "meeting",
+                "attendee"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}/attendee/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'meeting', 'attendee'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/attendee/{attendee}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_meeting_attendee: ToolDefinition = {
+  schema: {
+    name: 'update_meeting_attendee',
+    description: 'Update meeting attendee — Changes one attendee of a meeting, such as its role or what it may share. Send only the fields to change.  Only the meeting\\\'s owner, its hosts, Office Manager for the meeting\\\'s domain, Reseller for its territory, and Super User can change it. Anyone else gets `403`. A host who is not the owner puts its own user in the path.  The meeting and the attendee come from the path; the attendee\\\'s meeting, ID, domain, and user cannot be changed. A change to `role` or a restriction is also written to the meeting\\\'s event log. `202` means the change is accepted and applied shortly after. — [PUT /domains/{domain}/users/{user}/meetings/{meeting}/attendee/{attendee}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "meeting": {
+                      "type": "string",
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                },
+                "attendee": {
+                      "type": "string",
+                      "description": "Attendee ID: 6 letters or digits, such as `a1b2c3`. It is the `attendee_id` of an entry in the meeting's `attendees`."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Display name."
+                },
+                "role": {
+                      "type": "string",
+                      "description": "Role in the meeting. Allowed values: \"host\", \"presenter\", \"attendee\"",
+                      "enum": [
+                            "host",
+                            "presenter",
+                            "attendee"
+                      ]
+                },
+                "audio_restricted": {
+                      "type": "number",
+                      "description": "`1` stops the attendee sharing audio. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "video_restricted": {
+                      "type": "number",
+                      "description": "`1` stops the attendee sharing video. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "screenshare_restricted": {
+                      "type": "number",
+                      "description": "`1` stops the attendee sharing its screen. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "access_restricted": {
+                      "type": "number",
+                      "description": "`1` removes the attendee's access to the meeting. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "meeting",
+                "attendee"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/meetings/{}/attendee/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'meeting', 'attendee'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['name', 'role', 'audio_restricted', 'video_restricted', 'screenshare_restricted', 'access_restricted'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/attendee/{attendee}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_meeting_instance: ToolDefinition = {
+  schema: {
+    name: 'read_meeting_instance',
+    description: 'Read meeting (instance path) — Returns the meeting as `GET /domains/{domain}/users/{user}/meetings/{meeting}` does, but as a one-item array, and an empty array instead of `404`. The instance ID is not used to narrow the result; for one instance\\\'s history, use `GET /domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}/log`.  Access is checked against the meeting\\\'s owner: any user in the owner\\\'s domain can read it, and Office Manager, Reseller, and Super User can read it in the domains they manage. When you are the user in the path and you are on the meeting, you are checked as yourself, so an attendee from another domain reads the meeting through its own path. `meeting-passcode` is shown only to the meeting\\\'s owner, its hosts, and Office Manager or higher for its domain. Everyone else gets it masked with asterisks; `include-secret=yes` does not change that. — [GET /domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "meeting": {
+                      "type": "string",
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                },
+                "instance": {
+                      "type": "string",
+                      "description": "Instance ID of one occurrence of the meeting: 13 characters, such as `66e6f0a1b2c3d`. Each time a meeting starts it gets a new instance ID, returned as `meeting-instance-id`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "meeting",
+                "instance"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}/instance/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'meeting', 'instance'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_meeting_recording_token: ToolDefinition = {
+  schema: {
+    name: 'read_meeting_recording_token',
+    description: 'Read recording playback token — Returns the token a client uses to play back the recording of one instance of the meeting in the path.  Requires a token for the user in the path; a Meeting Guest uses its `guest_` user. Super User can call it for any user. Only the meeting\\\'s owner, hosts, and attendees, and Office Manager or higher for its domain, get a token; a meeting open to anyone with its ID is not enough. A Meeting Guest gets one only for the meeting its token was issued for.  The token comes from the video service, and every field except `access_token` is passed through as it sends them. When the video service cannot issue it the answer is `502`, or `504` when it does not answer in time. — [GET /domains/{domain}/users/{user}/meetings/{meeting}/sfu]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "meeting": {
+                      "type": "string",
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                },
+                "instance_id": {
+                      "type": "string",
+                      "description": "Instance ID of the recorded occurrence, as `meeting-instance-id` reported it: 1 to 64 letters or digits."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "meeting",
+                "instance_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}/sfu',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'meeting'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['instance_id'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/sfu',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_meeting_video_token: ToolDefinition = {
+  schema: {
+    name: 'create_meeting_video_token',
+    description: 'Create video join token — Returns the credentials a client uses to join the video of the meeting in the path.  Requires a token for the user in the path; a Meeting Guest uses its `guest_` user. Super User can call it for any user. You can join when you own the meeting, are on it, or are Office Manager or higher for its domain, or when the meeting is open to anyone with its ID and not locked. A Meeting Guest joins only the meeting its token was issued for.  The credentials come from the video service, and every field except `access_token` is passed through as it sends them. When the video service cannot issue them the answer is `502`, or `504` when it does not answer in time. Send no body. — [POST /domains/{domain}/users/{user}/meetings/{meeting}/sfu]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "meeting": {
+                      "type": "string",
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "meeting"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/meetings/{}/sfu',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'meeting'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/sfu',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_meeting_by_registration_id: ToolDefinition = {
+  schema: {
+    name: 'read_meeting_by_registration_id',
+    description: 'Read meeting by registration ID — Returns the meeting a registration link points to, so a registration page can show it before the guest registers.  Needs no token: the registration ID is the credential. Without a token, each client address can make 30 lookups a minute; more returns `429`. `meeting-passcode` is always masked here. — [GET /meetings/register/{registration_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "registration_id": {
+                      "type": "string",
+                      "description": "Registration ID from the meeting's registration link: 8 letters or digits, such as `k4Rt9xQ2`. It is the meeting's `meeting-registration-id`."
+                }
+          },
+          "required": [
+                "registration_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /meetings/register/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['registration_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/meetings/register/{registration_id}',
       pathParams,
     });
 

@@ -59,8 +59,13 @@ export const v1_subscriber_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=subscriber&action=create&directory_match=departments",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("subscriber", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("subscriber", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -82,8 +87,13 @@ export const v1_department_list: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=department&action=list",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("department", "list", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("department", "list", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

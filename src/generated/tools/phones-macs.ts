@@ -5,20 +5,72 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_phones: ToolDefinition = {
   schema: {
     name: 'get_phones',
-    description: 'Read Mac Addresses — [GET /phones]',
+    description: 'List phones — Lists provisioned phones by MAC address across every domain, with each phone\\\'s model, line assignments, and line 1 registration state. A Super User reads every domain, or narrows the list with `domain` or `reseller`. Other scopes use `GET /domains/{domain}/phones`.  Results are paged with `start` and `limit`. Get the total with `GET /phones/count`, or a reduced row per phone with `GET /phones/list`. Per-line passwords are left out, and `device-provisioning-password` is masked except on your own phone. A Super User can send `include-secrets=yes` to get them in plaintext. The reveal is audit-logged.  A phone\\\'s own configuration overrides are returned as `device-provisioning-overrides-blob`. The same value is also returned as `device-models-overrides-blob`, which is deprecated and will be removed in the next release. — [GET /phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
                       "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only phones in this domain."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only phones in domains of this reseller's territory."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only phones whose line 1 belongs to a user in this site. Send it with `domain`. Phones with no user on line 1 are left out. Paging applies after this filter."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `device-provisioning-password` and the per-line passwords in plaintext. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['limit', 'start', 'domain', 'reseller', 'device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension', 'site', 'include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -41,13 +93,13 @@ export const get_phones: ToolDefinition = {
 export const post_phones: ToolDefinition = {
   schema: {
     name: 'post_phones',
-    description: 'Add MAC address — [POST /phones]',
+    description: 'Add phone — Adds a phone to the inventory on the Endpoints server by MAC address, so it can download its configuration. Send `device-provisioning-mac-address` and `device-models-brand-and-model`, and `domain`. The MAC address can use `:`, `-`, or `.` separators, and is stored as 12 bare hex digits. Assign lines with `device-provisioning-sip-uri-1` to `device-provisioning-sip-uri-8`. A line you assign is enabled unless you send its `device-provisioning-line-N-enabled`. The user who owns line 1 is the phone\\\'s user.  Requires Site Manager, Office Manager, Reseller, or Super User scope. Site Manager can put only a device of a user in its site on line 1. Basic User and the other user scopes can add a phone only with their own device on line 1.  The response is `202`: the phone is accepted and added shortly after. A MAC address that already exists in any domain returns `409`. A soft phone model (`Manual or Softphone`) or a blank model returns `400`, because there is nothing to provision. For Yealink, Polycom, Snom, Fanvil, Grandstream, and Htek phones, the MAC address is also registered with the vendor\\\'s zero-touch provisioning service when the platform has one configured.  Every line (`device-provisioning-sip-uri-1` and up) must be a device in the phone\\\'s own domain. Line 1 must also belong to a user you may act for; lines 2 and up can be any device in the domain, for shared or monitored lines. A line from another domain returns `400`. — [POST /phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone, and the key you address it by. Returned as 12 hex digits with no separators. On create you can send `:`, `-`, or `.` separators, which are removed. Anything else returns `400`."
                 },
                 "domain": {
                       "type": "string",
@@ -55,262 +107,466 @@ export const post_phones: ToolDefinition = {
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller (territory) the phone's domain belongs to. Taken from the domain when you leave it out."
                 },
                 "device-models-brand-and-model": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
+                      "description": "Brand and model, separated by a space, as listed by `GET /phones/models`. Required on create. On an update that changes a line, the stored model is used when you leave it out. A soft phone (`Manual or Softphone`) or a blank model returns `400`."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "device-provisioning-registration-core-server"
+                      "description": "Hostname of the core server the phone registers to. Defaults to the platform's configured core server on create."
                 },
                 "notes": {
                       "type": "string",
-                      "description": "notes"
+                      "description": "Free-text notes about the phone."
                 },
                 "device-provisioning-sip-uri-1": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
+                      "description": "Device on line 1, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned. The user who owns this device is the phone's user. Basic User and the other user scopes can assign only their own device here, and Site Manager only a device of a user in its site."
                 },
                 "device-provisioning-line-1-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 1 is provisioned on the phone. When you assign line 1 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-1-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
+                      "description": "Whether line 1 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-2": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
+                      "description": "Device on line 2, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-2-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 2 is provisioned on the phone. When you assign line 2 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-2-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
+                      "description": "Whether line 2 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "enum": [
+                            "udp",
+                            "tcp",
+                            "tls"
+                      ],
+                      "default": "udp"
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "device-provisioning-username"
+                      "description": "Username the phone uses to download its configuration file from the Endpoints server."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "device-provisioning-password"
+                      "description": "Password the phone uses to download its configuration file. Masked unless the phone is your own, or you are a Super User sending `include-secrets=yes`. Sending the masked value back keeps the stored password."
                 },
                 "device-models-count-buttons": {
                       "type": "number",
-                      "description": "device-models-count-buttons"
+                      "description": "Read-only. Number of line keys the model has, from its model definition. Returned on single-phone reads."
                 },
                 "device-models-fxs-support-enabled": {
                       "type": "number",
-                      "description": "device-models-fxs-support-enabled"
+                      "description": "Read-only. Number of FXS (analog) ports the model has, from its model definition. Returned on single-phone reads."
+                },
+                "device-provisioning-overrides-blob": {
+                      "type": "string",
+                      "description": "This phone's own configuration overrides, as `key=\"value\"` pairs separated by spaces, applied on top of the model and domain defaults. Stored as text with no practical length limit. Replaces the deprecated `device-models-overrides-blob`."
                 },
                 "device-models-overrides-blob": {
                       "type": "string",
-                      "description": "device-models-overrides-blob"
+                      "description": "Deprecated: use `device-provisioning-overrides-blob`. Holds the same value, this phone's own overrides, and will be removed in the next release. Still accepted on write, where it sets `device-provisioning-overrides-blob`."
                 },
                 "device-models-resync-support-enabled": {
                       "type": "string",
-                      "description": "device-models-resync-support-enabled"
+                      "description": "Read-only. Whether the model supports a remote resync, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-shared-line-support-enabled": {
                       "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
+                      "description": "Read-only. Whether the model supports shared lines, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-sidecar-support-enabled": {
                       "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
+                      "description": "Whether the phone's model supports a sidecar (expansion module), from its model definition. Returned on single-phone reads. On a write, this name sets the phone's own `device-provisioning-sidecar`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-provisioning-sidecar": {
+                      "type": "string",
+                      "description": "Whether this phone has a sidecar (expansion module) configured. Returned on single-phone reads. Whether its model supports one is `device-models-sidecar-support-enabled`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-last-retrieved-datetime": {
                       "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
+                      "description": "Read-only. When the phone last downloaded its configuration, RFC 3339. `null` until it has, and again after any change to the phone."
                 },
                 "device-provisioning-directory": {
                       "type": "string",
-                      "description": "device-provisioning-directory"
+                      "description": "Phone directory setting for the phone. `disabled` turns the directory off. Default: \"disabled\"",
+                      "default": "disabled"
                 },
                 "device-provisioning-directory-support": {
                       "type": "string",
-                      "description": "device-provisioning-directory-support"
+                      "description": "Read-only. Whether the model supports a phone directory, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-line-1-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
+                      "description": "Read-only. Device name on line 1, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-1`. Returned on single-phone reads."
                 },
                 "device-provisioning-line-2-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
+                      "description": "Read-only. Device name on line 2, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-2`. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 3, without the `sip:` prefix and domain. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 4, without the `sip:` prefix and domain. Returned on single-phone reads."
                 },
                 "device-provisioning-ndp-hostname": {
                       "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
+                      "description": "Read-only. Hostname of the Endpoints server that holds the phone's record. Returned on single-phone reads."
                 },
                 "device-provisioning-presence": {
                       "type": "string",
-                      "description": "device-provisioning-presence"
+                      "description": "Whether the phone shows presence (busy lamp field) for other users. Allowed values: \"enabled\", \"disabled\", \"blf\"",
+                      "enum": [
+                            "enabled",
+                            "disabled",
+                            "blf"
+                      ]
                 },
                 "created-datetime": {
                       "type": "string",
-                      "description": "created-datetime"
+                      "description": "Read-only. When the phone was added, RFC 3339. Updates never change it."
                 },
                 "global-one-time-pass": {
                       "type": "string",
-                      "description": "global-one-time-pass"
+                      "description": "Whether the phone may download its configuration once with the system-wide global password instead of its own credentials. The Endpoints server sets it back to `no` after the phone's next successful download. While it is `yes`, the configuration file endpoints return `409`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "last-modified-datetime": {
                       "type": "string",
-                      "description": "last-modified-datetime"
+                      "description": "Read-only. When the phone's per-phone configuration (`/domains/{domain}/phoneconfiguration/{mac}`) last changed, RFC 3339. Absent when the phone has none."
                 },
                 "redundency": {
                       "type": "string",
-                      "description": "redundency"
+                      "description": "How the phone fails over between core servers. The field name is spelled `redundency`. Allowed values: \"none\", \"force primary\", \"geography\", \"system default\". Default: \"system default\"",
+                      "enum": [
+                            "none",
+                            "force primary",
+                            "geography",
+                            "system default"
+                      ],
+                      "default": "system default"
                 },
                 "device-provisioning-sip-uri-3": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
+                      "description": "Device on line 3, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-3-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
+                      "description": "Whether line 3 is provisioned on the phone. When you assign line 3 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-3-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
+                      "description": "Whether line 3 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-4": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
+                      "description": "Device on line 4, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-4-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
+                      "description": "Whether line 4 is provisioned on the phone. When you assign line 4 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-4-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
+                      "description": "Whether line 4 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-5": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
+                      "description": "Device on line 5, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-5-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
+                      "description": "Whether line 5 is provisioned on the phone. When you assign line 5 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-5-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
+                      "description": "Whether line 5 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-6": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
+                      "description": "Device on line 6, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-6-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
+                      "description": "Whether line 6 is provisioned on the phone. When you assign line 6 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-6-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
+                      "description": "Whether line 6 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-7": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
+                      "description": "Device on line 7, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-7-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
+                      "description": "Whether line 7 is provisioned on the phone. When you assign line 7 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-7-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
+                      "description": "Whether line 7 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-8": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
+                      "description": "Device on line 8, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-8-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
+                      "description": "Whether line 8 is provisioned on the phone. When you assign line 8 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-8-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
+                      "description": "Whether line 8 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
+                },
+                "device-provisioning-line-1-name": {
+                      "type": "string",
+                      "description": "Label shown for line 1 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-2-name": {
+                      "type": "string",
+                      "description": "Label shown for line 2 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-name": {
+                      "type": "string",
+                      "description": "Label shown for line 3 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-name": {
+                      "type": "string",
+                      "description": "Label shown for line 4 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-1-password": {
+                      "type": "string",
+                      "description": "Password for line 1. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-2-password": {
+                      "type": "string",
+                      "description": "Password for line 2. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-3-password": {
+                      "type": "string",
+                      "description": "Password for line 3. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-4-password": {
+                      "type": "string",
+                      "description": "Password for line 4. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-config-filename": {
+                      "type": "string",
+                      "description": "Configuration file name the Endpoints server serves this phone. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy": {
+                      "type": "string",
+                      "description": "Outbound proxy the phone sends SIP through. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy-port": {
+                      "type": "string",
+                      "description": "Port of the outbound proxy. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-local-port": {
+                      "type": "string",
+                      "description": "Local SIP port on the phone. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-codec": {
+                      "type": "string",
+                      "description": "Codec preference for the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-time-zone": {
+                      "type": "string",
+                      "description": "Time zone the phone displays. Returned on single-phone reads."
+                },
+                "device-provisioning-gmt-offset": {
+                      "type": "string",
+                      "description": "Offset from GMT in hours, for models that take an offset instead of a time zone. Returned on single-phone reads. Default: \"-8\"",
+                      "default": "-8"
+                },
+                "device-provisioning-firmware": {
+                      "type": "string",
+                      "description": "Firmware the phone is told to load. Returned on single-phone reads."
+                },
+                "device-provisioning-encryption": {
+                      "type": "string",
+                      "description": "Whether the configuration file is encrypted. Returned on single-phone reads. Allowed values: \"disabled\", \"enabled\"",
+                      "enum": [
+                            "disabled",
+                            "enabled"
+                      ]
+                },
+                "device-provisioning-srtp": {
+                      "type": "string",
+                      "description": "Whether the phone uses SRTP for media. Returned on single-phone reads. Allowed values: \"no\", \"yes\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "yes"
+                      ],
+                      "default": "no"
+                },
+                "device-provisioning-full-provisioning": {
+                      "type": "string",
+                      "description": "Full-provisioning setting for the phone. Returned on single-phone reads."
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "device-sip-registration-contact"
+                      "description": "Read-only. Contact header from line 1's last registration. Returned on single-phone reads."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-datetime"
+                      "description": "Read-only. When line 1 last registered, RFC 3339. Returned on single-phone reads."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
+                      "description": "Read-only. When line 1's current registration expires, RFC 3339. A time in the past means line 1 is not registered."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "device-sip-registration-state"
+                      "description": "Read-only. `registered` while line 1's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. `null` when line 1 is unassigned. Allowed values: \"registered\", \"unregistered\", null",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            null
+                      ]
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "Read-only. User agent of line 1's last registration. Returned on single-phone reads."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Read-only. User that owns line 1 (`device-provisioning-sip-uri-1`)."
+                },
+                "dirs": {
+                      "type": "array",
+                      "description": "Read-only. The domain's phone directories. Returned on a single-phone read through `/domains/{domain}/phones/{mac}` when the model supports a directory."
+                },
+                "api-note": {
+                      "type": "string",
+                      "description": "Read-only. Present when line slots 9 and above were left out of the response because they are unassigned or disabled."
                 }
           },
           "required": [
-                "device-provisioning-mac-address",
-                "domain",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "notes",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /phones',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-provisioning-overrides-blob', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-sidecar', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-line-3-extensions', 'device-provisioning-line-4-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-provisioning-line-1-name', 'device-provisioning-line-2-name', 'device-provisioning-line-3-name', 'device-provisioning-line-4-name', 'device-provisioning-line-1-password', 'device-provisioning-line-2-password', 'device-provisioning-line-3-password', 'device-provisioning-line-4-password', 'device-provisioning-config-filename', 'device-provisioning-outbound-proxy', 'device-provisioning-outbound-proxy-port', 'device-provisioning-local-port', 'device-provisioning-codec', 'device-provisioning-time-zone', 'device-provisioning-gmt-offset', 'device-provisioning-firmware', 'device-provisioning-encryption', 'device-provisioning-srtp', 'device-provisioning-full-provisioning', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent', 'user', 'dirs', 'api-note'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -333,13 +589,13 @@ export const post_phones: ToolDefinition = {
 export const put_phones: ToolDefinition = {
   schema: {
     name: 'put_phones',
-    description: 'Update MAC address — [PUT /phones]',
+    description: 'Update phone — Changes a phone, found by `device-provisioning-mac-address` in the body. Send only the fields to change. When you change a line and leave out `device-models-brand-and-model`, the phone keeps its stored model. A line you assign is enabled unless you send its `device-provisioning-line-N-enabled`. Setting `device-provisioning-line-N-enabled` to `no` on line 1 or 2 clears that line\\\'s extension.  Requires Office Manager, Reseller, or Super User scope. Site Manager can change a phone whose line 1 belongs to a user in its site, and hand line 1 only to a user in its site. Basic User and the other user scopes can change only their own phone, the one whose line 1 they own. Another user\\\'s phone, a phone with nobody on line 1, or giving line 1 to someone else returns `403`. A phone in a domain your token cannot reach returns `404`. Super User can change any phone.  The response is `202`: the change is accepted and applied shortly after. `created-datetime` never changes. Every change clears `device-provisioning-last-retrieved-datetime` until the phone downloads its configuration again. `device-provisioning-password` as returned by a read is masked. Sending that masked value back keeps the stored password. A soft phone model (`Manual or Softphone`) returns `400`.  Every line (`device-provisioning-sip-uri-1` and up) must be a device in the phone\\\'s own domain. Line 1 must also belong to a user you may act for; lines 2 and up can be any device in the domain, for shared or monitored lines. A line from another domain returns `400`. Changing `domain` moves the phone and every line on it: you need access to the target domain (a Reseller, a domain in its own reseller; other scopes, their own domain), or the request returns `403`. — [PUT /phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone, and the key you address it by. Returned as 12 hex digits with no separators. On create you can send `:`, `-`, or `.` separators, which are removed. Anything else returns `400`."
                 },
                 "domain": {
                       "type": "string",
@@ -347,262 +603,466 @@ export const put_phones: ToolDefinition = {
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller (territory) the phone's domain belongs to. Taken from the domain when you leave it out."
                 },
                 "device-models-brand-and-model": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
+                      "description": "Brand and model, separated by a space, as listed by `GET /phones/models`. Required on create. On an update that changes a line, the stored model is used when you leave it out. A soft phone (`Manual or Softphone`) or a blank model returns `400`."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "device-provisioning-registration-core-server"
+                      "description": "Hostname of the core server the phone registers to. Defaults to the platform's configured core server on create."
                 },
                 "notes": {
                       "type": "string",
-                      "description": "notes"
+                      "description": "Free-text notes about the phone."
                 },
                 "device-provisioning-sip-uri-1": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
+                      "description": "Device on line 1, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned. The user who owns this device is the phone's user. Basic User and the other user scopes can assign only their own device here, and Site Manager only a device of a user in its site."
                 },
                 "device-provisioning-line-1-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 1 is provisioned on the phone. When you assign line 1 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-1-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
+                      "description": "Whether line 1 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-2": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
+                      "description": "Device on line 2, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-2-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 2 is provisioned on the phone. When you assign line 2 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-2-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
+                      "description": "Whether line 2 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "enum": [
+                            "udp",
+                            "tcp",
+                            "tls"
+                      ],
+                      "default": "udp"
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "device-provisioning-username"
+                      "description": "Username the phone uses to download its configuration file from the Endpoints server."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "device-provisioning-password"
+                      "description": "Password the phone uses to download its configuration file. Masked unless the phone is your own, or you are a Super User sending `include-secrets=yes`. Sending the masked value back keeps the stored password."
                 },
                 "device-models-count-buttons": {
                       "type": "number",
-                      "description": "device-models-count-buttons"
+                      "description": "Read-only. Number of line keys the model has, from its model definition. Returned on single-phone reads."
                 },
                 "device-models-fxs-support-enabled": {
                       "type": "number",
-                      "description": "device-models-fxs-support-enabled"
+                      "description": "Read-only. Number of FXS (analog) ports the model has, from its model definition. Returned on single-phone reads."
+                },
+                "device-provisioning-overrides-blob": {
+                      "type": "string",
+                      "description": "This phone's own configuration overrides, as `key=\"value\"` pairs separated by spaces, applied on top of the model and domain defaults. Stored as text with no practical length limit. Replaces the deprecated `device-models-overrides-blob`."
                 },
                 "device-models-overrides-blob": {
                       "type": "string",
-                      "description": "device-models-overrides-blob"
+                      "description": "Deprecated: use `device-provisioning-overrides-blob`. Holds the same value, this phone's own overrides, and will be removed in the next release. Still accepted on write, where it sets `device-provisioning-overrides-blob`."
                 },
                 "device-models-resync-support-enabled": {
                       "type": "string",
-                      "description": "device-models-resync-support-enabled"
+                      "description": "Read-only. Whether the model supports a remote resync, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-shared-line-support-enabled": {
                       "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
+                      "description": "Read-only. Whether the model supports shared lines, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-sidecar-support-enabled": {
                       "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
+                      "description": "Whether the phone's model supports a sidecar (expansion module), from its model definition. Returned on single-phone reads. On a write, this name sets the phone's own `device-provisioning-sidecar`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-provisioning-sidecar": {
+                      "type": "string",
+                      "description": "Whether this phone has a sidecar (expansion module) configured. Returned on single-phone reads. Whether its model supports one is `device-models-sidecar-support-enabled`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-last-retrieved-datetime": {
                       "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
+                      "description": "Read-only. When the phone last downloaded its configuration, RFC 3339. `null` until it has, and again after any change to the phone."
                 },
                 "device-provisioning-directory": {
                       "type": "string",
-                      "description": "device-provisioning-directory"
+                      "description": "Phone directory setting for the phone. `disabled` turns the directory off. Default: \"disabled\"",
+                      "default": "disabled"
                 },
                 "device-provisioning-directory-support": {
                       "type": "string",
-                      "description": "device-provisioning-directory-support"
+                      "description": "Read-only. Whether the model supports a phone directory, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-line-1-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
+                      "description": "Read-only. Device name on line 1, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-1`. Returned on single-phone reads."
                 },
                 "device-provisioning-line-2-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
+                      "description": "Read-only. Device name on line 2, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-2`. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 3, without the `sip:` prefix and domain. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 4, without the `sip:` prefix and domain. Returned on single-phone reads."
                 },
                 "device-provisioning-ndp-hostname": {
                       "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
+                      "description": "Read-only. Hostname of the Endpoints server that holds the phone's record. Returned on single-phone reads."
                 },
                 "device-provisioning-presence": {
                       "type": "string",
-                      "description": "device-provisioning-presence"
+                      "description": "Whether the phone shows presence (busy lamp field) for other users. Allowed values: \"enabled\", \"disabled\", \"blf\"",
+                      "enum": [
+                            "enabled",
+                            "disabled",
+                            "blf"
+                      ]
                 },
                 "created-datetime": {
                       "type": "string",
-                      "description": "created-datetime"
+                      "description": "Read-only. When the phone was added, RFC 3339. Updates never change it."
                 },
                 "global-one-time-pass": {
                       "type": "string",
-                      "description": "global-one-time-pass"
+                      "description": "Whether the phone may download its configuration once with the system-wide global password instead of its own credentials. The Endpoints server sets it back to `no` after the phone's next successful download. While it is `yes`, the configuration file endpoints return `409`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "last-modified-datetime": {
                       "type": "string",
-                      "description": "last-modified-datetime"
+                      "description": "Read-only. When the phone's per-phone configuration (`/domains/{domain}/phoneconfiguration/{mac}`) last changed, RFC 3339. Absent when the phone has none."
                 },
                 "redundency": {
                       "type": "string",
-                      "description": "redundency"
+                      "description": "How the phone fails over between core servers. The field name is spelled `redundency`. Allowed values: \"none\", \"force primary\", \"geography\", \"system default\". Default: \"system default\"",
+                      "enum": [
+                            "none",
+                            "force primary",
+                            "geography",
+                            "system default"
+                      ],
+                      "default": "system default"
                 },
                 "device-provisioning-sip-uri-3": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
+                      "description": "Device on line 3, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-3-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
+                      "description": "Whether line 3 is provisioned on the phone. When you assign line 3 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-3-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
+                      "description": "Whether line 3 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-4": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
+                      "description": "Device on line 4, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-4-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
+                      "description": "Whether line 4 is provisioned on the phone. When you assign line 4 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-4-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
+                      "description": "Whether line 4 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-5": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
+                      "description": "Device on line 5, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-5-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
+                      "description": "Whether line 5 is provisioned on the phone. When you assign line 5 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-5-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
+                      "description": "Whether line 5 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-6": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
+                      "description": "Device on line 6, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-6-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
+                      "description": "Whether line 6 is provisioned on the phone. When you assign line 6 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-6-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
+                      "description": "Whether line 6 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-7": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
+                      "description": "Device on line 7, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-7-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
+                      "description": "Whether line 7 is provisioned on the phone. When you assign line 7 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-7-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
+                      "description": "Whether line 7 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-8": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
+                      "description": "Device on line 8, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-8-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
+                      "description": "Whether line 8 is provisioned on the phone. When you assign line 8 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-8-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
+                      "description": "Whether line 8 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
+                },
+                "device-provisioning-line-1-name": {
+                      "type": "string",
+                      "description": "Label shown for line 1 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-2-name": {
+                      "type": "string",
+                      "description": "Label shown for line 2 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-name": {
+                      "type": "string",
+                      "description": "Label shown for line 3 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-name": {
+                      "type": "string",
+                      "description": "Label shown for line 4 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-1-password": {
+                      "type": "string",
+                      "description": "Password for line 1. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-2-password": {
+                      "type": "string",
+                      "description": "Password for line 2. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-3-password": {
+                      "type": "string",
+                      "description": "Password for line 3. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-4-password": {
+                      "type": "string",
+                      "description": "Password for line 4. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-config-filename": {
+                      "type": "string",
+                      "description": "Configuration file name the Endpoints server serves this phone. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy": {
+                      "type": "string",
+                      "description": "Outbound proxy the phone sends SIP through. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy-port": {
+                      "type": "string",
+                      "description": "Port of the outbound proxy. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-local-port": {
+                      "type": "string",
+                      "description": "Local SIP port on the phone. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-codec": {
+                      "type": "string",
+                      "description": "Codec preference for the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-time-zone": {
+                      "type": "string",
+                      "description": "Time zone the phone displays. Returned on single-phone reads."
+                },
+                "device-provisioning-gmt-offset": {
+                      "type": "string",
+                      "description": "Offset from GMT in hours, for models that take an offset instead of a time zone. Returned on single-phone reads. Default: \"-8\"",
+                      "default": "-8"
+                },
+                "device-provisioning-firmware": {
+                      "type": "string",
+                      "description": "Firmware the phone is told to load. Returned on single-phone reads."
+                },
+                "device-provisioning-encryption": {
+                      "type": "string",
+                      "description": "Whether the configuration file is encrypted. Returned on single-phone reads. Allowed values: \"disabled\", \"enabled\"",
+                      "enum": [
+                            "disabled",
+                            "enabled"
+                      ]
+                },
+                "device-provisioning-srtp": {
+                      "type": "string",
+                      "description": "Whether the phone uses SRTP for media. Returned on single-phone reads. Allowed values: \"no\", \"yes\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "yes"
+                      ],
+                      "default": "no"
+                },
+                "device-provisioning-full-provisioning": {
+                      "type": "string",
+                      "description": "Full-provisioning setting for the phone. Returned on single-phone reads."
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "device-sip-registration-contact"
+                      "description": "Read-only. Contact header from line 1's last registration. Returned on single-phone reads."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-datetime"
+                      "description": "Read-only. When line 1 last registered, RFC 3339. Returned on single-phone reads."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
+                      "description": "Read-only. When line 1's current registration expires, RFC 3339. A time in the past means line 1 is not registered."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "device-sip-registration-state"
+                      "description": "Read-only. `registered` while line 1's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. `null` when line 1 is unassigned. Allowed values: \"registered\", \"unregistered\", null",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            null
+                      ]
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "Read-only. User agent of line 1's last registration. Returned on single-phone reads."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Read-only. User that owns line 1 (`device-provisioning-sip-uri-1`)."
+                },
+                "dirs": {
+                      "type": "array",
+                      "description": "Read-only. The domain's phone directories. Returned on a single-phone read through `/domains/{domain}/phones/{mac}` when the model supports a directory."
+                },
+                "api-note": {
+                      "type": "string",
+                      "description": "Read-only. Present when line slots 9 and above were left out of the response because they are unassigned or disabled."
                 }
           },
           "required": [
-                "device-provisioning-mac-address",
-                "domain",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "notes",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /phones',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-provisioning-overrides-blob', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-sidecar', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-line-3-extensions', 'device-provisioning-line-4-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-provisioning-line-1-name', 'device-provisioning-line-2-name', 'device-provisioning-line-3-name', 'device-provisioning-line-4-name', 'device-provisioning-line-1-password', 'device-provisioning-line-2-password', 'device-provisioning-line-3-password', 'device-provisioning-line-4-password', 'device-provisioning-config-filename', 'device-provisioning-outbound-proxy', 'device-provisioning-outbound-proxy-port', 'device-provisioning-local-port', 'device-provisioning-codec', 'device-provisioning-time-zone', 'device-provisioning-gmt-offset', 'device-provisioning-firmware', 'device-provisioning-encryption', 'device-provisioning-srtp', 'device-provisioning-full-provisioning', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent', 'user', 'dirs', 'api-note'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -625,266 +1085,40 @@ export const put_phones: ToolDefinition = {
 export const delete_phones: ToolDefinition = {
   schema: {
     name: 'delete_phones',
-    description: 'Remove MAC address — [DELETE /phones]',
+    description: 'Delete phone — Removes a phone from the Endpoints server inventory, found by `device-provisioning-mac-address` in the body or query string. Send `domain` too unless you are a Super User. The phone\\\'s own configuration (`/domains/{domain}/phoneconfiguration/{mac}`) is removed with it. To free one line instead of removing the phone, also send `id` (the device on that line) and `user` (its owner). If that device is on line 2 or higher, only that line is cleared and the phone stays. On line 1, or when the device\\\'s line cannot be found, the whole phone is removed.  Requires Office Manager, Reseller, or Super User scope. Site Manager can remove phones whose line 1 belongs to a user in its site. Basic User and the other user scopes can remove only their own phone, the one whose line 1 they own. A phone filed in a domain other than the one you name returns `404`.  The response is `202`: the removal is accepted and applied shortly after. The devices on the phone\\\'s lines are not removed. — [DELETE /phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone: 12 hex digits with no separators."
                 },
-                "reseller": {
+                "domain": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Domain the phone belongs to. Required unless you are a Super User. Not needed on `/domains/{domain}/phones`, where the path names it."
                 },
-                "device-models-brand-and-model": {
+                "id": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
+                      "description": "Device to take off the phone, such as `1002a`. Send it with `user` to free only that device's line. If the device is on line 1, the whole phone is removed."
                 },
-                "device-provisioning-registration-core-server": {
+                "user": {
                       "type": "string",
-                      "description": "device-provisioning-registration-core-server"
-                },
-                "device-provisioning-sip-uri-1": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
-                },
-                "device-provisioning-line-1-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "device-provisioning-sip-uri-1-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-2": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
-                },
-                "device-provisioning-line-2-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "device-provisioning-sip-uri-2-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
-                },
-                "device-provisioning-sip-transport-protocol": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
-                },
-                "device-provisioning-username": {
-                      "type": "string",
-                      "description": "device-provisioning-username"
-                },
-                "device-provisioning-password": {
-                      "type": "string",
-                      "description": "device-provisioning-password"
-                },
-                "device-models-count-buttons": {
-                      "type": "number",
-                      "description": "device-models-count-buttons"
-                },
-                "device-models-fxs-support-enabled": {
-                      "type": "number",
-                      "description": "device-models-fxs-support-enabled"
-                },
-                "device-models-overrides-blob": {
-                      "type": "string",
-                      "description": "device-models-overrides-blob"
-                },
-                "device-models-resync-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-resync-support-enabled"
-                },
-                "device-models-shared-line-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
-                },
-                "device-models-sidecar-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
-                },
-                "device-provisioning-last-retrieved-datetime": {
-                      "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
-                },
-                "device-provisioning-directory": {
-                      "type": "string",
-                      "description": "device-provisioning-directory"
-                },
-                "device-provisioning-directory-support": {
-                      "type": "string",
-                      "description": "device-provisioning-directory-support"
-                },
-                "device-provisioning-line-1-extensions": {
-                      "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
-                },
-                "device-provisioning-line-2-extensions": {
-                      "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
-                },
-                "device-provisioning-ndp-hostname": {
-                      "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
-                },
-                "device-provisioning-presence": {
-                      "type": "string",
-                      "description": "device-provisioning-presence"
-                },
-                "created-datetime": {
-                      "type": "string",
-                      "description": "created-datetime"
-                },
-                "global-one-time-pass": {
-                      "type": "string",
-                      "description": "global-one-time-pass"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "last-modified-datetime"
-                },
-                "redundency": {
-                      "type": "string",
-                      "description": "redundency"
-                },
-                "device-provisioning-sip-uri-3": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
-                },
-                "device-provisioning-line-3-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
-                },
-                "device-provisioning-sip-uri-3-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-4": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
-                },
-                "device-provisioning-line-4-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
-                },
-                "device-provisioning-sip-uri-4-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-5": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
-                },
-                "device-provisioning-line-5-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
-                },
-                "device-provisioning-sip-uri-5-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-6": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
-                },
-                "device-provisioning-line-6-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
-                },
-                "device-provisioning-sip-uri-6-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-7": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
-                },
-                "device-provisioning-line-7-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
-                },
-                "device-provisioning-sip-uri-7-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-8": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
-                },
-                "device-provisioning-line-8-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
-                },
-                "device-provisioning-sip-uri-8-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
-                },
-                "device-sip-registration-contact": {
-                      "type": "string",
-                      "description": "device-sip-registration-contact"
-                },
-                "device-sip-registration-datetime": {
-                      "type": "string",
-                      "description": "device-sip-registration-datetime"
-                },
-                "device-sip-registration-expires-datetime": {
-                      "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
-                },
-                "device-sip-registration-state": {
-                      "type": "string",
-                      "description": "device-sip-registration-state"
-                },
-                "device-sip-registration-user-agent": {
-                      "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "User that owns the device in `id`, such as `1002`. Needed only when freeing one line."
                 }
           },
           "required": [
-                "device-provisioning-mac-address",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /phones',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['device-provisioning-mac-address', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'id', 'user'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -904,45 +1138,59 @@ export const delete_phones: ToolDefinition = {
   },
 };
 
-export const get_phones_count: ToolDefinition = {
-  schema: {
-    name: 'get_phones_count',
-    description: 'Count Mac Addresses — [GET /phones/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/phones/count',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_domains_by_domain_phones: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phones',
-    description: 'Read Mac Addresses in Domain — [GET /domains/{domain}/phones]',
+    description: 'List phones in domain — Lists the domain\\\'s provisioned phones by MAC address, with each phone\\\'s model, line assignments, and line 1 registration state. Requires Office Manager, Reseller, or Super User scope. Site Manager uses `GET /domains/{domain}/phones/list` instead, and Basic User and the other user scopes read their own phone with `GET /domains/{domain}/phones/{mac}`.  Results are paged with `start` and `limit`. Get the total with `GET /domains/{domain}/phones/count`, or a reduced row per phone with `GET /domains/{domain}/phones/list`. Per-line passwords are left out, and `device-provisioning-password` is masked except on your own phone. A Super User can send `include-secrets=yes` to get them in plaintext. The reveal is audit-logged.  A phone\\\'s own configuration overrides are returned as `device-provisioning-overrides-blob`. The same value is also returned as `device-models-overrides-blob`, which is deprecated and will be removed in the next release. — [GET /domains/{domain}/phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
                       "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only phones whose line 1 belongs to a user in this site. Phones with no user on line 1 are left out. Paging applies after this filter."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `device-provisioning-password` and the per-line passwords in plaintext. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -950,13 +1198,19 @@ export const get_domains_by_domain_phones: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phones',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['limit', 'start', 'device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension', 'site', 'include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -980,7 +1234,7 @@ export const get_domains_by_domain_phones: ToolDefinition = {
 export const post_domains_by_domain_phones: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_phones',
-    description: 'Add MAC address for Domain — [POST /domains/{domain}/phones]',
+    description: 'Add phone in domain — Adds a phone to the domain\\\'s inventory on the Endpoints server by MAC address, so it can download its configuration. Send `device-provisioning-mac-address` and `device-models-brand-and-model`. The MAC address can use `:`, `-`, or `.` separators, and is stored as 12 bare hex digits. Assign lines with `device-provisioning-sip-uri-1` to `device-provisioning-sip-uri-8`. A line you assign is enabled unless you send its `device-provisioning-line-N-enabled`. The user who owns line 1 is the phone\\\'s user. The domain comes from the path.  Requires Site Manager, Office Manager, Reseller, or Super User scope. Site Manager can put only a device of a user in its site on line 1. Basic User and the other user scopes can add a phone only with their own device on line 1.  The response is `202`: the phone is accepted and added shortly after. A MAC address that already exists in any domain returns `409`. A soft phone model (`Manual or Softphone`) or a blank model returns `400`, because there is nothing to provision. For Yealink, Polycom, Snom, Fanvil, Grandstream, and Htek phones, the MAC address is also registered with the vendor\\\'s zero-touch provisioning service when the platform has one configured.  Every line (`device-provisioning-sip-uri-1` and up) must be a device in the phone\\\'s own domain. Line 1 must also belong to a user you may act for; lines 2 and up can be any device in the domain, for shared or monitored lines. A line from another domain returns `400`. — [POST /domains/{domain}/phones]',
     inputSchema: {
           "type": "object",
           "properties": {
@@ -990,263 +1244,468 @@ export const post_domains_by_domain_phones: ToolDefinition = {
                 },
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone, and the key you address it by. Returned as 12 hex digits with no separators. On create you can send `:`, `-`, or `.` separators, which are removed. Anything else returns `400`."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller (territory) the phone's domain belongs to. Taken from the domain when you leave it out."
                 },
                 "device-models-brand-and-model": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
+                      "description": "Brand and model, separated by a space, as listed by `GET /phones/models`. Required on create. On an update that changes a line, the stored model is used when you leave it out. A soft phone (`Manual or Softphone`) or a blank model returns `400`."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "device-provisioning-registration-core-server"
+                      "description": "Hostname of the core server the phone registers to. Defaults to the platform's configured core server on create."
                 },
                 "notes": {
                       "type": "string",
-                      "description": "notes"
+                      "description": "Free-text notes about the phone."
                 },
                 "device-provisioning-sip-uri-1": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
+                      "description": "Device on line 1, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned. The user who owns this device is the phone's user. Basic User and the other user scopes can assign only their own device here, and Site Manager only a device of a user in its site."
                 },
                 "device-provisioning-line-1-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 1 is provisioned on the phone. When you assign line 1 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-1-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
+                      "description": "Whether line 1 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-2": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
+                      "description": "Device on line 2, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-2-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 2 is provisioned on the phone. When you assign line 2 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-2-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
+                      "description": "Whether line 2 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "enum": [
+                            "udp",
+                            "tcp",
+                            "tls"
+                      ],
+                      "default": "udp"
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "device-provisioning-username"
+                      "description": "Username the phone uses to download its configuration file from the Endpoints server."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "device-provisioning-password"
+                      "description": "Password the phone uses to download its configuration file. Masked unless the phone is your own, or you are a Super User sending `include-secrets=yes`. Sending the masked value back keeps the stored password."
                 },
                 "device-models-count-buttons": {
                       "type": "number",
-                      "description": "device-models-count-buttons"
+                      "description": "Read-only. Number of line keys the model has, from its model definition. Returned on single-phone reads."
                 },
                 "device-models-fxs-support-enabled": {
                       "type": "number",
-                      "description": "device-models-fxs-support-enabled"
+                      "description": "Read-only. Number of FXS (analog) ports the model has, from its model definition. Returned on single-phone reads."
+                },
+                "device-provisioning-overrides-blob": {
+                      "type": "string",
+                      "description": "This phone's own configuration overrides, as `key=\"value\"` pairs separated by spaces, applied on top of the model and domain defaults. Stored as text with no practical length limit. Replaces the deprecated `device-models-overrides-blob`."
                 },
                 "device-models-overrides-blob": {
                       "type": "string",
-                      "description": "device-models-overrides-blob"
+                      "description": "Deprecated: use `device-provisioning-overrides-blob`. Holds the same value, this phone's own overrides, and will be removed in the next release. Still accepted on write, where it sets `device-provisioning-overrides-blob`."
                 },
                 "device-models-resync-support-enabled": {
                       "type": "string",
-                      "description": "device-models-resync-support-enabled"
+                      "description": "Read-only. Whether the model supports a remote resync, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-shared-line-support-enabled": {
                       "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
+                      "description": "Read-only. Whether the model supports shared lines, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-sidecar-support-enabled": {
                       "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
+                      "description": "Whether the phone's model supports a sidecar (expansion module), from its model definition. Returned on single-phone reads. On a write, this name sets the phone's own `device-provisioning-sidecar`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-provisioning-sidecar": {
+                      "type": "string",
+                      "description": "Whether this phone has a sidecar (expansion module) configured. Returned on single-phone reads. Whether its model supports one is `device-models-sidecar-support-enabled`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-last-retrieved-datetime": {
                       "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
+                      "description": "Read-only. When the phone last downloaded its configuration, RFC 3339. `null` until it has, and again after any change to the phone."
                 },
                 "device-provisioning-directory": {
                       "type": "string",
-                      "description": "device-provisioning-directory"
+                      "description": "Phone directory setting for the phone. `disabled` turns the directory off. Default: \"disabled\"",
+                      "default": "disabled"
                 },
                 "device-provisioning-directory-support": {
                       "type": "string",
-                      "description": "device-provisioning-directory-support"
+                      "description": "Read-only. Whether the model supports a phone directory, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-line-1-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
+                      "description": "Read-only. Device name on line 1, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-1`. Returned on single-phone reads."
                 },
                 "device-provisioning-line-2-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
+                      "description": "Read-only. Device name on line 2, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-2`. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 3, without the `sip:` prefix and domain. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 4, without the `sip:` prefix and domain. Returned on single-phone reads."
                 },
                 "device-provisioning-ndp-hostname": {
                       "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
+                      "description": "Read-only. Hostname of the Endpoints server that holds the phone's record. Returned on single-phone reads."
                 },
                 "device-provisioning-presence": {
                       "type": "string",
-                      "description": "device-provisioning-presence"
+                      "description": "Whether the phone shows presence (busy lamp field) for other users. Allowed values: \"enabled\", \"disabled\", \"blf\"",
+                      "enum": [
+                            "enabled",
+                            "disabled",
+                            "blf"
+                      ]
                 },
                 "created-datetime": {
                       "type": "string",
-                      "description": "created-datetime"
+                      "description": "Read-only. When the phone was added, RFC 3339. Updates never change it."
                 },
                 "global-one-time-pass": {
                       "type": "string",
-                      "description": "global-one-time-pass"
+                      "description": "Whether the phone may download its configuration once with the system-wide global password instead of its own credentials. The Endpoints server sets it back to `no` after the phone's next successful download. While it is `yes`, the configuration file endpoints return `409`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "last-modified-datetime": {
                       "type": "string",
-                      "description": "last-modified-datetime"
+                      "description": "Read-only. When the phone's per-phone configuration (`/domains/{domain}/phoneconfiguration/{mac}`) last changed, RFC 3339. Absent when the phone has none."
                 },
                 "redundency": {
                       "type": "string",
-                      "description": "redundency"
+                      "description": "How the phone fails over between core servers. The field name is spelled `redundency`. Allowed values: \"none\", \"force primary\", \"geography\", \"system default\". Default: \"system default\"",
+                      "enum": [
+                            "none",
+                            "force primary",
+                            "geography",
+                            "system default"
+                      ],
+                      "default": "system default"
                 },
                 "device-provisioning-sip-uri-3": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
+                      "description": "Device on line 3, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-3-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
+                      "description": "Whether line 3 is provisioned on the phone. When you assign line 3 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-3-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
+                      "description": "Whether line 3 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-4": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
+                      "description": "Device on line 4, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-4-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
+                      "description": "Whether line 4 is provisioned on the phone. When you assign line 4 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-4-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
+                      "description": "Whether line 4 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-5": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
+                      "description": "Device on line 5, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-5-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
+                      "description": "Whether line 5 is provisioned on the phone. When you assign line 5 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-5-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
+                      "description": "Whether line 5 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-6": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
+                      "description": "Device on line 6, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-6-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
+                      "description": "Whether line 6 is provisioned on the phone. When you assign line 6 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-6-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
+                      "description": "Whether line 6 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-7": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
+                      "description": "Device on line 7, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-7-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
+                      "description": "Whether line 7 is provisioned on the phone. When you assign line 7 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-7-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
+                      "description": "Whether line 7 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-8": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
+                      "description": "Device on line 8, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-8-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
+                      "description": "Whether line 8 is provisioned on the phone. When you assign line 8 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-8-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
+                      "description": "Whether line 8 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
+                },
+                "device-provisioning-line-1-name": {
+                      "type": "string",
+                      "description": "Label shown for line 1 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-2-name": {
+                      "type": "string",
+                      "description": "Label shown for line 2 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-name": {
+                      "type": "string",
+                      "description": "Label shown for line 3 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-name": {
+                      "type": "string",
+                      "description": "Label shown for line 4 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-1-password": {
+                      "type": "string",
+                      "description": "Password for line 1. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-2-password": {
+                      "type": "string",
+                      "description": "Password for line 2. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-3-password": {
+                      "type": "string",
+                      "description": "Password for line 3. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-4-password": {
+                      "type": "string",
+                      "description": "Password for line 4. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-config-filename": {
+                      "type": "string",
+                      "description": "Configuration file name the Endpoints server serves this phone. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy": {
+                      "type": "string",
+                      "description": "Outbound proxy the phone sends SIP through. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy-port": {
+                      "type": "string",
+                      "description": "Port of the outbound proxy. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-local-port": {
+                      "type": "string",
+                      "description": "Local SIP port on the phone. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-codec": {
+                      "type": "string",
+                      "description": "Codec preference for the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-time-zone": {
+                      "type": "string",
+                      "description": "Time zone the phone displays. Returned on single-phone reads."
+                },
+                "device-provisioning-gmt-offset": {
+                      "type": "string",
+                      "description": "Offset from GMT in hours, for models that take an offset instead of a time zone. Returned on single-phone reads. Default: \"-8\"",
+                      "default": "-8"
+                },
+                "device-provisioning-firmware": {
+                      "type": "string",
+                      "description": "Firmware the phone is told to load. Returned on single-phone reads."
+                },
+                "device-provisioning-encryption": {
+                      "type": "string",
+                      "description": "Whether the configuration file is encrypted. Returned on single-phone reads. Allowed values: \"disabled\", \"enabled\"",
+                      "enum": [
+                            "disabled",
+                            "enabled"
+                      ]
+                },
+                "device-provisioning-srtp": {
+                      "type": "string",
+                      "description": "Whether the phone uses SRTP for media. Returned on single-phone reads. Allowed values: \"no\", \"yes\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "yes"
+                      ],
+                      "default": "no"
+                },
+                "device-provisioning-full-provisioning": {
+                      "type": "string",
+                      "description": "Full-provisioning setting for the phone. Returned on single-phone reads."
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "device-sip-registration-contact"
+                      "description": "Read-only. Contact header from line 1's last registration. Returned on single-phone reads."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-datetime"
+                      "description": "Read-only. When line 1 last registered, RFC 3339. Returned on single-phone reads."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
+                      "description": "Read-only. When line 1's current registration expires, RFC 3339. A time in the past means line 1 is not registered."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "device-sip-registration-state"
+                      "description": "Read-only. `registered` while line 1's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. `null` when line 1 is unassigned. Allowed values: \"registered\", \"unregistered\", null",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            null
+                      ]
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "Read-only. User agent of line 1's last registration. Returned on single-phone reads."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Read-only. User that owns line 1 (`device-provisioning-sip-uri-1`)."
+                },
+                "dirs": {
+                      "type": "array",
+                      "description": "Read-only. The domain's phone directories. Returned on a single-phone read through `/domains/{domain}/phones/{mac}` when the model supports a directory."
+                },
+                "api-note": {
+                      "type": "string",
+                      "description": "Read-only. Present when line slots 9 and above were left out of the response because they are unassigned or disabled."
                 }
           },
           "required": [
                 "domain",
-                "device-provisioning-mac-address",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "notes",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/phones',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1254,7 +1713,7 @@ export const post_domains_by_domain_phones: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-provisioning-overrides-blob', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-sidecar', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-line-3-extensions', 'device-provisioning-line-4-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-provisioning-line-1-name', 'device-provisioning-line-2-name', 'device-provisioning-line-3-name', 'device-provisioning-line-4-name', 'device-provisioning-line-1-password', 'device-provisioning-line-2-password', 'device-provisioning-line-3-password', 'device-provisioning-line-4-password', 'device-provisioning-config-filename', 'device-provisioning-outbound-proxy', 'device-provisioning-outbound-proxy-port', 'device-provisioning-local-port', 'device-provisioning-codec', 'device-provisioning-time-zone', 'device-provisioning-gmt-offset', 'device-provisioning-firmware', 'device-provisioning-encryption', 'device-provisioning-srtp', 'device-provisioning-full-provisioning', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent', 'user', 'dirs', 'api-note'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1278,7 +1737,7 @@ export const post_domains_by_domain_phones: ToolDefinition = {
 export const put_domains_by_domain_phones: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_phones',
-    description: 'Update MAC address in Domain — [PUT /domains/{domain}/phones]',
+    description: 'Update phone in domain — Changes a phone in the domain, found by `device-provisioning-mac-address` in the body. Send only the fields to change. When you change a line and leave out `device-models-brand-and-model`, the phone keeps its stored model. A line you assign is enabled unless you send its `device-provisioning-line-N-enabled`. Setting `device-provisioning-line-N-enabled` to `no` on line 1 or 2 clears that line\\\'s extension.  Requires Office Manager, Reseller, or Super User scope. Site Manager can change a phone whose line 1 belongs to a user in its site, and hand line 1 only to a user in its site. Basic User and the other user scopes can change only their own phone, the one whose line 1 they own. Another user\\\'s phone, a phone with nobody on line 1, or giving line 1 to someone else returns `403`. A phone in a domain your token cannot reach returns `404`. Super User can change any phone.  The response is `202`: the change is accepted and applied shortly after. `created-datetime` never changes. Every change clears `device-provisioning-last-retrieved-datetime` until the phone downloads its configuration again. `device-provisioning-password` as returned by a read is masked. Sending that masked value back keeps the stored password. A soft phone model (`Manual or Softphone`) returns `400`.  Every line (`device-provisioning-sip-uri-1` and up) must be a device in the phone\\\'s own domain. Line 1 must also belong to a user you may act for; lines 2 and up can be any device in the domain, for shared or monitored lines. A line from another domain returns `400`. Changing `domain` moves the phone and every line on it: you need access to the target domain (a Reseller, a domain in its own reseller; other scopes, their own domain), or the request returns `403`. — [PUT /domains/{domain}/phones]',
     inputSchema: {
           "type": "object",
           "properties": {
@@ -1288,263 +1747,468 @@ export const put_domains_by_domain_phones: ToolDefinition = {
                 },
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone, and the key you address it by. Returned as 12 hex digits with no separators. On create you can send `:`, `-`, or `.` separators, which are removed. Anything else returns `400`."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller (territory) the phone's domain belongs to. Taken from the domain when you leave it out."
                 },
                 "device-models-brand-and-model": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
+                      "description": "Brand and model, separated by a space, as listed by `GET /phones/models`. Required on create. On an update that changes a line, the stored model is used when you leave it out. A soft phone (`Manual or Softphone`) or a blank model returns `400`."
                 },
                 "device-provisioning-registration-core-server": {
                       "type": "string",
-                      "description": "device-provisioning-registration-core-server"
+                      "description": "Hostname of the core server the phone registers to. Defaults to the platform's configured core server on create."
                 },
                 "notes": {
                       "type": "string",
-                      "description": "notes"
+                      "description": "Free-text notes about the phone."
                 },
                 "device-provisioning-sip-uri-1": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
+                      "description": "Device on line 1, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned. The user who owns this device is the phone's user. Basic User and the other user scopes can assign only their own device here, and Site Manager only a device of a user in its site."
                 },
                 "device-provisioning-line-1-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 1 is provisioned on the phone. When you assign line 1 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-1-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
+                      "description": "Whether line 1 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-2": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
+                      "description": "Device on line 2, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-2-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether line 2 is provisioned on the phone. When you assign line 2 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-2-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
+                      "description": "Whether line 2 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-transport-protocol": {
                       "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
+                      "description": "SIP transport the phone is configured to use. Allowed values: \"udp\", \"tcp\", \"tls\". Default: \"udp\"",
+                      "enum": [
+                            "udp",
+                            "tcp",
+                            "tls"
+                      ],
+                      "default": "udp"
                 },
                 "device-provisioning-username": {
                       "type": "string",
-                      "description": "device-provisioning-username"
+                      "description": "Username the phone uses to download its configuration file from the Endpoints server."
                 },
                 "device-provisioning-password": {
                       "type": "string",
-                      "description": "device-provisioning-password"
+                      "description": "Password the phone uses to download its configuration file. Masked unless the phone is your own, or you are a Super User sending `include-secrets=yes`. Sending the masked value back keeps the stored password."
                 },
                 "device-models-count-buttons": {
                       "type": "number",
-                      "description": "device-models-count-buttons"
+                      "description": "Read-only. Number of line keys the model has, from its model definition. Returned on single-phone reads."
                 },
                 "device-models-fxs-support-enabled": {
                       "type": "number",
-                      "description": "device-models-fxs-support-enabled"
+                      "description": "Read-only. Number of FXS (analog) ports the model has, from its model definition. Returned on single-phone reads."
+                },
+                "device-provisioning-overrides-blob": {
+                      "type": "string",
+                      "description": "This phone's own configuration overrides, as `key=\"value\"` pairs separated by spaces, applied on top of the model and domain defaults. Stored as text with no practical length limit. Replaces the deprecated `device-models-overrides-blob`."
                 },
                 "device-models-overrides-blob": {
                       "type": "string",
-                      "description": "device-models-overrides-blob"
+                      "description": "Deprecated: use `device-provisioning-overrides-blob`. Holds the same value, this phone's own overrides, and will be removed in the next release. Still accepted on write, where it sets `device-provisioning-overrides-blob`."
                 },
                 "device-models-resync-support-enabled": {
                       "type": "string",
-                      "description": "device-models-resync-support-enabled"
+                      "description": "Read-only. Whether the model supports a remote resync, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-shared-line-support-enabled": {
                       "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
+                      "description": "Read-only. Whether the model supports shared lines, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-models-sidecar-support-enabled": {
                       "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
+                      "description": "Whether the phone's model supports a sidecar (expansion module), from its model definition. Returned on single-phone reads. On a write, this name sets the phone's own `device-provisioning-sidecar`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "device-provisioning-sidecar": {
+                      "type": "string",
+                      "description": "Whether this phone has a sidecar (expansion module) configured. Returned on single-phone reads. Whether its model supports one is `device-models-sidecar-support-enabled`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-last-retrieved-datetime": {
                       "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
+                      "description": "Read-only. When the phone last downloaded its configuration, RFC 3339. `null` until it has, and again after any change to the phone."
                 },
                 "device-provisioning-directory": {
                       "type": "string",
-                      "description": "device-provisioning-directory"
+                      "description": "Phone directory setting for the phone. `disabled` turns the directory off. Default: \"disabled\"",
+                      "default": "disabled"
                 },
                 "device-provisioning-directory-support": {
                       "type": "string",
-                      "description": "device-provisioning-directory-support"
+                      "description": "Read-only. Whether the model supports a phone directory, from its model definition. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-line-1-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
+                      "description": "Read-only. Device name on line 1, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-1`. Returned on single-phone reads."
                 },
                 "device-provisioning-line-2-extensions": {
                       "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
+                      "description": "Read-only. Device name on line 2, without the `sip:` prefix and domain. Set from `device-provisioning-sip-uri-2`. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 3, without the `sip:` prefix and domain. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-extensions": {
+                      "type": "string",
+                      "description": "Read-only. Device name on line 4, without the `sip:` prefix and domain. Returned on single-phone reads."
                 },
                 "device-provisioning-ndp-hostname": {
                       "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
+                      "description": "Read-only. Hostname of the Endpoints server that holds the phone's record. Returned on single-phone reads."
                 },
                 "device-provisioning-presence": {
                       "type": "string",
-                      "description": "device-provisioning-presence"
+                      "description": "Whether the phone shows presence (busy lamp field) for other users. Allowed values: \"enabled\", \"disabled\", \"blf\"",
+                      "enum": [
+                            "enabled",
+                            "disabled",
+                            "blf"
+                      ]
                 },
                 "created-datetime": {
                       "type": "string",
-                      "description": "created-datetime"
+                      "description": "Read-only. When the phone was added, RFC 3339. Updates never change it."
                 },
                 "global-one-time-pass": {
                       "type": "string",
-                      "description": "global-one-time-pass"
+                      "description": "Whether the phone may download its configuration once with the system-wide global password instead of its own credentials. The Endpoints server sets it back to `no` after the phone's next successful download. While it is `yes`, the configuration file endpoints return `409`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "last-modified-datetime": {
                       "type": "string",
-                      "description": "last-modified-datetime"
+                      "description": "Read-only. When the phone's per-phone configuration (`/domains/{domain}/phoneconfiguration/{mac}`) last changed, RFC 3339. Absent when the phone has none."
                 },
                 "redundency": {
                       "type": "string",
-                      "description": "redundency"
+                      "description": "How the phone fails over between core servers. The field name is spelled `redundency`. Allowed values: \"none\", \"force primary\", \"geography\", \"system default\". Default: \"system default\"",
+                      "enum": [
+                            "none",
+                            "force primary",
+                            "geography",
+                            "system default"
+                      ],
+                      "default": "system default"
                 },
                 "device-provisioning-sip-uri-3": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
+                      "description": "Device on line 3, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-3-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
+                      "description": "Whether line 3 is provisioned on the phone. When you assign line 3 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-3-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
+                      "description": "Whether line 3 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-4": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
+                      "description": "Device on line 4, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-4-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
+                      "description": "Whether line 4 is provisioned on the phone. When you assign line 4 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-4-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
+                      "description": "Whether line 4 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-5": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
+                      "description": "Device on line 5, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-5-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
+                      "description": "Whether line 5 is provisioned on the phone. When you assign line 5 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-5-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
+                      "description": "Whether line 5 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-6": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
+                      "description": "Device on line 6, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-6-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
+                      "description": "Whether line 6 is provisioned on the phone. When you assign line 6 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-6-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
+                      "description": "Whether line 6 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-7": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
+                      "description": "Device on line 7, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-7-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
+                      "description": "Whether line 7 is provisioned on the phone. When you assign line 7 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-7-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
+                      "description": "Whether line 7 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
                 },
                 "device-provisioning-sip-uri-8": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
+                      "description": "Device on line 8, as `sip:<device>@<domain>`. `n/a` or `sip:@<domain>` means the line is unassigned."
                 },
                 "device-provisioning-line-8-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
+                      "description": "Whether line 8 is provisioned on the phone. When you assign line 8 and leave this out, it is set to `yes`, or `no` for an unassigned line. Returned on single-phone reads. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "device-provisioning-sip-uri-8-shared-line-enabled": {
                       "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
+                      "description": "Whether line 8 is a shared line (`shared`) or not (`private`). Allowed values: \"private\", \"shared\". Default: \"private\"",
+                      "enum": [
+                            "private",
+                            "shared"
+                      ],
+                      "default": "private"
+                },
+                "device-provisioning-line-1-name": {
+                      "type": "string",
+                      "description": "Label shown for line 1 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-2-name": {
+                      "type": "string",
+                      "description": "Label shown for line 2 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-3-name": {
+                      "type": "string",
+                      "description": "Label shown for line 3 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-4-name": {
+                      "type": "string",
+                      "description": "Label shown for line 4 on the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-line-1-password": {
+                      "type": "string",
+                      "description": "Password for line 1. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-2-password": {
+                      "type": "string",
+                      "description": "Password for line 2. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-3-password": {
+                      "type": "string",
+                      "description": "Password for line 3. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-line-4-password": {
+                      "type": "string",
+                      "description": "Password for line 4. Returned only to a Super User sending `include-secrets=yes`, and left out otherwise."
+                },
+                "device-provisioning-config-filename": {
+                      "type": "string",
+                      "description": "Configuration file name the Endpoints server serves this phone. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy": {
+                      "type": "string",
+                      "description": "Outbound proxy the phone sends SIP through. Returned on single-phone reads."
+                },
+                "device-provisioning-outbound-proxy-port": {
+                      "type": "string",
+                      "description": "Port of the outbound proxy. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-local-port": {
+                      "type": "string",
+                      "description": "Local SIP port on the phone. Returned on single-phone reads. Default: \"5060\"",
+                      "default": "5060"
+                },
+                "device-provisioning-codec": {
+                      "type": "string",
+                      "description": "Codec preference for the phone. Returned on single-phone reads."
+                },
+                "device-provisioning-time-zone": {
+                      "type": "string",
+                      "description": "Time zone the phone displays. Returned on single-phone reads."
+                },
+                "device-provisioning-gmt-offset": {
+                      "type": "string",
+                      "description": "Offset from GMT in hours, for models that take an offset instead of a time zone. Returned on single-phone reads. Default: \"-8\"",
+                      "default": "-8"
+                },
+                "device-provisioning-firmware": {
+                      "type": "string",
+                      "description": "Firmware the phone is told to load. Returned on single-phone reads."
+                },
+                "device-provisioning-encryption": {
+                      "type": "string",
+                      "description": "Whether the configuration file is encrypted. Returned on single-phone reads. Allowed values: \"disabled\", \"enabled\"",
+                      "enum": [
+                            "disabled",
+                            "enabled"
+                      ]
+                },
+                "device-provisioning-srtp": {
+                      "type": "string",
+                      "description": "Whether the phone uses SRTP for media. Returned on single-phone reads. Allowed values: \"no\", \"yes\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "yes"
+                      ],
+                      "default": "no"
+                },
+                "device-provisioning-full-provisioning": {
+                      "type": "string",
+                      "description": "Full-provisioning setting for the phone. Returned on single-phone reads."
                 },
                 "device-sip-registration-contact": {
                       "type": "string",
-                      "description": "device-sip-registration-contact"
+                      "description": "Read-only. Contact header from line 1's last registration. Returned on single-phone reads."
                 },
                 "device-sip-registration-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-datetime"
+                      "description": "Read-only. When line 1 last registered, RFC 3339. Returned on single-phone reads."
                 },
                 "device-sip-registration-expires-datetime": {
                       "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
+                      "description": "Read-only. When line 1's current registration expires, RFC 3339. A time in the past means line 1 is not registered."
                 },
                 "device-sip-registration-state": {
                       "type": "string",
-                      "description": "device-sip-registration-state"
+                      "description": "Read-only. `registered` while line 1's last registration has not expired, allowing about 2 minutes of grace. Otherwise `unregistered`. `null` when line 1 is unassigned. Allowed values: \"registered\", \"unregistered\", null",
+                      "enum": [
+                            "registered",
+                            "unregistered",
+                            null
+                      ]
                 },
                 "device-sip-registration-user-agent": {
                       "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "Read-only. User agent of line 1's last registration. Returned on single-phone reads."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Read-only. User that owns line 1 (`device-provisioning-sip-uri-1`)."
+                },
+                "dirs": {
+                      "type": "array",
+                      "description": "Read-only. The domain's phone directories. Returned on a single-phone read through `/domains/{domain}/phones/{mac}` when the model supports a directory."
+                },
+                "api-note": {
+                      "type": "string",
+                      "description": "Read-only. Present when line slots 9 and above were left out of the response because they are unassigned or disabled."
                 }
           },
           "required": [
                 "domain",
-                "device-provisioning-mac-address",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "notes",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/phones',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1552,7 +2216,7 @@ export const put_domains_by_domain_phones: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'notes', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-provisioning-overrides-blob', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-sidecar', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-line-3-extensions', 'device-provisioning-line-4-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-provisioning-line-1-name', 'device-provisioning-line-2-name', 'device-provisioning-line-3-name', 'device-provisioning-line-4-name', 'device-provisioning-line-1-password', 'device-provisioning-line-2-password', 'device-provisioning-line-3-password', 'device-provisioning-line-4-password', 'device-provisioning-config-filename', 'device-provisioning-outbound-proxy', 'device-provisioning-outbound-proxy-port', 'device-provisioning-local-port', 'device-provisioning-codec', 'device-provisioning-time-zone', 'device-provisioning-gmt-offset', 'device-provisioning-firmware', 'device-provisioning-encryption', 'device-provisioning-srtp', 'device-provisioning-full-provisioning', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent', 'user', 'dirs', 'api-note'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1576,268 +2240,38 @@ export const put_domains_by_domain_phones: ToolDefinition = {
 export const delete_domains_by_domain_phones: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_phones',
-    description: 'Remove MAC address in Domain — [DELETE /domains/{domain}/phones]',
+    description: 'Delete phone in domain — Removes a phone in the domain from the Endpoints server inventory, found by `device-provisioning-mac-address` in the body or query string. The phone\\\'s own configuration (`/domains/{domain}/phoneconfiguration/{mac}`) is removed with it. To free one line instead of removing the phone, also send `id` (the device on that line) and `user` (its owner). If that device is on line 2 or higher, only that line is cleared and the phone stays. On line 1, or when the device\\\'s line cannot be found, the whole phone is removed.  Requires Office Manager, Reseller, or Super User scope. Site Manager can remove phones whose line 1 belongs to a user in its site. Basic User and the other user scopes can remove only their own phone, the one whose line 1 they own. A phone filed in a domain other than the one you name returns `404`.  The response is `202`: the removal is accepted and applied shortly after. The devices on the phone\\\'s lines are not removed. — [DELETE /domains/{domain}/phones]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain the phone belongs to. Required unless you are a Super User. Not needed on `/domains/{domain}/phones`, where the path names it."
                 },
                 "device-provisioning-mac-address": {
                       "type": "string",
-                      "description": "device-provisioning-mac-address"
+                      "description": "MAC address of the phone: 12 hex digits with no separators."
                 },
-                "reseller": {
+                "id": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Device to take off the phone, such as `1002a`. Send it with `user` to free only that device's line. If the device is on line 1, the whole phone is removed."
                 },
-                "device-models-brand-and-model": {
+                "user": {
                       "type": "string",
-                      "description": "device-models-brand-and-model"
-                },
-                "device-provisioning-registration-core-server": {
-                      "type": "string",
-                      "description": "device-provisioning-registration-core-server"
-                },
-                "device-provisioning-sip-uri-1": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-1"
-                },
-                "device-provisioning-line-1-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "device-provisioning-sip-uri-1-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-1-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-2": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-2"
-                },
-                "device-provisioning-line-2-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "device-provisioning-sip-uri-2-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-2-shared-line-enabled"
-                },
-                "device-provisioning-sip-transport-protocol": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-transport-protocol"
-                },
-                "device-provisioning-username": {
-                      "type": "string",
-                      "description": "device-provisioning-username"
-                },
-                "device-provisioning-password": {
-                      "type": "string",
-                      "description": "device-provisioning-password"
-                },
-                "device-models-count-buttons": {
-                      "type": "number",
-                      "description": "device-models-count-buttons"
-                },
-                "device-models-fxs-support-enabled": {
-                      "type": "number",
-                      "description": "device-models-fxs-support-enabled"
-                },
-                "device-models-overrides-blob": {
-                      "type": "string",
-                      "description": "device-models-overrides-blob"
-                },
-                "device-models-resync-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-resync-support-enabled"
-                },
-                "device-models-shared-line-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-shared-line-support-enabled"
-                },
-                "device-models-sidecar-support-enabled": {
-                      "type": "string",
-                      "description": "device-models-sidecar-support-enabled"
-                },
-                "device-provisioning-last-retrieved-datetime": {
-                      "type": "string",
-                      "description": "device-provisioning-last-retrieved-datetime"
-                },
-                "device-provisioning-directory": {
-                      "type": "string",
-                      "description": "device-provisioning-directory"
-                },
-                "device-provisioning-directory-support": {
-                      "type": "string",
-                      "description": "device-provisioning-directory-support"
-                },
-                "device-provisioning-line-1-extensions": {
-                      "type": "string",
-                      "description": "device-provisioning-line-1-extensions"
-                },
-                "device-provisioning-line-2-extensions": {
-                      "type": "string",
-                      "description": "device-provisioning-line-2-extensions"
-                },
-                "device-provisioning-ndp-hostname": {
-                      "type": "string",
-                      "description": "device-provisioning-ndp-hostname"
-                },
-                "device-provisioning-presence": {
-                      "type": "string",
-                      "description": "device-provisioning-presence"
-                },
-                "created-datetime": {
-                      "type": "string",
-                      "description": "created-datetime"
-                },
-                "global-one-time-pass": {
-                      "type": "string",
-                      "description": "global-one-time-pass"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "last-modified-datetime"
-                },
-                "redundency": {
-                      "type": "string",
-                      "description": "redundency"
-                },
-                "device-provisioning-sip-uri-3": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-3"
-                },
-                "device-provisioning-line-3-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-3-enabled"
-                },
-                "device-provisioning-sip-uri-3-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-3-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-4": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-4"
-                },
-                "device-provisioning-line-4-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-4-enabled"
-                },
-                "device-provisioning-sip-uri-4-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-4-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-5": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-5"
-                },
-                "device-provisioning-line-5-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-5-enabled"
-                },
-                "device-provisioning-sip-uri-5-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-5-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-6": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-6"
-                },
-                "device-provisioning-line-6-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-6-enabled"
-                },
-                "device-provisioning-sip-uri-6-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-6-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-7": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-7"
-                },
-                "device-provisioning-line-7-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-7-enabled"
-                },
-                "device-provisioning-sip-uri-7-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-7-shared-line-enabled"
-                },
-                "device-provisioning-sip-uri-8": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-8"
-                },
-                "device-provisioning-line-8-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-line-8-enabled"
-                },
-                "device-provisioning-sip-uri-8-shared-line-enabled": {
-                      "type": "string",
-                      "description": "device-provisioning-sip-uri-8-shared-line-enabled"
-                },
-                "device-sip-registration-contact": {
-                      "type": "string",
-                      "description": "device-sip-registration-contact"
-                },
-                "device-sip-registration-datetime": {
-                      "type": "string",
-                      "description": "device-sip-registration-datetime"
-                },
-                "device-sip-registration-expires-datetime": {
-                      "type": "string",
-                      "description": "device-sip-registration-expires-datetime"
-                },
-                "device-sip-registration-state": {
-                      "type": "string",
-                      "description": "device-sip-registration-state"
-                },
-                "device-sip-registration-user-agent": {
-                      "type": "string",
-                      "description": "device-sip-registration-user-agent"
+                      "description": "User that owns the device in `id`, such as `1002`. Needed only when freeing one line."
                 }
           },
           "required": [
                 "domain",
-                "device-provisioning-mac-address",
-                "reseller",
-                "device-models-brand-and-model",
-                "device-provisioning-registration-core-server",
-                "device-provisioning-sip-uri-1",
-                "device-provisioning-line-1-enabled",
-                "device-provisioning-sip-uri-1-shared-line-enabled",
-                "device-provisioning-sip-uri-2",
-                "device-provisioning-line-2-enabled",
-                "device-provisioning-sip-uri-2-shared-line-enabled",
-                "device-provisioning-sip-transport-protocol",
-                "device-provisioning-username",
-                "device-provisioning-password",
-                "device-models-count-buttons",
-                "device-models-fxs-support-enabled",
-                "device-models-overrides-blob",
-                "device-models-resync-support-enabled",
-                "device-models-shared-line-support-enabled",
-                "device-models-sidecar-support-enabled",
-                "device-provisioning-last-retrieved-datetime",
-                "device-provisioning-directory",
-                "device-provisioning-directory-support",
-                "device-provisioning-ndp-hostname",
-                "device-provisioning-presence",
-                "created-datetime",
-                "global-one-time-pass",
-                "redundency"
+                "device-provisioning-mac-address"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/phones',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1845,7 +2279,7 @@ export const delete_domains_by_domain_phones: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['device-provisioning-mac-address', 'reseller', 'device-models-brand-and-model', 'device-provisioning-registration-core-server', 'device-provisioning-sip-uri-1', 'device-provisioning-line-1-enabled', 'device-provisioning-sip-uri-1-shared-line-enabled', 'device-provisioning-sip-uri-2', 'device-provisioning-line-2-enabled', 'device-provisioning-sip-uri-2-shared-line-enabled', 'device-provisioning-sip-transport-protocol', 'device-provisioning-username', 'device-provisioning-password', 'device-models-count-buttons', 'device-models-fxs-support-enabled', 'device-models-overrides-blob', 'device-models-resync-support-enabled', 'device-models-shared-line-support-enabled', 'device-models-sidecar-support-enabled', 'device-provisioning-last-retrieved-datetime', 'device-provisioning-directory', 'device-provisioning-directory-support', 'device-provisioning-line-1-extensions', 'device-provisioning-line-2-extensions', 'device-provisioning-ndp-hostname', 'device-provisioning-presence', 'created-datetime', 'global-one-time-pass', 'last-modified-datetime', 'redundency', 'device-provisioning-sip-uri-3', 'device-provisioning-line-3-enabled', 'device-provisioning-sip-uri-3-shared-line-enabled', 'device-provisioning-sip-uri-4', 'device-provisioning-line-4-enabled', 'device-provisioning-sip-uri-4-shared-line-enabled', 'device-provisioning-sip-uri-5', 'device-provisioning-line-5-enabled', 'device-provisioning-sip-uri-5-shared-line-enabled', 'device-provisioning-sip-uri-6', 'device-provisioning-line-6-enabled', 'device-provisioning-sip-uri-6-shared-line-enabled', 'device-provisioning-sip-uri-7', 'device-provisioning-line-7-enabled', 'device-provisioning-sip-uri-7-shared-line-enabled', 'device-provisioning-sip-uri-8', 'device-provisioning-line-8-enabled', 'device-provisioning-sip-uri-8-shared-line-enabled', 'device-sip-registration-contact', 'device-sip-registration-datetime', 'device-sip-registration-expires-datetime', 'device-sip-registration-state', 'device-sip-registration-user-agent'];
+    const bodyParamNames = ['device-provisioning-mac-address', 'domain', 'id', 'user'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1869,13 +2303,22 @@ export const delete_domains_by_domain_phones: ToolDefinition = {
 export const get_phones_by_mac: ToolDefinition = {
   schema: {
     name: 'get_phones_by_mac',
-    description: 'Read Specific Mac Address — [GET /phones/{mac}]',
+    description: 'Read phone — Reads one phone from any domain with its full detail: every line, the model\\\'s capabilities, line 1\\\'s registration, and the Endpoints server hostname. Super User, Reseller, and Office Manager read any phone they can see. Site Manager reads phones whose line 1 belongs to a user in its site. Basic User and the other user scopes read only their own phone, the one whose line 1 they own.  Per-line passwords are left out, and `device-provisioning-password` is masked except on your own phone. A Super User can send `include-secrets=yes` to get them in plaintext. The reveal is audit-logged.  Two fields describe a sidecar (expansion module): `device-provisioning-sidecar` is this phone\\\'s own setting, and `device-models-sidecar-support-enabled` is whether its model supports one. A phone\\\'s own configuration overrides are returned as `device-provisioning-overrides-blob`. The same value is also returned as `device-models-overrides-blob`, which is deprecated and will be removed in the next release. — [GET /phones/{mac}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "mac": {
                       "type": "string",
-                      "description": "mac"
+                      "description": "MAC address of the phone: 12 hex digits with no separators, such as `00005e005301`. Letter case does not matter."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `device-provisioning-password` and the per-line passwords in plaintext. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -1883,16 +2326,97 @@ export const get_phones_by_mac: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['mac'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/phones/{mac}',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_phones_count: ToolDefinition = {
+  schema: {
+    name: 'get_phones_count',
+    description: 'Count phones — Counts provisioned phones across every domain, taking the same filters as `GET /phones`. A Super User counts every domain unless you narrow it with `domain` or `reseller`. Other scopes use `GET /domains/{domain}/phones/count`. — [GET /phones/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Only phones in this domain."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only phones in domains of this reseller's territory."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only phones whose line 1 belongs to a user in this site. Send it with `domain`. Phones with no user on line 1 are left out. Paging applies after this filter."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['domain', 'reseller', 'device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/count',
+      queryParams,
     });
 
     return {
@@ -1907,22 +2431,26 @@ export const get_phones_by_mac: ToolDefinition = {
 export const get_domains_by_domain_phones_by_mac: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phones_by_mac',
-    description: 'Read Specific Mac Addresses in Domain — [GET /domains/{domain}/phones/{mac}]',
+    description: 'Read phone in domain — Reads one phone in the domain with its full detail: every line, the model\\\'s capabilities, line 1\\\'s registration, and the Endpoints server hostname. Super User, Reseller, and Office Manager read any phone they can see. Site Manager reads phones whose line 1 belongs to a user in its site. Basic User and the other user scopes read only their own phone, the one whose line 1 they own.  Per-line passwords are left out, and `device-provisioning-password` is masked except on your own phone. A Super User can send `include-secrets=yes` to get them in plaintext. The reveal is audit-logged.  Two fields describe a sidecar (expansion module): `device-provisioning-sidecar` is this phone\\\'s own setting, and `device-models-sidecar-support-enabled` is whether its model supports one. A phone\\\'s own configuration overrides are returned as `device-provisioning-overrides-blob`. The same value is also returned as `device-models-overrides-blob`, which is deprecated and will be removed in the next release. A phone in another domain returns `404`. — [GET /domains/{domain}/phones/{mac}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "mac": {
                       "type": "string",
-                      "description": "mac"
+                      "description": "MAC address of the phone: 12 hex digits with no separators, such as `00005e005301`. Letter case does not matter."
                 },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `device-provisioning-password` and the per-line passwords in plaintext. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -1931,13 +2459,19 @@ export const get_domains_by_domain_phones_by_mac: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phones/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'mac'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -1945,6 +2479,366 @@ export const get_domains_by_domain_phones_by_mac: ToolDefinition = {
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phones/{mac}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_phones_in_domain: ToolDefinition = {
+  schema: {
+    name: 'count_phones_in_domain',
+    description: 'Count phones in domain — Counts the domain\\\'s provisioned phones, taking the same filters as `GET /domains/{domain}/phones`. Requires Site Manager, Office Manager, Reseller, or Super User scope. — [GET /domains/{domain}/phones/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only phones whose line 1 belongs to a user in this site. Phones with no user on line 1 are left out. Paging applies after this filter."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phones/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/phones/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_phones: ToolDefinition = {
+  schema: {
+    name: 'list_domain_phones',
+    description: 'List phone summaries in domain — Lists the domain\\\'s phones with a reduced set of fields: MAC address, model, domain, line 1\\\'s extension, and notes. Use it where you need only the inventory, not the full record.  Requires Site Manager, Office Manager, Reseller, or Super User scope. Site Manager can use this and `GET /domains/{domain}/phones/count`, but not the full `GET /domains/{domain}/phones`. Results are paged with `start` and `limit`. `GET /domains/{domain}/phones/{mac}/list` returns the same reduced row for one phone. — [GET /domains/{domain}/phones/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phones/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/phones/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_phone_config_file_in_domain: ToolDefinition = {
+  schema: {
+    name: 'read_phone_config_file_in_domain',
+    description: 'Read phone configuration file in domain — Returns the configuration file the Endpoints server builds for this phone, the file the phone downloads when it boots. The body is the file itself, `text/plain` or `text/xml` depending on the model. Errors are the usual JSON error body.  Passwords, tokens, and secrets in the file are masked (`ab********yz`), and so is any `user:password@` in a URL. Usernames, line keys, and every other setting are shown as built. A Super User can send `include-secrets=yes` to get the file unmasked. The reveal is audit-logged.  Some phones cannot be read yet, because building the file would change the phone\\\'s provisioning state. The request returns `409` instead:  - while the phone\\\'s one-time global password is armed (`global-one-time-pass` is `yes`), because reading the file would use it up - when the phone has no provisioning credentials yet and the server is set to generate them, because reading the file would create them  Both clear once the phone has provisioned.  Office Manager reads any phone in its domain, Reseller any phone in its territory, and Super User any phone. Site Manager reads phones whose line 1 belongs to a user in its site. Basic User and the other user scopes read only their own phone, the one whose line 1 they own. A phone you cannot see returns `404`. — [GET /domains/{domain}/phones/{mac}/config]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the phone belongs to, such as `example.com`. `~` means your own domain. A phone in another domain returns `404`."
+                },
+                "mac": {
+                      "type": "string",
+                      "description": "MAC address of the phone: 12 hex digits with no separators, such as `00005e005301`."
+                },
+                "file": {
+                      "type": "string",
+                      "description": "A secondary file for this phone instead of its main configuration, such as `poly-00005e005301.cfg` (Polycom) or `00005e005301-directory.xml`. It must contain this phone's MAC address, use only letters, digits, `.`, `_`, and `-`, and end in `.cfg`, `.xml`, `.cnf`, `.txt`, `.conf`, or `.ini`, or have no extension. Anything else returns `400`. Leave it out for the main file."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns the file with its credentials unmasked. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "mac"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phones/{}/config',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'mac'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['file', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/phones/{mac}/config',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_phone_summaries: ToolDefinition = {
+  schema: {
+    name: 'list_phone_summaries',
+    description: 'List phone summaries — Lists provisioned phones across every domain with a reduced set of fields: MAC address, model, domain, line 1\\\'s extension, and notes. A Super User reads every domain, or narrows the list with `domain` or `reseller`. Other scopes use `GET /domains/{domain}/phones/list`. Results are paged with `start` and `limit`. — [GET /phones/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only phones in this domain."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only phones in domains of this reseller's territory."
+                },
+                "device-models-brand-and-model": {
+                      "type": "string",
+                      "description": "Only phones of this brand and model, matched exactly, such as `Yealink T54W`."
+                },
+                "model_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose brand and model match this SQL `LIKE` pattern, such as `Yealink%`. Use `%` as the wildcard."
+                },
+                "mac_LIKE": {
+                      "type": "string",
+                      "description": "Only phones whose MAC address matches this SQL `LIKE` pattern, such as `00005e%`. Use `%` as the wildcard."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Only phones whose notes match this SQL `LIKE` pattern, such as `%Front Desk%`. Without `%`, the notes must match exactly."
+                },
+                "extension": {
+                      "type": "string",
+                      "description": "Only phones with a device on any line whose address contains this text, such as `1001`. Part of an address matches, so `100` also matches `1001`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'start', 'domain', 'reseller', 'device-models-brand-and-model', 'model_LIKE', 'mac_LIKE', 'notes', 'extension'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/list',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_phone_config_file: ToolDefinition = {
+  schema: {
+    name: 'read_phone_config_file',
+    description: 'Read phone configuration file — Returns the configuration file the Endpoints server builds for this phone, the file the phone downloads when it boots. The body is the file itself, `text/plain` or `text/xml` depending on the model. Errors are the usual JSON error body.  Passwords, tokens, and secrets in the file are masked (`ab********yz`), and so is any `user:password@` in a URL. Usernames, line keys, and every other setting are shown as built. A Super User can send `include-secrets=yes` to get the file unmasked. The reveal is audit-logged.  Some phones cannot be read yet, because building the file would change the phone\\\'s provisioning state. The request returns `409` instead:  - while the phone\\\'s one-time global password is armed (`global-one-time-pass` is `yes`), because reading the file would use it up - when the phone has no provisioning credentials yet and the server is set to generate them, because reading the file would create them  Both clear once the phone has provisioned.  Office Manager reads any phone in its domain, Reseller any phone in its territory, and Super User any phone. Site Manager reads phones whose line 1 belongs to a user in its site. Basic User and the other user scopes read only their own phone, the one whose line 1 they own. A phone you cannot see returns `404`.  This form takes no domain. The phone\\\'s own domain is used, and your token must be able to see it: a Reseller its territory, other domain scopes only their own domain. — [GET /phones/{mac}/config]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "mac": {
+                      "type": "string",
+                      "description": "MAC address of the phone: 12 hex digits with no separators, such as `00005e005301`."
+                },
+                "file": {
+                      "type": "string",
+                      "description": "A secondary file for this phone instead of its main configuration, such as `poly-00005e005301.cfg` (Polycom) or `00005e005301-directory.xml`. It must contain this phone's MAC address, use only letters, digits, `.`, `_`, and `-`, and end in `.cfg`, `.xml`, `.cnf`, `.txt`, `.conf`, or `.ini`, or have no extension. Anything else returns `400`. Leave it out for the main file."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns the file with its credentials unmasked. Super User only. Any other scope gets `403`. The reveal is audit-logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "mac"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phones/{}/config',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['mac'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['file', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phones/{mac}/config',
       pathParams,
       queryParams,
     });

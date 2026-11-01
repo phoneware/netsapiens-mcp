@@ -46,6 +46,12 @@ export const post_domains_by_domain_users_by_user_timeframes_3: ToolDefinition =
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
@@ -108,6 +114,12 @@ export const put_domains_by_domain_users_by_user_timeframes_by_id_3: ToolDefinit
                 "update-only"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];

@@ -2,16 +2,141 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+export const get_phonenumbers: ToolDefinition = {
+  schema: {
+    name: 'get_phonenumbers',
+    description: 'List phone numbers in all domains — Returns the phone numbers across every domain your token can see, with where calls to each one go and its SMS assignment, if any. Requires Reseller, Super User, or Super User Read Only scope. A Reseller sees the domains in its territory. A Super User sees every domain, or one territory with `territory`. Super User Read Only must send `territory`.  Numbers that exist only as an SMS assignment follow the dial-rule rows with `sms-only` set to `true`, up to 5,000 of them. `start` and `limit` page across both sets, 100 rows at a time unless you set `limit`. An SMS-only row whose domain was deleted carries `domain-invalid`.  The platform\\\'s default DID table is read, so a domain whose `inventory.did-table` setting names another dial plan is missing from this list. For one domain, use `GET /domains/{domain}/phonenumbers`. For the total, call `GET /phonenumbers/count`. — [GET /phonenumbers]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "start": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first row to return. Paging runs over the dial-rule rows first, then the SMS-only rows. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "territory": {
+                      "type": "string",
+                      "description": "Returns only the numbers in domains of this territory. A Super User can name any territory. A Reseller sees only its own territory, with or without this parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination, exact match. `lookup:` needs a domain to look in, so on this path it matches no number. Use `GET /domains/{domain}/phonenumbers` for it."
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination host, exact match."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Returns only enabled (`yes`) or disabled (`no`) numbers. `all`, or leaving it out, returns both. Allowed values: \"yes\", \"no\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose description matches this pattern. Use `%` as the wildcard, for example `Sales%`."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Returns only the numbers that use this application, such as `to-user` or `available-number`. Use `%` as the wildcard: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose application parameter is exactly this value."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phonenumbers',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['start', 'limit', 'territory', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'enabled', 'dial-rule-description', 'dial-rule-application', 'dial-rule-parameter'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phonenumbers',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const get_domain_phonenumbers: ToolDefinition = {
   schema: {
     name: 'get_domain_phonenumbers',
-    description: 'Get All Phone Numbers for Domain — [GET /domains/{domain}/phonenumbers]',
+    description: 'List phone numbers — Returns the phone numbers assigned to a domain, with where calls to each one go and its SMS assignment, if any. Every user scope can read the numbers of its own domain. A Reseller reads the domains in its territory, and Super User and Super User Read Only read every domain.  Numbers that exist only as an SMS assignment, with no dial rule, follow the dial-rule rows with `sms-only` set to `true`. `start` and `limit` page across both sets, 100 rows at a time unless you set `limit`. For the total, call `GET /domains/{domain}/phonenumbers/count` with the same filters.  Each domain keeps its numbers in the dial plan its `inventory.did-table` setting names, `DID Table` unless the domain changes it. Numbers that are not assigned to any domain are not listed here. — [GET /domains/{domain}/phonenumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first row to return. Paging runs over the dial-rule rows first, then the SMS-only rows. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination, exact match. Prefix a service code with `lookup:` to match every user in the domain that has that service code, for example `lookup:system-queue`. A `lookup:` that finds no user matches no number."
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination host, exact match."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Returns only enabled (`yes`) or disabled (`no`) numbers. `all`, or leaving it out, returns both. Allowed values: \"yes\", \"no\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose description matches this pattern. Use `%` as the wildcard, for example `Sales%`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to users in this site, including conference numbers of those users. SMS-only numbers are included only when their `sms-dest` is a user in the site. With `site`, `limit` is ignored."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Returns only the numbers that use this application, such as `to-user` or `available-number`. Use `%` as the wildcard: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose application parameter is exactly this value."
                 }
           },
           "required": [
@@ -19,16 +144,28 @@ export const get_domain_phonenumbers: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonenumbers',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['start', 'limit', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'enabled', 'dial-rule-description', 'site', 'dial-rule-application', 'dial-rule-parameter'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phonenumbers',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,30 +180,29 @@ export const get_domain_phonenumbers: ToolDefinition = {
 export const create_phonenumber: ToolDefinition = {
   schema: {
     name: 'create_phonenumber',
-    description: 'Add Phone Number in Domain — This will allow adding a phone number. — [POST /domains/{domain}/phonenumbers]',
+    description: 'Create phone number — Adds a phone number to the domain and sets where calls to it go. Scopes below Reseller add numbers only to their own domain, a Reseller only to domains in its territory, and a Super User to any domain.  Send `phonenumber` and `dial-rule-translation-destination-user`. To keep a number in the domain without routing it, use `dial-rule-application` `available-number` with `[*]` as the destination user and host. Any `sms-*` field also creates an SMS assignment for the number. A number that already has an SMS assignment but no dial rule gets its dial rule.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. Read the number back to confirm it. A number already in the DID table answers `409`, even when another domain holds it. Each domain keeps its numbers in the dial plan its `inventory.did-table` setting names, `DID Table` unless the domain changes it. — [POST /domains/{domain}/phonenumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phonenumber": {
                       "type": "string",
-                      "description": "This is the main phonenumber setting. Should be a  formated in a e164 format with country count and number. US domestic numbers should be similiar to 18005551234"
+                      "description": "The phone number, digits with the country code, for example `15555550123`. 7 to 249 characters, and 16 at most when the number has an SMS assignment. The API stores it exactly as sent and does not convert it to E.164, so use the same form everywhere."
                 },
                 "enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "Whether the number routes calls. A disabled number is skipped when a call is matched. Defaults to `yes` on create. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "yes"
+                      ]
                 },
                 "dial-rule-application": {
                       "type": "string",
-                      "description": "This is the application that the call will be routed using. It works in partnership with dial-rule-translation-destination-user and dial-rule-translation-destination-host to forward to a next destination. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-force-caller-id\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\"",
+                      "description": "The application that handles a call to the number. `available-number` keeps the number in the domain without routing it. Left out, no application is set. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-update-cdr-by-user\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"hangup\"",
                       "enum": [
                             "available-number",
                             "to-voicemail-residential",
@@ -82,7 +218,7 @@ export const create_phonenumber: ToolDefinition = {
                             "spam-screening",
                             "to-connection-block-caller-id",
                             "to-connection-no-timeout",
-                            "to-connection-add-header-force-caller-id",
+                            "to-connection-add-header-update-cdr-by-user",
                             "to-connection-add-header-no-timeout",
                             "to-connection-add-header",
                             "to-single-device-add-header-allow-voicemail",
@@ -91,32 +227,52 @@ export const create_phonenumber: ToolDefinition = {
                             "to-user-add-header",
                             "to-user-residential-add-header",
                             "to-user-notify-of-recording",
-                            "hangup",
                             "to-user-answer-and-fake-ringback",
-                            "toggle-timeframe"
+                            "toggle-timeframe",
+                            "hangup"
                       ]
                 },
                 "dial-rule-parameter": {
                       "type": "string",
-                      "description": "This is the application parameter field that can be used for additional settings based on the dial-rule-application. Default is empty string."
+                      "description": "An extra setting for the application, such as the SIP header an `*-add-header` application adds. Send `<NULL>` to clear it. It reads back as an empty string."
                 },
                 "dial-rule-translation-destination-user": {
                       "type": "string",
-                      "description": "This is the forward destination the call will be sent to in partnership with the application (dial-rule-application) and host (dial-rule-translation-destination-host). This might be a user, queue or offnet number depending on the application."
+                      "description": "Where the call goes, read together with `dial-rule-application`: a user's extension, a call queue's extension, or an off-net number. `[*]` keeps the dialed number."
                 },
                 "dial-rule-translation-destination-host": {
                       "type": "string",
-                      "description": "This is the forward destination host the call will be sent to in partnership with the application (dial-rule-application) and user (dial-rule-translation-destination-user). This might be the domain name or a connection name if trying to route offnet. Default: \"[*]\"",
-                      "default": "[*]"
+                      "description": "The host part of the destination, usually your domain. `[*]` keeps the dialed host. Left out, it is empty."
                 },
                 "dial-rule-translation-source-name": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"name\" often used for the caller id name or the the descriptive quoted value outside of the sip uri. Defaults to [*] but you can add a prefix for example with something like this, sales_[*]. Default: \"[*]\"",
+                      "description": "The caller ID name sent with the call. `[*]` keeps the caller's name, and text around it is added to that name, for example `Sales_[*]`. Defaults to `[*]` on create. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "This is a description of the number/rule that can be used for defintion or tracking purposes."
+                      "description": "A note on the number for your own tracking, up to 63 characters. Send an empty string to clear it."
+                },
+                "sms-enabled": {
+                      "type": "boolean",
+                      "description": "Whether the number has an SMS assignment. On a write, `true` creates or keeps the assignment and `false` removes it. Sending `sms-application`, `sms-carrier`, or `sms-dest` alone means `true`. Leave all four out to keep the assignment as it is."
+                },
+                "sms-application": {
+                      "type": "string",
+                      "description": "What receives the number's messages. `available` unassigns the number and clears `sms-dest`. Left out on a write, it is `user` when `sms-dest` is sent and `available` otherwise. Allowed values: \"available\", \"user\", \"callqueue\"",
+                      "enum": [
+                            "available",
+                            "user",
+                            "callqueue"
+                      ]
+                },
+                "sms-carrier": {
+                      "type": "string",
+                      "description": "The carrier the number sends and receives messages through, one of the platform's configured SMS carriers such as `bandwidth`. Not case-sensitive. Left out on an update, the current carrier is kept."
+                },
+                "sms-dest": {
+                      "type": "string",
+                      "description": "The extension of the user or call queue that receives the number's messages. Left out on an update, the current destination is kept."
                 }
           },
           "required": [
@@ -126,13 +282,19 @@ export const create_phonenumber: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/phonenumbers',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['phonenumber', 'enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-description'];
+    const bodyParamNames = ['phonenumber', 'enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-description', 'sms-enabled', 'sms-application', 'sms-carrier', 'sms-dest'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -153,22 +315,28 @@ export const create_phonenumber: ToolDefinition = {
   },
 };
 
-export const count_domain_phonenumbers: ToolDefinition = {
+export const update_phonenumber_queue: ToolDefinition = {
   schema: {
-    name: 'count_domain_phonenumbers',
-    description: 'Count Phone Numbers for Domain — [GET /domains/{domain}/phonenumbers/count]',
+    name: 'update_phonenumber_queue',
+    description: 'Update phone number by body — Changes where calls to a phone number go, or its other settings. Name the number in the body with `phonenumber`. It is the same change as `PUT /domains/{domain}/phonenumbers/{phonenumber}`, with the number in the body instead of the path. Requires Site Manager, Office Manager, Reseller, or Super User scope. Scopes below Reseller change only their own domain, and a Reseller only the domains in its territory.  The request is a partial update: a field you leave out keeps its value. A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values.  A Reseller or Super User can name a number that is not assigned to any domain. The change assigns it to the domain in the path. A Super User can also name a number assigned to another domain, and the change moves it to the domain in the path, so check the path before you send.  A number that has only an SMS assignment can be changed too. Send only `sms-*` fields to change the assignment, or `dial-rule-translation-destination-user` to give the number a dial rule.  If an Office Manager sends `dial-rule-translation-destination-host`, it must be its own domain, except with the `to-connection` and `to-single-device` applications, or the request answers `403`. A number in neither place answers `404`: add it with `POST /domains/{domain}/phonenumbers`.  ### Send to a user  Set `dial-rule-application` to `to-user`, `dial-rule-translation-destination-user` to the user\\\'s extension, and `dial-rule-translation-destination-host` to your domain.  ### Send to a call queue  Set `dial-rule-application` to `to-callqueue` and `dial-rule-translation-destination-user` to the queue\\\'s extension.  ### Use another application  Set `dial-rule-application` to any other application, such as `to-connection-add-header-update-cdr-by-user` for an off-net number. Put a header the application adds in `dial-rule-parameter`.  ### Move back to available  Set `dial-rule-application` to `available-number`, the destination user and host to `[*]`, and `dial-rule-parameter` to `<NULL>`. The number stays in this domain, ready to assign again.  ### Change other fields  Leave `dial-rule-application` out and send the fields to change: `enabled`, the description, the destination, the caller ID name, or the `sms-*` fields. Send `sms-enabled` `false` to remove the SMS assignment.  A body without `phonenumber` answers `400`. — [PUT /domains/{domain}/phonenumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/phonenumbers',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -177,74 +345,9 @@ export const count_domain_phonenumbers: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/phonenumbers/count',
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/phonenumbers',
       pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_phonenumbers: ToolDefinition = {
-  schema: {
-    name: 'get_phonenumbers',
-    description: 'Get All Phone Numbers for System or Reseller — This path will give you all Phonenumbers (DIDs) that are accessable based on the access rights of the Access Token or API Key used to make the requests. Super User or Reseller both supported, but for per domain lookups you should use /domains/{domain}/phonenumbers. — [GET /phonenumbers]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "start": {
-                      "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
-                      "default": 0
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                }
-          }
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['start', 'limit'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/phonenumbers',
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const count_phonenumbers: ToolDefinition = {
-  schema: {
-    name: 'count_phonenumbers',
-    description: 'Count All Phone Numbers for System or Reseller — This path will give you all Phonenumbers (DIDs) that are accessable based on the access rights of the Access Token or API Key used to make the requests. Super User or Reseller both supported, but for per domain lookups you should use /domains/{domain}/phonenumbers. — [GET /phonenumbers/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/phonenumbers/count',
     });
 
     return {
@@ -259,17 +362,17 @@ export const count_phonenumbers: ToolDefinition = {
 export const get_phonenumber: ToolDefinition = {
   schema: {
     name: 'get_phonenumber',
-    description: 'Get Specific Phone Number in Domain — [GET /domains/{domain}/phonenumbers/{phonenumber}]',
+    description: 'Read phone number — Returns one phone number in the domain: where calls to it go and its SMS assignment, if any. Every user scope can read the numbers of its own domain. A Reseller reads the domains in its territory, and Super User and Super User Read Only read every domain.  A number that exists only as an SMS assignment comes back with `sms-only` set to `true` and no dial-rule fields. A number assigned to a different domain answers `404`. — [GET /domains/{domain}/phonenumbers/{phonenumber}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phonenumber": {
                       "type": "string",
-                      "description": "phonenumber"
+                      "description": "The phone number, as stored: digits with the country code, for example `15555550123`. No spaces, dashes, or parentheses. A `+` is accepted only for a number that was stored with one."
                 }
           },
           "required": [
@@ -277,6 +380,12 @@ export const get_phonenumber: ToolDefinition = {
                 "phonenumber"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonenumbers/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'phonenumber'];
@@ -302,30 +411,29 @@ export const get_phonenumber: ToolDefinition = {
 export const update_phonenumber: ToolDefinition = {
   schema: {
     name: 'update_phonenumber',
-    description: 'Update Phone Number in Domain — This API will allow updating of an existing number in a domain. — [PUT /domains/{domain}/phonenumbers/{phonenumber}]',
+    description: 'Update phone number — Changes where calls to one phone number go, or its other settings. Requires Site Manager, Office Manager, Reseller, or Super User scope. Scopes below Reseller change only their own domain, and a Reseller only the domains in its territory.  The request is a partial update: a field you leave out keeps its value. A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values.  A Reseller or Super User can name a number that is not assigned to any domain. The change assigns it to the domain in the path. A Super User can also name a number assigned to another domain, and the change moves it to the domain in the path, so check the path before you send.  A number that has only an SMS assignment can be changed too. Send only `sms-*` fields to change the assignment, or `dial-rule-translation-destination-user` to give the number a dial rule.  If an Office Manager sends `dial-rule-translation-destination-host`, it must be its own domain, except with the `to-connection` and `to-single-device` applications, or the request answers `403`. A number in neither place answers `404`: add it with `POST /domains/{domain}/phonenumbers`.  For a worked example of each routing case, see `PUT /domains/{domain}/phonenumbers`. You do not need to send `phonenumber` in the body. If you do, it must match the path. — [PUT /domains/{domain}/phonenumbers/{phonenumber}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phonenumber": {
                       "type": "string",
-                      "description": "phonenumber"
+                      "description": "The phone number, as stored: digits with the country code, for example `15555550123`. No spaces, dashes, or parentheses. A `+` is accepted only for a number that was stored with one. The number to change."
                 },
                 "enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "Whether the number routes calls. A disabled number is skipped when a call is matched. Leave it out to keep the current value. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "yes"
+                      ]
                 },
                 "dial-rule-application": {
                       "type": "string",
-                      "description": "This is the application that the call will be routed using. It works in partnership with dial-rule-translation-destination-user and dial-rule-translation-destination-host to forward to a next destination. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-force-caller-id\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\"",
+                      "description": "The application that handles a call to the number, read together with the destination user and host. `available-number` keeps the number in the domain without routing it. Leave it out to keep the current value. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-update-cdr-by-user\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"hangup\"",
                       "enum": [
                             "available-number",
                             "to-voicemail-residential",
@@ -341,7 +449,7 @@ export const update_phonenumber: ToolDefinition = {
                             "spam-screening",
                             "to-connection-block-caller-id",
                             "to-connection-no-timeout",
-                            "to-connection-add-header-force-caller-id",
+                            "to-connection-add-header-update-cdr-by-user",
                             "to-connection-add-header-no-timeout",
                             "to-connection-add-header",
                             "to-single-device-add-header-allow-voicemail",
@@ -350,40 +458,64 @@ export const update_phonenumber: ToolDefinition = {
                             "to-user-add-header",
                             "to-user-residential-add-header",
                             "to-user-notify-of-recording",
-                            "hangup",
                             "to-user-answer-and-fake-ringback",
-                            "toggle-timeframe"
+                            "toggle-timeframe",
+                            "hangup"
                       ]
                 },
                 "dial-rule-parameter": {
                       "type": "string",
-                      "description": "This is the application parameter field that can be used for additional settings based on the dial-rule-application. Default is empty string."
+                      "description": "An extra setting for the application, such as the SIP header an `*-add-header` application adds. Send `<NULL>` to clear it. It reads back as an empty string."
                 },
                 "dial-rule-translation-destination-user": {
                       "type": "string",
-                      "description": "This is the forward destination the call will be sent to in partnership with the application (dial-rule-application) and host (dial-rule-translation-destination-host). This might be a user, queue or offnet number depending on the application."
+                      "description": "Where the call goes, read together with `dial-rule-application`: a user's extension, a call queue's extension, or an off-net number. `[*]` keeps the dialed number. Leave it out to keep the current value."
                 },
                 "dial-rule-translation-destination-host": {
                       "type": "string",
-                      "description": "This is the forward destination host the call will be sent to in partnership with the application (dial-rule-application) and user (dial-rule-translation-destination-user). This might be the domain name or a connection name if trying to route offnet. Default: \"[*]\"",
-                      "default": "[*]"
+                      "description": "The host part of the destination, usually your domain. `[*]` keeps the dialed host. Leave it out to keep the current value."
                 },
                 "dial-rule-translation-source-name": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"name\" often used for the caller id name or the the descriptive quoted value outside of the sip uri. Defaults to [*] but you can add a prefix for example with something like this, sales_[*]. Default: \"[*]\"",
-                      "default": "[*]"
+                      "description": "The caller ID name sent with the call. `[*]` keeps the caller's name, and text around it is added to that name, for example `Sales_[*]`. Leave it out to keep the current value."
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "This is a description of the number/rule that can be used for defintion or tracking purposes."
+                      "description": "A note on the number for your own tracking, up to 63 characters. Send an empty string to clear it."
+                },
+                "sms-enabled": {
+                      "type": "boolean",
+                      "description": "Whether the number has an SMS assignment. On a write, `true` creates or keeps the assignment and `false` removes it. Sending `sms-application`, `sms-carrier`, or `sms-dest` alone means `true`. Leave all four out to keep the assignment as it is."
+                },
+                "sms-application": {
+                      "type": "string",
+                      "description": "What receives the number's messages. `available` unassigns the number and clears `sms-dest`. Left out on a write, it is `user` when `sms-dest` is sent and `available` otherwise. Allowed values: \"available\", \"user\", \"callqueue\"",
+                      "enum": [
+                            "available",
+                            "user",
+                            "callqueue"
+                      ]
+                },
+                "sms-carrier": {
+                      "type": "string",
+                      "description": "The carrier the number sends and receives messages through, one of the platform's configured SMS carriers such as `bandwidth`. Not case-sensitive. Left out on an update, the current carrier is kept."
+                },
+                "sms-dest": {
+                      "type": "string",
+                      "description": "The extension of the user or call queue that receives the number's messages. Left out on an update, the current destination is kept."
                 }
           },
           "required": [
                 "domain",
-                "phonenumber",
-                "dial-rule-translation-destination-user"
+                "phonenumber"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/phonenumbers/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'phonenumber'];
@@ -391,7 +523,7 @@ export const update_phonenumber: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-description'];
+    const bodyParamNames = ['enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-description', 'sms-enabled', 'sms-application', 'sms-carrier', 'sms-dest'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -415,17 +547,17 @@ export const update_phonenumber: ToolDefinition = {
 export const delete_phonenumber: ToolDefinition = {
   schema: {
     name: 'delete_phonenumber',
-    description: 'Remove Phone Number from Domain — This will allow adding a phone number. — [DELETE /domains/{domain}/phonenumbers/{phonenumber}]',
+    description: 'Delete phone number — Removes a phone number from the domain\\\'s DID table, so calls to it no longer route. Requires Reseller or Super User scope.  The number is removed, not returned to inventory: to use it again, add it with `POST /domains/{domain}/phonenumbers`. To keep it in this domain without routing it, change it to `dial-rule-application` `available-number` with `PUT` instead. The number\\\'s SMS assignment, if any, is not removed, and the number then lists as `sms-only`. Remove it first with `PUT` and `sms-enabled` `false`. A number that exists only as an SMS assignment has no dial rule and answers `404`.  A `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/phonenumbers/{phonenumber}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phonenumber": {
                       "type": "string",
-                      "description": "phonenumber"
+                      "description": "The phone number, as stored: digits with the country code, for example `15555550123`. No spaces, dashes, or parentheses. A `+` is accepted only for a number that was stored with one. The number to delete."
                 }
           },
           "required": [
@@ -433,6 +565,12 @@ export const delete_phonenumber: ToolDefinition = {
                 "phonenumber"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/phonenumbers/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'phonenumber'];
@@ -444,6 +582,255 @@ export const delete_phonenumber: ToolDefinition = {
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/phonenumbers/{phonenumber}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_domain_phonenumbers: ToolDefinition = {
+  schema: {
+    name: 'count_domain_phonenumbers',
+    description: 'Count phone numbers — Returns how many phone numbers are assigned to a domain. Every user scope can read the numbers of its own domain. A Reseller reads the domains in its territory, and Super User and Super User Read Only read every domain.  It takes the same filters as `GET /domains/{domain}/phonenumbers`, and the total includes SMS-only numbers, so it matches the length of the full list. `start` and `limit` do not apply. — [GET /domains/{domain}/phonenumbers/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Counts only the numbers routed to this destination, exact match. Prefix a service code with `lookup:` to match every user in the domain that has that service code, for example `lookup:system-queue`. A `lookup:` that finds no user matches no number."
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Counts only the numbers routed to this destination host, exact match."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Counts only enabled (`yes`) or disabled (`no`) numbers. `all`, or leaving it out, counts both. Allowed values: \"yes\", \"no\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Counts only the numbers whose description matches this pattern. Use `%` as the wildcard, for example `Sales%`."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Counts only the numbers that use this application, such as `to-user` or `available-number`. Use `%` as the wildcard: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Counts only the numbers whose application parameter is exactly this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Counts only the numbers routed to users in this site, including conference numbers of those users. SMS-only numbers count only when their `sms-dest` is a user in the site."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonenumbers/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'enabled', 'dial-rule-description', 'dial-rule-application', 'dial-rule-parameter', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/phonenumbers/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_phonenumbers: ToolDefinition = {
+  schema: {
+    name: 'count_phonenumbers',
+    description: 'Count phone numbers in all domains — Returns how many phone numbers exist across every domain your token can see. Requires Reseller, Super User, or Super User Read Only scope. A Reseller counts its own territory. Super User Read Only must send `territory`.  It takes the same filters as `GET /phonenumbers`, and the total includes SMS-only numbers, up to 5,000 of them, so it matches the length of the full list. For one domain, use `GET /domains/{domain}/phonenumbers/count`. — [GET /phonenumbers/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "territory": {
+                      "type": "string",
+                      "description": "Counts only the numbers in domains of this territory. A Reseller counts only its own territory."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Counts only the numbers routed to this destination, exact match. `lookup:` needs a domain to look in, so on this path it matches no number. Use `GET /domains/{domain}/phonenumbers` for it."
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Counts only the numbers routed to this destination host, exact match."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Counts only enabled (`yes`) or disabled (`no`) numbers. `all`, or leaving it out, counts both. Allowed values: \"yes\", \"no\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Counts only the numbers whose description matches this pattern. Use `%` as the wildcard, for example `Sales%`."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Counts only the numbers that use this application, such as `to-user` or `available-number`. Use `%` as the wildcard: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Counts only the numbers whose application parameter is exactly this value."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /phonenumbers/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['territory', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'enabled', 'dial-rule-description', 'dial-rule-application', 'dial-rule-parameter'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/phonenumbers/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_phonenumbers: ToolDefinition = {
+  schema: {
+    name: 'list_domain_phonenumbers',
+    description: 'List phone numbers (short) — Returns a short view of the domain\\\'s phone numbers: each number, its domain, its description, and its destination. Every user scope can read the numbers of its own domain. A Reseller reads the domains in its territory, and Super User and Super User Read Only read every domain.  It takes the same filters as `GET /domains/{domain}/phonenumbers`: `dial-rule-translation-destination-user`, `dial-rule-translation-destination-host`, `enabled`, `dial-rule-description`, `dial-rule-application`, `dial-rule-parameter`, and `site`. Unlike the full read, it has no default limit: without `limit` it returns every row. SMS-only numbers appear with only `phonenumber` and `domain`. For every field, use `GET /domains/{domain}/phonenumbers`. — [GET /domains/{domain}/phonenumbers/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first row to return. Paging runs over the dial-rule rows first, then the SMS-only rows. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most rows to return. Without it every row is returned. Default: 100",
+                      "default": 100
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination, exact match. Prefix a service code with `lookup:` to match every user in the domain that has that service code, for example `lookup:system-queue`. A `lookup:` that finds no user matches no number."
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to this destination host, exact match."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "Returns only enabled (`yes`) or disabled (`no`) numbers. `all`, or leaving it out, returns both. Allowed values: \"yes\", \"no\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose description matches this pattern. Use `%` as the wildcard, for example `Sales%`."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Returns only the numbers that use this application, such as `to-user` or `available-number`. Use `%` as the wildcard: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Returns only the numbers whose application parameter is exactly this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only the numbers routed to users in this site, including conference numbers of those users. SMS-only numbers are included only when their `sms-dest` is a user in the site. With `site`, `limit` is ignored."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonenumbers/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start', 'limit', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'enabled', 'dial-rule-description', 'dial-rule-application', 'dial-rule-parameter', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/phonenumbers/list',
+      pathParams,
+      queryParams,
     });
 
     return {

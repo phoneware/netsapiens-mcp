@@ -46,6 +46,12 @@ export const post_domains_by_domain_users_by_user_timeframes_2: ToolDefinition =
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
@@ -60,185 +66,6 @@ export const post_domains_by_domain_users_by_user_timeframes_2: ToolDefinition =
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/timeframes',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const post_domains_by_domain_users_by_user_timeframes_by_id_1: ToolDefinition = {
-  schema: {
-    name: 'post_domains_by_domain_users_by_user_timeframes_by_id_1',
-    description: 'Create Additional Date Ranges within Specific Dates Timeframe — When creating additional date ranges within a Specific Dates timeframe it is not necessary to supply a ```timeframe-id``` for the new date ranges. These ```timeframe-id```s will be generated automatically. — [POST /domains/{domain}/users/{user}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` for the timeframe to modify"
-                },
-                "timeframe-specific-dates-array": {
-                      "type": "array",
-                      "description": "timeframe-specific-dates-array"
-                },
-                "timeframe-days-of-week-array": {
-                      "type": "array",
-                      "description": "timeframe-days-of-week-array"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['timeframe-specific-dates-array', 'timeframe-days-of-week-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const put_domains_by_domain_users_by_user_timeframes_by_id_1: ToolDefinition = {
-  schema: {
-    name: 'put_domains_by_domain_users_by_user_timeframes_by_id_1',
-    description: 'Replace All Date Ranges in Specific Dates Timeframe — If a new array of specific date ranges is supplied in the update request for a Specific Dates timeframe, it will replace all existing specific date ranges in the timeframe, meaning that any existing specific date ranges in that timeframe will be removed. To update individual specific date ranges within a Specific Dates timeframe, refer to "Update Date Ranges within Specific Dates Timeframe." It is not necessary to supply a ```timeframe-id``` for the new date ranges. These ```timeframe-id```s will be generated automatically. — [PUT /domains/{domain}/users/{user}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to modify"
-                },
-                "timeframe-specific-dates-array": {
-                      "type": "array",
-                      "description": "timeframe-specific-dates-array"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['timeframe-specific-dates-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PUT',
-      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const delete_domains_by_domain_users_by_user_timeframes_by_id_1: ToolDefinition = {
-  schema: {
-    name: 'delete_domains_by_domain_users_by_user_timeframes_by_id_1',
-    description: 'Delete Date Range within Specific Dates Timeframe — In order to delete a date range within a Specific Dates timeframe, supply the ```timeframe-id``` of the particular range to be deleted as the parameter ```child_id``` within the request. — [DELETE /domains/{domain}/users/{user}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to modify"
-                },
-                "child_id": {
-                      "type": "string",
-                      "description": "The ```id``` of the date range you wish to delete within the timeframe."
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "id",
-                "child_id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['child_id'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
       pathParams,
       body,
     });
@@ -287,6 +114,12 @@ export const put_domains_by_domain_users_by_user_timeframes_by_id_2: ToolDefinit
                 "update_only"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];

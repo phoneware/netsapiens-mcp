@@ -48,8 +48,13 @@ export const v1_callrequest_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=callrequest&action=addWakeUp",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("callrequest", "addWakeUp", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("callrequest", "addWakeUp", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -75,8 +80,13 @@ export const v1_callrequest_delete: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=callrequest&action=delWakeUp",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("callrequest", "delWakeUp", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("callrequest", "delWakeUp", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -113,8 +123,13 @@ export const v1_callrequest_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=callrequest&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("callrequest", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("callrequest", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
