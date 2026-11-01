@@ -23,6 +23,14 @@ export interface AuthHooks {
     nsApiUrl: string;
     resumeToken?: string;
   }): Promise<LoginDecision>;
+  /**
+   * Invoked on every access token verification (HTTP /mcp) and on refresh token exchange
+   * before any upstream refresh grant.
+   *
+   * On access token verification: any thrown error maps to 401 InvalidTokenError.
+   * On refresh token exchange: InvalidTokenError deletes the session and maps to 400 InvalidGrantError.
+   * Other errors leave the session intact and map to 500 ServerError.
+   */
   onVerify(stored: StoredToken): Promise<Record<string, unknown>>;
 }
 

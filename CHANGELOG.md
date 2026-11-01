@@ -24,6 +24,7 @@ All notable changes to this project will be documented in this file.
   - `type: "peer"` is removed because it invoked an undocumented route.
   - Attended transfer now accepts `consult_call_id`, looks up `core-server` and `call-session-id`, and bridges call legs.
   - Blind transfer sends `to` using the documented `call-term-user` parameter.
+- AuthHooks: onVerify now also runs during refresh-token exchange before any upstream refresh grant. If onVerify throws InvalidTokenError, the session is deleted and the client receives 400 invalid_grant. Other errors preserve the session and return 500 server_error.
 
 ### Features
 

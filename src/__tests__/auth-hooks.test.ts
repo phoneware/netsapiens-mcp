@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import express, { type Request, type Response } from 'express';
 import request from 'supertest';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import type { StoredToken, AuthHooks, RenderPagesOptions } from '../auth/types.js';
@@ -421,5 +421,119 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
 
     expect(capturedScope).toBe('Office Manager');
     expect(capturedUser).toBe('1013');
+  });
+
+  describe('C-R1: onVerify hook during refresh token exchange', () => {
+    const initialSession: StoredToken = {
+      clientId: dummyClient.client_id,
+      expiresAt: Date.now() + 3600_000,
+      nsAccessToken: 'ns-acc-orig',
+      nsRefreshToken: 'ns-ref-orig',
+      nsExpiresAt: Date.now() + 3600_000,
+      nsUsername: 'user@domain.com',
+      serverBaseUrl: 'http://localhost:3000',
+      extra: { seatId: 'seat-123' },
+    };
+
+    function createRouterApp(provider: NetSapiensAuthProvider) {
+      const app = express();
+      app.use(express.urlencoded({ extended: false }));
+      app.use(express.json());
+      app.use(
+        mcpAuthRouter({
+          provider,
+          issuerUrl: new URL('http://localhost:3000'),
+          resourceServerUrl: new URL('http://localhost:3000/mcp'),
+        }),
+      );
+      return app;
+    }
+
+    it('Hook throws InvalidTokenError: 400 invalid_grant, 0 upstream calls, session deleted', async () => {
+      const provider = createProvider({
+        hooks: {
+          async onVerify() {
+            throw new InvalidTokenError('Seat is revoked');
+          },
+        },
+      });
+      const refreshGrantMock = vi.fn();
+      (provider as unknown as { nsRefreshGrant: unknown }).nsRefreshGrant = refreshGrantMock;
+
+      const store = (provider as unknown as { store: McpStore }).store;
+      const client = await store.clients.registerClient(dummyClient as any);
+      await store.sessions.create({ accessToken: 'acc-1', refreshToken: 'ref-1' }, { ...initialSession, clientId: client.client_id });
+
+      const app = createRouterApp(provider);
+      const res = await request(app)
+        .post('/token')
+        .send(`grant_type=refresh_token&refresh_token=ref-1&client_id=${client.client_id}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_grant');
+      expect(refreshGrantMock).toHaveBeenCalledTimes(0);
+      expect(await store.sessions.getByRefreshToken('ref-1')).toBeUndefined();
+    });
+
+    it('Hook returns normally: 200, rotated tokens, 1 upstream call, retains extra, old refresh is invalid', async () => {
+      const provider = createProvider({
+        hooks: {
+          async onVerify() {
+            return { active: true };
+          },
+        },
+      });
+      const refreshGrantMock = vi.fn().mockResolvedValue({
+        access_token: 'ns-acc-new',
+        refresh_token: 'ns-ref-new',
+        expires_in: 3600,
+      });
+      (provider as unknown as { nsRefreshGrant: unknown }).nsRefreshGrant = refreshGrantMock;
+
+      const store = (provider as unknown as { store: McpStore }).store;
+      const client = await store.clients.registerClient(dummyClient as any);
+      await store.sessions.create({ accessToken: 'acc-2', refreshToken: 'ref-2' }, { ...initialSession, clientId: client.client_id });
+
+      const app = createRouterApp(provider);
+      const res = await request(app)
+        .post('/token')
+        .send(`grant_type=refresh_token&refresh_token=ref-2&client_id=${client.client_id}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.access_token).toBeDefined();
+      expect(res.body.refresh_token).toBeDefined();
+      expect(refreshGrantMock).toHaveBeenCalledTimes(1);
+
+      const newStored = await store.sessions.getByRefreshToken(res.body.refresh_token);
+      expect(newStored?.extra).toEqual({ seatId: 'seat-123' });
+      expect(await store.sessions.getByRefreshToken('ref-2')).toBeUndefined();
+    });
+
+    it('Hook throws plain Error: 500 server_error, 0 upstream calls, session kept in store', async () => {
+      const provider = createProvider({
+        hooks: {
+          async onVerify() {
+            throw new Error('Database connection dropped');
+          },
+        },
+      });
+      const refreshGrantMock = vi.fn();
+      (provider as unknown as { nsRefreshGrant: unknown }).nsRefreshGrant = refreshGrantMock;
+
+      const store = (provider as unknown as { store: McpStore }).store;
+      const client = await store.clients.registerClient(dummyClient as any);
+      await store.sessions.create({ accessToken: 'acc-3', refreshToken: 'ref-3' }, { ...initialSession, clientId: client.client_id });
+
+      const app = createRouterApp(provider);
+      const res = await request(app)
+        .post('/token')
+        .send(`grant_type=refresh_token&refresh_token=ref-3&client_id=${client.client_id}`);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('server_error');
+      expect(res.body.error_description).toBe('Refresh authorization check failed; please retry');
+      expect(refreshGrantMock).toHaveBeenCalledTimes(0);
+      expect(await store.sessions.getByRefreshToken('ref-3')).toBeDefined();
+    });
   });
 });

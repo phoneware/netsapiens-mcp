@@ -447,7 +447,7 @@ export interface NetSapiensAuthProviderOptions {
  store: McpStore;
  /** MCP Server base URL for cross-server token isolation */
  serverBaseUrl?: string;
- /** Optional auth hooks for enrollment and request verification */
+ /** Optional auth hooks for enrollment, access-token verification, and refresh authorization */
  hooks?: AuthHooks;
  /** Optional custom HTML page renderers */
  renderPages?: RenderPagesOptions;
@@ -998,6 +998,20 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    throw new InvalidGrantError('Invalid refresh token');
   }
 
+  if (this.hooks?.onVerify) {
+   try {
+    await this.hooks.onVerify(stored);
+   } catch (err: unknown) {
+    if (err instanceof InvalidTokenError) {
+     await this.store.sessions.deleteByRefreshToken(refreshToken);
+     throw new InvalidGrantError(err.message);
+    }
+    logger.warn('Refresh authorization check failed', {
+     error: err instanceof Error ? err.message : String(err),
+    });
+    throw new ServerError('Refresh authorization check failed; please retry');
+   }
+  }
   let nsTokens: NsTokenResponse;
   if (stored.nsRefreshToken) {
    try {
