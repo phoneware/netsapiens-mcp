@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 4ea97b0d2599a3372ea37b47977333c2827c443c). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 3acde4a7f737eb25abde5a9de0d2904d8ee27a83). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Firestore } from '@google-cloud/firestore';
@@ -13,6 +13,7 @@ import { stripUndefined } from './strip-undefined.js';
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
+  getCutoverOperationDocRef,
   type GuardMutationResult,
   type LegacyOperationContext,
 } from './cutover-fence.js';
@@ -138,7 +139,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     familyId: string,
     grant: G,
     expiresAt?: number,
-    options?: { operation?: LegacyOperationContext },
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
   ): Promise<void> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     if (this.fence?.enforce) {
@@ -147,6 +148,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           db: this.db,
           namespace: this.fence!.namespace,
           operation: options?.operation,
+          completeOperation: options?.completeOperation,
           now: this.nowProvider,
         });
         guard.bufferCompletion(this.nowProvider());
@@ -203,7 +205,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   async ensureFresh(
     familyId: string,
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
-    options?: EnsureFreshOptions & { operation?: LegacyOperationContext },
+    options?: EnsureFreshOptions & { operation?: LegacyOperationContext; completeOperation?: boolean },
   ): Promise<G> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     const now = options?.now ?? this.nowProvider();
@@ -242,6 +244,16 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         return { status: 'leased' as const, current };
       }
 
+      if (this.fence?.enforce && options?.operation) {
+        const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operation.id);
+        transaction.set(
+          opRef,
+          { phase: 'upstream_pending', updatedAt: now },
+          { merge: true },
+        );
+        options.operation.markAmbiguousRemoteOutcome('Lease claimed; remote grant in flight');
+      }
+
       transaction.set(
         docRef,
         stripUndefined({
@@ -255,7 +267,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
       return { status: 'claimed' as const, grant: current.grant };
     });
-
     if (claimResult.status === 'fresh') {
       return claimResult.grant;
     }
@@ -287,10 +298,70 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     }
 
     // claimResult.status === 'claimed': instance holds the lease
+    let refreshed: { grant: G; expiresAt?: number } | undefined;
     try {
-      const refreshed = await refresh(claimResult.grant);
-      const commitNow = options?.now ?? this.nowProvider();
+      refreshed = await refresh(claimResult.grant);
+    } catch (err) {
+      if (this.fence?.enforce && options?.operation) {
+        options.operation.markAmbiguousRemoteOutcome(
+          'Remote refresh failed or timed out: ' + (err instanceof Error ? err.message : String(err)),
+        );
+        const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operation.id);
+        await this.db.runTransaction(async (transaction) => {
+          transaction.set(
+            opRef,
+            {
+              phase: 'upstream_pending',
+              ambiguousRemoteOutcome: true,
+              updatedAt: this.nowProvider(),
+            },
+            { merge: true },
+          );
+        }).catch(() => {});
+      }
 
+      await this.db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (snap.exists) {
+          const current = snap.data() as StoredUpstreamRecord<G>;
+          if (current.leaseOwner === leaseOwner) {
+            transaction.set(
+              docRef,
+              {
+                leaseUntil: null,
+                leaseOwner: null,
+              },
+              { merge: true },
+            );
+          }
+        }
+      }).catch(() => {});
+
+      if (kitCodeOf(err)) throw err;
+
+      const classification = classifyUpstreamTokenResponse(
+        0,
+        err instanceof Error ? err.message : String(err),
+      );
+      if (classification === 'definitive') {
+        await this.delete(familyId, options);
+        throw new UpstreamRevokedError(err instanceof Error ? err.message : String(err));
+      }
+
+      const snap = await docRef.get();
+      if (snap.exists) {
+        const data = snap.data() as StoredUpstreamRecord<G>;
+        if (data.expiresAt && data.expiresAt > now) {
+          return data.grant;
+        }
+      }
+
+      throw new UpstreamUnavailableError(err instanceof Error ? err.message : String(err));
+    }
+
+    // Remote grant succeeded! Commit locally:
+    const commitNow = options?.now ?? this.nowProvider();
+    try {
       await this.db.runTransaction(async (transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce) {
@@ -299,7 +370,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             namespace: this.fence.namespace,
             operation: options?.operation,
             now: this.nowProvider,
-            completeOperation: true,
+            completeOperation: options?.completeOperation ?? true,
           });
         }
 
@@ -328,42 +399,25 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
       return refreshed.grant;
     } catch (err) {
-      await this.db.runTransaction(async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (snap.exists) {
-          const current = snap.data() as StoredUpstreamRecord<G>;
-          if (current.leaseOwner === leaseOwner) {
-            transaction.set(
-              docRef,
-              {
-                leaseUntil: null,
-                leaseOwner: null,
-              },
-              { merge: true },
-            );
-          }
-        }
-      }).catch(() => {});
-      if (kitCodeOf(err)) throw err;
-
-      const classification = classifyUpstreamTokenResponse(
-        0,
-        err instanceof Error ? err.message : String(err),
-      );
-      if (classification === 'definitive') {
-        await this.delete(familyId, options);
-        throw new UpstreamRevokedError(err instanceof Error ? err.message : String(err));
+      // Remote succeeded but local commit failed! Must mark ambiguous and keep closing blocked
+      if (this.fence?.enforce && options?.operation) {
+        options.operation.markAmbiguousRemoteOutcome(
+          'Remote grant succeeded but local commit failed: ' + (err instanceof Error ? err.message : String(err)),
+        );
+        const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operation.id);
+        await this.db.runTransaction(async (transaction) => {
+          transaction.set(
+            opRef,
+            {
+              phase: 'upstream_pending',
+              ambiguousRemoteOutcome: true,
+              updatedAt: this.nowProvider(),
+            },
+            { merge: true },
+          );
+        }).catch(() => {});
       }
-
-      const snap = await docRef.get();
-      if (snap.exists) {
-        const data = snap.data() as StoredUpstreamRecord<G>;
-        if (data.expiresAt && data.expiresAt > now) {
-          return data.grant;
-        }
-      }
-
-      throw new UpstreamUnavailableError(err instanceof Error ? err.message : String(err));
+      throw err;
     }
   }
 }

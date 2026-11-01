@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 4ea97b0d2599a3372ea37b47977333c2827c443c). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 3acde4a7f737eb25abde5a9de0d2904d8ee27a83). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -23,6 +23,7 @@ import { stripUndefined } from './strip-undefined.js';
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
+  getCutoverFenceRecord,
   type GuardMutationResult,
   type LegacyOperationContext,
 } from './cutover-fence.js';
@@ -192,6 +193,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const data = snap.data() as Record<string, unknown>;
 
       if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
+        if (this.fence?.enforce) {
+          const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
+          if (control && control.state !== 'legacy_open') {
+            return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
+          }
+        }
         return await this.adoptLegacyEmbeddedDoc(data);
       }
 
@@ -233,6 +240,16 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (!legacyMatch.empty) {
             const rawDoc = legacyMatch.docs[0]!.data() as Record<string, unknown>;
             if (!rawDoc.refreshFamilyId) {
+              if (this.fence?.enforce) {
+                const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
+                if (control && control.state !== 'legacy_open') {
+                  const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(rawDoc) : rawDoc) as unknown as T;
+                  if (expectedClientId && tokenObj.clientId !== expectedClientId) {
+                    return { status: 'missing' };
+                  }
+                  return { status: 'active', token: tokenObj, familyId: '' };
+                }
+              }
               const adopted = await this.adoptLegacyEmbeddedDoc(rawDoc, options);
               if (adopted) {
                 if (expectedClientId && adopted.clientId !== expectedClientId) {
@@ -262,8 +279,19 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         // Legacy pointer doc
         const legacyAccessSnap = await this.accessCol().doc(docId(raw.accessToken)).get();
         if (!legacyAccessSnap.exists) return { status: 'missing' };
+        const rawAccess = legacyAccessSnap.data() as Record<string, unknown>;
+        if (this.fence?.enforce) {
+          const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
+          if (control && control.state !== 'legacy_open') {
+            const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(rawAccess) : rawAccess) as unknown as T;
+            if (expectedClientId && tokenObj.clientId !== expectedClientId) {
+              return { status: 'missing' };
+            }
+            return { status: 'active', token: tokenObj, familyId: '' };
+          }
+        }
         const adopted = await this.adoptLegacyEmbeddedDoc(
-          legacyAccessSnap.data() as Record<string, unknown>,
+          rawAccess,
           options,
         );
         if (!adopted) return { status: 'missing' };

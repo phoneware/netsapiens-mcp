@@ -30,6 +30,7 @@ import { InvalidTokenError, InvalidGrantError, ServerError, TemporarilyUnavailab
 import {
   type CutoverFenceConfig,
   type LegacyOperationContext,
+  type SupportedCutoverNamespace,
   withLegacyOperation,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
@@ -534,8 +535,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private nsRefreshInflight = new Map<string, Promise<void>>();
  private fenceConfig?: CutoverFenceConfig;
 
- get fenceNamespace(): string {
-  return this.fenceConfig?.namespace ?? 'mcp';
+ get fenceNamespace(): SupportedCutoverNamespace {
+  const ns = this.fenceConfig?.namespace;
+  if (ns === 'readonly_mcp' || ns === 'pwmcp') return ns;
+  return 'mcp';
  }
 
  async withOperation<R>(
