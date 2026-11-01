@@ -16,7 +16,7 @@ NetSapiens provides an official reference documentation MCP at `docs.ns-api.com/
 
 In contrast, `netsapiens-mcp` provides:
 - **Per-user sign-in:** In HTTP mode, each user authenticates with their own NetSapiens credentials through an OAuth 2.1 browser authorization code flow; raw user passwords never enter model context. In stdio mode, single-user operation uses an API token or credentials passed via environment variables.
-- **Role-aware tools:** Each user only sees and invokes tools their NetSapiens role allows (`super_user`, `reseller`, `domain_admin`, `office_manager`, `user`).
+- **Role-aware tools:** Each user only sees and invokes tools their NetSapiens role tier allows (`system_admin`, `reseller`, `domain_admin`, or `user`, mapped from platform scopes like Super User or Office Manager).
 - **Version-aware availability:** Tool catalogs adapt automatically to the reported release of the target NetSapiens host (44.3 through 46.0).
 - **Curated workflows:** High-level composite tools for complex operations alongside over 1,100 granular API tools.
 - **Credential protection:** Encrypted session storage at rest in HTTP mode, policy filters, and automated secret scrubbing.
@@ -124,7 +124,7 @@ The server detects each connected host's API version via `GET /ns-api/v2/version
 | Host line | Documentation used | Observed on a live host | Read tools | Write tools |
 |---|---|---|---|---|
 | 44.3 | 44.3 (retrieved 2026-10-29) | not yet | 132 | 198 |
-| 44.4 | 44.4 (retrieved 2026-10-29) | 44.4.10 (maintainer) | 139 | 199 |
+| 44.4 | 44.4 (retrieved 2026-10-29) | 44.4.10 (maintainer), 44.5.2 (maintainer) | 139 | 199 |
 | 45.0 | 45.0 (retrieved 2026-10-29) | not yet | 207 | 247 |
 | 46.0 | 46.0 (retrieved 2026-10-29) | not yet | 568 | 548 |
 | newer than 46 | 46.0 (newer than documented) | not yet | 568 | 548 |

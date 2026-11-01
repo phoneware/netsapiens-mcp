@@ -7,6 +7,7 @@ import { v1ToolRegistry } from '../src/generated/v1/registry.js';
 import { CURATED_CATALOG } from '../src/tools/curated/catalog.js';
 import { ENV_VARS } from '../src/config/env.js';
 import { firestoreCollections } from '../src/store/firestore.js';
+import { resolveDocsBranch } from '../src/netsapiens/availability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,8 +56,12 @@ export function generateReadmeFacts(): ReadmeFacts {
     const retrieved = sourcesJson[srcKey]?.retrievedAt
       ? sourcesJson[srcKey].retrievedAt!.split('T')[0]
       : 'unrecorded';
-    const obs = availJson.observations?.find?.((o: any) => o.line === b);
-    const obsText = obs ? `${obs.apiVersion} (${obs.source})` : 'not yet';
+    const obsList = (availJson.observations ?? []).filter(
+      (o: any) => resolveDocsBranch(o.apiVersion, branchesJson).docsBranch === b,
+    );
+    const obsText = obsList.length > 0
+      ? obsList.map((o: any) => `${o.apiVersion} (${o.source})`).join(', ')
+      : 'not yet';
 
     // Count tools documented in this branch
     let readCount = 0;
