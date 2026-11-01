@@ -34,6 +34,7 @@ import {
   withLegacyOperation,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
+  requestOperationContext,
 } from './kit/cutover-fence.js';
 import {
  UpstreamRevokedError,
@@ -550,6 +551,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   kind: string,
   fn: (opCtx?: LegacyOperationContext) => Promise<R>,
  ): Promise<R> {
+  const existing = requestOperationContext.getStore();
+  if (existing) {
+   return await fn(existing);
+  }
   if (this.db && this.fenceConfig?.enforce) {
    return await withLegacyOperation(
     { db: this.db, namespace: this.fenceNamespace, kind, now: this.nowProvider },
@@ -614,7 +619,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (options.authCodeStore) {
    this.authCodeStore = options.authCodeStore;
   } else if (useFirestore) {
-   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db: this.db, fence: this.fenceConfig });
+   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db: this.db, fence: this.fenceConfig, now: this.nowProvider });
   }
   if (useFirestore) {
    logger.info('Auth provider using Firestore persistence');
@@ -1421,12 +1426,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // -----------------------------------------------------------------------
 
  async verifyAccessToken(token: string): Promise<AuthInfo> {
-  let stored = await this.tokenStore.get(token);
+  const op = requestOperationContext.getStore();
+  let stored: StoredToken | undefined;
+  if (this.tokenStore instanceof FirestoreTokenStore) {
+   stored = await this.tokenStore.getByAccessToken(token, { operation: op });
+  } else {
+   stored = await this.tokenStore.get(token);
+  }
   if (!stored) {
-   // Must be InvalidTokenError (not a plain Error): requireBearerAuth maps
-   // it to a 401 with a WWW-Authenticate challenge, which is the signal an
-   // MCP client needs to refresh or re-authenticate. Anything else becomes
-   // a 500 the client can't act on.
    throw new InvalidTokenError('Invalid access token');
   }
 
@@ -1588,12 +1595,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  ): Promise<void> {
   const { token } = request;
   await this.withOperation('revocation', async (opCtx) => {
-   const stored = await this.tokenStore.get(token);
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(token, { operation: opCtx })
+    : await this.tokenStore.get(token);
    if (stored) {
     if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
      await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId, { operation: opCtx });
     } else {
-     await this.tokenStore.delete(token);
+     await (this.tokenStore as any).delete(token, { operation: opCtx });
     }
     return;
    }
@@ -1613,12 +1622,19 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // -----------------------------------------------------------------------
 
  async getNsAccessToken(mcpToken: string): Promise<string | undefined> {
-  const stored = await this.tokenStore.get(mcpToken);
-  return stored?.nsAccessToken;
+  return await this.withOperation('read', async (opCtx) => {
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(mcpToken, { operation: opCtx })
+    : await this.tokenStore.get(mcpToken);
+   return stored?.nsAccessToken;
+  });
  }
 
  async forceRefreshUpstream(mcpToken: string): Promise<string | undefined> {
-  const stored = await this.tokenStore.get(mcpToken);
+  const op = requestOperationContext.getStore();
+  const stored = this.tokenStore instanceof FirestoreTokenStore
+   ? await this.tokenStore.getByAccessToken(mcpToken, { operation: op })
+   : await this.tokenStore.get(mcpToken);
   if (!stored || !stored.nsRefreshToken) return undefined;
   if (this.hooks?.onVerify) {
    try {

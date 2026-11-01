@@ -1,4 +1,5 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at 991303831b36f7587f3c006454bcd2d56b1818a0). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at b22c77fa771b858646b09f000ac77fa3ecbbe959). Edit the canonical file, then re-copy.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -25,6 +26,8 @@ export function assertSupportedCutoverNamespace(
     );
   }
 }
+export const requestOperationContext = new AsyncLocalStorage<LegacyOperationContext>();
+
 
 export type CutoverFenceState =
   | 'legacy_open'
@@ -258,26 +261,49 @@ export async function initializeCutoverFence(
   namespace: string,
   options?: {
     initialEpoch?: number;
-    initialState?: CutoverFenceState;
+    initialState?: 'legacy_open';
     now?: () => number;
   },
 ): Promise<CutoverFenceControlRecord> {
   assertSupportedCutoverNamespace(namespace);
+  const requestedState = options?.initialState ?? 'legacy_open';
+  if (requestedState !== 'legacy_open') {
+    throw new CutoverFenceError(
+      `Cannot initialize cutover fence in state '${requestedState}': initialization must be in 'legacy_open'`,
+    );
+  }
+  const requestedEpoch = options?.initialEpoch ?? 1;
+  if (!Number.isInteger(requestedEpoch) || requestedEpoch < 1) {
+    throw new CutoverFenceError(
+      `Invalid initialEpoch for namespace ${namespace}: must be a positive integer, got ${requestedEpoch}`,
+    );
+  }
+
   const now = options?.now ?? Date.now;
   const ref = getCutoverFenceDocRef(db, namespace);
 
   return await db.runTransaction(async (transaction) => {
     const snap = await transaction.get(ref);
     if (snap.exists) {
-      return parseCutoverFenceRecord(snap.data(), namespace);
+      const existing = parseCutoverFenceRecord(snap.data(), namespace);
+      if (existing.epoch !== requestedEpoch) {
+        throw new CutoverFenceError(
+          `Cannot initialize cutover fence for namespace ${namespace}: existing epoch ${existing.epoch} does not match requested initialEpoch ${requestedEpoch}`,
+        );
+      }
+      if (existing.state !== requestedState) {
+        throw new CutoverFenceError(
+          `Cannot initialize cutover fence for namespace ${namespace}: existing state '${existing.state}' does not match requested initialState '${requestedState}'`,
+        );
+      }
+      return existing;
     }
     const currentTime = now();
-    const state = options?.initialState ?? 'legacy_open';
     const initial: CutoverFenceControlRecord = {
       schemaVersion: 1,
       namespace,
-      epoch: options?.initialEpoch ?? 1,
-      state,
+      epoch: requestedEpoch,
+      state: 'legacy_open',
       activeOperations: 0,
       irreversible: false,
       createdAt: currentTime,
@@ -627,20 +653,22 @@ export async function withLegacyOperation<R>(
     },
   };
 
-  try {
-    const result = await fn(ctx);
-    if (!ctx.isCompleted() && !ctx.isAmbiguousRemoteOutcome()) {
-      await releaseLegacyOperation(options.db, ctx, 'completed', now);
+  return await requestOperationContext.run(ctx, async () => {
+    try {
+      const result = await fn(ctx);
+      if (!ctx.isCompleted() && !ctx.isAmbiguousRemoteOutcome()) {
+        await releaseLegacyOperation(options.db, ctx, 'completed', now);
+      }
+      return result;
+    } catch (err) {
+      if (ctx.isAmbiguousRemoteOutcome()) {
+        await markOperationAmbiguous(options.db, ctx, now).catch(() => {});
+      } else if (!ctx.isCompleted()) {
+        await releaseLegacyOperation(options.db, ctx, 'failed', now).catch(() => {});
+      }
+      throw err;
     }
-    return result;
-  } catch (err) {
-    if (ctx.isAmbiguousRemoteOutcome()) {
-      await markOperationAmbiguous(options.db, ctx, now).catch(() => {});
-    } else if (!ctx.isCompleted()) {
-      await releaseLegacyOperation(options.db, ctx, 'failed', now).catch(() => {});
-    }
-    throw err;
-  }
+  });
 }
 
 export async function releaseLegacyOperation(

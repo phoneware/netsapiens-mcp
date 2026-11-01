@@ -1022,4 +1022,283 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     await expect(validateBridgeStartup(authProvider)).rejects.toThrow(CutoverFenceError);
   });
+
+  it('21. Production createApp HTTP router /mcp under legacy_open succeeds (200) with bearer auth and balanced operation lifecycle', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    const testAccessToken = 'bearer-valid-mcp-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'rt-valid-mcp-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'any_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-token-123',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    const mcpRes = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'ping',
+      });
+
+    expect(mcpRes.status).toBe(200);
+
+    let activeOps = 1;
+    for (let i = 0; i < 30; i++) {
+      const c = await getCutoverFenceRecord(db, namespace);
+      if (c?.activeOperations === 0) {
+        activeOps = 0;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(activeOps).toBe(0);
+  });
+
+  it('22. Production createApp HTTP router /mcp under closing and fenced returns HTTP 503 Retry-After and never sends invalid_token challenge', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const testAccessToken = 'bearer-token-' + randomBytes(8).toString('hex');
+
+    const { app } = createApp(authProvider);
+
+    // Transition to closing
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    const closingRes = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'ping' });
+
+    expect(closingRes.status).toBe(503);
+    expect(closingRes.headers['retry-after']).toBe('5');
+    expect(closingRes.body.error).toBe('temporarily_unavailable');
+    expect(closingRes.headers['www-authenticate']).toBeUndefined();
+
+    // Transition to fenced
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'closing',
+      toState: 'fenced',
+      expectedEpoch: 1,
+    });
+
+    const fencedRes = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+
+    expect(fencedRes.status).toBe(503);
+    expect(fencedRes.headers['retry-after']).toBe('5');
+    expect(fencedRes.body.error).toBe('temporarily_unavailable');
+    expect(fencedRes.headers['www-authenticate']).toBeUndefined();
+  });
+
+  it('23. Direct provider entrypoints create their own operation scope outside HTTP requests', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const testAccessToken = 'direct-bearer-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'direct-rt-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'any_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-direct-token-456',
+      nsUsername: 'directuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    // Direct verifyAccessToken outside HTTP
+    const authInfo = await authProvider.verifyAccessToken(testAccessToken);
+    expect(authInfo).toBeDefined();
+
+    // Direct getNsAccessToken outside HTTP
+    const nsToken = await authProvider.getNsAccessToken(testAccessToken);
+    expect(nsToken).toBe('ns-direct-token-456');
+
+    // Direct revokeToken outside HTTP
+    const clientInfo = { client_id: 'any_client' } as any;
+    await authProvider.revokeToken(clientInfo, { token: testAccessToken });
+
+    // After revoke, lookup returns undefined
+    const revoked = await tokenStore.get(testAccessToken);
+    expect(revoked).toBeUndefined();
+
+    const control = await getCutoverFenceRecord(db, namespace);
+    expect(control?.activeOperations).toBe(0);
+  });
+
+  it('24. Preserves 2.3 base embedded format sessions under real HTTP with transparent adoption', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const legacyAccessToken = 'base-23-access-' + randomBytes(8).toString('hex');
+    const legacyRefreshToken = 'base-23-refresh-' + randomBytes(8).toString('hex');
+
+    // Seed v2.3 base document without refreshFamilyId
+    await db.collection('mcp_tokens').doc(docId(legacyAccessToken)).set({
+      accessToken: legacyAccessToken,
+      refreshToken: legacyRefreshToken,
+      clientId: 'legacy_client_23',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-legacy-token-789',
+      nsUsername: 'legacyuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    // Call /mcp with legacy 2.3 token
+    const mcpRes = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${legacyAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'ping' });
+
+    expect(mcpRes.status).toBe(200);
+
+    // Verify the document was transparently adopted into family collection
+    const adoptedDoc = await db.collection('mcp_tokens').doc(docId(legacyAccessToken)).get();
+    const data = adoptedDoc.data();
+    expect(data?.refreshFamilyId).toBeDefined();
+
+    const familyDoc = await db.collection('mcp_tokens_refresh_families').doc(docId(data?.refreshFamilyId)).get();
+    expect(familyDoc.exists).toBe(true);
+  });
+
+  it('25. HTTP admission precedes client adoption: /authorize under closing returns HTTP 503', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    const authRes = await request(app)
+      .get('/authorize?response_type=code&client_id=new_dynamic_client&redirect_uri=http://localhost/cb')
+      .send();
+
+    expect(authRes.status).toBe(503);
+    expect(authRes.headers['retry-after']).toBe('5');
+    expect(authRes.body.error).toBe('temporarily_unavailable');
+
+    // Ensure client was NOT adopted into clients store
+    const clientDoc = await db.collection('mcp_oauth_clients').doc('new_dynamic_client').get();
+    expect(clientDoc.exists).toBe(false);
+  });
 });

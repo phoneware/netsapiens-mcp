@@ -18,7 +18,12 @@ import { requireBearer } from './auth/kit/bearer.js';
 import { UpstreamRevokedError, kitCodeOf, CutoverRefusedError, CutoverFenceError } from './auth/kit/errors.js';
 import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
-import { getCutoverFenceRecord, type CutoverFenceConfig } from './auth/kit/cutover-fence.js';
+import {
+  getCutoverFenceRecord,
+  withLegacyOperation,
+  type CutoverFenceConfig,
+  type SupportedCutoverNamespace,
+} from './auth/kit/cutover-fence.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
@@ -343,6 +348,71 @@ function wireApp(
  // Publishes the requested loopback redirect_uri for the clients store, which
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
  // scoped to /authorize so every other endpoint keeps exact redirect matching.
+ const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
+  return async (_req, res, next) => {
+   if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
+    return next();
+   }
+   try {
+    const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
+    if (!control || control.state !== 'legacy_open') {
+     res.setHeader('Retry-After', '5');
+     return res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: control
+       ? `Cutover state is ${control.state}; ${endpointName} is temporarily unavailable`
+       : `Cutover fence control record is missing for namespace ${authProvider.fenceNamespace}`,
+     });
+    }
+
+    await withLegacyOperation(
+     {
+      db: authProvider.dbInstance,
+      namespace: authProvider.fenceNamespace as SupportedCutoverNamespace,
+      kind: endpointName,
+      now: authProvider.nowProvider,
+     },
+     async (_opCtx) => {
+      let resolved = false;
+      let resolveFn: () => void = () => {};
+      const promise = new Promise<void>((resolve) => {
+       resolveFn = () => {
+        if (!resolved) {
+         resolved = true;
+         resolve();
+        }
+       };
+      });
+      res.once('finish', resolveFn);
+      res.once('close', resolveFn);
+      next();
+      await promise;
+     },
+    );
+   } catch (err: unknown) {
+    if (res.headersSent) return;
+    if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+     const retryAfter = (err && typeof err === 'object' && 'retryAfterSeconds' in err && typeof (err as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number')
+      ? (err as { retryAfterSeconds: number }).retryAfterSeconds
+      : 5;
+     res.setHeader('Retry-After', String(retryAfter));
+     return res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: err instanceof Error ? err.message : 'Cutover in progress; operation temporarily unavailable',
+     });
+    }
+    return next(err);
+   }
+  };
+ };
+
+ // HTTP cutover admission precedes ALL mutating middleware, including client adoption (C9.1)
+ app.use('/register', cutoverAdmissionMiddleware('register'));
+ app.use('/token', cutoverAdmissionMiddleware('token'));
+ app.use('/authorize', cutoverAdmissionMiddleware('authorize'));
+ app.use('/login', cutoverAdmissionMiddleware('login'));
+ app.use('/mfa', cutoverAdmissionMiddleware('mfa'));
+
  app.use('/authorize', allowLoopbackRedirectUri());
  app.use(
   '/authorize',
@@ -351,36 +421,6 @@ function wireApp(
    serverName: 'NetSapiens MCP',
   }),
  );
- const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
-  return async (_req, res, next) => {
-   if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
-    return next();
-   }
-   try {
-    const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
-    if (control && control.state !== 'legacy_open') {
-     res.setHeader('Retry-After', '5');
-     return res.status(503).json({
-      error: 'temporarily_unavailable',
-      error_description: `Cutover state is ${control.state}; ${endpointName} is temporarily unavailable`,
-     });
-    }
-   } catch {
-    res.setHeader('Retry-After', '5');
-    return res.status(503).json({
-     error: 'temporarily_unavailable',
-     error_description: 'Cutover control check temporarily unavailable',
-    });
-   }
-   next();
-  };
- };
-
- app.use('/token', cutoverAdmissionMiddleware('token exchange'));
- app.use('/register', cutoverAdmissionMiddleware('client registration'));
- app.use('/authorize', cutoverAdmissionMiddleware('authorization'));
- app.use('/login', cutoverAdmissionMiddleware('login'));
- // OAuth endpoints: discovery, authorize, token, register, revoke
  app.use(mcpAuthRouter({
   provider: authProvider,
   issuerUrl: baseUrl,
@@ -440,6 +480,7 @@ function wireApp(
   resourceMetadataUrl,
   now: authProvider.nowProvider,
  });
+ app.use('/mcp', cutoverAdmissionMiddleware('mcp'));
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
   const negotiated = negotiateProtocolVersion(req);

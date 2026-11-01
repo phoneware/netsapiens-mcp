@@ -18,6 +18,7 @@ import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/au
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
+import type { RefreshRotationResult } from './kit/ledger.js';
 import { FirestoreUpstreamGrantStore } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { UpstreamUnavailableError } from './kit/errors.js';
@@ -28,6 +29,8 @@ import {
   withLegacyOperation,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
+  requestOperationContext,
+  type SupportedCutoverNamespace,
 } from './kit/cutover-fence.js';
 import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { logger } from '../utils/logger.js';
@@ -181,6 +184,10 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       projectId: opts.projectId,
     });
   }
+  get localNowProvider(): () => number {
+    return this.localNow;
+  }
+
 
   get dbInstance(): Firestore {
     return this.rawDb;
@@ -206,13 +213,18 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return this.rawDb.collection(`${this.tokensCollection}_upstream`).doc(docId(familyId));
   }
 
+  private resolveOp(options?: { operation?: LegacyOperationContext }): LegacyOperationContext | undefined {
+    return options?.operation ?? requestOperationContext.getStore();
+  }
+
   // Backwards compatibility methods
   async get(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
     return this.getByAccessToken(accessToken, options);
   }
 
-  async getByRefreshToken(refreshToken: string): Promise<StoredToken | undefined> {
-    const res = await this.lookupRefresh(refreshToken);
+  async getByRefreshToken(refreshToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    const res = await this.lookupRefresh(refreshToken, undefined, this.localNow(), { operation: op });
     if (res.status === 'active' || res.status === 'retry') {
       return res.token;
     }
@@ -224,7 +236,14 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   }
 
   override async issue(token: StoredToken, options?: { operation?: LegacyOperationContext }): Promise<StoredToken> {
-    return super.issue(token, options);
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'issue', now: this.localNow },
+        async (opCtx) => this.issue(token, { operation: opCtx }),
+      );
+    }
+    return super.issue(token, { operation: op });
   }
 
   override async rotate(
@@ -233,15 +252,29 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     expectedClientId: string,
     now?: number,
     options?: { operation?: LegacyOperationContext },
-  ) {
-    return super.rotate(oldRefreshToken, replacement, expectedClientId, now, options);
+  ): Promise<RefreshRotationResult<StoredToken>> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'rotate', now: this.localNow },
+        async (opCtx) => this.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: opCtx }),
+      );
+    }
+    return super.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: op });
   }
 
- override async getByAccessToken(
-  accessToken: string,
-  options?: { operation?: LegacyOperationContext },
- ): Promise<StoredToken | undefined> {
-    const token = await super.getByAccessToken(accessToken, options);
+  override async getByAccessToken(
+    accessToken: string,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'read', now: this.localNow },
+        async (opCtx) => this.getByAccessToken(accessToken, { operation: opCtx }),
+      );
+    }
+    const token = await super.getByAccessToken(accessToken, { operation: op });
     if (!token) return undefined;
     if (token.ttlAt) {
       const converted = toDate(token.ttlAt);
@@ -269,6 +302,13 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     patch: Partial<StoredToken>,
     options?: { operation?: LegacyOperationContext },
   ): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'update', now: this.localNow },
+        async (opCtx) => this.update(accessToken, patch, { operation: opCtx }),
+      );
+    }
     const accessRef = this.accessDocRef(accessToken);
     return await this.rawDb.runTransaction(async (transaction) => {
       let guard: GuardMutationResult | undefined;
@@ -277,7 +317,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         guard = await checkMutationGuardInTransaction(transaction, {
           db: this.rawDb,
           namespace: fence.namespace,
-          operation: options?.operation,
+          operation: op,
           now: this.localNow,
         });
       }
@@ -327,7 +367,14 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
   opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number; operation?: LegacyOperationContext },
  ): Promise<StoredToken> {
-    const docRef = this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
+  const op = this.resolveOp(opts);
+  if (this.fenceConfig?.enforce && !op) {
+    return await withLegacyOperation(
+      { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'upstream_refresh', now: this.localNow },
+      async (opCtx) => this.refreshNsToken(accessToken, doRefresh, { ...opts, operation: opCtx }),
+    );
+  }
+  const docRef = this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
   const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
   const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
   const LEASE_DURATION_MS = opts?.leaseDurationMs ?? 15_000;
@@ -338,14 +385,14 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
    let shouldRefresh = false;
    let tokenToRefresh: StoredToken | undefined;
    let currentLeaseOwner: string | undefined;
-      await this.rawDb.runTransaction(async (transaction) => {
+   await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.rawDb,
         namespace: fence.namespace,
-        operation: opts?.operation,
+        operation: op,
         now: this.localNow,
         completeOperation: false,
       });
@@ -520,14 +567,38 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   throw new RetryableRefreshError('Timed out waiting for upstream token refresh');
  }
 
- async delete(accessToken: string): Promise<void> {
-    await this.revokeByToken(accessToken);
+ async delete(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+        async (opCtx) => this.delete(accessToken, { operation: opCtx }),
+      );
+    }
+    await this.revokeByToken(accessToken, { operation: op });
  }
 
- async deleteByRefreshToken(refreshToken: string): Promise<void> {
-    await this.revokeByToken(refreshToken);
+ async deleteByRefreshToken(refreshToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+        async (opCtx) => this.deleteByRefreshToken(refreshToken, { operation: opCtx }),
+      );
+    }
+    await this.revokeByToken(refreshToken, { operation: op });
  }
 
+ override async revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'revocation', now: this.localNow },
+        async (opCtx) => this.revokeFamily(familyId, { operation: opCtx }),
+      );
+    }
+    return super.revokeFamily(familyId, { operation: op });
+ }
   clearCache(): void {
     // No-op: caches removed per C1
  }
@@ -576,7 +647,8 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
   options?: { operation?: LegacyOperationContext },
  ): Promise<OAuthClientInformationFull> {
-  if (this.fenceConfig?.enforce && !options?.operation) {
+  const op = options?.operation ?? requestOperationContext.getStore();
+  if (this.fenceConfig?.enforce && !op) {
    return await withLegacyOperation(
     { db: this.db, namespace: this.fenceConfig.namespace, kind: 'register_client' },
     async (opCtx) => this.registerClient(client, { operation: opCtx }),
@@ -604,7 +676,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: fence.namespace,
-        operation: options?.operation,
+        operation: op,
       });
     }
     guard?.bufferCompletion();
@@ -633,13 +705,16 @@ export class FirestoreAuthCodeStore {
  private readonly collection: string;
  readonly fenceConfig?: CutoverFenceConfig;
 
- constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig } = {}) {
+ private readonly localNow: () => number;
+
+ constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig; now?: () => number } = {}) {
   this.collection = opts.collection ?? 'mcp_auth_codes';
   this.db = opts.db ?? new Firestore({
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
   this.fenceConfig = opts.fence;
+  this.localNow = opts.now ?? Date.now;
   logger.info('Firestore auth code store initialized', { collection: this.collection });
  }
 
@@ -655,13 +730,15 @@ export class FirestoreAuthCodeStore {
   },
   options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
  ): Promise<void> {
-  if (this.fenceConfig?.enforce && !options?.operation) {
+  const op = options?.operation ?? requestOperationContext.getStore();
+  if (this.fenceConfig?.enforce && !op) {
    return await withLegacyOperation(
     { db: this.db, namespace: this.fenceConfig.namespace, kind: 'auth_code' },
     async (opCtx) => this.set(code, data, { operation: opCtx, completeOperation: true }),
    );
   }
-  const expiresAt = data.expiresAt ?? Date.now() + 5 * 60 * 1000;
+  const now = this.localNow();
+  const expiresAt = data.expiresAt ?? now + 5 * 60 * 1000;
   const docData: AuthCodeData = {
    pending: data.pending,
    nsTokens: data.nsTokens,
@@ -680,7 +757,7 @@ export class FirestoreAuthCodeStore {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: fence.namespace,
-        operation: options?.operation,
+        operation: op,
         completeOperation: options?.completeOperation !== false,
       });
     }
@@ -695,7 +772,7 @@ export class FirestoreAuthCodeStore {
   const snap = await this.db.collection(this.collection).doc(code).get();
   if (!snap.exists) return undefined;
   const data = snap.data() as AuthCodeData;
-  if (data.used || Date.now() > data.expiresAt) return undefined;
+  if (data.used || this.localNow() > data.expiresAt) return undefined;
   if (data.serverBaseUrl || expected?.serverBaseUrl) {
    if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
     logger.warn('Auth code challenge rejected: serverBaseUrl mismatch (cross-server auth code)', {
@@ -721,6 +798,7 @@ export class FirestoreAuthCodeStore {
   expected?: { serverBaseUrl?: string; clientId?: string },
   options?: { operation?: LegacyOperationContext },
  ): Promise<{ pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> } | undefined> {
+  const op = options?.operation ?? requestOperationContext.getStore();
   const docRef = this.db.collection(this.collection).doc(code);
   return await this.db.runTransaction(async (transaction) => {
    let guard: GuardMutationResult | undefined;
@@ -729,14 +807,14 @@ export class FirestoreAuthCodeStore {
      guard = await checkMutationGuardInTransaction(transaction, {
        db: this.db,
        namespace: fence.namespace,
-       operation: options?.operation,
+       operation: op,
        completeOperation: false,
      });
    }
    const snap = await transaction.get(docRef);
    if (!snap.exists) return undefined;
    const data = snap.data() as AuthCodeData;
-   if (data.used || Date.now() > data.expiresAt) {
+   if (data.used || this.localNow() > data.expiresAt) {
     return undefined;
    }
    if (data.serverBaseUrl || expected?.serverBaseUrl) {
@@ -772,6 +850,7 @@ export class FirestoreAuthCodeStore {
   expected: { serverBaseUrl?: string; clientId?: string; tokenLifetimeSec: number },
   options?: { operation?: LegacyOperationContext },
  ): Promise<{ tokens: OAuthTokens } | undefined> {
+  const op = options?.operation ?? requestOperationContext.getStore();
   const codeRef = this.db.collection(this.collection).doc(code);
   return await this.db.runTransaction(async (transaction) => {
    let guard: GuardMutationResult | undefined;
@@ -780,7 +859,7 @@ export class FirestoreAuthCodeStore {
      guard = await checkMutationGuardInTransaction(transaction, {
        db: this.db,
        namespace: fence.namespace,
-       operation: options?.operation,
+       operation: op,
        completeOperation: true,
      });
    }
@@ -803,7 +882,7 @@ export class FirestoreAuthCodeStore {
    const accessToken = randomBytes(32).toString('hex');
    const refreshToken = randomBytes(32).toString('hex');
    const familyId = randomUUID();
-   const now = Date.now();
+   const now = tokenStore.localNowProvider();
    const expiresAt = now + expected.tokenLifetimeSec * 1000;
    const nsExpiresAt = data.nsTokens.expires_in
      ? now + data.nsTokens.expires_in * 1000

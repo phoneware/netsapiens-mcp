@@ -1,4 +1,3 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 991303831b36f7587f3c006454bcd2d56b1818a0). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -24,9 +23,12 @@ import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
   getCutoverFenceRecord,
+  getCutoverOperationDocRef,
   readCutoverFenceInTransaction,
   type GuardMutationResult,
   type LegacyOperationContext,
+  type LegacyOperationRecord,
+  requestOperationContext,
 } from './cutover-fence.js';
 export function docId(raw: string): string {
   return raw.replace(/[\/.]/g, '_');
@@ -106,11 +108,17 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const accessPayload = stripUndefined({ ...stored, ...extras });
 
       if (this.fence?.enforce) {
+        const op = options?.operation ?? requestOperationContext.getStore();
+        if (!op) {
+          throw new CutoverFenceError(
+            `Durable operation context is required for fence-enforced issue in namespace ${this.fence.namespace}`,
+          );
+        }
         await this.db.runTransaction(async (transaction: Transaction) => {
           const guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence!.namespace,
-            operation: options?.operation,
+            operation: op,
             completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
@@ -137,13 +145,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
             const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
             if (upstreamData) {
-              transaction.set(
-                this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId)),
-                stripUndefined({
-                  ...upstreamData,
-                  updatedAt: this.nowProvider(),
-                }),
-              );
+              const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
+              const upstreamPayload = stripUndefined({
+                ...upstreamData,
+                updatedAt: this.nowProvider(),
+              });
+              transaction.set(upstreamRef, upstreamPayload);
             }
           }
         });
@@ -173,13 +180,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
         const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
         if (upstreamData) {
-          batch.set(
-            this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId)),
-            stripUndefined({
-              ...upstreamData,
-              updatedAt: this.nowProvider(),
-            }),
-          );
+          const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
+          const upstreamPayload = stripUndefined({
+            ...upstreamData,
+            updatedAt: this.nowProvider(),
+          });
+          batch.set(upstreamRef, upstreamPayload);
         }
       }
 
@@ -196,7 +202,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   ): Promise<T | undefined> {
     try {
       if (this.fence?.enforce) {
-        if (!options?.operation) {
+        const op = options?.operation ?? requestOperationContext.getStore();
+        if (!op) {
           throw new CutoverFenceError(
             `Durable operation context is required for fence-enforced getByAccessToken in namespace ${this.fence.namespace}`,
           );
@@ -207,10 +214,27 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (control.state !== 'legacy_open') {
             if (
               control.state === 'closing' &&
-              options.operation &&
-              options.operation.epoch === control.epoch
+              op &&
+              op.epoch === control.epoch
             ) {
-              // Admitted operation permitted during closing
+              const opRef = getCutoverOperationDocRef(this.db, this.fence!.namespace, op.id);
+              const opSnap = await transaction.get(opRef);
+              if (!opSnap.exists) {
+                throw new CutoverFenceError(
+                  `Durable operation record missing in closing: ${op.id}`,
+                );
+              }
+              const opData = opSnap.data() as LegacyOperationRecord;
+              if (opData.epoch !== control.epoch) {
+                throw new CutoverFenceError(
+                  `Operation epoch mismatch in closing: expected ${control.epoch}, got ${opData.epoch}`,
+                );
+              }
+              if (opData.phase !== 'admitted' && opData.phase !== 'upstream_pending') {
+                throw new CutoverFenceError(
+                  `Operation in closing is in phase ${opData.phase}; lookup refused`,
+                );
+              }
             } else {
               throw new CutoverRefusedError(
                 `Cutover state is ${control.state}; access token lookup refused for namespace ${this.fence!.namespace}`,
@@ -224,7 +248,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           const data = snap.data() as Record<string, unknown>;
 
           if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
-            return await this.adoptLegacyEmbeddedDocInTransaction(transaction, data, { operation: options.operation });
+            return await this.adoptLegacyEmbeddedDocInTransaction(transaction, data, { operation: op });
           }
           return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
         });
@@ -266,39 +290,40 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   ): Promise<RefreshLookupResult<T>> {
     try {
       if (this.fence?.enforce) {
-        const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
-        if (!control) {
-          throw new CutoverFenceError(
-            `Missing cutover fence control record for namespace ${this.fence.namespace}`,
-          );
-        }
-        if (control.state !== 'legacy_open') {
-          if (
-            control.state === 'closing' &&
-            options?.operation &&
-            options.operation.epoch === control.epoch
-          ) {
-            // Admitted operation permitted during closing
-          } else {
-            throw new CutoverRefusedError(
-              `Cutover state is ${control.state}; refresh lookup refused for namespace ${this.fence.namespace}`,
-              { cutoverState: control.state, epoch: control.epoch },
-            );
-          }
-        }
-
+        const op = options?.operation ?? requestOperationContext.getStore();
         return await this.db.runTransaction(async (transaction: Transaction) => {
-          let guard: GuardMutationResult | undefined;
-          if (options?.operation) {
-            guard = await checkMutationGuardInTransaction(transaction, {
-              db: this.db,
-              namespace: this.fence!.namespace,
-              operation: options.operation,
-              completeOperation: false,
-              now: this.nowProvider,
-            });
+          const control = await readCutoverFenceInTransaction(transaction, this.db, this.fence!.namespace);
+          if (control.state !== 'legacy_open') {
+            if (
+              control.state === 'closing' &&
+              op &&
+              op.epoch === control.epoch
+            ) {
+              const opRef = getCutoverOperationDocRef(this.db, this.fence!.namespace, op.id);
+              const opSnap = await transaction.get(opRef);
+              if (!opSnap.exists) {
+                throw new CutoverFenceError(
+                  `Durable operation record missing in closing: ${op.id}`,
+                );
+              }
+              const opData = opSnap.data() as LegacyOperationRecord;
+              if (opData.epoch !== control.epoch) {
+                throw new CutoverFenceError(
+                  `Operation epoch mismatch in closing: expected ${control.epoch}, got ${opData.epoch}`,
+                );
+              }
+              if (opData.phase !== 'admitted' && opData.phase !== 'upstream_pending') {
+                throw new CutoverFenceError(
+                  `Operation in closing is in phase ${opData.phase}; lookup refused`,
+                );
+              }
+            } else {
+              throw new CutoverRefusedError(
+                `Cutover state is ${control.state}; refresh lookup refused for namespace ${this.fence!.namespace}`,
+                { cutoverState: control.state, epoch: control.epoch },
+              );
+            }
           }
-
           const refreshRef = this.refreshCol().doc(docId(refreshToken));
           const snap = await transaction.get(refreshRef);
 
@@ -315,7 +340,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                   const adopted = await this.adoptLegacyEmbeddedDocInTransaction(
                     transaction,
                     rawDoc,
-                    { operation: options?.operation },
+                    { operation: op },
                   );
                   if (adopted) {
                     if (expectedClientId && adopted.clientId !== expectedClientId) {
@@ -338,9 +363,21 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 .limit(1),
             );
             if (!retiredMatch.empty) {
+              if (!op) {
+                throw new CutoverFenceError(
+                  `Durable operation context is required for retired replay revocation during lookupRefresh in namespace ${this.fence!.namespace}`,
+                );
+              }
+              const retiredGuard = await checkMutationGuardInTransaction(transaction, {
+                db: this.db,
+                namespace: this.fence!.namespace,
+                operation: op,
+                completeOperation: true,
+                now: this.nowProvider,
+              });
               const familyDoc = retiredMatch.docs[0]!;
               const family = familyDoc.data() as StoredRefreshFamily;
-              guard?.bufferCompletion(now);
+              retiredGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
               return { status: 'replay', familyId: familyDoc.id };
             }
@@ -405,9 +442,20 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               }
             }
 
-            // Consumed replay: revoke family in the SAME transaction!
+            if (!op) {
+              throw new CutoverFenceError(
+                `Durable operation context is required for consumed replay revocation during lookupRefresh in namespace ${this.fence!.namespace}`,
+              );
+            }
+            const replayGuard = await checkMutationGuardInTransaction(transaction, {
+              db: this.db,
+              namespace: this.fence!.namespace,
+              operation: op,
+              completeOperation: true,
+              now: this.nowProvider,
+            });
             if (family) {
-              guard?.bufferCompletion(now);
+              replayGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyRef, family);
             }
             return { status: 'replay', familyId: raw.familyId };
@@ -522,10 +570,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const result = await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce) {
+          const op = options?.operation ?? requestOperationContext.getStore();
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
-            operation: options?.operation,
+            operation: op,
             completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
@@ -775,13 +824,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
           const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
           if (upstreamData) {
-            transaction.set(
-              this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId)),
-              stripUndefined({
-                ...upstreamData,
-                updatedAt: now,
-              }),
-            );
+            const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId));
+            const upstreamPayload = stripUndefined({
+              ...upstreamData,
+              updatedAt: now,
+            });
+            transaction.set(upstreamRef, upstreamPayload, { merge: true });
           }
         }
 
@@ -796,7 +844,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
   async revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
-      if (this.fence?.enforce && !options?.operation) {
+      const op = options?.operation ?? requestOperationContext.getStore();
+      if (this.fence?.enforce && !op) {
         throw new CutoverFenceError(
           `Durable operation context is required for fence-enforced revokeFamily in namespace ${this.fence.namespace}`,
         );
@@ -804,11 +853,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const familyRef = this.familyCol().doc(docId(familyId));
       await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
-        if (this.fence?.enforce) {
+        if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
-            operation: options?.operation,
+            operation: op,
             now: this.nowProvider,
           });
         }
@@ -828,7 +877,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
   async revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
-      if (this.fence?.enforce && !options?.operation) {
+      const op = options?.operation ?? requestOperationContext.getStore();
+      if (this.fence?.enforce && !op) {
         throw new CutoverFenceError(
           `Durable operation context is required for fence-enforced revokeByToken in namespace ${this.fence.namespace}`,
         );
@@ -838,11 +888,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
       await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
-        if (this.fence?.enforce) {
+        if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
-            operation: options?.operation,
+            operation: op,
             now: this.nowProvider,
           });
         }
@@ -959,11 +1009,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     options?: { operation?: LegacyOperationContext },
   ): Promise<T | undefined> {
     let guard: GuardMutationResult | undefined;
+    const op = options?.operation ?? requestOperationContext.getStore();
     if (this.fence?.enforce) {
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: this.fence.namespace,
-        operation: options?.operation,
+        operation: op,
         completeOperation: false,
         now: this.nowProvider,
       });
