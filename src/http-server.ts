@@ -23,6 +23,7 @@ import {
   withLegacyOperation,
   type CutoverFenceConfig,
   type SupportedCutoverNamespace,
+  requestOperationContext,
 } from './auth/kit/cutover-fence.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
@@ -154,7 +155,12 @@ export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): 
 }
 
 export async function validateBridgeStartup(authProvider: NetSapiensAuthProvider): Promise<void> {
- if (authProvider.fenceConfig?.enforce && authProvider.dbInstance) {
+ if (authProvider.fenceConfig?.enforce) {
+  if (!authProvider.dbInstance) {
+   throw new CutoverFenceError(
+    `Bridge startup refused: cutover fence is enforced for namespace ${authProvider.fenceNamespace} but no Firestore database instance is configured`,
+   );
+  }
   const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
   if (!control) {
    throw new CutoverFenceError(
@@ -349,7 +355,7 @@ function wireApp(
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
  // scoped to /authorize so every other endpoint keeps exact redirect matching.
  const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
-  return async (_req, res, next) => {
+  return async (req, res, next) => {
    if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
     return next();
    }
@@ -372,7 +378,8 @@ function wireApp(
       kind: endpointName,
       now: authProvider.nowProvider,
      },
-     async (_opCtx) => {
+     async (opCtx) => {
+      (req as any).cutoverOperation = opCtx;
       let resolved = false;
       let resolveFn: () => void = () => {};
       const promise = new Promise<void>((resolve) => {
@@ -385,7 +392,16 @@ function wireApp(
       });
       res.once('finish', resolveFn);
       res.once('close', resolveFn);
-      next();
+      if (req.method === 'GET') {
+       const origWriteHead = res.writeHead.bind(res);
+       res.writeHead = (...args: any[]) => {
+        resolveFn();
+        return (origWriteHead as any)(...args);
+       };
+      }
+      requestOperationContext.run(opCtx, () => {
+       next();
+      });
       await promise;
      },
     );
@@ -409,6 +425,7 @@ function wireApp(
  // HTTP cutover admission precedes ALL mutating middleware, including client adoption (C9.1)
  app.use('/register', cutoverAdmissionMiddleware('register'));
  app.use('/token', cutoverAdmissionMiddleware('token'));
+ app.use('/revoke', cutoverAdmissionMiddleware('revoke'));
  app.use('/authorize', cutoverAdmissionMiddleware('authorize'));
  app.use('/login', cutoverAdmissionMiddleware('login'));
  app.use('/mfa', cutoverAdmissionMiddleware('mfa'));
@@ -421,6 +438,29 @@ function wireApp(
    serverName: 'NetSapiens MCP',
   }),
  );
+ // Intercept /token and /revoke responses to map temporarily_unavailable to HTTP 503 + Retry-After: 5
+ app.use(['/token', '/revoke'], (_req, res, next) => {
+  const origStatus = res.status.bind(res);
+  const origJson = res.json.bind(res);
+  let currentStatus = 200;
+
+  res.status = (code: number) => {
+   currentStatus = code;
+   return res;
+  };
+
+  res.json = (body: any) => {
+   if (body && typeof body === 'object' && body.error === 'temporarily_unavailable') {
+    res.setHeader('Retry-After', '5');
+    origStatus(503);
+    return origJson(body);
+   }
+   origStatus(currentStatus);
+   return origJson(body);
+  };
+
+  next();
+ });
  app.use(mcpAuthRouter({
   provider: authProvider,
   issuerUrl: baseUrl,

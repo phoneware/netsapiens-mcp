@@ -19,10 +19,10 @@ import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshRotationResult } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore } from './kit/upstream-grant.js';
+import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
-import { UpstreamUnavailableError } from './kit/errors.js';
-import { UpstreamTimeoutError } from './netsapiens-auth-provider.js';
+import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
+import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
 import {
   type CutoverFenceConfig,
   type LegacyOperationContext,
@@ -214,7 +214,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   }
 
   private resolveOp(options?: { operation?: LegacyOperationContext }): LegacyOperationContext | undefined {
-    return options?.operation ?? requestOperationContext.getStore();
+    const op = options?.operation ?? requestOperationContext.getStore();
+    if (op && op.isCompleted()) {
+      return undefined;
+    }
+    return op;
   }
 
   // Backwards compatibility methods
@@ -518,40 +522,52 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
       (err instanceof Error && err.message.toLowerCase().includes('timeout'));
 
-    if (isTimeout) {
-      opts?.operation?.markAmbiguousRemoteOutcome(err instanceof Error ? err.message : String(err));
-      await this.rawDb.runTransaction(async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (snap.exists) {
-          const current = snap.data() as StoredToken;
-          transaction.set(docRef, { ambiguousRemoteOutcome: true }, { merge: true });
-          if (current.refreshFamilyId) {
-            transaction.set(
-              this.upstreamDocRef(current.refreshFamilyId),
-              {
-                ambiguousOutcome: true,
-                ambiguousReason: 'Timeout during refresh',
-                ambiguousAt: this.localNow(),
-              },
-              { merge: true },
-            );
+    const isDefinitive =
+      err instanceof UpstreamGrantRejectedError ||
+      err instanceof UpstreamRevokedError ||
+      kitCodeOf(err) === 'upstream_revoked';
+
+    if (isDefinitive) {
+      if (currentLeaseOwner) {
+        await this.rawDb.runTransaction(async (transaction) => {
+          const snap = await transaction.get(docRef);
+          if (snap.exists) {
+            const current = snap.data() as StoredToken & { refreshLockOwner?: string };
+            if (current.refreshLockOwner === currentLeaseOwner) {
+              transaction.update(docRef, {
+                refreshLockUntil: null,
+                refreshLockOwner: null,
+              });
+            }
           }
-        }
-      }).catch(() => {});
-    } else if (currentLeaseOwner) {
-      await this.rawDb.runTransaction(async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (snap.exists) {
-          const current = snap.data() as StoredToken & { refreshLockOwner?: string };
-          if (current.refreshLockOwner === currentLeaseOwner) {
-            transaction.update(docRef, {
-              refreshLockUntil: null,
-              refreshLockOwner: null,
-            });
-          }
-        }
-      }).catch(() => {});
+        }).catch(() => {});
+      }
+      throw err;
     }
+
+    const reasonCode: AmbiguousGrantReasonCode = isTimeout ? 'upstream_timeout' : 'upstream_transport_error';
+    if (opts?.operation) {
+      opts.operation.markAmbiguousRemoteOutcome(reasonCode);
+    }
+    await this.rawDb.runTransaction(async (transaction) => {
+      const snap = await transaction.get(docRef);
+      if (snap.exists) {
+        const current = snap.data() as StoredToken;
+        transaction.set(docRef, { ambiguousRemoteOutcome: true }, { merge: true });
+        if (current.refreshFamilyId) {
+          transaction.set(
+            this.upstreamDocRef(current.refreshFamilyId),
+            {
+              ambiguousOutcome: true,
+              ambiguousReason: reasonCode,
+              ambiguousAt: this.localNow(),
+              ambiguousOperationId: opts?.operation?.id,
+            },
+            { merge: true },
+          );
+        }
+      }
+    }).catch(() => {});
     throw err;
    }
   }
@@ -761,6 +777,7 @@ export class FirestoreAuthCodeStore {
         completeOperation: options?.completeOperation !== false,
       });
     }
+    guard?.bufferCompletion(now);
     transaction.set(docRef, stripUndefined(docData));
   });
  }

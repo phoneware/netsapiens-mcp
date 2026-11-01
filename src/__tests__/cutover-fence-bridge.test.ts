@@ -1049,6 +1049,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
     process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    process.env.MCP_BASE_URL = 'http://localhost';
 
     const testAccessToken = 'bearer-valid-mcp-' + randomBytes(8).toString('hex');
     const testRefreshToken = 'rt-valid-mcp-' + randomBytes(8).toString('hex');
@@ -1300,5 +1301,243 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     // Ensure client was NOT adopted into clients store
     const clientDoc = await db.collection('mcp_oauth_clients').doc('new_dynamic_client').get();
     expect(clientDoc.exists).toBe(false);
+  });
+
+  it('26. Pre-admitted HTTP request completes under closing without nested double-admission, while subsequent request is refused with 503', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+
+    let transitionedMidFlight = false;
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      hooks: {
+        onVerify: async () => {
+          if (!transitionedMidFlight) {
+            transitionedMidFlight = true;
+            await transitionCutoverFenceState(db, namespace, {
+              fromState: 'legacy_open',
+              toState: 'closing',
+              expectedEpoch: 1,
+            });
+          }
+        },
+      },
+    });
+
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockResolvedValue({
+      access_token: 'new-ns-access',
+      refresh_token: 'new-ns-refresh',
+      expires_in: 3600,
+      username: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+    });
+
+    const testAccessToken = 'midflight-access-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'midflight-refresh-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'midflight_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-token-mid',
+      nsRefreshToken: 'ns-refresh-mid',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    await (authProvider as any).clientsStore.registerClient({
+      client_id: 'midflight_client',
+      redirect_uris: ['http://localhost/cb'],
+      token_endpoint_auth_method: 'none',
+    });
+
+    const { app } = createApp(authProvider);
+
+    // 1. In-flight request admitted in legacy_open, transitions to closing in onVerify
+    const tokenRes1 = await request(app)
+      .post('/token')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: testRefreshToken,
+        client_id: 'midflight_client',
+      });
+
+    // Pre-admitted request must succeed (200), NOT 503 double-admission refusal
+    expect(tokenRes1.status).toBe(200);
+    expect(tokenRes1.body.access_token).toBeDefined();
+
+    // 2. New request after closing must be refused with 503 + Retry-After: 5
+    const tokenRes2 = await request(app)
+      .post('/token')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: tokenRes1.body.refresh_token,
+        client_id: 'midflight_client',
+      });
+
+    expect(tokenRes2.status).toBe(503);
+    expect(tokenRes2.headers['retry-after']).toBe('5');
+    expect(tokenRes2.body.error).toBe('temporarily_unavailable');
+
+    // 3. Operations drain to 0
+    let activeOps = 1;
+    for (let i = 0; i < 30; i++) {
+      const c = await getCutoverFenceRecord(db, namespace);
+      if (c?.activeOperations === 0) {
+        activeOps = 0;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(activeOps).toBe(0);
+  });
+
+  it('27. Production createApp HTTP router /revoke under closing/fenced returns HTTP 503 Retry-After and never returns SDK 500 ServerError', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    await (authProvider as any).clientsStore.registerClient({
+      client_id: 'revoke_client',
+      redirect_uris: ['http://localhost/cb'],
+      token_endpoint_auth_method: 'none',
+    });
+
+    const { app } = createApp(authProvider);
+
+    // Transition to closing
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    const revokeRes = await request(app)
+      .post('/revoke')
+      .send({
+        token: 'any_token',
+        client_id: 'revoke_client',
+      });
+
+    // Outer /revoke admission must return 503 + Retry-After: 5, NOT SDK 500
+    expect(revokeRes.status).toBe(503);
+    expect(revokeRes.headers['retry-after']).toBe('5');
+    expect(revokeRes.body.error).toBe('temporarily_unavailable');
+  });
+
+  it('28. Production createApp HTTP router /token under transient upstream error returns HTTP 503 Retry-After and preserves credentials', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockRejectedValue(
+      new UpstreamTimeoutError('Upstream connection timeout'),
+    );
+
+    const testAccessToken = 'transient-access-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'transient-refresh-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'transient_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-token-transient',
+      nsRefreshToken: 'ns-refresh-transient',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    await (authProvider as any).clientsStore.registerClient({
+      client_id: 'transient_client',
+      redirect_uris: ['http://localhost/cb'],
+      token_endpoint_auth_method: 'none',
+    });
+
+    const { app } = createApp(authProvider);
+
+    const tokenRes = await request(app)
+      .post('/token')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: testRefreshToken,
+        client_id: 'transient_client',
+      });
+
+    // Must return 503 + Retry-After: 5, NOT 400 invalid_grant
+    expect(tokenRes.status).toBe(503);
+    expect(tokenRes.headers['retry-after']).toBe('5');
+    expect(tokenRes.body.error).toBe('temporarily_unavailable');
+
+    // Token must NOT be revoked: still exists in store
+    const existing = await tokenStore.get(testAccessToken);
+    expect(existing).toBeDefined();
   });
 });
