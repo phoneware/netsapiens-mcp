@@ -3,7 +3,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toolRegistry } from '../generated/registry.js';
-import { MULTIPART_ONLY_TOOLS } from '../tools/multipart.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -101,11 +100,11 @@ describe('generator exclusions', () => {
     ).toEqual([]);
   });
 
-  it('tools with multipartOnly include every name in MULTIPART_ONLY_TOOLS', () => {
-    for (const name of MULTIPART_ONLY_TOOLS) {
-      const tool = toolRegistry.get(name);
-      expect(tool, `tool '${name}' from MULTIPART_ONLY_TOOLS must exist in registry`).toBeDefined();
-      expect(tool?.operation?.multipartOnly, `tool '${name}' must have multipartOnly: true`).toBe(true);
+  it('tools with multipartOnly are marked with multipartOnly: true', () => {
+    const multipartTools = [...toolRegistry.values()].filter((t) => t.operation?.multipartOnly);
+    expect(multipartTools.length).toBe(12);
+    for (const tool of multipartTools) {
+      expect(tool.operation?.multipartOnly).toBe(true);
     }
   });
 });

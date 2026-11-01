@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * NetSapiens MCP Server
  * Model Context Protocol server for NetSapiens platform integration
@@ -6,6 +7,8 @@
  * functionality including user management, call records, and system information.
  */
 import { randomBytes } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createMemoryStore } from './store/memory.js';
 import { setUsageStore } from './tools/promotion/usage-store.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -17,6 +20,11 @@ import { logger } from './utils/logger.js';
 import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
 import { createRequire } from 'node:module';
 import { normalizePlatformUrl } from './auth/platforms.js';
+import type { UserRole } from './auth/roles.js';
+import type { AvailabilityContext } from './netsapiens/availability.js';
+import { createAvailabilityContext } from './netsapiens/availability.js';
+import { getVersionInfo } from './netsapiens/version.js';
+import { createGuardedClient } from './netsapiens/guarded-client.js';
 
 const packageMetadata: unknown = createRequire(import.meta.url)('../package.json');
 if (!packageMetadata || typeof packageMetadata !== 'object' || !('version' in packageMetadata) || typeof packageMetadata.version !== 'string') {
@@ -31,6 +39,12 @@ export const loadConfig = (): MCPServerConfig => {
  let apiUrl: string;
  try { apiUrl = normalizePlatformUrl(rawApiUrl); } catch { throw new Error(`ConfigError: NETSAPIENS_API_URL must be an http(s) URL, got "${rawApiUrl}"`); }
  const transport = process.env.MCP_TRANSPORT || 'stdio';
+ const rawTtl = process.env.NETSAPIENS_VERSION_TTL_SECONDS;
+ if (rawTtl !== undefined && rawTtl !== '') {
+  if (!/^\d+$/.test(rawTtl) || parseInt(rawTtl, 10) <= 0) {
+   throw new Error(`ConfigError: NETSAPIENS_VERSION_TTL_SECONDS must be a positive integer, got "${rawTtl}"`);
+  }
+ }
  if (process.env.MCP_PLATFORMS !== undefined) throw new Error('ConfigError: MCP_PLATFORMS was removed in 3.0.0; use NETSAPIENS_PLATFORMS');
  if (transport !== 'http' && process.env.NETSAPIENS_PLATFORMS !== undefined) console.error('warn: NETSAPIENS_PLATFORMS is ignored in stdio mode');
 
@@ -103,10 +117,11 @@ export function getToolDefinitions() {
 export function registerTools(
  server: Server,
  netsapiensClient: NetSapiensClient,
- userRole?: import('./auth/roles.js').UserRole,
+ userRole?: UserRole,
  userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
 ): void {
- registerAllTools(server, netsapiensClient, userRole, userIdentity);
+ registerAllTools(server, netsapiensClient, userRole, userIdentity, availabilityContext);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +132,7 @@ export class NetSapiensMCPServer {
  private server: Server;
  private netsapiensClient: NetSapiensClient;
 
- constructor(config: MCPServerConfig) {
+ constructor(config: MCPServerConfig, context?: AvailabilityContext) {
   this.server = new Server(
    serverImplementation(config),
    {
@@ -126,8 +141,10 @@ export class NetSapiensMCPServer {
    }
   );
 
-  this.netsapiensClient = new NetSapiensClient(config.netsapiens);
-  registerTools(this.server, this.netsapiensClient);
+  const rawClient = new NetSapiensClient(config.netsapiens);
+  const guardedClient = context ? createGuardedClient(rawClient, context) : rawClient;
+  this.netsapiensClient = guardedClient;
+  registerTools(this.server, guardedClient, undefined, undefined, context);
   this.setupErrorHandling();
  }
 
@@ -157,19 +174,23 @@ export class NetSapiensMCPServer {
  * Creates a configured MCP Server + NetSapiensClient pair without connecting a transport.
  * Used by both the stdio and HTTP code paths.
  */
-export function createMcpServer(config: MCPServerConfig): { server: Server; client: NetSapiensClient } {
+export function createMcpServer(
+ config: MCPServerConfig,
+ context?: AvailabilityContext,
+): { server: Server; client: NetSapiensClient } {
  const server = new Server(
   serverImplementation(config),
   { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS }
  );
- const client = new NetSapiensClient(config.netsapiens);
- registerTools(server, client);
+ const rawClient = new NetSapiensClient(config.netsapiens);
+ const guardedClient = context ? createGuardedClient(rawClient, context) : rawClient;
+ registerTools(server, guardedClient, undefined, undefined, context);
 
  server.onerror = (error) => {
   logger.error('[MCP Error]', { error: String(error) });
  };
 
- return { server, client };
+ return { server, client: guardedClient };
 }
 
 export async function main(): Promise<void> {
@@ -187,7 +208,10 @@ export async function main(): Promise<void> {
   setUsageStore(stdioStore.usage);
 
   const config = loadConfig();
-  const server = new NetSapiensMCPServer(config);
+  const origin = new URL(config.netsapiens.apiUrl).origin;
+  const versionInfo = await getVersionInfo(origin);
+  const context = createAvailabilityContext(versionInfo);
+  const server = new NetSapiensMCPServer(config, context);
   await server.run();
  }
 }
@@ -199,8 +223,8 @@ export async function main(): Promise<void> {
 function isEntrypoint(): boolean {
  if (typeof process === 'undefined' || !process.argv?.[1]) return false;
  try {
-  const argvUrl = new URL(`file://${process.argv[1]}`).href;
-  return import.meta.url === argvUrl;
+  const realArgv = realpathSync(process.argv[1]);
+  return realArgv === fileURLToPath(import.meta.url);
  } catch {
   return false;
  }

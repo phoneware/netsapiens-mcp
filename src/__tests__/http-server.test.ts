@@ -247,7 +247,8 @@ describe('startHttpServer()', () => {
     expect(body.status).toBe('ok');
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('activeSessions');
-    expect(body).toHaveProperty('nsApiUrl');
+    expect(body).not.toHaveProperty('nsApiUrl');
+    expect(body).toHaveProperty('netsapiens');
     expect(body).toHaveProperty('version');
     expect(body.mode).toBe('session');
 

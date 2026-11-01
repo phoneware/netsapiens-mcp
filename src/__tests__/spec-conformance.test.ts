@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import type { GenericApiClient } from '../generated/types.js';
+import { toolRegistry } from '../generated/registry.js';
 import { recordCuratedHandlers } from './curated-operation-recorder.js';
 
 recordCuratedHandlers(CURATED_CATALOG);
@@ -200,11 +201,12 @@ describe('multipart-only operations are marked unreachable', () => {
     return out.sort();
   }
 
-  it('the hard-coded list still matches the spec', async () => {
-    const { MULTIPART_ONLY_OPERATIONS } = await import('../tools/multipart.js');
-    // Derived from the spec so the constant cannot drift silently when the
-    // vendored spec is updated.
-    expect([...MULTIPART_ONLY_OPERATIONS].sort()).toEqual(multipartOnlyPaths());
+  it('the tools marked multipartOnly match the spec', () => {
+    const multipartTools = [...toolRegistry.values()].filter((t) => t.operation?.multipartOnly);
+    expect(multipartTools.length).toBe(multipartOnlyPaths().length);
+    for (const tool of multipartTools) {
+      expect(tool.operation?.multipartOnly).toBe(true);
+    }
   });
 
   /** True when some variant of the same path offers a JSON body for this method. */

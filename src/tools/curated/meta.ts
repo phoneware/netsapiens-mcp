@@ -9,10 +9,10 @@
  *                                  tier, disabled actions) still apply.
  */
 
-import type { CuratedTool } from './types.js';
+import type { CuratedTool, CuratedResult } from './types.js';
 import { textResult } from './types.js';
 import type { GenericApiClient, ToolDefinition } from '../../generated/types.js';
-
+import type { AvailabilityContext } from '../../netsapiens/availability.js';
 /**
  * Build the meta-tools, parameterized over the full registry and a dispatcher.
  * Kept as a factory so the registry layer can inject the merged v1+v2 map and
@@ -29,6 +29,7 @@ export function buildMetaTools(
   * just reject anyway.
   */
  isVisible: (toolName: string) => boolean = () => true,
+ availabilityContext?: AvailabilityContext,
 ): CuratedTool[] {
  const search_api: CuratedTool = {
   operations: [],
@@ -104,12 +105,23 @@ export function buildMetaTools(
   handler: async (args, client) => {
    const name = String(args.tool_name);
    const inner = (args.args ?? {}) as Record<string, unknown>;
-   const result = await dispatch(name, inner, client);
-   // dispatch may return null on unknown tool — surface a useful error
-   if (result === null || result === undefined) {
-    return textResult({ error: `Tool '${name}' is not registered. Use search_api to discover the correct name.` });
+   try {
+    const result = await dispatch(name, inner, client);
+    // dispatch may return null on unknown tool — surface a useful error
+    if (result === null || result === undefined) {
+     return textResult({ error: `Tool '${name}' is not registered. Use search_api to discover the correct name.` });
+    }
+    return result as CuratedResult;
+   } catch (error: unknown) {
+    if (error && typeof error === 'object' && (('name' in error && error.name === 'McpError') || ('code' in error && typeof error.code === 'number'))) {
+     throw error;
+    }
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    return {
+     isError: true,
+     content: [{ type: 'text' as const, text: errorMsg }],
+    };
    }
-   return result as ReturnType<typeof textResult>;
   },
  };
 

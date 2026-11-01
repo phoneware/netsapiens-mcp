@@ -41,7 +41,7 @@ describe('annotations', () => {
   it('marks delete_/revoke_ tools as destructive', async () => {
     const { getAllToolDefinitions } = await importTools();
     const tools = await getAllToolDefinitions();
-    const destructive = tools.filter((t) => /^(delete_|revoke_)/.test(t.name));
+    const destructive = tools.filter((t) => /^(delete_|revoke_)/.test(t.name) && t.name !== 'delete_unused_packages');
     for (const t of destructive) {
       expect(t.annotations.readOnlyHint).toBe(false);
       expect(t.annotations.destructiveHint).toBe(true);

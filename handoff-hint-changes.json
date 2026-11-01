@@ -1,0 +1,327 @@
+[
+  {
+    "name": "restore_domain_backup",
+    "operation": "PUT /domains/{}/restore",
+    "method": "PUT",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "export_call_trace_domain",
+    "operation": "POST /domains/{}/sipflow/export",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "export_call_trace",
+    "operation": "POST /sipflow/export",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "delete_unused_packages",
+    "operation": "POST /apt/autoremove/{}",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "reboot_devices_bulk",
+    "operation": "POST /domains/{}/devices/reboot",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "reboot_device",
+    "operation": "POST /domains/{}/devices/{}/reboot",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "reboot_device_for_user",
+    "operation": "POST /domains/{}/users/{}/devices/{}/reboot",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "domain_billing",
+    "operation": "GET /domains/{}/billing",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "check_email_verified",
+    "operation": "GET /domains/{}/users/{}/email/checkVerified/{}",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "remove_allowed_ip_alias",
+    "operation": "POST /ipaware/{}/allowed_ips/remove",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "restart_service",
+    "operation": "POST /ipaware/{}/restart",
+    "method": "POST",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_greeting",
+    "operation": "GET /domains/{}/users/{}/greetings/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_msg_file_domain",
+    "operation": "GET /domains/{}/msg/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_msg_file_user",
+    "operation": "GET /domains/{}/users/{}/msg/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_moh_file_domain",
+    "operation": "GET /domains/{}/moh/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_moh_file_user",
+    "operation": "GET /domains/{}/users/{}/moh/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_voicemail",
+    "operation": "GET /domains/{}/users/{}/voicemails/{}/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "unregister_push_configuration_domain",
+    "operation": "DELETE /domains/{}/push",
+    "method": "DELETE",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    }
+  },
+  {
+    "name": "unregister_push_configuration_user",
+    "operation": "DELETE /domains/{}/users/{}/push",
+    "method": "DELETE",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    }
+  },
+  {
+    "name": "unregister_push_configuration_system",
+    "operation": "DELETE /push",
+    "method": "DELETE",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    }
+  },
+  {
+    "name": "play_recording",
+    "operation": "GET /recordings/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_speech_word_domain",
+    "operation": "GET /domains/{}/speech-words/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "play_speech_word",
+    "operation": "GET /speech-words/{}/play",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  },
+  {
+    "name": "delete",
+    "operation": "DELETE /",
+    "method": "DELETE",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": false,
+      "destructiveHint": true
+    }
+  },
+  {
+    "name": "version",
+    "operation": "GET /version",
+    "method": "GET",
+    "oldHints": {
+      "readOnlyHint": false,
+      "destructiveHint": false
+    },
+    "newHints": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    }
+  }
+]
