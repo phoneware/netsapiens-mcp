@@ -1087,11 +1087,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      }
 
      if (err instanceof RetryableRefreshError || err instanceof LeaseLostError) {
-      logger.warn('Upstream NS refresh failed with retryable error', { error: String(err) });
-      throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
+      if (!latest.nsExpiresAt || Date.now() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS) {
+       stored = latest;
+      } else {
+       logger.warn('Upstream NS refresh failed with retryable error', { error: String(err) });
+       throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
+      }
+     } else {
+      throw err;
      }
-
-     throw err;
     }
 
     if (stored.nsExpiresAt && Date.now() > stored.nsExpiresAt) {

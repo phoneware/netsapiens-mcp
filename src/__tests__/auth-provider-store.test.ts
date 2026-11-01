@@ -218,6 +218,35 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
       expect(res.headers['www-authenticate']).toBeUndefined();
       expect(await store.sessions.get(token)).toBeDefined();
     });
+    it('C1.4: LeaseLostError with fresh row updated by peer continues with fresh session', async () => {
+      const token = 'leaselost-fresh-bearer';
+      const stored: StoredToken = {
+        clientId: 'cid',
+        expiresAt: Date.now() + 60_000,
+        nsAccessToken: 'ns-stale',
+        nsRefreshToken: 'ns-ref',
+        nsExpiresAt: Date.now() - 1000,
+        nsUsername: 'alice',
+        serverBaseUrl: 'http://localhost:3000',
+      };
+      await store.sessions.create({ accessToken: token, refreshToken: 'ref-lease-fresh' }, stored);
+
+      vi.spyOn(store.sessions, 'refreshUpstream').mockImplementationOnce(async () => {
+        await store.sessions.create(
+          { accessToken: token, refreshToken: 'ref-lease-fresh' },
+          { ...stored, nsAccessToken: 'ns-fresh-winner', nsExpiresAt: Date.now() + 3_600_000 },
+        );
+        throw new LeaseLostError();
+      });
+
+      const res = await request(app)
+        .post('/mcp')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      const row = await store.sessions.get(token);
+      expect(row?.nsAccessToken).toBe('ns-fresh-winner');
+    });
 
     it('UpstreamGrantRejectedError during refresh deletes token and returns 401', async () => {
       const token = 'grant-rejected-bearer';
