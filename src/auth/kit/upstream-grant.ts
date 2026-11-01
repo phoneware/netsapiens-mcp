@@ -541,15 +541,18 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
   async reconcileAmbiguousGrant(
     familyId: string,
-    grant: G | null,
+    grant: G,
     expiresAt: number | undefined,
-    options: { operationId: string; operation?: LegacyOperationContext; outcome?: 'success' | 'failure' },
+    options: { operationId: string; operation?: LegacyOperationContext },
   ): Promise<void> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     const now = this.nowProvider();
 
     if (!options?.operationId) {
       throw new CutoverFenceError('Cannot reconcile grant: options.operationId is required');
+    }
+    if (!grant || typeof grant !== 'object') {
+      throw new CutoverFenceError('Cannot reconcile grant: provider-backed durable evidence is required; ambiguous outcome remains held');
     }
     await this.db.runTransaction(async (transaction) => {
       const grantSnap = await transaction.get(docRef);
@@ -590,12 +593,10 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new CutoverFenceError(`Operation ${options.operationId} is not ambiguous or pending`);
         }
 
-        const isFailure = options?.outcome === 'failure' || grant === null;
-        const resolvedPhase = isFailure ? 'failed' : 'completed';
         transaction.set(
           opRef,
           {
-            phase: resolvedPhase,
+            phase: 'completed',
             ambiguousRemoteOutcome: false,
             updatedAt: now,
           },
@@ -616,38 +617,21 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         );
       }
 
-      const isFailure = options?.outcome === 'failure' || grant === null;
-      if (isFailure) {
-        transaction.set(
-          docRef,
-          {
-            leaseUntil: null,
-            leaseOwner: null,
-            ambiguousOutcome: null,
-            ambiguousReason: null,
-            ambiguousAt: null,
-            ambiguousOperationId: null,
-            updatedAt: now,
-          },
-          { merge: true },
-        );
-      } else {
-        transaction.set(
-          docRef,
-          stripUndefined({
-            grant,
-            expiresAt,
-            leaseUntil: null,
-            leaseOwner: null,
-            ambiguousOutcome: null,
-            ambiguousReason: null,
-            ambiguousAt: null,
-            ambiguousOperationId: null,
-            updatedAt: now,
-          }),
-          { merge: true },
-        );
-      }
+      transaction.set(
+        docRef,
+        stripUndefined({
+          grant,
+          expiresAt,
+          leaseUntil: null,
+          leaseOwner: null,
+          ambiguousOutcome: null,
+          ambiguousReason: null,
+          ambiguousAt: null,
+          ambiguousOperationId: null,
+          updatedAt: now,
+        }),
+        { merge: true },
+      );
     });
   }
 }

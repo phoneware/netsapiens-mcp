@@ -391,7 +391,12 @@ function wireApp(
        };
       });
       res.once('finish', resolveFn);
-      res.once('close', resolveFn);
+      const origEnd = res.end.bind(res);
+      res.end = (...args: any[]) => {
+       const ret = (origEnd as any)(...args);
+       resolveFn();
+       return ret;
+      };
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {
