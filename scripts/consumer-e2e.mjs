@@ -793,7 +793,8 @@ async function main() {
         let health = await waitForHealth(serverPort);
         for (let i = 0; i < 50; i++) {
           const entry44 = health.netsapiens?.find?.((p) => p.apiUrl === fake44.origin);
-          if (entry44?.apiVersion) break;
+          const entry46 = health.netsapiens?.find?.((p) => p.apiUrl === fake46.origin);
+          if (entry44?.apiVersion && entry46?.apiVersion) break;
           await delay(100);
           health = await waitForHealth(serverPort);
         }
