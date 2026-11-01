@@ -1002,9 +1002,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const now = Date.now();
    const lookup = await this.store.sessions.lookupRefresh(refreshToken, client?.client_id ?? '', now);
   if (lookup.status === 'missing') {
-   logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
-    refreshFingerprint: refreshToken.slice(0, 8),
-   });
+   logger.warn('Refresh token presented but unknown: user will be asked to reconnect');
    throw new InvalidGrantError('Invalid refresh token');
   }
 

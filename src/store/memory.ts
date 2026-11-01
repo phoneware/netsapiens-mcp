@@ -70,7 +70,10 @@ export class MemoryBackend implements StoreBackend {
   async atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult> {
     const oldRef = this.state.refresh.get(params.oldRefreshId);
     if (!oldRef) {
-      const retiredFamilyId = this.state.retiredFamilies.get(params.oldRefreshId);
+      let retiredFamilyId = this.state.retiredFamilies.get(params.oldRefreshId);
+      if (!retiredFamilyId && params.legacyFingerprint) {
+        retiredFamilyId = this.state.retiredFamilies.get(params.legacyFingerprint);
+      }
       if (retiredFamilyId) {
         await this.atomicRevokeFamily(retiredFamilyId);
         return { status: 'replay', familyId: retiredFamilyId };
@@ -165,6 +168,13 @@ export class MemoryBackend implements StoreBackend {
         return 'stale';
       }
     }
+    if (condition?.expectedLeaseOwner !== undefined) {
+      const upstream = this.state.upstream.get(familyId);
+      if (upstream && upstream.leaseOwner !== condition.expectedLeaseOwner) {
+        return 'stale';
+      }
+    }
+
 
     family.status = 'revoked';
     family.revokedAt = Date.now();

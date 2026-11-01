@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createCodec, type Codec, LeaseLostError, RetryableRefreshError } from './codec.js';
@@ -280,7 +280,11 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         const refresh = await backend.getRefresh(id);
         if (!refresh) {
           if (backend.findFamilyByRetiredId) {
-            const family = await backend.findFamilyByRetiredId(id);
+            let family = await backend.findFamilyByRetiredId(id);
+            if (!family) {
+              const legacyFp = createHash('sha256').update(refreshToken).digest('base64url');
+              family = await backend.findFamilyByRetiredId(legacyFp);
+            }
             if (family) {
               await backend.atomicRevokeFamily(family.id);
               return { status: 'replay', familyId: family.id };
@@ -407,6 +411,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           newUpstreamSealed,
           newNsExpiresAt: replacement.session.nsExpiresAt,
           retiredFingerprint: oldRefreshId,
+          legacyFingerprint: createHash('sha256').update(oldRefreshToken).digest('base64url'),
         });
 
         if (rotateResult.status === 'claimed') {
@@ -605,6 +610,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
                 await backend.atomicRevokeFamily(familyId, {
                   expectedFamilyGeneration: fam.generation,
                   expectedUpstreamGrantVersion: updated.grantVersion,
+                  expectedLeaseOwner: owner,
                 }).catch(() => {});
               }
             }

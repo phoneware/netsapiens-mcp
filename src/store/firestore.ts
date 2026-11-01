@@ -57,6 +57,8 @@ export interface FirestoreCollections {
   refreshTokens: string;
   refreshFamilies: string;
   upstreamGrants: string;
+  retiredRefreshTokens: string;
+  meta: string;
   oauthClients: string;
   authCodes: string;
   resumeTokens: string;
@@ -69,6 +71,8 @@ export function firestoreCollections(namespace: string): FirestoreCollections {
     refreshTokens: `${namespace}_refresh`,
     refreshFamilies: `${namespace}_refresh_families`,
     upstreamGrants: `${namespace}_upstream`,
+    retiredRefreshTokens: `${namespace}_retired_refresh`,
+    meta: `${namespace}_meta`,
     oauthClients: `${namespace}_oauth_clients`,
     authCodes: `${namespace}_auth_codes`,
     resumeTokens: `${namespace}_resume_tokens`,
@@ -121,6 +125,7 @@ export class FirestoreBackend implements StoreBackend {
   atomicIssue!: StoreBackend['atomicIssue'];
   atomicRotate!: StoreBackend['atomicRotate'];
   atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
+  findFamilyByRetiredId!: NonNullable<StoreBackend['findFamilyByRetiredId']>;
 
   putAuthCode!: StoreBackend['putAuthCode'];
   getAuthCode!: StoreBackend['getAuthCode'];
@@ -145,6 +150,7 @@ export class FirestoreBackend implements StoreBackend {
     const resumes = db.collection(names.resumeTokens);
     const usage = db.collection(names.usage);
     const clients = db.collection(names.oauthClients);
+    const retiredTokens = db.collection(names.retiredRefreshTokens);
 
     const accessData = ({ id: _id, ...row }: AccessRow) => defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) });
     const refreshData = ({ id: _id, ...row }: RefreshPointerRow) => defined({ ...row, v: 2 });
@@ -231,12 +237,43 @@ export class FirestoreBackend implements StoreBackend {
           return next;
         });
       },
+      async findFamilyByRetiredId(retiredId: string): Promise<FamilyRow | undefined> {
+        await ensureAdopted();
+        const doc = await retiredTokens.doc(retiredId).get();
+        if (doc.exists) {
+          const famId = (doc.data() as { familyId: string }).familyId;
+          const famSnap = await refreshFamilies.doc(famId).get();
+          return famSnap.exists ? ({ ...famSnap.data(), id: famId } as unknown as FamilyRow) : undefined;
+        }
+        return undefined;
+      },
 
       async atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult> {
         const oldRefDoc = refreshTokens.doc(params.oldRefreshId);
         return db.runTransaction(async tx => {
           const oldSnap = await tx.get(oldRefDoc);
           if (!oldSnap.exists) {
+            let retiredDoc = await tx.get(retiredTokens.doc(params.oldRefreshId));
+            if (!retiredDoc.exists && params.legacyFingerprint) {
+              retiredDoc = await tx.get(retiredTokens.doc(params.legacyFingerprint));
+            }
+            if (retiredDoc.exists) {
+              const famId = (retiredDoc.data() as { familyId: string }).familyId;
+              const famDoc = refreshFamilies.doc(famId);
+              const famSnap = await tx.get(famDoc);
+              if (famSnap.exists) {
+                const fam = { ...famSnap.data(), id: famDoc.id } as FamilyRow;
+                tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
+                if (fam.currentAccessTokenId) tx.delete(sessions.doc(fam.currentAccessTokenId));
+                tx.delete(upstreamGrants.doc(famId));
+                const refQuerySnap = await refreshTokens.where('familyId', '==', famId).get();
+                for (const doc of refQuerySnap.docs) {
+                  const data = doc.data() as unknown as RefreshPointerRow;
+                  tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
+                }
+              }
+              return { status: 'replay', familyId: famId };
+            }
             return { status: 'missing' };
           }
 
@@ -262,6 +299,15 @@ export class FirestoreBackend implements StoreBackend {
             }
             // Late replay
             tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
+            if (fam.currentAccessTokenId) {
+              tx.delete(sessions.doc(fam.currentAccessTokenId));
+            }
+            tx.delete(upstreamGrants.doc(fam.id));
+            const refQuerySnap = await refreshTokens.where('familyId', '==', fam.id).get();
+            for (const doc of refQuerySnap.docs) {
+              const data = doc.data() as unknown as RefreshPointerRow;
+              tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
+            }
             return { status: 'replay', familyId: fam.id };
           }
 
@@ -274,6 +320,19 @@ export class FirestoreBackend implements StoreBackend {
             consumedAt: params.now,
             successorSealed: params.newSuccessorSealed,
           }));
+
+          // Prune older consumed pointers' successorSealed inside transaction
+          const oldPastRef = await refreshTokens.where('familyId', '==', fam.id).get();
+          for (const doc of oldPastRef.docs) {
+            const d = doc.data() as unknown as RefreshPointerRow;
+            if (d && d.consumedAt && params.now - d.consumedAt > REFRESH_RETRY_WINDOW_MS && d.successorSealed) {
+              tx.set(refreshTokens.doc(doc.id), refreshData({ ...d, successorSealed: undefined }));
+            }
+          }
+
+          if (params.retiredFingerprint) {
+            tx.set(retiredTokens.doc(params.retiredFingerprint), { familyId: fam.id, retiredAt: params.now });
+          }
 
           // 2. Put new refresh
           tx.set(refreshTokens.doc(params.newRefreshRow.id), refreshData({
@@ -340,6 +399,12 @@ export class FirestoreBackend implements StoreBackend {
           if (condition?.expectedUpstreamGrantVersion !== undefined) {
             const upSnap = await tx.get(upstreamGrants.doc(familyId));
             if (upSnap.exists && (upSnap.data() as unknown as UpstreamGrantRow).grantVersion !== condition.expectedUpstreamGrantVersion) {
+              return 'stale';
+            }
+          }
+          if (condition?.expectedLeaseOwner !== undefined) {
+            const upSnap = await tx.get(upstreamGrants.doc(familyId));
+            if (upSnap.exists && (upSnap.data() as unknown as UpstreamGrantRow).leaseOwner !== condition.expectedLeaseOwner) {
               return 'stale';
             }
           }

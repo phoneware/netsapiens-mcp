@@ -383,11 +383,18 @@ export class SqliteBackend implements StoreBackend {
         return transaction(() => {
           const oldRef = refreshRow(db.prepare('SELECT * FROM refresh_tokens WHERE id=?').get(params.oldRefreshId));
           if (!oldRef) {
-            const retired = db.prepare('SELECT family_id FROM retired_refresh_tokens WHERE refresh_id=?').get(params.oldRefreshId);
+            let retired = db.prepare('SELECT family_id FROM retired_refresh_tokens WHERE refresh_id=?').get(params.oldRefreshId);
+            if (!retired && params.legacyFingerprint) {
+              retired = db.prepare('SELECT family_id FROM retired_refresh_tokens WHERE refresh_id=?').get(params.legacyFingerprint);
+            }
             if (retired) {
               const famId = retired.family_id as string;
               db.prepare("UPDATE refresh_families SET status='revoked', revoked_at=?, generation=generation+1, updated_at=? WHERE id=?")
                 .run(params.now, params.now, famId);
+              db.prepare('DELETE FROM sessions WHERE family_id=?').run(famId);
+              db.prepare('DELETE FROM upstream_grants WHERE id=?').run(famId);
+              db.prepare("UPDATE refresh_tokens SET status='consumed', consumed_at=?, successor_sealed=NULL WHERE family_id=?")
+                .run(params.now, famId);
               return { status: 'replay', familyId: famId };
             }
             return { status: 'missing' };
@@ -409,9 +416,12 @@ export class SqliteBackend implements StoreBackend {
             // Late replay
             db.prepare("UPDATE refresh_families SET status='revoked', revoked_at=?, generation=generation+1, updated_at=? WHERE id=?")
               .run(params.now, params.now, fam.id);
+            db.prepare('DELETE FROM sessions WHERE family_id=?').run(fam.id);
+            db.prepare('DELETE FROM upstream_grants WHERE id=?').run(fam.id);
+            db.prepare("UPDATE refresh_tokens SET status='consumed', consumed_at=?, successor_sealed=NULL WHERE family_id=?")
+              .run(params.now, fam.id);
             return { status: 'replay', familyId: fam.id };
           }
-
           const nextGen = fam.generation + 1;
 
           // Consume old refresh
@@ -467,6 +477,12 @@ export class SqliteBackend implements StoreBackend {
           if (condition?.expectedUpstreamGrantVersion !== undefined) {
             const up = upstreamRow(db.prepare('SELECT * FROM upstream_grants WHERE id=?').get(familyId));
             if (up && up.grantVersion !== condition.expectedUpstreamGrantVersion) {
+              return 'stale';
+            }
+          }
+          if (condition?.expectedLeaseOwner !== undefined) {
+            const up = upstreamRow(db.prepare('SELECT * FROM upstream_grants WHERE id=?').get(familyId));
+            if (up && up.leaseOwner !== condition.expectedLeaseOwner) {
               return 'stale';
             }
           }

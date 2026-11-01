@@ -202,6 +202,12 @@ export async function adoptFirestoreLegacyTokens(options: {
             if (prevRefreshRow) {
               tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
             }
+            for (const fp of retiredFingerprints) {
+              tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), {
+                familyId,
+                retiredAt: now,
+              });
+            }
           }
           return 'migrated';
         });
@@ -223,14 +229,7 @@ export async function adoptFirestoreLegacyTokens(options: {
     const tokensSnap = await db.collection(legacyTokensCol).get();
     for (const tokDoc of tokensSnap.docs) {
       report.scanned++;
-      const tokData = tokDoc.data();
       const accessToken = tokDoc.id;
-
-      if (!tokData || !tokData.refreshToken) {
-        report.skipped++;
-        continue;
-      }
-
       const accessId = codec.id('session', accessToken);
 
       try {
@@ -240,6 +239,14 @@ export async function adoptFirestoreLegacyTokens(options: {
             return 'skipped';
           }
 
+          const legacyTokSnap = await tx.get(db.collection(legacyTokensCol).doc(accessToken));
+          if (!legacyTokSnap.exists) {
+            return 'skipped';
+          }
+          const tokData = legacyTokSnap.data();
+          if (!tokData || !tokData.refreshToken) {
+            return 'skipped';
+          }
           const familyId = (tokData.refreshFamilyId as string) || randomUUID();
           const refreshId = codec.id('refresh', tokData.refreshToken as string);
           const now = Date.now();
@@ -331,12 +338,13 @@ export async function ensureFirestoreAdopted(options: {
   const snap = await markerDoc.get();
   if (snap.exists) return;
 
-  const legacyFamiliesSnap = await db.collection(`${namespace}_tokens_refresh_families`).get().catch(() => null);
-  const legacyTokensSnap = await db.collection(`${namespace}_tokens`).get().catch(() => null);
+  // Read without swallowing errors: network or permission failure MUST fail closed
+  const legacyFamiliesSnap = await db.collection(`${namespace}_tokens_refresh_families`).get();
+  const legacyTokensSnap = await db.collection(`${namespace}_tokens`).get();
 
-  const hasLegacy = (legacyFamiliesSnap && !legacyFamiliesSnap.empty) || (legacyTokensSnap && !legacyTokensSnap.empty);
+  const hasLegacy = !legacyFamiliesSnap.empty || !legacyTokensSnap.empty;
   if (!hasLegacy) {
-    await markerDoc.set({ adoptedAt: Date.now(), skipped: true });
+    await markerDoc.set({ adoptedAt: Date.now(), skipped: true, scanned: 0, migrated: 0, errors: 0 });
     return;
   }
 

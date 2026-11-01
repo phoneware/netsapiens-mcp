@@ -26,8 +26,8 @@ export { createStore } from './store/store.js';
 export { createSqliteStore } from './store/sqlite.js';
 export { createFirestoreStore, createFirestoreBackend, firestoreCollections, FirestoreClientsStore } from './store/firestore.js';
 export { createMemoryStore } from './store/memory.js';
-export { adoptFirestoreLegacyTokens, type FirestoreAdoptionReport } from './store/firestore-v2-adoption.js';
-export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
+export { adoptFirestoreLegacyTokens, ensureFirestoreAdopted, type FirestoreAdoptionReport } from './store/firestore-v2-adoption.js';
+export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError, StoreUnavailableError } from './store/codec.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';

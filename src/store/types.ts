@@ -34,6 +34,7 @@ export type RefreshRotationResult =
 export interface RevokeCondition {
   expectedFamilyGeneration?: number;
   expectedUpstreamGrantVersion?: number;
+  expectedLeaseOwner?: string;
 }
 export interface BackendRotateParams {
   oldRefreshId: string;
@@ -46,6 +47,7 @@ export interface BackendRotateParams {
   newUpstreamSealed?: string;
   newNsExpiresAt?: number;
   retiredFingerprint?: string;
+  legacyFingerprint?: string;
 }
 export type BackendRotateResult =
   | { status: 'claimed'; familyId: string; generation: number }

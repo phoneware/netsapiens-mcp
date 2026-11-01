@@ -149,4 +149,24 @@ describe('HTTP 503 Transients & Permanence Middlewares', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('invalid_grant');
   });
+
+  it('/token never logs raw refresh token material on unknown refresh token', async () => {
+    const { app, client } = await buildTestApp();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const rawSecretToken = 'supersecret_raw_refresh_token_never_log_me';
+
+    const res = await request(app)
+      .post('/token')
+      .send(`grant_type=refresh_token&refresh_token=${rawSecretToken}&client_id=${client.client_id}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_grant');
+
+    for (const call of warnSpy.mock.calls) {
+      const serialized = JSON.stringify(call);
+      expect(serialized).not.toContain(rawSecretToken);
+      expect(serialized).not.toContain(rawSecretToken.slice(0, 8));
+      expect(serialized).not.toContain('supersecret');
+    }
+  });
 });
