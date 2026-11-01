@@ -1,22 +1,35 @@
 {
-  "harnessSha": "2d103fa41eca7b96121533f946c701bd3de0d9e7",
-  "timestamp": "2026-11-01T21:55:56.106Z",
+  "harnessSha": "ecc997a6e1239e37ba623e9c9595f96cefd993e5",
+  "timestamp": "2026-11-01T22:14:33.921Z",
   "emulatorHost": "127.0.0.1:8080",
   "artifacts": {
+    "v231": {
+      "tag": "v2.3.1",
+      "gitSha": "ebd8c6680b3171edbdec7ac5d5d3423b465c2a75",
+      "path": "/tmp/netsapiens-mcp-2.3.1.tgz",
+      "sha256": "255acfb92c580b551599edfd893f4a839929315e0abcd211cec7374cd70ade10",
+      "integrity": "sha512-EYJrkWM59J1Gsbqe0onr7pomKv9vFhb/hru5JKFY5FT54TIRZ1NLQ4ODUvkITDBJh1euRFFfRYVHqOoIypkX1w=="
+    },
+    "v240": {
+      "tag": "v2.4.0",
+      "gitSha": "50c17b0f7d71a1a6eb9ac3d6e19c16b481f8b7d5",
+      "path": "/tmp/netsapiens-mcp-2.4.0-released.tgz",
+      "sha256": "9bb9efd5114d0675cb8da826a1dcf7719662c21ff5b97e61987fba56014af6ec",
+      "integrity": "sha512-qDhw09qDzpvTt5LNQT+b3JdQYxzyKD27ny9uHQKX2bl71cBu0wZk4cNbGYxFTWiReo6vJ1GvHeDDY+awkFiJrQ=="
+    },
     "bridge": {
+      "branch": "feat/netsapiens-mcp-2-bridge",
+      "gitSha": "3080249d9eac21578f623d7edb5f5fab56c2503c",
       "path": "/tmp/netsapiens-mcp-2.4.1-3080249.tgz",
       "sha256": "419f52889c42a162a0c6e071b232901b7249373473937abeab27283a8ad8fd64",
       "integrity": "sha512-cPwa1k559wYz/yiTHt0n+vqV5MYkRIvcUQP28Pwb3RTPw3XKzjpwjomlZSkKtBCSoOnC/8KAc0xJ9r9hupZIJg=="
     },
     "v3": {
+      "branch": "feat/netsapiens-mcp-3",
+      "gitSha": "f415003ffd38d3f1ad6b2d2224638a64264ecfa0",
       "path": "/tmp/netsapiens-mcp-3.0.0-3edf8a2.tgz",
       "sha256": "f8ec93f12c0c252e6eb2e8e4d5264173ff51d7a90d5713c9869e416afeee136f",
       "integrity": "sha512-l/Sqn0/xUlDTIMpi53cvoPb5UMJpVnlxTVNKPXdEjakkJN+9Mv+6wYQpKc6o8o22xTK92RREaw2BrY/5GISmOg=="
-    },
-    "unfenced": {
-      "path": "/tmp/netsapiens-mcp-2.4.0-released.tgz",
-      "sha256": "9bb9efd5114d0675cb8da826a1dcf7719662c21ff5b97e61987fba56014af6ec",
-      "integrity": "sha512-qDhw09qDzpvTt5LNQT+b3JdQYxzyKD27ny9uHQKX2bl71cBu0wZk4cNbGYxFTWiReo6vJ1GvHeDDY+awkFiJrQ=="
     }
   },
   "installed": {
@@ -31,15 +44,15 @@
       "id": "open_state_happy_path",
       "name": "Open-state happy path (DCR, auth, login, code exchange, bearer request, restart persistence, refresh rotation)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "healthStatus": "ok",
         "dcrStatus": 201,
         "loginRedirected": true,
         "authCodeAcquired": true,
-        "mcpBearerStatus": 400,
-        "restartBearerValid": false,
+        "mcpBearerStatus": 200,
+        "restartBearerValid": true,
         "refreshSucceeded": true,
         "fakeNsGrantCount": 2
       },
@@ -64,7 +77,7 @@
       "id": "close_races",
       "name": "Close races (admitted completes during closing, new refuses, fenced waits for active operations to drain)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "newOpRefusedDuringClosing": true,
@@ -78,7 +91,7 @@
       "id": "sdk_mapping",
       "name": "SDK mapping: normal errors yield 400, fence refusal yields 503 Retry-After",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "badRequestStatus": 400,
@@ -91,14 +104,16 @@
       "id": "refresh_ownership_dedup",
       "name": "Refresh ownership and concurrent dedup (concurrent refresh calls yield single upstream grant; retry returns successor)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "req1Status": 200,
         "req2Status": 200,
         "retryStatus": 200,
         "upstreamRefreshGrants": 1,
-        "successorMatched": true
+        "successorMatched": true,
+        "retrySuccessorMatched": true,
+        "noExtraGrantOnRetry": true
       },
       "receiptValid": true
     },
@@ -106,7 +121,7 @@
       "id": "faults_no_second_grant",
       "name": "Fault handling (upstream pending locks family, preventing second grant)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "secondGrantBlocked": true,
@@ -116,28 +131,31 @@
     },
     {
       "id": "lifecycle_flag_leak_and_duplicate_ops",
-      "name": "Lifecycle: duplicate op IDs cause zero callback executions and no counter change",
+      "name": "Lifecycle: duplicate op IDs cause zero callback executions and no counter change; aborted tx does not leak flags",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "NOT_APPLICABLE",
       "candidateStatus": "PASS",
       "observations": {
         "firstExecuted": true,
         "duplicateCallbackRan": false,
         "duplicateRefused": true,
         "noCounterChange": true,
+        "counterBalanced": true,
+        "notFalselyCompleted": true,
         "activeOperations": 0
       },
       "receiptValid": true
     },
     {
       "id": "reconciliation_family_isolation",
-      "name": "Reconciliation: family isolation (reconciling Family A does not touch Family B)",
+      "name": "Reconciliation: family isolation (reconciling Family A does not touch Family B; wrong epoch refuses)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "famBIsolate": true,
-        "famBToken": "h:9c93518f"
+        "famBToken": "h:9c93518f",
+        "wrongEpochRefused": true
       },
       "receiptValid": true
     },
@@ -145,7 +163,7 @@
       "id": "atomic_continuation_and_code",
       "name": "Atomic code exchange (failure preserves code; commit consumes code atomically; replay refused)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "PASS",
       "observations": {
         "failedTxPreservesCode": true,
@@ -158,26 +176,26 @@
       "id": "migration_graph_preservation",
       "name": "Migration graph preservation (v2.3 base tokens, v2.4 PR56 families, upstream grants, no-ID resumes)",
       "status": "FAIL",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "UNPROVEN",
       "candidateStatus": "FAIL",
       "observations": {
         "scanned": 6,
-        "migrated": 4,
+        "migrated": 5,
         "skipped": 4,
-        "errors": 3,
+        "errors": 2,
         "v3SessionsCount": 4,
         "v3FamiliesCount": 4,
         "seededPR56FamiliesCount": 3
       },
       "receiptValid": true,
-      "rejectionReason": "Adopter reported 3 errors on legacy graph: S3 firestore-v2-adoption requires embedded id and numeric consumedAt on resume records, whereas actual bridge stores doc ID without embedded id and unconsumed tokens lack consumedAt"
+      "rejectionReason": "Adopter reported 2 errors on legacy graph: S3 firestore-v2-adoption requires embedded id on resume rows while actual bridge stores token ID in document key"
     },
     {
       "id": "migration_recovery_and_empty_namespace",
       "name": "Migration recovery and empty namespace (empty manifest, irreversible false until mutation, stale epoch refused)",
-      "status": "PASS",
-      "baselineStatus": "GREEN",
-      "candidateStatus": "PASS",
+      "status": "FAIL",
+      "baselineStatus": "UNPROVEN",
+      "candidateStatus": "FAIL",
       "observations": {
         "emptyScanned": 0,
         "emptyErrors": 0,
@@ -185,15 +203,17 @@
         "irreversible": true,
         "staleEpochRefused": true
       },
-      "receiptValid": true
+      "receiptValid": true,
+      "rejectionReason": "C12 violation: irreversible must remain false on empty namespace until first credential mutation"
     },
     {
       "id": "secret_safety_audit",
       "name": "Secret safety audit (receipts, metadata, logs contain zero raw tokens, client secrets, auth codes)",
       "status": "PASS",
-      "baselineStatus": "GREEN",
+      "baselineStatus": "NOT_APPLICABLE",
       "candidateStatus": "PASS",
       "observations": {
+        "scannedFields": 740,
         "totalViolations": 0,
         "violations": []
       },
@@ -215,13 +235,13 @@
   ],
   "secretSafety": {
     "passed": true,
-    "scannedFields": 0,
+    "scannedFields": 740,
     "violations": []
   },
   "summary": {
     "total": 13,
-    "passed": 12,
-    "failed": 1,
+    "passed": 11,
+    "failed": 2,
     "blocked": 0
   }
 }

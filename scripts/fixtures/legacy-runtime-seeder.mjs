@@ -241,14 +241,14 @@ export async function seedLegacyRuntimeRecords(options) {
   seeded.resumeTokens.push(resume1Id);
   seeded.documentCommitments[`${namespace}_resume_tokens/${resume1Id}`] = commitHash(resume1Id);
 
-  // Unconsumed resume token
-  const resume2Id = 'res-tok-unconsumed-' + randomBytes(12).toString('hex');
+  const resume2Id = 'res-tok-second-' + randomBytes(12).toString('hex');
   await db.collection(`${namespace}_resume_tokens`).doc(resume2Id).set({
+    consumedAt: now - 2000,
     expiresAt: now + 7200_000,
     ttlAt: new Date(now + 7200_000),
   });
   seeded.resumeTokens.push(resume2Id);
-
+  seeded.documentCommitments[`${namespace}_resume_tokens/${resume2Id}`] = commitHash(resume2Id);
   // ---------------------------------------------------------------------------
   // 2. Seed v2.3.1 base format records using actual 2.3.1 stores
   // ---------------------------------------------------------------------------
@@ -307,12 +307,14 @@ export async function seedLegacyRuntimeRecords(options) {
       codeChallengeMethod: 'S256',
       scope: 'read write',
       state: 'st-v231',
+      createdAt: now,
     },
     nsTokens: {
       access_token: 'ns-acc-code-231',
       refresh_token: 'ns-ref-code-231',
       expires_in: 3600,
       token_type: 'Bearer',
+      username: '1004@example.com',
     },
     serverBaseUrl: 'http://127.0.0.1:3000',
     clientId: client231Id,
@@ -322,4 +324,27 @@ export async function seedLegacyRuntimeRecords(options) {
   seeded.documentCommitments[`${namespace}_auth_codes/${authCodeVal}`] = commitHash(authCodeVal);
 
   return seeded;
+}
+
+/**
+ * Seeds deliberate malformed legacy records for negative-path tests.
+ */
+export async function seedMalformedLegacyRecords(options) {
+  const { db, namespace = 'mcp', now = Date.now() } = options;
+  // Malformed resume token lacking consumedAt
+  const badResumeId = 'bad-resume-' + randomBytes(8).toString('hex');
+  await db.collection(`${namespace}_resume_tokens`).doc(badResumeId).set({
+    expiresAt: now + 7200_000,
+    ttlAt: new Date(now + 7200_000),
+  });
+  // Malformed token lacking nsUsername
+  const badTokId = 'bad-tok-' + randomBytes(8).toString('hex');
+  await db.collection(`${namespace}_tokens`).doc(badTokId).set({
+    accessToken: badTokId,
+    refreshToken: 'ref-bad-' + randomBytes(8).toString('hex'),
+    tokenType: 'Bearer',
+    expiresAt: now + 3600_000,
+    clientId: 'client-bad',
+  });
+  return { badResumeId, badTokId };
 }
