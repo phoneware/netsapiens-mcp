@@ -800,3 +800,116 @@ describe('Upstream NS refresh error classification (M5 guard)', () => {
     postSpy.mockRestore();
   });
 });
+
+async function runTtlPolicyIsolationTest(db: Firestore, collection: string): Promise<void> {
+  const store = new FirestoreTokenStore({
+    db,
+    collection,
+  });
+
+  const now = Date.now();
+  const initialToken: StoredToken = {
+    accessToken: `access-${randomBytes(4).toString('hex')}`,
+    refreshToken: `refresh-${randomBytes(4).toString('hex')}`,
+    clientId: 'client-ttl-test',
+    expiresAt: now + 3600_000,
+    ttlAt: new Date(now + 30 * 24 * 3600_000),
+    nsAccessToken: 'ns-acc-1',
+    nsRefreshToken: 'ns-ref-1',
+    nsExpiresAt: now + 3600_000,
+    nsUsername: 'ttl@example.com',
+    nsUserRole: 'domain_admin',
+    nsApiUrl: 'https://ns.example.com',
+  };
+
+  // 1. Issue
+  const issued = await store.issue(initialToken);
+  expect(issued.refreshFamilyId).toBeDefined();
+  const familyId = issued.refreshFamilyId!;
+
+  // Check access doc: MUST have ttlAt
+  const accessSnap = await db.collection(collection).doc(issued.accessToken).get();
+  expect(accessSnap.exists).toBe(true);
+  expect(accessSnap.data()?.ttlAt).toBeDefined();
+
+  // Check refresh doc: MUST NOT have ttlAt
+  const refreshSnap = await db.collection(`${collection}_refresh`).doc(issued.refreshToken).get();
+  expect(refreshSnap.exists).toBe(true);
+  expect(refreshSnap.data()?.ttlAt, `refresh doc in ${collection}_refresh must not have ttlAt`).toBeUndefined();
+
+  // Check refresh family doc: MUST NOT have ttlAt
+  const familySnap = await db.collection(`${collection}_refresh_families`).doc(familyId).get();
+  expect(familySnap.exists).toBe(true);
+  expect(familySnap.data()?.ttlAt, `family doc in ${collection}_refresh_families must not have ttlAt`).toBeUndefined();
+
+  // Check upstream doc: MUST NOT have ttlAt
+  const upstreamSnap = await db.collection(`${collection}_upstream`).doc(familyId).get();
+  expect(upstreamSnap.exists).toBe(true);
+  expect(upstreamSnap.data()?.ttlAt, `upstream doc in ${collection}_upstream must not have ttlAt`).toBeUndefined();
+
+  // 2. Rotate
+  const nextToken: StoredToken = {
+    accessToken: `access-rot-${randomBytes(4).toString('hex')}`,
+    refreshToken: `refresh-rot-${randomBytes(4).toString('hex')}`,
+    clientId: 'client-ttl-test',
+    expiresAt: now + 7200_000,
+    ttlAt: new Date(now + 30 * 24 * 3600_000),
+    nsAccessToken: 'ns-acc-2',
+    nsRefreshToken: 'ns-ref-2',
+    nsExpiresAt: now + 7200_000,
+    nsUsername: 'ttl@example.com',
+    nsUserRole: 'domain_admin',
+    nsApiUrl: 'https://ns.example.com',
+  };
+
+  const rot = await store.rotate(issued.refreshToken, nextToken, 'client-ttl-test', now + 1000);
+  expect(rot.status).toBe('claimed');
+
+  // Check rotated access doc: MUST have ttlAt
+  const rotAccessSnap = await db.collection(collection).doc(nextToken.accessToken).get();
+  expect(rotAccessSnap.exists).toBe(true);
+  expect(rotAccessSnap.data()?.ttlAt).toBeDefined();
+
+  // Check rotated refresh doc: MUST NOT have ttlAt
+  const rotRefreshSnap = await db.collection(`${collection}_refresh`).doc(nextToken.refreshToken).get();
+  expect(rotRefreshSnap.exists).toBe(true);
+  expect(rotRefreshSnap.data()?.ttlAt, `new refresh doc in ${collection}_refresh must not have ttlAt`).toBeUndefined();
+
+  // Check consumed old refresh doc: MUST NOT have ttlAt
+  const oldRefreshSnap = await db.collection(`${collection}_refresh`).doc(issued.refreshToken).get();
+  expect(oldRefreshSnap.exists).toBe(true);
+  expect(oldRefreshSnap.data()?.ttlAt, `consumed refresh doc in ${collection}_refresh must not have ttlAt`).toBeUndefined();
+
+  // Check family doc after rotation: MUST NOT have ttlAt
+  const rotFamilySnap = await db.collection(`${collection}_refresh_families`).doc(familyId).get();
+  expect(rotFamilySnap.exists).toBe(true);
+  expect(rotFamilySnap.data()?.ttlAt, `family doc after rotation must not have ttlAt`).toBeUndefined();
+
+  // Check upstream doc after rotation: MUST NOT have ttlAt
+  const rotUpstreamSnap = await db.collection(`${collection}_upstream`).doc(familyId).get();
+  expect(rotUpstreamSnap.exists).toBe(true);
+  expect(rotUpstreamSnap.data()?.ttlAt, `upstream doc after rotation must not have ttlAt`).toBeUndefined();
+}
+
+describe('TTL Policy Isolation on Subsidiary Collections (Fake Firestore)', () => {
+  const collections = ['mcp_tokens', 'readonly_mcp_tokens', 'pwmcp_tokens'];
+  for (const col of collections) {
+    it(`asserts _refresh, _refresh_families, and _upstream carry NO ttlAt for ${col}`, async () => {
+      const fakeDb = new FakeFirestore();
+      await runTtlPolicyIsolationTest(fakeDb as unknown as Firestore, col);
+    });
+  }
+});
+
+describe.skipIf(!emulatorRunning)('TTL Policy Isolation on Subsidiary Collections (Firestore Emulator)', () => {
+  const collections = ['mcp_tokens', 'readonly_mcp_tokens', 'pwmcp_tokens'];
+  for (const col of collections) {
+    it(`asserts _refresh, _refresh_families, and _upstream carry NO ttlAt for ${col} on emulator`, async () => {
+      const db = new Firestore({
+        projectId: process.env.GOOGLE_CLOUD_PROJECT || 'test-project',
+        ignoreUndefinedProperties: true,
+      });
+      await runTtlPolicyIsolationTest(db, col);
+    });
+  }
+});

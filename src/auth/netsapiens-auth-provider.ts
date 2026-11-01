@@ -1178,14 +1178,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     }
   }
 
-   if (!stored.nsRefreshToken) {
-   logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
-    username: stored.nsUsername,
-   });
-   throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
-  }
-
+  // Try to refresh the upstream NS token if we have a refresh token
   let nsTokens: NsTokenResponse;
+  if (stored.nsRefreshToken) {
    try {
     nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
     nsTokens.username = stored.nsUsername;
@@ -1196,11 +1191,17 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
       await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
      } else {
-  await this.tokenStore.delete(stored.accessToken);
+      await (this.tokenStore as TokenStoreLike).delete(stored.accessToken);
      }
     throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
     }
     throw toTokenEndpointError(err);
+   }
+  } else {
+   logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
+    username: stored.nsUsername,
+   });
+   throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
   }
 
    const newAccess = randomBytes(32).toString('hex');
