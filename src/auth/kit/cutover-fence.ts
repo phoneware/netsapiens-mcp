@@ -1,5 +1,48 @@
-import { randomUUID } from 'node:crypto';
+
+export class CutoverFenceError extends Error {
+  readonly kitCode = "cutover_fence_error";
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "CutoverFenceError";
+  }
+}
+
+export class CutoverRefusedError extends Error {
+  readonly kitCode = "cutover_refused";
+  readonly retryAfterSeconds: number;
+  readonly cutoverState?: string;
+  readonly epoch?: number;
+
+  constructor(
+    message: string = "Cutover in progress; operation temporarily unavailable",
+    options?: { cause?: unknown; retryAfterSeconds?: number; cutoverState?: string; epoch?: number },
+  ) {
+    super(message, options);
+    this.name = "CutoverRefusedError";
+    this.retryAfterSeconds = options?.retryAfterSeconds ?? 30;
+    this.cutoverState = options?.cutoverState;
+    this.epoch = options?.epoch;
+  }
+}
+
+export function stripUndefined<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(stripUndefined) as unknown as T;
+  if (typeof value === "object" && !(value instanceof Date)) {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(record)) {
+      if (v !== undefined) out[k] = stripUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+import { createHash, randomUUID } from 'node:crypto';
 import type { FirestoreLike } from '../../store/firestore.js';
+
+
 
 export const SUPPORTED_CUTOVER_NAMESPACES = ['mcp', 'pwmcp', 'readonly_mcp'] as const;
 export type SupportedCutoverNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
@@ -34,24 +77,23 @@ export const ALLOWED_STATE_TRANSITIONS: Readonly<Record<CutoverFenceState, reado
   v3_ready: ['v3_active'],
   v3_active: [],
 };
+
 export interface CutoverFenceControlRecord {
   schemaVersion: 1;
-  namespace: string;
+  namespace: SupportedCutoverNamespace;
   epoch: number;
   state: CutoverFenceState;
   activeOperations: number;
   irreversible: boolean;
-  emptyNamespace?: boolean;
   migrationRunId?: string;
   migrationManifestDigest?: string;
+  emptyNamespace?: boolean;
   createdAt?: number;
   updatedAt?: number;
-  fencedAt?: number;
-  migratedAt?: number;
 }
 
 export interface CutoverFenceConfig {
-  namespace: string;
+  namespace: SupportedCutoverNamespace;
   enforce: boolean;
 }
 
@@ -64,7 +106,7 @@ export type LegacyOperationPhase =
 export interface LegacyOperationRecord {
   schemaVersion: 1;
   id: string;
-  namespace: string;
+  namespace: SupportedCutoverNamespace;
   epoch: number;
   kind: string;
   phase: LegacyOperationPhase;
@@ -78,7 +120,7 @@ export interface LegacyOperationRecord {
 
 export interface LegacyOperationContext {
   readonly id: string;
-  readonly namespace: string;
+  readonly namespace: SupportedCutoverNamespace;
   readonly epoch: number;
   readonly kind: string;
   isAmbiguousRemoteOutcome(): boolean;
@@ -88,54 +130,6 @@ export interface LegacyOperationContext {
   markCompleted(): void;
 }
 
-export interface LegacyOperationMetadata {
-  [key: string]: unknown;
-  revision?: string;
-  attempt?: number;
-  phase?: string;
-  reconciled?: boolean;
-}
-
-export class CutoverFenceError extends Error {
-  readonly kitCode = 'cutover_fence_error';
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'CutoverFenceError';
-  }
-}
-
-export class CutoverRefusedError extends Error {
-  readonly kitCode = 'cutover_refused';
-  readonly retryAfterSeconds: number;
-  readonly cutoverState?: string;
-  readonly epoch?: number;
-
-  constructor(
-    message: string = 'Cutover in progress; operation temporarily unavailable',
-    options?: { cause?: unknown; retryAfterSeconds?: number; cutoverState?: string; epoch?: number },
-  ) {
-    super(message, options);
-    this.name = 'CutoverRefusedError';
-    this.retryAfterSeconds = options?.retryAfterSeconds ?? 30;
-    this.cutoverState = options?.cutoverState;
-    this.epoch = options?.epoch;
-  }
-}
-
-export function stripUndefined<T>(value: T): T {
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) return value.map(stripUndefined) as unknown as T;
-  if (typeof value === 'object' && !(value instanceof Date)) {
-    const record = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(record)) {
-      if (v !== undefined) out[k] = stripUndefined(v);
-    }
-    return out as T;
-  }
-  return value;
-}
-
 export function getCutoverFenceDocRef(db: FirestoreLike, namespace: string): any {
   assertSupportedCutoverNamespace(namespace);
   return db.collection(`${namespace}_meta`).doc('cutover_fence');
@@ -143,10 +137,7 @@ export function getCutoverFenceDocRef(db: FirestoreLike, namespace: string): any
 
 export function getCutoverOperationsColRef(db: FirestoreLike, namespace: string): any {
   assertSupportedCutoverNamespace(namespace);
-  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence');
-  return typeof docRef.collection === 'function'
-    ? docRef.collection('operations')
-    : db.collection(`${namespace}_meta/cutover_fence/operations`);
+  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence'); return typeof (docRef as any).collection === 'function' ? (docRef as any).collection('operations') : db.collection(`${namespace}_meta/cutover_fence/operations`);
 }
 
 export function getCutoverOperationDocRef(
@@ -210,6 +201,19 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
   }
 
   // Validate state-specific invariants
+  if (
+    record.state === 'legacy_open' ||
+    record.state === 'closing' ||
+    record.state === 'fenced' ||
+    record.state === 'migrating'
+  ) {
+    if (record.emptyNamespace !== undefined) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} cannot define emptyNamespace`,
+      );
+    }
+  }
+
   if (record.state === 'legacy_open') {
     if (record.irreversible !== false) {
       throw new CutoverFenceError(
@@ -238,29 +242,29 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
         `Invalid cutover fence invariants for namespace ${namespace}: migrating cannot have migrationManifestDigest before v3_ready`,
       );
     }
-  } else if (record.state === 'v3_ready') {
+  } else if (record.state === 'v3_ready' || record.state === 'v3_active') {
     if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: v3_ready requires migrationRunId`,
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationRunId`,
       );
     }
     if (typeof record.migrationManifestDigest !== 'string' || !record.migrationManifestDigest) {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: v3_ready requires migrationManifestDigest`,
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationManifestDigest`,
       );
     }
-  } else if (record.state === 'v3_active') {
-    if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
+    if (record.emptyNamespace !== undefined && typeof record.emptyNamespace !== 'boolean') {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: v3_active requires migrationRunId`,
+        `Invalid emptyNamespace field in cutover fence record for namespace ${namespace}: expected boolean, got ${typeof record.emptyNamespace}`,
       );
     }
-    if (typeof record.migrationManifestDigest !== 'string' || !record.migrationManifestDigest) {
-      throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: v3_active requires migrationManifestDigest`,
-      );
+    if (record.irreversible !== true) {
+      if (record.emptyNamespace !== true) {
+        throw new CutoverFenceError(
+          `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} must be irreversible: true unless emptyNamespace is true`,
+        );
+      }
     }
-    // C12: For empty namespaces, irreversible is false in v3_ready and v3_active until first credential mutation
   }
 
   return {
@@ -274,9 +278,8 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
     migrationManifestDigest:
       typeof record.migrationManifestDigest === 'string' ? record.migrationManifestDigest : undefined,
     createdAt: typeof record.createdAt === 'number' ? record.createdAt : undefined,
+    emptyNamespace: typeof record.emptyNamespace === 'boolean' ? record.emptyNamespace : undefined,
     updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
-    fencedAt: typeof record.fencedAt === 'number' ? record.fencedAt : undefined,
-    migratedAt: typeof record.migratedAt === 'number' ? record.migratedAt : undefined,
   };
 }
 
@@ -312,57 +315,75 @@ export async function initializeCutoverFence(
   namespace: string,
   options?: {
     initialEpoch?: number;
-    initialState?: CutoverFenceState;
-    migrationRunId?: string;
-    migrationManifestDigest?: string;
+    initialState?: 'legacy_open';
     now?: () => number;
   },
 ): Promise<CutoverFenceControlRecord> {
   assertSupportedCutoverNamespace(namespace);
+  const requestedState = options?.initialState ?? 'legacy_open';
+  if (requestedState !== 'legacy_open') {
+    throw new CutoverFenceError(
+      `Cannot initialize cutover fence in state '${requestedState}': initialization must be in 'legacy_open'`,
+    );
+  }
+  const requestedEpoch = options?.initialEpoch ?? 1;
+  if (!Number.isInteger(requestedEpoch) || requestedEpoch < 1) {
+    throw new CutoverFenceError(
+      `Invalid initialEpoch for namespace ${namespace}: must be a positive integer, got ${requestedEpoch}`,
+    );
+  }
+
   const now = options?.now ?? Date.now;
   const ref = getCutoverFenceDocRef(db, namespace);
 
   return await db.runTransaction(async (transaction) => {
-    const snap = await transaction.get(ref);
-    if (snap.exists) {
-      return parseCutoverFenceRecord(snap.data(), namespace);
-    }
-    const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
-    if (markerSnap.exists && (options?.initialState ?? 'legacy_open') === 'legacy_open') {
+    const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+    const markerSnap = await transaction.get(markerRef);
+    if (markerSnap.exists) {
       throw new CutoverFenceError(
-        `Cannot initialize legacy_open for namespace ${namespace}: v2_adopted marker exists in database`,
+        `Cannot initialize cutover fence in legacy_open: durable v2_adopted marker already exists for namespace ${namespace}`,
       );
     }
+
+    const snap = await transaction.get(ref);
+    if (snap.exists) {
+      const existing = parseCutoverFenceRecord(snap.data(), namespace);
+      if (existing.epoch !== requestedEpoch) {
+        throw new CutoverFenceError(
+          `Cannot initialize cutover fence for namespace ${namespace}: existing epoch ${existing.epoch} does not match requested initialEpoch ${requestedEpoch}`,
+        );
+      }
+      if (existing.state !== requestedState) {
+        throw new CutoverFenceError(
+          `Cannot initialize cutover fence for namespace ${namespace}: existing state '${existing.state}' does not match requested initialState '${requestedState}'`,
+        );
+      }
+      return existing;
+    }
     const currentTime = now();
-    const state = options?.initialState ?? 'legacy_open';
-    const isV3 = state === 'v3_ready' || state === 'v3_active';
     const initial: CutoverFenceControlRecord = {
       schemaVersion: 1,
       namespace,
-      epoch: options?.initialEpoch ?? 1,
-      state,
+      epoch: requestedEpoch,
+      state: 'legacy_open',
       activeOperations: 0,
-      irreversible: isV3 ? true : false,
-      migrationRunId: isV3 ? (options?.migrationRunId ?? 'bootstrap') : undefined,
-      migrationManifestDigest: isV3 ? (options?.migrationManifestDigest ?? 'bootstrap') : undefined,
+      irreversible: false,
       createdAt: currentTime,
       updatedAt: currentTime,
-      migratedAt: isV3 ? currentTime : undefined,
     };
     transaction.set(ref, stripUndefined(initial as unknown as Record<string, unknown>));
     return initial;
   });
 }
 
-
 export interface CutoverTransitionParams {
   fromState?: CutoverFenceState | CutoverFenceState[];
   toState: CutoverFenceState;
   expectedEpoch: number;
   nextEpoch?: number;
-  emptyNamespace?: boolean;
   migrationRunId?: string;
   migrationManifestDigest?: string;
+  emptyNamespace?: boolean;
   allowIdempotent?: boolean;
   now?: () => number;
 }
@@ -376,7 +397,7 @@ export async function transitionCutoverFenceState(
   const now = params.now ?? Date.now;
   const ref = getCutoverFenceDocRef(db, namespace);
 
-  return await db.runTransaction(async (transaction: any) => {
+  return await db.runTransaction(async (transaction) => {
     const current = await readCutoverFenceInTransaction(transaction, db, namespace);
 
     if (current.epoch !== params.expectedEpoch) {
@@ -385,7 +406,18 @@ export async function transitionCutoverFenceState(
       );
     }
 
+    if (params.emptyNamespace !== undefined && params.toState !== 'v3_ready') {
+      throw new CutoverFenceError(
+        `Invalid emptyNamespace parameter for transition to ${params.toState}: emptyNamespace flag is only allowed on transition to v3_ready`,
+      );
+    }
+
     if (current.state === params.toState) {
+      if (params.emptyNamespace !== undefined && current.emptyNamespace !== params.emptyNamespace) {
+        throw new CutoverFenceError(
+          `Idempotent transition failed for namespace ${namespace}: emptyNamespace mismatch`,
+        );
+      }
       if (params.migrationRunId && current.migrationRunId !== params.migrationRunId) {
         throw new CutoverFenceError(
           `Idempotent transition failed for namespace ${namespace}: migrationRunId mismatch`,
@@ -447,30 +479,26 @@ export async function transitionCutoverFenceState(
         );
       }
     } else if (params.toState === 'legacy_open') {
-      const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
-      if (markerSnap.exists) {
-        throw new CutoverFenceError(
-          `Cannot return to legacy_open for namespace ${namespace}: v2_adopted marker exists`,
-        );
-      }
-      if (current.emptyNamespace) {
-        throw new CutoverFenceError(
-          `Cannot return to legacy_open for namespace ${namespace}: emptyNamespace cutover completed`,
-        );
-      }
       if (current.irreversible) {
         throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: irreversible migration latch is engaged`,
         );
       }
+      if (current.migrationRunId || current.emptyNamespace) {
+        throw new CutoverFenceError(
+          `Cannot return to legacy_open for namespace ${namespace}: migration ownership record exists`,
+        );
+      }
+      const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+      const markerSnap = await transaction.get(markerRef);
+      if (markerSnap.exists) {
+        throw new CutoverFenceError(
+          `Cannot return to legacy_open for namespace ${namespace}: durable v2_adopted ownership marker exists`,
+        );
+      }
       if (current.activeOperations !== 0) {
         throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: activeOperations is ${current.activeOperations}`,
-        );
-      }
-      if (current.migrationRunId) {
-        throw new CutoverFenceError(
-          `Cannot return to legacy_open for namespace ${namespace}: migration run record exists`,
         );
       }
     } else if (params.toState === 'migrating') {
@@ -496,30 +524,294 @@ export async function transitionCutoverFenceState(
         );
       }
       if (params.emptyNamespace === true) {
-        const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
+        const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+        const markerSnap = await transaction.get(markerRef);
         if (!markerSnap.exists) {
           throw new CutoverFenceError(
-            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: v2_adopted marker is missing`,
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: missing durable ownership marker ${namespace}_meta/v2_adopted`,
           );
         }
-        const mData = markerSnap.data();
-        const markerRunId = mData?.migrationRunId ?? mData?.runId;
-        if (markerRunId !== (params.migrationRunId ?? current.migrationRunId)) {
+        const m = markerSnap.data() as Record<string, unknown>;
+
+        // 1. schemaVersion check
+        if (m.schemaVersion !== 1) {
           throw new CutoverFenceError(
-            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker runId mismatch`,
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: malformed or mismatched empty ownership marker (schemaVersion must be 1, got ${String(m.schemaVersion)})`,
           );
         }
-        if (mData?.emptyNamespace !== true && mData?.empty !== true) {
+
+        // 2. Strict allowed top-level keys
+        const ALLOWED_MARKER_KEYS: Record<string, true> = {
+          schemaVersion: true,
+          adoptedAt: true,
+          migrationRunId: true,
+          runId: true,
+          epoch: true,
+          manifestDigest: true,
+          migrationManifestDigest: true,
+          sourceInventoryDigest: true,
+          targetInventoryDigest: true,
+          empty: true,
+          emptyNamespace: true,
+          totalAdopted: true,
+          totalCandidateTokens: true,
+          totalCandidateCodes: true,
+          totalCandidateResumes: true,
+          totalCandidateClients: true,
+          totalPhysicalRecords: true,
+          scanned: true,
+          migrated: true,
+          skipped: true,
+          errors: true,
+          physicalCounts: true,
+          targetCounts: true,
+          classifications: true,
+          reasons: true,
+          codeSha: true,
+          codeArtifact: true,
+          packageIntegrity: true,
+        };
+        for (const k of Object.keys(m)) {
+          if (!ALLOWED_MARKER_KEYS[k]) {
+            throw new CutoverFenceError(
+              `Cannot transition to v3_ready with emptyNamespace for ${namespace}: unexpected field '${k}' in ownership marker`,
+            );
+          }
+        }
+
+        const runId = (m.runId ?? m.migrationRunId) as string | undefined;
+        const manifestDigest = (m.manifestDigest ?? m.migrationManifestDigest) as string | undefined;
+        const epoch = m.epoch as number | undefined;
+
+        if (m.emptyNamespace !== true && m.empty !== true) {
           throw new CutoverFenceError(
-            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker is not marked empty`,
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker emptyNamespace must be true`,
           );
         }
-      } else {
-        if (!current.irreversible) {
+        if (!runId || runId !== current.migrationRunId) {
           throw new CutoverFenceError(
-            `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: malformed or mismatched empty ownership marker (runId mismatch, expected ${current.migrationRunId}, got ${runId})`,
           );
         }
+        if (!manifestDigest || manifestDigest !== params.migrationManifestDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: malformed or mismatched empty ownership marker (manifestDigest mismatch, expected ${params.migrationManifestDigest}, got ${manifestDigest})`,
+          );
+        }
+        if (epoch !== current.epoch) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: malformed or mismatched empty ownership marker (epoch mismatch, expected ${current.epoch}, got ${epoch})`,
+          );
+        }
+
+        // Required provenance and digest fields
+        if (typeof m.sourceInventoryDigest !== 'string' || !m.sourceInventoryDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing sourceInventoryDigest`,
+          );
+        }
+        if (typeof m.targetInventoryDigest !== 'string' || !m.targetInventoryDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing targetInventoryDigest`,
+          );
+        }
+        if (typeof m.codeSha !== 'string' || !m.codeSha) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing codeSha`,
+          );
+        }
+        if (typeof m.codeArtifact !== 'string' || !m.codeArtifact) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing codeArtifact`,
+          );
+        }
+        if (typeof m.packageIntegrity !== 'string' || !m.packageIntegrity) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing packageIntegrity`,
+          );
+        }
+
+        // Validate top-level count fields are present and zero:
+        const topLevelZeroCounts = [
+          'totalAdopted',
+          'totalCandidateTokens',
+          'totalCandidateCodes',
+          'totalCandidateResumes',
+          'totalCandidateClients',
+          'totalPhysicalRecords',
+          'scanned',
+          'migrated',
+          'skipped',
+          'errors',
+        ];
+        for (const k of topLevelZeroCounts) {
+          const val = m[k];
+          if (val === undefined || typeof val !== 'number' || val !== 0) {
+            throw new CutoverFenceError(
+              `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker count '${k}' must be 0, got ${String(val)}`,
+            );
+          }
+        }
+
+        // Validate required nested count maps are present and have exact key sets with all zeroes:
+        const exactMapKeys: Record<string, string[]> = {
+          physicalCounts: ['families', 'tokens', 'refresh', 'upstream', 'authCodes', 'resumeTokens', 'oauthClients', 'clients'],
+          targetCounts: ['families', 'tokens', 'refresh', 'upstream', 'authCodes', 'resumeTokens', 'retiredRefreshTokens', 'oauthClients'],
+          classifications: ['pr56Families', 'baseFormatTokens', 'authCodes', 'resumeTokens', 'clients'],
+        };
+        for (const [mapKey, requiredKeys] of Object.entries(exactMapKeys)) {
+          const mapVal = m[mapKey];
+          if (!mapVal || typeof mapVal !== 'object') {
+            throw new CutoverFenceError(
+              `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker missing required map '${mapKey}'`,
+            );
+          }
+          const rec = mapVal as Record<string, unknown>;
+          const actualKeys = Object.keys(rec);
+          if (actualKeys.length !== requiredKeys.length || !requiredKeys.every((k) => actualKeys.includes(k))) {
+            throw new CutoverFenceError(
+              `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker map '${mapKey}' key mismatch (expected exact ${requiredKeys.join(', ')}, got ${actualKeys.join(', ')})`,
+            );
+          }
+          for (const key of requiredKeys) {
+            const val = rec[key];
+            if (val === undefined || typeof val !== 'number' || val !== 0) {
+              throw new CutoverFenceError(
+                `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker count '${mapKey}.${key}' must be 0, got ${String(val)}`,
+              );
+            }
+          }
+        }
+
+        // Validate physicalCounts sum matches totalPhysicalRecords (both must be 0)
+        const markerPhysicalSum = Object.values(m.physicalCounts as Record<string, number>).reduce((sum, n) => sum + n, 0);
+        if (markerPhysicalSum !== m.totalPhysicalRecords || m.totalPhysicalRecords !== 0) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker physicalCounts sum (${markerPhysicalSum}) contradicts totalPhysicalRecords (${m.totalPhysicalRecords})`,
+          );
+        }
+
+        // Bind actual prepared manifest:
+        const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${current.epoch}`);
+        const prepSnap = await transaction.get(prepRef);
+        if (!prepSnap.exists) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: missing prepared manifest ${namespace}_meta/migration_prepared_${current.epoch}`,
+          );
+        }
+        const prep = prepSnap.data() as Record<string, unknown>;
+        if (prep.schemaVersion !== 1) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest schemaVersion must be 1, got ${String(prep.schemaVersion)}`,
+          );
+        }
+        if (prep.status !== 'prepared') {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest status must be 'prepared', got '${String(prep.status)}'`,
+          );
+        }
+        const prepRunId = (prep.runId ?? prep.migrationRunId) as string | undefined;
+        if (prepRunId !== current.migrationRunId) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest runId mismatch`,
+          );
+        }
+        if (prep.epoch !== current.epoch) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest epoch mismatch`,
+          );
+        }
+        if (prep.sourceInventoryDigest !== m.sourceInventoryDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest sourceInventoryDigest mismatch`,
+          );
+        }
+        if (prep.codeSha !== m.codeSha || prep.codeArtifact !== m.codeArtifact || prep.packageIntegrity !== m.packageIntegrity) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest provenance mismatch`,
+          );
+        }
+        if (prep.totalPhysicalRecords !== 0) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest totalPhysicalRecords must be 0`,
+          );
+        }
+        if (prep.physicalCounts && typeof prep.physicalCounts === 'object') {
+          const prepPhysicalSum = Object.values(prep.physicalCounts as Record<string, number>).reduce((sum, n) => sum + n, 0);
+          if (prepPhysicalSum !== prep.totalPhysicalRecords || prep.totalPhysicalRecords !== 0) {
+            throw new CutoverFenceError(
+              `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest physicalCounts sum (${prepPhysicalSum}) contradicts totalPhysicalRecords (${prep.totalPhysicalRecords})`,
+            );
+          }
+        }
+        if (!Array.isArray(prep.candidateCommitments) || prep.candidateCommitments.length !== 0) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: prepared manifest candidateCommitments must be empty array`,
+          );
+        }
+
+        // Bind actual final migration manifest:
+        const finalManifestRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${current.epoch}`);
+        const finalManifestSnap = await transaction.get(finalManifestRef);
+        if (!finalManifestSnap.exists) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: missing final migration manifest ${namespace}_meta/migration_manifest_${current.epoch}`,
+          );
+        }
+        const finalManifest = finalManifestSnap.data() as Record<string, unknown>;
+        if (finalManifest.schemaVersion !== 1) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest schemaVersion must be 1, got ${String(finalManifest.schemaVersion)}`,
+          );
+        }
+        if (finalManifest.completionState !== 'completed') {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest completionState must be 'completed', got '${String(finalManifest.completionState)}'`,
+          );
+        }
+        const finalRunId = (finalManifest.runId ?? finalManifest.migrationRunId) as string | undefined;
+        if (finalRunId !== current.migrationRunId) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest runId mismatch`,
+          );
+        }
+        if (finalManifest.epoch !== current.epoch) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest epoch mismatch`,
+          );
+        }
+        const finalTargetDigest = (finalManifest.digests as Record<string, string> | undefined)?.targetInventoryDigest ?? finalManifest.targetInventoryDigest;
+        if (!finalTargetDigest || finalTargetDigest !== m.targetInventoryDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: target inventory digest mismatch between marker and final manifest`,
+          );
+        }
+        const finalSourceDigest = (finalManifest.digests as Record<string, string> | undefined)?.sourceInventoryDigest ?? finalManifest.sourceInventoryDigest;
+        if (!finalSourceDigest || finalSourceDigest !== m.sourceInventoryDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: source inventory digest mismatch between marker and final manifest`,
+          );
+        }
+        if (finalManifest.codeSha !== m.codeSha || finalManifest.codeArtifact !== m.codeArtifact || finalManifest.packageIntegrity !== m.packageIntegrity) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest provenance mismatch`,
+          );
+        }
+        if (finalManifest.scanned !== 0 || finalManifest.migrated !== 0 || finalManifest.skipped !== 0 || finalManifest.errors !== 0) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: final manifest counts must be 0 for empty namespace`,
+          );
+        }
+        const computedDigest = createHash('sha256').update(JSON.stringify(finalManifest)).digest('hex');
+        if (computedDigest !== params.migrationManifestDigest) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: computed final manifest digest (${computedDigest}) does not match migrationManifestDigest (${params.migrationManifestDigest})`,
+          );
+        }
+      } else if (!current.irreversible) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
+        );
       }
     } else if (params.toState === 'v3_active') {
       if (!current.migrationRunId || !current.migrationManifestDigest) {
@@ -555,12 +847,10 @@ export async function transitionCutoverFenceState(
       state: params.toState,
       epoch: nextEpoch,
       irreversible: current.irreversible,
-      emptyNamespace: params.emptyNamespace ?? current.emptyNamespace,
+      emptyNamespace: params.toState === 'v3_ready' ? params.emptyNamespace : current.emptyNamespace,
       migrationRunId: params.migrationRunId ?? current.migrationRunId,
       migrationManifestDigest: params.migrationManifestDigest ?? current.migrationManifestDigest,
       updatedAt: currentTime,
-      fencedAt: params.toState === 'fenced' ? currentTime : current.fencedAt,
-      migratedAt: params.toState === 'v3_ready' ? currentTime : current.migratedAt,
     };
 
     transaction.set(ref, stripUndefined(updated as unknown as Record<string, unknown>));
@@ -578,7 +868,7 @@ export async function markIrreversibleInTransaction(
 ): Promise<CutoverFenceControlRecord> {
   assertSupportedCutoverNamespace(namespace);
   const current = await readCutoverFenceInTransaction(transaction, db, namespace);
-  if (current.state !== 'migrating' && current.state !== 'v3_ready' && current.state !== 'v3_active') {
+  if (!['migrating', 'v3_ready', 'v3_active'].includes(current.state)) {
     throw new CutoverFenceError(
       `Cannot set irreversible latch for namespace ${namespace}: state must be 'migrating', 'v3_ready', or 'v3_active', got '${current.state}'`,
     );
@@ -607,13 +897,21 @@ export async function markIrreversibleInTransaction(
   return updated;
 }
 
+export interface LegacyOperationMetadata {
+  readonly [key: string]: unknown;
+  readonly revision?: string;
+  readonly attempt?: number;
+  readonly phase?: string;
+  readonly reconciled?: boolean;
+}
+
 export interface WithLegacyOperationOptions {
   db: FirestoreLike;
-  namespace: string;
+  namespace: SupportedCutoverNamespace;
   kind: string;
   operationId?: string;
   leaseMs?: number;
-  metadata?: Record<string, unknown>;
+  metadata?: LegacyOperationMetadata;
   now?: () => number;
 }
 
@@ -621,12 +919,13 @@ export async function withLegacyOperation<R>(
   options: WithLegacyOperationOptions,
   fn: (ctx: LegacyOperationContext) => Promise<R>,
 ): Promise<R> {
+  assertSupportedCutoverNamespace(options.namespace);
   const now = options.now ?? Date.now;
   const opId = options.operationId ?? randomUUID();
   const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
   const opRef = getCutoverOperationDocRef(options.db, options.namespace, opId);
 
-  const opRecord = await options.db.runTransaction(async (transaction: any) => {
+  const opRecord = await options.db.runTransaction(async (transaction) => {
     const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
 
     if (control.state !== 'legacy_open' || control.irreversible) {
@@ -643,9 +942,10 @@ export async function withLegacyOperation<R>(
         `Operation ID ${opId} already exists in phase ${existingRecord.phase}; duplicate admission rejected`,
       );
     }
-    if (!options.kind || typeof options.kind !== 'string' || options.kind.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(options.kind)) {
+
+    if (!options.kind || typeof options.kind !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(options.kind)) {
       throw new CutoverFenceError(
-        `Invalid operation kind: kind must be an alphanumeric identifier up to 64 chars, got '${options.kind}'`,
+        `Invalid operation kind: kind must match /^[a-zA-Z0-9_-]{1,64}$/, got '${String(options.kind)}'`,
       );
     }
     const forbiddenKindTerms = ['password', 'secret', 'credential'];
@@ -661,16 +961,30 @@ export async function withLegacyOperation<R>(
             `Operation metadata key '${key}' is not in the allowlist (${allowedKeys.join(', ')})`,
           );
         }
-        if (typeof value === 'string') {
-          if (value.length > 64) {
-            throw new CutoverFenceError(`Operation metadata value for '${key}' exceeds 64 chars`);
+        if (key === 'revision') {
+          if (typeof value !== 'string' || !/^[a-zA-Z0-9._-]{1,32}$/.test(value)) {
+            throw new CutoverFenceError(
+              `Operation metadata 'revision' must be a safe identifier matching /^[a-zA-Z0-9._-]{1,32}$/, got '${String(value)}'`,
+            );
           }
-          const forbiddenTerms = ['bearer', 'secret', 'token', 'password', 'jwt', 'auth'];
-          if (forbiddenTerms.some((term) => value.toLowerCase().includes(term))) {
-            throw new CutoverFenceError(`Operation metadata value for '${key}' must not contain sensitive fragments`);
+        } else if (key === 'phase') {
+          if (typeof value !== 'string' || !/^[a-zA-Z0-9._-]{1,32}$/.test(value)) {
+            throw new CutoverFenceError(
+              `Operation metadata 'phase' must be a safe identifier matching /^[a-zA-Z0-9._-]{1,32}$/, got '${String(value)}'`,
+            );
           }
-        } else if (typeof value !== 'number' && typeof value !== 'boolean') {
-          throw new CutoverFenceError(`Operation metadata value for '${key}' must be primitive (string, number, boolean)`);
+        } else if (key === 'attempt') {
+          if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 100) {
+            throw new CutoverFenceError(
+              `Operation metadata 'attempt' must be an integer between 1 and 100, got '${String(value)}'`,
+            );
+          }
+        } else if (key === 'reconciled') {
+          if (typeof value !== 'boolean') {
+            throw new CutoverFenceError(
+              `Operation metadata 'reconciled' must be a boolean, got '${String(value)}'`,
+            );
+          }
         }
       }
     }
@@ -742,31 +1056,44 @@ export async function releaseLegacyOperation(
   terminalPhase: 'completed' | 'failed',
   nowProvider: () => number = Date.now,
 ): Promise<void> {
+  assertSupportedCutoverNamespace(ctx.namespace);
   const controlRef = getCutoverFenceDocRef(db, ctx.namespace);
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
 
-  await db.runTransaction(async (transaction: any) => {
+  await db.runTransaction(async (transaction) => {
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
 
-    if (controlSnap.exists) {
-      const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
-      const newActive = Math.max(0, control.activeOperations - 1);
-      transaction.set(
-        controlRef,
-        { activeOperations: newActive, updatedAt: currentTime },
-        { merge: true },
+    if (!controlSnap.exists) {
+      throw new CutoverFenceError(`Control record missing for namespace ${ctx.namespace}`);
+    }
+    if (!opSnap.exists) {
+      throw new CutoverFenceError(`Operation record missing for operation ${ctx.id}`);
+    }
+
+    const opRecord = opSnap.data() as LegacyOperationRecord;
+    if (opRecord.phase === 'completed' || opRecord.phase === 'failed') {
+      return;
+    }
+
+    const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
+    if (control.activeOperations <= 0) {
+      throw new CutoverFenceError(
+        `Active operations underflow on release for namespace ${ctx.namespace}: count is ${control.activeOperations}`,
       );
     }
 
-    if (opSnap.exists) {
-      transaction.set(
-        opRef,
-        { phase: terminalPhase, updatedAt: currentTime },
-        { merge: true },
-      );
-    }
+    transaction.set(
+      controlRef,
+      { activeOperations: control.activeOperations - 1, updatedAt: currentTime },
+      { merge: true },
+    );
+    transaction.set(
+      opRef,
+      { phase: terminalPhase, updatedAt: currentTime },
+      { merge: true },
+    );
   });
 
   ctx.markCompleted();
@@ -777,10 +1104,11 @@ export async function markOperationAmbiguous(
   ctx: LegacyOperationContext,
   nowProvider: () => number = Date.now,
 ): Promise<void> {
+  assertSupportedCutoverNamespace(ctx.namespace);
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
 
-  await db.runTransaction(async (transaction: any) => {
+  await db.runTransaction(async (transaction) => {
     const opSnap = await transaction.get(opRef);
     if (opSnap.exists) {
       transaction.set(
@@ -798,7 +1126,7 @@ export async function markOperationAmbiguous(
 
 export interface GuardMutationOptions {
   db: FirestoreLike;
-  namespace: string;
+  namespace: SupportedCutoverNamespace;
   operation?: LegacyOperationContext;
   completeOperation?: boolean;
   now?: () => number;
@@ -808,12 +1136,14 @@ export interface GuardMutationResult {
   control: CutoverFenceControlRecord;
   operation?: LegacyOperationRecord;
   bufferCompletion: (now?: number) => void;
+  onCommit: () => void;
 }
 
 export async function checkMutationGuardInTransaction(
   transaction: any,
   options: GuardMutationOptions,
 ): Promise<GuardMutationResult> {
+  assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
 
   if (['fenced', 'migrating', 'v3_ready', 'v3_active'].includes(control.state)) {
@@ -866,34 +1196,44 @@ export async function checkMutationGuardInTransaction(
         `Operation epoch mismatch: expected ${control.epoch}, got ${options.operation.epoch}`,
       );
     }
-    const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
-    const opSnap = await transaction.get(opRef);
-    if (!opSnap.exists) {
-      throw new CutoverFenceError(
-        `Operation record ${options.operation.id} missing`,
-      );
-    }
-    opRecord = opSnap.data() as LegacyOperationRecord;
-    if (opRecord.epoch !== control.epoch) {
-      throw new CutoverFenceError(
-        `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
-      );
-    }
-    if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
-      throw new CutoverFenceError(
-        `Operation ${options.operation.id} is already in phase ${opRecord.phase}; cannot be reused for mutation`,
-      );
-    }
+      const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
+      const opSnap = await transaction.get(opRef);
+      if (!opSnap.exists) {
+        throw new CutoverFenceError(
+          `Operation record ${options.operation.id} missing`,
+        );
+      }
+      opRecord = opSnap.data() as LegacyOperationRecord;
+      if (opRecord.epoch !== control.epoch) {
+        throw new CutoverFenceError(
+          `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
+        );
+      }
+      if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
+        throw new CutoverFenceError(
+          `Operation ${options.operation.id} is already in phase ${opRecord.phase}; cannot be reused for mutation`,
+        );
+      }
   }
 
   const shouldComplete = options.operation && options.completeOperation !== false;
   const opToComplete = options.operation;
+  let completionBuffered = false;
 
   return {
     control,
     operation: opRecord,
     bufferCompletion: (customNow?: number) => {
       if (!shouldComplete || !opToComplete) return;
+      if (opRecord && (opRecord.phase === 'completed' || opRecord.phase === 'failed')) {
+        return;
+      }
+      if (control.activeOperations <= 0) {
+        throw new CutoverFenceError(
+          `Active operations underflow on completion for namespace ${options.namespace}: count is ${control.activeOperations}`,
+        );
+      }
+      completionBuffered = true;
       const currentTime = customNow ?? (options.now ? options.now() : Date.now());
       const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
       const opRef = getCutoverOperationDocRef(options.db, options.namespace, opToComplete.id);
@@ -906,12 +1246,16 @@ export async function checkMutationGuardInTransaction(
       transaction.set(
         controlRef,
         {
-          activeOperations: Math.max(0, control.activeOperations - 1),
+          activeOperations: control.activeOperations - 1,
           updatedAt: currentTime,
         },
         { merge: true },
       );
-      opToComplete.markCompleted();
+    },
+    onCommit: () => {
+      if (completionBuffered && shouldComplete && opToComplete) {
+        opToComplete.markCompleted();
+      }
     },
   };
 }
@@ -922,12 +1266,25 @@ export async function isLegacyMutationPermittedInTransaction(
   namespace: string,
   operation?: LegacyOperationContext,
 ): Promise<{ permitted: boolean; control: CutoverFenceControlRecord }> {
+  assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (['fenced', 'migrating', 'v3_ready', 'v3_active'].includes(control.state)) {
     return { permitted: false, control };
   }
   if (control.state === 'closing') {
     if (!operation || operation.epoch !== control.epoch) {
+      return { permitted: false, control };
+    }
+    const opRef = getCutoverOperationDocRef(db, namespace, operation.id);
+    const opSnap = await transaction.get(opRef);
+    if (!opSnap.exists) {
+      return { permitted: false, control };
+    }
+    const opRecord = opSnap.data() as LegacyOperationRecord;
+    if (
+      opRecord.epoch !== control.epoch ||
+      (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending')
+    ) {
       return { permitted: false, control };
     }
   }

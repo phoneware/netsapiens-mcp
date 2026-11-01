@@ -50,19 +50,26 @@ class MockFirestore implements FirestoreLike {
           data: () => data,
         })),
       }),
-      where: (field: string, _op: string, value: string) => ({
-        get: async () => {
-          const matched = Array.from(col.entries()).filter(([, d]) => d[field] === value);
-          return {
-            empty: matched.length === 0,
-            docs: matched.map(([id, data]) => ({
-              id,
-              exists: true,
-              data: () => data,
-            })),
-          };
-        },
-      }),
+      where: (field: string, op: string, value: any) => {
+        const query = {
+          limit: (_n: number) => query,
+          get: async () => {
+            const matched = Array.from(col.entries()).filter(([, d]) => {
+              if (op === 'in' && Array.isArray(value)) return value.includes(d[field]);
+              return d[field] === value;
+            });
+            return {
+              empty: matched.length === 0,
+              docs: matched.map(([id, data]) => ({
+                id,
+                exists: true,
+                data: () => data,
+              })),
+            };
+          },
+        };
+        return query;
+      },
     };
   }
 
@@ -128,7 +135,9 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
       updatedAt: Date.now(),
     });
     // 4. Initialize fence in fenced state, execute adoption, and transition to v3_active
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1 });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
     const report = await adoptFirestoreLegacyTokens({
       db,
       namespace,

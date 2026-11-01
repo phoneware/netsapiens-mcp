@@ -106,6 +106,12 @@ class MockFirestore implements FirestoreLike {
 describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', () => {
   const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   const key = deriveStoreKey(secret);
+  const setupFencedState = async (db: any, namespace: string, epoch: number = 1): Promise<void> => {
+    await initializeCutoverFence(db, namespace, { initialEpoch: epoch });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: epoch });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: epoch });
+  };
+
   const defaultAdoptOpts = async (db: any, namespace: string, opts: Record<string, unknown> = {}) => {
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
       (opts.dryRun ? undefined : await computeSourceInventoryDigest(db, namespace, key));
@@ -267,7 +273,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const db = new MockFirestore();
     const namespace = 'mcp';
 
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     const familyId = 'dry-fam-1';
     await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
@@ -326,7 +332,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const db = new MockFirestore();
     const namespace = 'mcp';
 
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     // Seed an orphan access doc pointing to nonexistent family
     await db.collection(`${namespace}_tokens`).doc('orphan-access-tok').set({
@@ -346,7 +352,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const namespace = 'mcp';
     const familyId = 'fam-partial-conflict';
 
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     // Seed legacy family
     await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
@@ -392,7 +398,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const namespace = 'mcp';
     const familyId = 'fam-missing-ids';
 
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     // Seed legacy family missing currentAccessToken AND currentRefreshToken
     await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
@@ -422,7 +428,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
   it('classifies orphan refresh pointers and orphan upstream grants as errors', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     // Seed orphan refresh pointer (no family)
     await db.collection(`${namespace}_tokens_refresh`).doc('orphan-ref').set({
@@ -443,7 +449,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
   it('rejects conflicting claims when two families claim the same access or refresh token', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     const now = Date.now();
     // Family 1
@@ -500,7 +506,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
   it('classifies family-linked access token as orphan if it does not match currentAccessToken', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(db, namespace, 1);
 
     const now = Date.now();
     await db.collection(`${namespace}_tokens_refresh_families`).doc('fam-1').set({
