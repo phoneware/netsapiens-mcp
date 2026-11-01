@@ -93,6 +93,7 @@ function parseArgs() {
   // Auto-detect defaults
   if (!opts.bridgeTarball) {
     const candBridge = [
+      '/tmp/netsapiens-mcp-2.4.1-5cfb23c.tgz',
       '/tmp/netsapiens-mcp-2.4.1-a0be24d.tgz',
       '/Users/jwaldrip/dev/worktrees/netsapiens-mcp-2-bridge/netsapiens-mcp-2.4.1.tgz',
       '/tmp/netsapiens-mcp-2.4.1-3080249.tgz',
@@ -306,11 +307,13 @@ async function main() {
     ? 'f415003ffd38d3f1ad6b2d2224638a64264ecfa0'
     : getGitSha('origin/feat/netsapiens-mcp-3');
 
-  const bridgeCommitSha = opts.bridgeTarball.includes('a0be24d')
-    ? 'a0be24dcce0408544d6a6a26ff48c084050e8548'
-    : (opts.bridgeTarball.includes('3080249')
-      ? '3080249d9eac21578f623d7edb5f5fab56c2503c'
-      : getGitSha('origin/feat/netsapiens-mcp-2-bridge'));
+  const bridgeCommitSha = opts.bridgeTarball.includes('5cfb23c')
+    ? '5cfb23c7ac20fb856416c76c4a95212eb60a7c7a'
+    : (opts.bridgeTarball.includes('a0be24d')
+      ? 'a0be24d620fc3e138d73500b6a39ab93d61f8c51'
+      : (opts.bridgeTarball.includes('3080249')
+        ? '3080249d9eac21578f623d7edb5f5fab56c2503c'
+        : getGitSha('origin/feat/netsapiens-mcp-2-bridge')));
 
   const artifacts = {
     v231: {
@@ -1208,40 +1211,47 @@ async function main() {
       const testAccessToken = 'acc-fault-' + randomBytes(8).toString('hex');
       const testRefreshToken = 'ref-fault-' + randomBytes(8).toString('hex');
 
-      const tokenStore = new bridgeLib.FirestoreTokenStore({
+      const familyId = 'fam-fault-' + randomBytes(4).toString('hex');
+      const opId = 'op-fault-' + randomBytes(8).toString('hex');
+
+      const upstreamStore = new upstreamGrantMod.FirestoreUpstreamGrantStore({
         db,
-        collection: `${namespace}_tokens`,
+        collection: `${namespace}_tokens_upstream`,
         fence: { namespace, enforce: true },
       });
 
-      // Seed token in Firestore marked with ambiguousRemoteOutcome (representing remote grant success but local commit failure)
-      await db.collection(`${namespace}_tokens`).doc(testAccessToken).set({
-        accessToken: testAccessToken,
-        refreshToken: testRefreshToken,
-        tokenType: 'Bearer',
-        expiresAt: Date.now() + 3600_000,
-        scope: 'read write',
-        clientId: 'client-fault',
-        nsAccessToken: 'ns-acc-fault',
-        nsRefreshToken: 'ns-ref-fault',
-        nsExpiresAt: Date.now() + 10_000, // expiring
-        ambiguousRemoteOutcome: true,
+      // Seed upstream grant with ambiguousOutcome: true
+      await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+        grant: {
+          nsAccessToken: 'ns-acc-fault',
+          nsRefreshToken: 'ns-ref-fault',
+          nsExpiresAt: Date.now() + 10_000,
+          nsUsername: 'user@example.com',
+        },
+        ambiguousOutcome: true,
+        ambiguousOperationId: opId,
+        updatedAt: Date.now(),
       });
 
       let refreshUnavailableCaught = false;
       let secondGrantExecuted = false;
 
       try {
-        await tokenStore.refreshNsToken(testAccessToken, async () => {
-          secondGrantExecuted = true;
-          return { access_token: 'ns-acc-new', expires_in: 3600 };
-        });
+        await bridgeLib.withLegacyOperation(
+          { db, namespace, enforce: true, kind: 'upstream_refresh' },
+          async (ctx) => {
+            await upstreamStore.ensureFresh(familyId, async () => {
+              secondGrantExecuted = true;
+              return { grant: { nsAccessToken: 'ns-acc-new' } };
+            }, { operation: ctx });
+          },
+        );
       } catch (err) {
         if (err instanceof TypeError || err instanceof ReferenceError) throw err;
         refreshUnavailableCaught =
           err.name === 'UpstreamUnavailableError' ||
           err instanceof bridgeLib.UpstreamUnavailableError ||
-          (typeof err.message === 'string' && err.message.includes('ambiguous and pending reconciliation'));
+          (typeof err.message === 'string' && err.message.includes('ambiguous'));
       }
 
       const pass = refreshUnavailableCaught === true && secondGrantExecuted === false;

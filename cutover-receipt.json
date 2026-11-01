@@ -1,6 +1,6 @@
 {
-  "harnessSha": "99ae2711096b7bd70eb8dc91582eb67325a7a7bf",
-  "timestamp": "2026-11-01T22:26:27.396Z",
+  "harnessSha": "71a4504747dd7a30cf37cbd4c6e88f9d03c30639",
+  "timestamp": "2026-11-01T22:45:02.907Z",
   "emulatorHost": "127.0.0.1:8080",
   "artifacts": {
     "v231": {
@@ -19,10 +19,10 @@
     },
     "bridge": {
       "branch": "feat/netsapiens-mcp-2-bridge",
-      "gitSha": "a0be24dcce0408544d6a6a26ff48c084050e8548",
-      "path": "/tmp/netsapiens-mcp-2.4.1-a0be24d.tgz",
-      "sha256": "20ba5f525a896223fd05a74f72dca415a6564aaba1c45d97d30cbe03de5f12f5",
-      "integrity": "sha512-t2VZ7ZDR0K+ImMMGxrHms1gBgFinnFA2bY1wBRFzKkQ9lTOOktTWZK5gZcnO72LcqHvE51R+1ztODfdSQ8k5cw=="
+      "gitSha": "5cfb23c7ac20fb856416c76c4a95212eb60a7c7a",
+      "path": "/tmp/netsapiens-mcp-2.4.1-5cfb23c.tgz",
+      "sha256": "ba2cf11d0dbb2b5fd143641a29f095f64739649777930ee04ac4e387049031ff",
+      "integrity": "sha512-SKPa/K9/RZuJAmP7npyfa+VI2Kq7iNssLaQqWP088DI2hH5w4APe/n+d2kF8mD4S8HksjLUZj7ZXD8nSD+WsTw=="
     },
     "v3": {
       "branch": "feat/netsapiens-mcp-3",
@@ -105,23 +105,22 @@
     {
       "id": "refresh_ownership_dedup",
       "name": "Refresh ownership and concurrent dedup (concurrent refresh calls yield single upstream grant; retry returns successor)",
-      "status": "FAIL",
+      "status": "PASS",
       "baselineStatus": "UNPROVEN",
-      "candidateStatus": "FAIL",
+      "candidateStatus": "PASS",
       "observations": {
         "req1Status": 200,
         "req2Status": 200,
         "retryStatus": 200,
         "replayStatus": 400,
-        "upstreamRefreshGrants": 2,
+        "upstreamRefreshGrants": 1,
         "successorMatched": true,
         "retrySuccessorMatched": true,
-        "noExtraGrantOnRetry": false,
+        "noExtraGrantOnRetry": true,
         "familyRevoked": false,
         "upstreamRemoved": true
       },
-      "receiptValid": true,
-      "rejectionReason": "Dedup assertion failed: res1=200, res2=200, grants=2, matched=true"
+      "receiptValid": true
     },
     {
       "id": "faults_no_second_grant",
@@ -219,7 +218,7 @@
       "baselineStatus": "NOT_APPLICABLE",
       "candidateStatus": "PASS",
       "observations": {
-        "scannedFields": 934,
+        "scannedFields": 931,
         "totalViolations": 0,
         "violations": []
       },
@@ -241,13 +240,13 @@
   ],
   "secretSafety": {
     "passed": true,
-    "scannedFields": 934,
+    "scannedFields": 931,
     "violations": []
   },
   "summary": {
     "total": 13,
-    "passed": 11,
-    "failed": 2,
+    "passed": 12,
+    "failed": 1,
     "blocked": 0
   }
 }
