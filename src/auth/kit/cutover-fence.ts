@@ -227,20 +227,31 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
         `Invalid cutover fence invariants for namespace ${namespace}: migrating cannot have migrationManifestDigest before v3_ready`,
       );
     }
-  } else if (record.state === 'v3_ready' || record.state === 'v3_active') {
+  } else if (record.state === 'v3_ready') {
     if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationRunId`,
+        `Invalid cutover fence invariants for namespace ${namespace}: v3_ready requires migrationRunId`,
       );
     }
     if (typeof record.migrationManifestDigest !== 'string' || !record.migrationManifestDigest) {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationManifestDigest`,
+        `Invalid cutover fence invariants for namespace ${namespace}: v3_ready requires migrationManifestDigest`,
+      );
+    }
+  } else if (record.state === 'v3_active') {
+    if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: v3_active requires migrationRunId`,
+      );
+    }
+    if (typeof record.migrationManifestDigest !== 'string' || !record.migrationManifestDigest) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: v3_active requires migrationManifestDigest`,
       );
     }
     if (record.irreversible !== true) {
       throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} must be irreversible: true`,
+        `Invalid cutover fence invariants for namespace ${namespace}: v3_active must be irreversible: true`,
       );
     }
   }
@@ -453,6 +464,11 @@ export async function transitionCutoverFenceState(
           `Cannot transition to v3_ready for namespace ${namespace}: non-empty migrationManifestDigest is required`,
         );
       }
+      if (!current.irreversible) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
+        );
+      }
     } else if (params.toState === 'v3_active') {
       if (!current.migrationRunId || !current.migrationManifestDigest) {
         throw new CutoverFenceError(
@@ -563,13 +579,31 @@ export async function withLegacyOperation<R>(
   const opRecord = await options.db.runTransaction(async (transaction: any) => {
     const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
 
-    if (control.state !== 'legacy_open') {
+    if (control.state !== 'legacy_open' || control.irreversible) {
       throw new CutoverRefusedError(
-        `Cutover state is ${control.state}; admissions closed for namespace ${options.namespace}`,
+        `Cutover state is ${control.state} (irreversible=${control.irreversible}); admissions closed for namespace ${options.namespace}`,
         { cutoverState: control.state, epoch: control.epoch },
       );
     }
 
+    const existingOp = await transaction.get(opRef);
+    if (existingOp.exists) {
+      const existingRecord = existingOp.data() as LegacyOperationRecord;
+      throw new CutoverFenceError(
+        `Operation ID ${opId} already exists in phase ${existingRecord.phase}; duplicate admission rejected`,
+      );
+    }
+
+    if (options.metadata) {
+      const forbiddenKeys = ['token', 'accesstoken', 'refreshtoken', 'password', 'secret', 'code', 'authcode'];
+      for (const key of Object.keys(options.metadata)) {
+        if (forbiddenKeys.some((f) => key.toLowerCase().includes(f))) {
+          throw new CutoverFenceError(
+            `Operation metadata must not contain credential or secret fields: forbidden key '${key}'`,
+          );
+        }
+      }
+    }
     const currentTime = now();
     const createdRecord: LegacyOperationRecord = {
       schemaVersion: 1,
@@ -749,25 +783,33 @@ export async function checkMutationGuardInTransaction(
       );
     }
   } else if (control.state === 'legacy_open') {
-    if (options.operation) {
-      if (options.operation.epoch !== control.epoch) {
-        throw new CutoverFenceError(
-          `Operation epoch mismatch: expected ${control.epoch}, got ${options.operation.epoch}`,
-        );
-      }
-      const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
-      const opSnap = await transaction.get(opRef);
-      if (!opSnap.exists) {
-        throw new CutoverFenceError(
-          `Operation record ${options.operation.id} missing`,
-        );
-      }
-      opRecord = opSnap.data() as LegacyOperationRecord;
-      if (opRecord.epoch !== control.epoch) {
-        throw new CutoverFenceError(
-          `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
-        );
-      }
+    if (!options.operation) {
+      throw new CutoverFenceError(
+        `Durable operation context is required for fence-enforced mutations in namespace ${options.namespace}`,
+      );
+    }
+    if (options.operation.epoch !== control.epoch) {
+      throw new CutoverFenceError(
+        `Operation epoch mismatch: expected ${control.epoch}, got ${options.operation.epoch}`,
+      );
+    }
+    const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
+    const opSnap = await transaction.get(opRef);
+    if (!opSnap.exists) {
+      throw new CutoverFenceError(
+        `Operation record ${options.operation.id} missing`,
+      );
+    }
+    opRecord = opSnap.data() as LegacyOperationRecord;
+    if (opRecord.epoch !== control.epoch) {
+      throw new CutoverFenceError(
+        `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
+      );
+    }
+    if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
+      throw new CutoverFenceError(
+        `Operation ${options.operation.id} is already in phase ${opRecord.phase}; cannot be reused for mutation`,
+      );
     }
   }
 

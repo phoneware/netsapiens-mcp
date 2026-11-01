@@ -3,6 +3,8 @@ import {
   getCutoverFenceDocRef,
   isSupportedCutoverNamespace,
   CutoverRefusedError,
+  CutoverFenceError,
+  parseCutoverFenceRecord,
 } from '../auth/kit/cutover-fence.js';
 import type { AtomicIssueParams } from './types.js';
 import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
@@ -178,18 +180,21 @@ export class FirestoreBackend implements StoreBackend {
       return adoptionPromise;
     };
 
-    const assertV3MutationAllowed = async (tx?: any) => {
+    const assertV3ActiveInTransaction = async (tx: any) => {
       if (!isSupportedCutoverNamespace(namespace)) return;
       const controlRef = getCutoverFenceDocRef(db, namespace);
-      const snap = tx ? await tx.get(controlRef) : await controlRef.get();
-      if (snap && snap.exists) {
-        const control = snap.data() as CutoverFenceControlRecord;
-        if (control.state !== 'v3_ready' && control.state !== 'v3_active') {
-          throw new CutoverRefusedError(
-            `Cutover state is ${control.state}; v3 mutations not permitted for namespace ${namespace}`,
-            { cutoverState: control.state, epoch: control.epoch },
-          );
-        }
+      const snap = await tx.get(controlRef);
+      if (!snap.exists) {
+        throw new CutoverFenceError(
+          `Cutover fence control record missing for namespace: ${namespace}. Mutations refused.`,
+        );
+      }
+      const control = parseCutoverFenceRecord(snap.data(), namespace);
+      if (control.state !== 'v3_active') {
+        throw new CutoverRefusedError(
+          `Cutover state is ${control.state}; v3 mutations require v3_active for namespace ${namespace}`,
+          { cutoverState: control.state, epoch: control.epoch },
+        );
       }
     };
 
@@ -203,12 +208,16 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
       },
       async putAccess(row) {
-        await assertV3MutationAllowed();
-        await sessions.doc(row.id).set(accessData(row));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(sessions.doc(row.id), accessData(row));
+        });
       },
       async deleteAccess(id) {
-        await assertV3MutationAllowed();
-        await sessions.doc(id).delete();
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.delete(sessions.doc(id));
+        });
       },
 
       async getRefresh(id: string) {
@@ -217,16 +226,20 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
       },
       async putRefresh(row) {
-        await assertV3MutationAllowed();
-        await refreshTokens.doc(row.id).set(refreshData(row));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(refreshTokens.doc(row.id), refreshData(row));
+        });
       },
       async deleteRefresh(id) {
-        await assertV3MutationAllowed();
-        await refreshTokens.doc(id).delete();
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.delete(refreshTokens.doc(id));
+        });
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
           tx.set(sessions.doc(params.accessRow.id), accessData(params.accessRow));
           tx.set(refreshTokens.doc(params.refreshRow.id), refreshData(params.refreshRow));
           tx.set(refreshFamilies.doc(params.familyRow.id), familyData(params.familyRow));
@@ -240,8 +253,10 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as FamilyRow) : undefined;
       },
       async putFamily(row) {
-        await assertV3MutationAllowed();
-        await refreshFamilies.doc(row.id).set(familyData(row));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(refreshFamilies.doc(row.id), familyData(row));
+        });
       },
 
       async getUpstream(id) {
@@ -250,13 +265,15 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as UpstreamGrantRow) : undefined;
       },
       async putUpstream(row) {
-        await assertV3MutationAllowed();
-        await upstreamGrants.doc(row.id).set(upstreamData(row));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(upstreamGrants.doc(row.id), upstreamData(row));
+        });
       },
       async updateUpstream(id, mutate) {
         const ref = upstreamGrants.doc(id);
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as UpstreamGrantRow;
@@ -281,7 +298,9 @@ export class FirestoreBackend implements StoreBackend {
       async atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult> {
         const oldRefDoc = refreshTokens.doc(params.oldRefreshId);
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
+
+          // All reads first
           const oldSnap = await tx.get(oldRefDoc);
           if (!oldSnap.exists) {
             let retiredDoc = await tx.get(retiredTokens.doc(params.oldRefreshId));
@@ -292,13 +311,18 @@ export class FirestoreBackend implements StoreBackend {
               const famId = (retiredDoc.data() as { familyId: string }).familyId;
               const famDoc = refreshFamilies.doc(famId);
               const famSnap = await tx.get(famDoc);
+              let refDocs: any[] = [];
+              if (famSnap.exists) {
+                const refQuerySnap = await tx.get(refreshTokens.where('familyId', '==', famId));
+                refDocs = refQuerySnap.docs;
+              }
+              // All reads done. Now writes.
               if (famSnap.exists) {
                 const fam = { ...famSnap.data(), id: famDoc.id } as FamilyRow;
                 tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
                 if (fam.currentAccessTokenId) tx.delete(sessions.doc(fam.currentAccessTokenId));
                 tx.delete(upstreamGrants.doc(famId));
-                const refQuerySnap = await refreshTokens.where('familyId', '==', famId).get();
-                for (const doc of refQuerySnap.docs) {
+                for (const doc of refDocs) {
                   const data = doc.data() as unknown as RefreshPointerRow;
                   tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
                 }
@@ -318,6 +342,7 @@ export class FirestoreBackend implements StoreBackend {
 
           const upDoc = upstreamGrants.doc(fam.id);
           const upSnap = params.newUpstreamSealed ? await tx.get(upDoc) : null;
+
           if (oldRef.status === 'consumed') {
             const withinRetry = oldRef.consumedAt !== undefined && params.now - oldRef.consumedAt <= REFRESH_RETRY_WINDOW_MS;
             if (withinRetry && oldRef.successorSealed) {
@@ -328,13 +353,14 @@ export class FirestoreBackend implements StoreBackend {
                 successorSealed: oldRef.successorSealed,
               };
             }
-            // Late replay
+            // Late replay - read query before writing
+            const refQuerySnap = await tx.get(refreshTokens.where('familyId', '==', fam.id));
+            // Now writes
             tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
             if (fam.currentAccessTokenId) {
               tx.delete(sessions.doc(fam.currentAccessTokenId));
             }
             tx.delete(upstreamGrants.doc(fam.id));
-            const refQuerySnap = await refreshTokens.where('familyId', '==', fam.id).get();
             for (const doc of refQuerySnap.docs) {
               const data = doc.data() as unknown as RefreshPointerRow;
               tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
@@ -342,6 +368,10 @@ export class FirestoreBackend implements StoreBackend {
             return { status: 'replay', familyId: fam.id };
           }
 
+          // Active rotation path - read older consumed pointers before writing
+          const oldPastRef = await tx.get(refreshTokens.where('familyId', '==', fam.id));
+
+          // All reads finished. Now perform all writes.
           const nextGen = fam.generation + 1;
 
           // 1. Consume old refresh
@@ -352,8 +382,7 @@ export class FirestoreBackend implements StoreBackend {
             successorSealed: params.newSuccessorSealed,
           }));
 
-          // Prune older consumed pointers' successorSealed inside transaction
-          const oldPastRef = await refreshTokens.where('familyId', '==', fam.id).get();
+          // Prune older consumed pointers' successorSealed
           for (const doc of oldPastRef.docs) {
             const d = doc.data() as unknown as RefreshPointerRow;
             if (d && d.consumedAt && params.now - d.consumedAt > REFRESH_RETRY_WINDOW_MS && d.successorSealed) {
@@ -417,7 +446,7 @@ export class FirestoreBackend implements StoreBackend {
       async atomicRevokeFamily(familyId: string, condition?: RevokeCondition): Promise<'revoked' | 'stale' | 'missing'> {
         const famDoc = refreshFamilies.doc(familyId);
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
           const famSnap = await tx.get(famDoc);
           if (!famSnap.exists) return 'missing';
 
@@ -441,9 +470,9 @@ export class FirestoreBackend implements StoreBackend {
             }
           }
 
-          const refDoc = fam.activeRefreshId ? refreshTokens.doc(fam.activeRefreshId) : null;
-          const refSnap = refDoc ? await tx.get(refDoc) : null;
+          const refQuerySnap = await tx.get(refreshTokens.where('familyId', '==', familyId));
 
+          // All reads complete. Now writes.
           const now = Date.now();
           tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: now, generation: fam.generation + 1, updatedAt: now }));
 
@@ -451,7 +480,6 @@ export class FirestoreBackend implements StoreBackend {
             tx.delete(sessions.doc(fam.currentAccessTokenId));
           }
           tx.delete(upstreamGrants.doc(familyId));
-          const refQuerySnap = await refreshTokens.where('familyId', '==', familyId).get();
           for (const doc of refQuerySnap.docs) {
             const data = doc.data() as unknown as RefreshPointerRow;
             tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: now, successorSealed: undefined }));
@@ -501,10 +529,14 @@ export class FirestoreBackend implements StoreBackend {
         };
       },
       async putSession(row) {
-        await sessions.doc(row.id).set(defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) }));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(sessions.doc(row.id), defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) }));
+        });
       },
       async updateSession(id, mutate) {
         return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
           const ref = sessions.doc(id);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
@@ -552,11 +584,18 @@ export class FirestoreBackend implements StoreBackend {
           return next;
         });
       },
-      async deleteSession(id) { await sessions.doc(id).delete(); },
+      async deleteSession(id) {
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.delete(sessions.doc(id));
+        });
+      },
 
       async putAuthCode(row) {
-        await assertV3MutationAllowed();
-        await codes.doc(row.id).set(codeData(row));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(codes.doc(row.id), codeData(row));
+        });
       },
       async getAuthCode(id) {
         const snap = await codes.doc(id).get();
@@ -565,7 +604,7 @@ export class FirestoreBackend implements StoreBackend {
       async takeAuthCode(id) {
         const ref = codes.doc(id);
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as AuthCodeRow;
@@ -576,7 +615,7 @@ export class FirestoreBackend implements StoreBackend {
       async insertResumeIfAbsent(row, now) {
         const ref = resumes.doc(row.id);
         return db.runTransaction(async tx => {
-          await assertV3MutationAllowed(tx);
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (snap.exists && (snap.data() as unknown as ResumeRow).expiresAt > now) return false;
           tx.set(ref, resumeData(row));
@@ -589,6 +628,7 @@ export class FirestoreBackend implements StoreBackend {
         for (let attempt = 0; attempt < 15; attempt++) {
           try {
             await db.runTransaction(async tx => {
+              await assertV3ActiveInTransaction(tx);
               const snap = await tx.get(ref);
               const current = snap.exists ? (snap.data() as { count: number; lastUsed: number }) : { count: 0, lastUsed: now };
               tx.set(ref, { userHash, toolName, count: current.count + 1, lastUsed: now });
@@ -612,17 +652,25 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? snap.data() as OAuthClientInformationFull : undefined;
       },
       async putClient(client) {
-        await clients.doc(client.client_id).set(defined(client));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          tx.set(clients.doc(client.client_id), defined(client));
+        });
       },
       async sweep(now) {
-        const snap = await refreshTokens.where('status', '==', 'consumed').get();
-        for (const doc of snap.docs) {
-          const data = doc.data() as unknown as RefreshPointerRow;
-          if (data && typeof data.consumedAt === 'number' && now - data.consumedAt > REFRESH_RETRY_WINDOW_MS && data.successorSealed) {
-            await refreshTokens.doc(doc.id).set(defined({ ...data, successorSealed: undefined }));
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          const snap = await tx.get(refreshTokens.where('status', '==', 'consumed'));
+          let count = 0;
+          for (const doc of snap.docs) {
+            const data = doc.data() as unknown as RefreshPointerRow;
+            if (data && typeof data.consumedAt === 'number' && now - data.consumedAt > REFRESH_RETRY_WINDOW_MS && data.successorSealed) {
+              tx.set(refreshTokens.doc(doc.id), defined({ ...data, successorSealed: undefined }));
+              count++;
+            }
           }
-        }
-        return 0;
+          return count;
+        });
       },
       async close() { },
     };

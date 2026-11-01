@@ -3,7 +3,12 @@ import axios from 'axios';
 import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
 import { deriveStoreKey } from '../store/codec.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
-
+import {
+  initializeCutoverFence,
+  getCutoverFenceRecord,
+  transitionCutoverFenceState,
+} from '../auth/kit/cutover-fence.js';
+import { adoptFirestoreLegacyTokens } from '../store/firestore-v2-adoption.js';
 class MockFirestore implements FirestoreLike {
   private collections = new Map<string, Map<string, Record<string, unknown>>>();
 
@@ -24,8 +29,12 @@ class MockFirestore implements FirestoreLike {
           exists: col.has(id),
           data: () => col.get(id),
         }),
-        set: async (data: Record<string, unknown>) => {
-          col.set(id, data);
+        set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+          if (opts?.merge && col.has(id)) {
+            col.set(id, { ...col.get(id), ...data });
+          } else {
+            col.set(id, data);
+          }
         },
         delete: async () => {
           col.delete(id);
@@ -58,7 +67,7 @@ class MockFirestore implements FirestoreLike {
   async runTransaction<T>(cb: (tx: any) => Promise<T>): Promise<T> {
     const tx = {
       get: async (docRef: any) => docRef.get(),
-      set: (docRef: any, data: any) => docRef.set(data),
+      set: (docRef: any, data: any, opts?: { merge?: boolean }) => docRef.set(data, opts),
       delete: (docRef: any) => docRef.delete(),
     };
     return cb(tx);
@@ -121,7 +130,22 @@ describe('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant sha
     // 4. Access document in `${namespace}_tokens` is ABSENT (TTL-deleted)
     // db.collection(`${namespace}_tokens`).doc(legacyAccessToken) is NOT created!
 
-    // 5. Open v3 store
+    // 5. Initialize fence in fenced state, execute adoption, and transition to v3_active
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBe(0);
+    expect(report.migrated).toBe(1);
+
+    const ctrl = await getCutoverFenceRecord(db, namespace);
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: 1,
+      migrationRunId: ctrl!.migrationRunId!,
+      migrationManifestDigest: ctrl!.migrationManifestDigest!,
+    });
+
+    // Open v3 store
     const store = createFirestoreStore({ db, namespace, key });
 
     // 6. Verify lookupRefresh correctly resolves clientId and seatId from the active refresh pointer

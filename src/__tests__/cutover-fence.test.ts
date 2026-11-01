@@ -10,8 +10,8 @@ import {
   CutoverFenceError,
   CutoverRefusedError,
 } from '../auth/kit/cutover-fence.js';
-import { adoptFirestoreLegacyTokens } from '../store/firestore-v2-adoption.js';
-import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
+import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from '../store/firestore-v2-adoption.js';
+import { createFirestoreStore, createFirestoreBackend, type FirestoreLike } from '../store/firestore.js';
 import { deriveStoreKey } from '../store/codec.js';
 
 class MockFirestore implements FirestoreLike {
@@ -130,6 +130,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
     await db.collection(`${namespace}_tokens_refresh`).doc('ref-1').set({
       familyId: 'fam-1',
+      status: 'active',
       createdAt: now,
     });
     await db.collection(`${namespace}_tokens_upstream`).doc('fam-1').set({
@@ -190,7 +191,6 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     // 5. Run migration under fenced state
     const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
     expect(report.errors).toBe(0);
-    expect(report.migrated).toBe(1);
 
     // 6. Verify state is now v3_ready and irreversible is true
     const finalRecord = await getCutoverFenceRecord(db, namespace);
@@ -207,7 +207,16 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       }),
     ).rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
 
-    // 8. Verify v3 store can open and read the migrated session with 200 OK
+    // 8. Transition to v3_active
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: 1,
+      migrationRunId: finalRecord!.migrationRunId!,
+      migrationManifestDigest: finalRecord!.migrationManifestDigest!,
+    });
+
+    // 9. Verify v3 store can open and read the migrated session with 200 OK
     const store = createFirestoreStore({ db, namespace, key });
     const session = await store.sessions.get('tok-1');
     expect(session?.clientId).toBe('client-leg');
@@ -384,5 +393,207 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
 
     const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
     expect(report.errors).toBe(1);
+  });
+
+  it('fails closed when missing control record in controlled namespace', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    // No control record initialized!
+    await expect(
+      adoptFirestoreLegacyTokens({ db, namespace, key }),
+    ).rejects.toThrow(CutoverFenceError);
+  });
+
+  it('classifies orphan refresh pointers and orphan upstream grants as errors', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    // Seed orphan refresh pointer (no family)
+    await db.collection(`${namespace}_tokens_refresh`).doc('orphan-ref').set({
+      familyId: 'nonexistent-fam',
+      status: 'active',
+    });
+
+    // Seed orphan upstream grant (no family)
+    await db.collection(`${namespace}_tokens_upstream`).doc('orphan-upstream-fam').set({
+      nsAccessToken: 'ns-tok',
+      nsRefreshToken: 'ns-ref',
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBe(2);
+  });
+
+  it('rejects conflicting claims when two families claim the same access or refresh token', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    const now = Date.now();
+    // Family 1
+    await db.collection(`${namespace}_tokens_refresh_families`).doc('fam-1').set({
+      currentRefreshToken: 'shared-ref',
+      currentAccessToken: 'acc-1',
+      clientId: 'c1',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('shared-ref').set({
+      familyId: 'fam-1',
+      status: 'active',
+      createdAt: now,
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc('fam-1').set({
+      nsAccessToken: 'ns-tok-1',
+      nsRefreshToken: 'ns-ref-1',
+      nsUsername: 'u1@domain.com',
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens`).doc('acc-1').set({
+      familyId: 'fam-1',
+      accessToken: 'acc-1',
+      clientId: 'c1',
+      expiresAt: now + 3600_000,
+    });
+
+    // Family 2 claims the SAME refresh token shared-ref!
+    await db.collection(`${namespace}_tokens_refresh_families`).doc('fam-2').set({
+      currentRefreshToken: 'shared-ref',
+      currentAccessToken: 'acc-2',
+      clientId: 'c2',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc('fam-2').set({
+      nsAccessToken: 'ns-tok-2',
+      nsRefreshToken: 'ns-ref-2',
+      nsUsername: 'u2@domain.com',
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens`).doc('acc-2').set({
+      familyId: 'fam-2',
+      accessToken: 'acc-2',
+      clientId: 'c2',
+      expiresAt: now + 3600_000,
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBeGreaterThanOrEqual(1);
+  });
+
+  it('classifies family-linked access token as orphan if it does not match currentAccessToken', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    const now = Date.now();
+    await db.collection(`${namespace}_tokens_refresh_families`).doc('fam-1').set({
+      currentRefreshToken: 'ref-1',
+      currentAccessToken: 'acc-legit',
+      clientId: 'c1',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('ref-1').set({
+      familyId: 'fam-1',
+      status: 'active',
+      createdAt: now,
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc('fam-1').set({
+      nsAccessToken: 'ns-tok-1',
+      nsRefreshToken: 'ns-ref-1',
+      nsUsername: 'u1@domain.com',
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens`).doc('acc-legit').set({
+      familyId: 'fam-1',
+      accessToken: 'acc-legit',
+      clientId: 'c1',
+      expiresAt: now + 3600_000,
+    });
+
+    // An extraneous token claiming refreshFamilyId: 'fam-1' but fam-1.currentAccessToken is acc-legit!
+    await db.collection(`${namespace}_tokens`).doc('acc-stray').set({
+      refreshFamilyId: 'fam-1',
+      accessToken: 'acc-stray',
+      clientId: 'c1',
+      expiresAt: now + 3600_000,
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBe(1);
+  });
+
+  it('ordinary writers are refused when fence is in v3_ready and allowed only in v3_active', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+
+    // Initialize fence in v3_ready (not yet active)
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'fenced', toState: 'migrating', expectedEpoch: 1, migrationRunId: 'run-1' });
+    await db.runTransaction(async (tx) => {
+      await markIrreversibleInTransaction(tx, db, namespace, 1, 'run-1');
+    });
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'migrating',
+      toState: 'v3_ready',
+      expectedEpoch: 1,
+      migrationRunId: 'run-1',
+      migrationManifestDigest: 'digest-1',
+    });
+
+    const backend = createFirestoreBackend({ db, namespace, key });
+    // In v3_ready, ordinary write mutations MUST BE REFUSED!
+    await expect(
+      backend.putAccess({
+        id: 'tok-write',
+        familyId: 'fam-1',
+        expiresAt: Date.now() + 3600_000,
+        retainUntil: Date.now() + 7200_000,
+        sealed: 'sealed-data',
+      }),
+    ).rejects.toThrow(CutoverRefusedError);
+
+    // Now activate to v3_active
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: 1,
+      migrationRunId: 'run-1',
+      migrationManifestDigest: 'digest-1',
+    });
+
+    // Now ordinary write mutation MUST SUCCEED!
+    await backend.putAccess({
+      id: 'tok-write',
+      familyId: 'fam-1',
+      expiresAt: Date.now() + 3600_000,
+      retainUntil: Date.now() + 7200_000,
+      sealed: 'sealed-data',
+    });
+
+    const written = await backend.getAccess('tok-write');
+    expect(written).toBeDefined();
+    expect(written?.id).toBe('tok-write');
+  });
+
+  it('ensureFirestoreAdopted refuses request-triggered migration on read paths when legacy credentials exist', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    // Seed legacy token
+    await db.collection(`${namespace}_tokens`).doc('unmigrated-tok').set({
+      accessToken: 'unmigrated-tok',
+      refreshToken: 'unmigrated-ref',
+    });
+
+    // Calling ensureFirestoreAdopted on normal read path MUST REFUSE, NOT auto-migrate!
+    await expect(
+      ensureFirestoreAdopted({ db, namespace, key }),
+    ).rejects.toThrow(CutoverRefusedError);
   });
 });

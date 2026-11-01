@@ -196,13 +196,17 @@ describe.skipIf(!host)('Firestore emulator', () => {
    nsRefreshToken: 'pr56-ns-ref',
    nsUsername: 'user@pr56.com',
   });
+  await db.collection(`${ns}_tokens_refresh`).doc('pr56-ref').set({
+   familyId: famId,
+   status: 'active',
+  });
   await db.collection(`${ns}_tokens`).doc('pr56-acc').set({
    accessToken: 'pr56-acc',
    refreshToken: 'pr56-ref',
+   refreshFamilyId: famId,
    expiresAt: Date.now() + 3600_000,
    clientId: 'pr56-client',
   });
-
   await db.collection(`${ns}_tokens`).doc('legacy-acc-2').set({
    accessToken: 'legacy-acc-2',
    refreshToken: 'legacy-ref-2',
