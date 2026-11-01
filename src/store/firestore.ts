@@ -1,5 +1,11 @@
+import {
+  type CutoverFenceControlRecord,
+  getCutoverFenceDocRef,
+  isSupportedCutoverNamespace,
+  CutoverRefusedError,
+} from '../auth/kit/cutover-fence.js';
 import type { AtomicIssueParams } from './types.js';
-import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted, adoptSingleLegacyToken, adoptSingleLegacyFamily } from './firestore-v2-adoption.js';
+import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -171,105 +177,55 @@ export class FirestoreBackend implements StoreBackend {
       return adoptionPromise;
     };
 
+    const assertV3MutationAllowed = async (tx?: any) => {
+      if (!isSupportedCutoverNamespace(namespace)) return;
+      const controlRef = getCutoverFenceDocRef(db, namespace);
+      const snap = tx ? await tx.get(controlRef) : await controlRef.get();
+      if (snap && snap.exists) {
+        const control = snap.data() as CutoverFenceControlRecord;
+        if (control.state !== 'v3_ready' && control.state !== 'v3_active') {
+          throw new CutoverRefusedError(
+            `Cutover state is ${control.state}; v3 mutations not permitted for namespace ${namespace}`,
+            { cutoverState: control.state, epoch: control.epoch },
+          );
+        }
+      }
+    };
+
     const backend: StoreBackend = {
       name: 'firestore',
       capabilities: this.capabilities,
 
-      async getAccess(id: string, rawToken?: string) {
+      async getAccess(id: string) {
         await ensureAdopted();
-        let snap = await sessions.doc(id).get();
-        if (snap.exists) {
-          return { ...snap.data(), id } as unknown as AccessRow;
-        }
-
-        // Old-writer drain fence: check if an old 2.x instance wrote this exact token
-        // to legacy collection during rolling cutover.
-        if (rawToken && key) {
-          const legacyDocId = rawToken.replace(/[\/.]/g, '_');
-          const legacySnap = await db.collection(`${namespace}_tokens`).doc(legacyDocId).get();
-          if (legacySnap.exists) {
-            const tokData = legacySnap.data();
-            if (tokData && tokData.refreshToken) {
-              await adoptSingleLegacyToken({
-                db,
-                namespace,
-                key,
-                accessToken: rawToken,
-                tokData,
-              });
-              snap = await sessions.doc(id).get();
-              if (snap.exists) {
-                return { ...snap.data(), id } as unknown as AccessRow;
-              }
-            }
-          }
-        }
-        return undefined;
+        const snap = await sessions.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
       },
       async putAccess(row) {
+        await assertV3MutationAllowed();
         await sessions.doc(row.id).set(accessData(row));
       },
       async deleteAccess(id) {
+        await assertV3MutationAllowed();
         await sessions.doc(id).delete();
       },
 
-      async getRefresh(id: string, rawRefreshToken?: string) {
+      async getRefresh(id: string) {
         await ensureAdopted();
-        let snap = await refreshTokens.doc(id).get();
-        if (snap.exists) {
-          return { ...snap.data(), id } as unknown as RefreshPointerRow;
-        }
-
-        // Old-writer drain fence: check if an old 2.x instance wrote this refresh token
-        // to legacy collection during rolling cutover.
-        if (rawRefreshToken && key) {
-          const legacyDocId = rawRefreshToken.replace(/[\/.]/g, '_');
-          const legacyRefSnap = await db.collection(`${namespace}_tokens_refresh`).doc(legacyDocId).get();
-          if (legacyRefSnap.exists) {
-            const refData = legacyRefSnap.data();
-            const familyId = refData?.familyId as string | undefined;
-            if (familyId) {
-              await adoptSingleLegacyFamily({
-                db,
-                namespace,
-                key,
-                familyId,
-              });
-              snap = await refreshTokens.doc(id).get();
-              if (snap.exists) {
-                return { ...snap.data(), id } as unknown as RefreshPointerRow;
-              }
-            } else if (refData?.accessToken) {
-              const legacyTokSnap = await db.collection(`${namespace}_tokens`).doc(String(refData.accessToken).replace(/[\/.]/g, '_')).get();
-              if (legacyTokSnap.exists) {
-                const tokData = legacyTokSnap.data();
-                if (tokData) {
-                  await adoptSingleLegacyToken({
-                    db,
-                    namespace,
-                    key,
-                    accessToken: String(refData.accessToken),
-                    tokData,
-                  });
-                  snap = await refreshTokens.doc(id).get();
-                  if (snap.exists) {
-                    return { ...snap.data(), id } as unknown as RefreshPointerRow;
-                  }
-                }
-              }
-            }
-          }
-        }
-        return undefined;
+        const snap = await refreshTokens.doc(id).get();
+        return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
       },
       async putRefresh(row) {
+        await assertV3MutationAllowed();
         await refreshTokens.doc(row.id).set(refreshData(row));
       },
       async deleteRefresh(id) {
+        await assertV3MutationAllowed();
         await refreshTokens.doc(id).delete();
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           tx.set(sessions.doc(params.accessRow.id), accessData(params.accessRow));
           tx.set(refreshTokens.doc(params.refreshRow.id), refreshData(params.refreshRow));
           tx.set(refreshFamilies.doc(params.familyRow.id), familyData(params.familyRow));
@@ -283,6 +239,7 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as FamilyRow) : undefined;
       },
       async putFamily(row) {
+        await assertV3MutationAllowed();
         await refreshFamilies.doc(row.id).set(familyData(row));
       },
 
@@ -292,11 +249,13 @@ export class FirestoreBackend implements StoreBackend {
         return snap.exists ? ({ ...snap.data(), id } as unknown as UpstreamGrantRow) : undefined;
       },
       async putUpstream(row) {
+        await assertV3MutationAllowed();
         await upstreamGrants.doc(row.id).set(upstreamData(row));
       },
       async updateUpstream(id, mutate) {
         const ref = upstreamGrants.doc(id);
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as UpstreamGrantRow;
@@ -321,6 +280,7 @@ export class FirestoreBackend implements StoreBackend {
       async atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult> {
         const oldRefDoc = refreshTokens.doc(params.oldRefreshId);
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           const oldSnap = await tx.get(oldRefDoc);
           if (!oldSnap.exists) {
             let retiredDoc = await tx.get(retiredTokens.doc(params.oldRefreshId));
@@ -456,6 +416,7 @@ export class FirestoreBackend implements StoreBackend {
       async atomicRevokeFamily(familyId: string, condition?: RevokeCondition): Promise<'revoked' | 'stale' | 'missing'> {
         const famDoc = refreshFamilies.doc(familyId);
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           const famSnap = await tx.get(famDoc);
           if (!famSnap.exists) return 'missing';
 
@@ -592,7 +553,10 @@ export class FirestoreBackend implements StoreBackend {
       },
       async deleteSession(id) { await sessions.doc(id).delete(); },
 
-      async putAuthCode(row) { await codes.doc(row.id).set(codeData(row)); },
+      async putAuthCode(row) {
+        await assertV3MutationAllowed();
+        await codes.doc(row.id).set(codeData(row));
+      },
       async getAuthCode(id) {
         const snap = await codes.doc(id).get();
         return snap.exists ? { ...snap.data(), id } as AuthCodeRow : undefined;
@@ -600,6 +564,7 @@ export class FirestoreBackend implements StoreBackend {
       async takeAuthCode(id) {
         const ref = codes.doc(id);
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as AuthCodeRow;
@@ -610,6 +575,7 @@ export class FirestoreBackend implements StoreBackend {
       async insertResumeIfAbsent(row, now) {
         const ref = resumes.doc(row.id);
         return db.runTransaction(async tx => {
+          await assertV3MutationAllowed(tx);
           const snap = await tx.get(ref);
           if (snap.exists && (snap.data() as unknown as ResumeRow).expiresAt > now) return false;
           tx.set(ref, resumeData(row));
@@ -674,12 +640,19 @@ export function createFirestoreStore(options: { db: FirestoreLike; namespace: st
 export {
   adoptFirestoreLegacyTokens,
   ensureFirestoreAdopted,
-  adoptSingleLegacyToken,
-  adoptSingleLegacyFamily,
-  checkCutoverFence,
-  engageCutoverFence,
-  releaseCutoverFence,
-  assertLegacyWritePermitted,
-  CutoverFencedError,
-  type CutoverFenceDoc,
+  type FirestoreAdoptionReport,
+  type MigrationManifest,
+  type CutoverFenceControlRecord,
+  type CutoverFenceState,
+  getCutoverFenceRecord,
+  initializeCutoverFence,
+  transitionCutoverFenceState,
+  markIrreversibleInTransaction,
+  withLegacyOperation,
+  releaseLegacyOperation,
+  markOperationAmbiguous,
+  checkMutationGuardInTransaction,
+  isLegacyMutationPermittedInTransaction,
+  CutoverFenceError,
+  CutoverRefusedError,
 } from './firestore-v2-adoption.js';
