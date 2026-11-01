@@ -99,6 +99,20 @@ describe('HTTP 503 Transients & Permanence Middlewares', () => {
     expect(res.headers['retry-after']).toBe('5');
     expect(res.body.error).toBe('temporarily_unavailable');
   });
+  it('/mcp sends 503 Retry-After: 5 on raw plain Error (e.g. Firestore connection lost)', async () => {
+    const { app, store, tokens } = await buildTestApp();
+    vi.spyOn(store.sessions, 'get').mockRejectedValueOnce(new Error('Firestore connection lost'));
+
+    const res = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${tokens.accessToken}`)
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+    expect(res.status).toBe(503);
+    expect(res.headers['retry-after']).toBe('5');
+    expect(res.body.error).toBe('temporarily_unavailable');
+  });
+
 
   it('/mcp sends 503 Retry-After: 5 when onVerify hook encounters an operational error', async () => {
     const { app, tokens } = await buildTestApp(true); // hook throws operational error

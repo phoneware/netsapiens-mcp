@@ -19,7 +19,7 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
-import { ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
@@ -490,23 +490,18 @@ function wireApp(
     (req as AuthenticatedRequest).auth = authInfo;
     return next();
    } catch (err: unknown) {
-    if (
-     err instanceof StoreConfigError ||
-     err instanceof StoreLockedError ||
-     err instanceof RetryableRefreshError ||
-     err instanceof LeaseLostError ||
-     err instanceof UpstreamUnavailableError ||
-     err instanceof UpstreamTimeoutError ||
-     (err instanceof ServerError && /temporarily unavailable/i.test(err.message))
-    ) {
-     res.setHeader('Retry-After', '5');
-     res.status(503).json({
-      error: 'temporarily_unavailable',
-      error_description: 'Service temporarily unavailable, please retry',
-     });
-     return;
+    if (err instanceof InvalidTokenError) {
+     return bearerAuth(req, res, next);
     }
-    return bearerAuth(req, res, next);
+    logger.warn('MCP bearer verification failed with operational/store error', {
+     error: err instanceof Error ? err.message : String(err),
+    });
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({
+     error: 'temporarily_unavailable',
+     error_description: 'Service temporarily unavailable, please retry',
+    });
+    return;
    }
   }
   return bearerAuth(req, res, next);

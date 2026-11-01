@@ -1173,9 +1173,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      familyId: session.refreshFamilyId,
      error: err instanceof Error ? err.message : String(err),
     });
-    if (session.refreshFamilyId) {
-     await this.store.sessions.revokeFamily(session.refreshFamilyId);
-    }
    }
    return undefined;
   }

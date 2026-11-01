@@ -38,7 +38,23 @@ function makeApp(provider: NetSapiensAuthProvider) {
   const app = express();
   app.use(express.json());
   const resourceMetadataUrl = new URL('http://localhost:3000/.well-known/oauth-protected-resource');
-  app.use('/mcp', requireBearerAuth({ verifier: provider, resourceMetadataUrl }));
+  const bearerAuth = requireBearerAuth({ verifier: provider, resourceMetadataUrl });
+  app.use('/mcp', async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+      const token = authHeader.slice(7).trim();
+      try {
+        await provider.verifyAccessToken(token);
+      } catch (err: unknown) {
+        if (!(err instanceof InvalidTokenError)) {
+          res.setHeader('Retry-After', '5');
+          res.status(503).json({ error: 'temporarily_unavailable' });
+          return;
+        }
+      }
+    }
+    return bearerAuth(req, res, next);
+  });
   app.post('/mcp', (_req, res) => {
     res.json({ ok: true });
   });
@@ -91,14 +107,15 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
       expect(authHeader).toContain('Bearer error="invalid_token", error_description="Invalid access token"');
     });
 
-    it('C1.5: store error in sessions.get propagates as 500, never 401', async () => {
+    it('C1.5: store error in sessions.get propagates as 503, never 401', async () => {
       vi.spyOn(store.sessions, 'get').mockRejectedValueOnce(new Error('Underlying store failure'));
 
       const res = await request(app)
         .post('/mcp')
         .set('Authorization', 'Bearer some-token');
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
       expect(res.headers['www-authenticate']).toBeUndefined();
     });
 
@@ -171,7 +188,7 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
       expect(res.headers['www-authenticate']).toContain('Bearer error="invalid_token", error_description="Invalid access token"');
     });
 
-    it('C1.4: RetryableRefreshError during refresh returns 500', async () => {
+    it('C1.4: RetryableRefreshError during refresh returns 503', async () => {
       const token = 'retryable-bearer';
       const stored: StoredToken = {
         clientId: 'cid',
@@ -190,13 +207,14 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         .post('/mcp')
         .set('Authorization', `Bearer ${token}`);
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
       expect(res.headers['www-authenticate']).toBeUndefined();
       // Token was NOT deleted on retryable error
       expect(await store.sessions.get(token)).toBeDefined();
     });
 
-    it('C1.4: LeaseLostError during refresh returns 500', async () => {
+    it('C1.4: LeaseLostError during refresh returns 503', async () => {
       const token = 'leaselost-bearer';
       const stored: StoredToken = {
         clientId: 'cid',
@@ -215,7 +233,8 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         .post('/mcp')
         .set('Authorization', `Bearer ${token}`);
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
       expect(res.headers['www-authenticate']).toBeUndefined();
       expect(await store.sessions.get(token)).toBeDefined();
     });

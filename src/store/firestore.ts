@@ -1,5 +1,5 @@
 import type { AtomicIssueParams } from './types.js';
-import { adoptFirestoreLegacyTokens } from './firestore-v2-adoption.js';
+import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -153,16 +153,25 @@ export class FirestoreBackend implements StoreBackend {
     const codeData = ({ id: _id, ...row }: AuthCodeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
     const resumeData = ({ id: _id, ...row }: ResumeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
 
+    let adoptionPromise: Promise<void> | null = null;
+    const ensureAdopted = async () => {
+      if (!key) return;
+      if (!adoptionPromise) {
+        adoptionPromise = ensureFirestoreAdopted({ db, namespace, key }).catch((err) => {
+          adoptionPromise = null;
+          throw err;
+        });
+      }
+      return adoptionPromise;
+    };
+
     const backend: StoreBackend = {
       name: 'firestore',
       capabilities: this.capabilities,
 
       async getAccess(id) {
-        let snap = await sessions.doc(id).get();
-        if (!snap.exists && key) {
-          await adoptFirestoreLegacyTokens({ db, namespace, key }).catch(() => {});
-          snap = await sessions.doc(id).get();
-        }
+        await ensureAdopted();
+        const snap = await sessions.doc(id).get();
         return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
       },
       async putAccess(row) {
@@ -173,11 +182,8 @@ export class FirestoreBackend implements StoreBackend {
       },
 
       async getRefresh(id) {
-        let snap = await refreshTokens.doc(id).get();
-        if (!snap.exists && key) {
-          await adoptFirestoreLegacyTokens({ db, namespace, key }).catch(() => {});
-          snap = await refreshTokens.doc(id).get();
-        }
+        await ensureAdopted();
+        const snap = await refreshTokens.doc(id).get();
         return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
       },
       async putRefresh(row) {
@@ -196,6 +202,7 @@ export class FirestoreBackend implements StoreBackend {
       },
 
       async getFamily(id) {
+        await ensureAdopted();
         const snap = await refreshFamilies.doc(id).get();
         return snap.exists ? ({ ...snap.data(), id } as unknown as FamilyRow) : undefined;
       },
@@ -204,6 +211,7 @@ export class FirestoreBackend implements StoreBackend {
       },
 
       async getUpstream(id) {
+        await ensureAdopted();
         const snap = await upstreamGrants.doc(id).get();
         return snap.exists ? ({ ...snap.data(), id } as unknown as UpstreamGrantRow) : undefined;
       },
@@ -346,14 +354,10 @@ export class FirestoreBackend implements StoreBackend {
             tx.delete(sessions.doc(fam.currentAccessTokenId));
           }
           tx.delete(upstreamGrants.doc(familyId));
-
-          if (refDoc && refSnap && refSnap.exists) {
-            tx.set(refDoc, refreshData({
-              ...(refSnap.data() as unknown as RefreshPointerRow),
-              status: 'consumed',
-              consumedAt: now,
-              successorSealed: undefined,
-            }));
+          const refQuerySnap = await refreshTokens.where('familyId', '==', familyId).get();
+          for (const doc of refQuerySnap.docs) {
+            const data = doc.data() as unknown as RefreshPointerRow;
+            tx.set(doc.ref, refreshData({ ...data, status: 'consumed', consumedAt: now, successorSealed: undefined }));
           }
           return 'revoked';
         });
@@ -508,7 +512,16 @@ export class FirestoreBackend implements StoreBackend {
       async putClient(client) {
         await clients.doc(client.client_id).set(defined(client));
       },
-      async sweep() { return 0; },
+      async sweep(now) {
+        const snap = await refreshTokens.where('status', '==', 'consumed').get();
+        for (const doc of snap.docs) {
+          const data = doc.data() as unknown as RefreshPointerRow;
+          if (data && typeof data.consumedAt === 'number' && now - data.consumedAt > REFRESH_RETRY_WINDOW_MS && data.successorSealed) {
+            await doc.ref.set(defined({ ...data, successorSealed: undefined }));
+          }
+        }
+        return 0;
+      },
       async close() { },
     };
 
@@ -523,3 +536,4 @@ export function createFirestoreBackend(options: { db: FirestoreLike; namespace: 
 export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array }): McpStore {
   return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
 }
+export { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';

@@ -151,6 +151,7 @@ export class SqliteBackend implements StoreBackend {
       n += Number(db.prepare('DELETE FROM sessions WHERE retain_until <= ?').run(now).changes);
       n += Number(db.prepare('DELETE FROM auth_codes WHERE expires_at <= ?').run(now).changes);
       n += Number(db.prepare('DELETE FROM resume_tokens WHERE expires_at <= ?').run(now).changes);
+      db.prepare('UPDATE refresh_tokens SET successor_sealed=NULL WHERE consumed_at IS NOT NULL AND consumed_at <= ? AND successor_sealed IS NOT NULL').run(now - REFRESH_RETRY_WINDOW_MS);
       return n;
     });
 
@@ -334,11 +335,22 @@ export class SqliteBackend implements StoreBackend {
           .run(row.id, row.grantVersion, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.updatedAt, row.sealed);
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
-        return transaction(() => {
-          backend.putAccess(params.accessRow);
-          backend.putRefresh(params.refreshRow);
-          backend.putFamily(params.familyRow);
-          backend.putUpstream(params.upstreamRow);
+        transaction(() => {
+          db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,sealed=excluded.sealed`)
+            .run(params.accessRow.id, params.accessRow.familyId, params.accessRow.expiresAt, params.accessRow.retainUntil, params.accessRow.sealed);
+
+          db.prepare(`INSERT INTO refresh_tokens(id,family_id,status,generation,consumed_at,successor_sealed) VALUES (?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,status=excluded.status,generation=excluded.generation,consumed_at=excluded.consumed_at,successor_sealed=excluded.successor_sealed`)
+            .run(params.refreshRow.id, params.refreshRow.familyId, params.refreshRow.status, params.refreshRow.generation, params.refreshRow.consumedAt ?? null, params.refreshRow.successorSealed ?? null);
+
+          db.prepare(`INSERT INTO refresh_families(id,generation,status,active_refresh_id,current_access_token_id,revoked_at,updated_at,sealed) VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,status=excluded.status,active_refresh_id=excluded.active_refresh_id,current_access_token_id=excluded.current_access_token_id,revoked_at=excluded.revoked_at,updated_at=excluded.updated_at,sealed=excluded.sealed`)
+            .run(params.familyRow.id, params.familyRow.generation, params.familyRow.status, params.familyRow.activeRefreshId, params.familyRow.currentAccessTokenId, params.familyRow.revokedAt ?? null, params.familyRow.updatedAt, params.familyRow.sealed);
+
+          db.prepare(`INSERT INTO upstream_grants(id,grant_version,ns_expires_at,lease_owner,lease_until,updated_at,sealed) VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET grant_version=excluded.grant_version,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,updated_at=excluded.updated_at,sealed=excluded.sealed`)
+            .run(params.upstreamRow.id, params.upstreamRow.grantVersion, params.upstreamRow.nsExpiresAt ?? null, params.upstreamRow.leaseOwner ?? null, params.upstreamRow.leaseUntil ?? null, params.upstreamRow.updatedAt, params.upstreamRow.sealed);
         });
       },
 
@@ -405,7 +417,8 @@ export class SqliteBackend implements StoreBackend {
           // Consume old refresh
           db.prepare("UPDATE refresh_tokens SET status='consumed', consumed_at=?, successor_sealed=? WHERE id=?")
             .run(params.now, params.newSuccessorSealed, params.oldRefreshId);
-
+          db.prepare('UPDATE refresh_tokens SET successor_sealed=NULL WHERE family_id=? AND consumed_at IS NOT NULL AND consumed_at <= ? AND successor_sealed IS NOT NULL')
+            .run(fam.id, params.now - REFRESH_RETRY_WINDOW_MS);
           if (params.retiredFingerprint) {
             db.prepare('INSERT OR REPLACE INTO retired_refresh_tokens(refresh_id, family_id) VALUES (?,?)')
               .run(params.retiredFingerprint, fam.id);

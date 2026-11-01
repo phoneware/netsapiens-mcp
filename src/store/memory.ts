@@ -108,6 +108,12 @@ export class MemoryBackend implements StoreBackend {
     if (family.currentAccessTokenId) {
       this.state.access.delete(family.currentAccessTokenId);
     }
+    for (const row of this.state.refresh.values()) {
+      if (row.familyId === family.id && row.consumedAt && params.now - row.consumedAt > REFRESH_RETRY_WINDOW_MS) {
+        row.successorSealed = undefined;
+      }
+    }
+
 
     this.state.access.set(params.newAccessRow.id, {
       ...params.newAccessRow,
@@ -170,11 +176,12 @@ export class MemoryBackend implements StoreBackend {
     }
     this.state.upstream.delete(familyId);
 
-    const activeRef = this.state.refresh.get(family.activeRefreshId);
-    if (activeRef) {
-      activeRef.status = 'consumed';
-      activeRef.consumedAt = Date.now();
-      activeRef.successorSealed = undefined;
+    for (const row of this.state.refresh.values()) {
+      if (row.familyId === familyId) {
+        row.status = 'consumed';
+        row.consumedAt = Date.now();
+        row.successorSealed = undefined;
+      }
     }
     return 'revoked';
   }
@@ -235,6 +242,11 @@ export class MemoryBackend implements StoreBackend {
       if (row.retainUntil <= now) {
         this.state.sessions.delete(id);
         count++;
+      }
+    }
+    for (const row of this.state.refresh.values()) {
+      if (row.consumedAt && now - row.consumedAt > REFRESH_RETRY_WINDOW_MS && row.successorSealed) {
+        row.successorSealed = undefined;
       }
     }
     return count;
