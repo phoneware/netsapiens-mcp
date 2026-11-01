@@ -817,12 +817,12 @@ async function main() {
             const sampleKey = keys46Only[0];
             const callRes = await sendMcpRequest(serverPort, token44.accessToken, 'tools/call', {
               name: 'call_api',
-              arguments: { key: sampleKey },
+              arguments: { tool_name: 'get_health_status_api', args: {} },
             });
 
             // Refusal must occur
             if (callRes.status === 200 && !callRes.json?.error && !callRes.json?.result?.isError) {
-              fail('version', 'refusal-of-46-only-tool', `call_api for 46-only key unexpectedly succeeded on 44.4.10`);
+              fail('version', 'refusal-of-46-only-tool', `call_api for 46-only tool unexpectedly succeeded on 44.4.10`);
             }
             const postReqCount = fake44.requests.length;
             if (postReqCount !== initialReqCount) {
