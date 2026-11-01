@@ -1,3 +1,4 @@
+// @ts-ignore TS2823: Node 24 runtime supports import attributes with { type: 'json' }
 import defaultAvailability from '../generated/availability.json' with { type: 'json' };
 import type { VersionInfo } from './version.js';
 

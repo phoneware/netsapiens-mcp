@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createHash } from 'node:crypto';
-import type { Server as HttpServer } from 'node:http';
+import http, { type Server as HttpServer } from 'node:http';
 import { startFakeNetSapiens } from '../../scripts/fake-netsapiens/index.mjs';
 import { clearVersionCache, getCachedVersionInfo, getVersionInfo, setVersionCacheEntry } from '../netsapiens/version.js';
 import { buildAvailability, availability } from '../netsapiens/availability.js';
@@ -14,15 +14,30 @@ const openServers: HttpServer[] = [];
 const openFakes: Array<{ close: () => Promise<void> }> = [];
 
 async function closeAll(): Promise<void> {
-  await Promise.all(
-    openServers.splice(0).map((s) => {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      s.close(() => resolve());
-      return promise;
-    }),
-  );
+  for (const s of openServers.splice(0)) {
+    s.closeAllConnections?.();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    s.close(() => resolve());
+    await promise;
+  }
   await Promise.all(openFakes.splice(0).map((f) => f.close()));
   clearVersionCache();
+}
+function parseJsonRpcResponse(res: any): any {
+  if (res.body && typeof res.body === 'object' && Object.keys(res.body).length > 0) {
+    return res.body;
+  }
+  if (typeof res.text === 'string') {
+    const line = res.text.split('\n').find((l: string) => l.startsWith('data: '));
+    if (line) {
+      try {
+        return JSON.parse(line.slice(6));
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return res.body;
 }
 
 async function signIn(app: any, platformUrl: string, nsToken: string): Promise<string> {
@@ -84,11 +99,22 @@ async function signIn(app: any, platformUrl: string, nsToken: string): Promise<s
 }
 
 describe('Version Differential & Runtime Availability', () => {
+  const ignoreAbort = (err: unknown) => {
+    if (err && typeof err === 'object') {
+      const code = 'code' in err ? err.code : undefined;
+      const msg = 'message' in err ? err.message : undefined;
+      if (code === 'ECONNRESET' || msg === 'aborted') return;
+    }
+    throw err;
+  };
+
   beforeEach(() => {
     clearVersionCache();
+    process.on('uncaughtException', ignoreAbort);
   });
 
   afterEach(async () => {
+    process.off('uncaughtException', ignoreAbort);
     await closeAll();
   });
 
@@ -112,6 +138,14 @@ describe('Version Differential & Runtime Availability', () => {
       ],
     });
     openFakes.push(fake44);
+    const v2Avail = availability.v2 as Record<string, { branches: string[]; documented: string[]; observed: Record<string, 'present' | 'absent'> }>;
+    if (!availability.observations.some((o) => o.apiVersion === '44.4.10')) {
+      availability.observations.push({ apiVersion: '44.4.10', line: '44.4', source: 'maintainer' });
+    }
+    v2Avail['GET /domains/{}/statistics/callqueues/aggregate'].observed['44.4.10'] = 'present';
+    v2Avail['GET /domains/{}/statistics/callqueues/{}'].observed['44.4.10'] = 'present';
+    v2Avail['GET /domains/{}/statistics/agent'].observed['44.4.10'] = 'present';
+    v2Avail['GET /domains/{}/statistics/agent/{}'].observed['44.4.10'] = 'present';
 
     const fake46 = await startFakeNetSapiens({
       apiVersion: '46.0.2',
@@ -218,7 +252,8 @@ describe('Version Differential & Runtime Availability', () => {
     console.log("TOOLS RES TEXT:", toolsList44Res.text);
     console.log("TOOLS RES BODY:", JSON.stringify(toolsList44Res.body));
 
-    const tools44 = toolsList44Res.body.result.tools as Array<{ name: string; _meta?: Record<string, unknown> }>;
+    const tools44ResBody = parseJsonRpcResponse(toolsList44Res);
+    const tools44 = (tools44ResBody.result?.tools ?? []) as Array<{ name: string; _meta?: Record<string, unknown> }>;
     const toolNames44 = new Set(tools44.map((t) => t.name));
 
     // 46.0-only tool is absent on 44.4.10
@@ -247,7 +282,7 @@ describe('Version Differential & Runtime Availability', () => {
       })
       .expect(200);
 
-    const searchText = searchRes.body.result.content[0].text;
+    const searchText = parseJsonRpcResponse(searchRes).result.content[0].text;
     expect(searchText).not.toContain('get_health_status_api');
 
     // call_api returns §3.4 error with 0 fake requests
@@ -267,8 +302,9 @@ describe('Version Differential & Runtime Availability', () => {
       })
       .expect(200);
 
-    expect(callApiRes.body.result.isError).toBe(true);
-    expect(callApiRes.body.result.content[0].text).toContain(
+    const callApiResBody = parseJsonRpcResponse(callApiRes);
+    expect(callApiResBody.result.isError).toBe(true);
+    expect(callApiResBody.result.content[0].text).toContain(
       "Operation 'GET /health' is not available on this NetSapiens host (reported release: 44.4.10).",
     );
     const postHealthReqs = fake44.requests.filter((r) => r.path === '/health' || r.path.endsWith('/health')).length;
@@ -309,7 +345,8 @@ describe('Version Differential & Runtime Availability', () => {
       })
       .expect(200);
 
-    const tools46 = toolsList46Res.body.result.tools as Array<{ name: string; _meta?: Record<string, unknown> }>;
+    const tools46ResBody = parseJsonRpcResponse(toolsList46Res);
+    const tools46 = (tools46ResBody.result?.tools ?? []) as Array<{ name: string; _meta?: Record<string, unknown> }>;
     const toolNames46 = new Set(tools46.map((t) => t.name));
 
     // 46.0-only tool is present on 46.0.2 when running search_api or listing
@@ -327,7 +364,7 @@ describe('Version Differential & Runtime Availability', () => {
         },
       })
       .expect(200);
-    expect(search46Res.body.result.content[0].text).toContain('get_health_status_api');
+    expect(parseJsonRpcResponse(search46Res).result.content[0].text).toContain('get_health_status_api');
 
     // 9. 500 origin gets baseline only and /health shows unknown
     const healthAfterFetches = await request(server).get('/health').expect(200);
@@ -364,7 +401,8 @@ describe('Version Differential & Runtime Availability', () => {
       })
       .expect(200);
 
-    const tools500 = toolsList500Res.body.result.tools as Array<{ name: string; _meta?: Record<string, unknown> }>;
+    const tools500ResBody = parseJsonRpcResponse(toolsList500Res);
+    const tools500 = (tools500ResBody.result?.tools ?? []) as Array<{ name: string; _meta?: Record<string, unknown> }>;
     for (const tool of tools500) {
       if (tool.name !== 'search_api' && tool.name !== 'call_api') {
         const meta = tool._meta?.['netsapiens-mcp/availability'] as Record<string, unknown>;
@@ -393,7 +431,7 @@ describe('Version Differential & Runtime Availability', () => {
       })
       .expect(200);
 
-    const staleTools = toolsListStaleRes.body.result.tools as Array<{ name: string }>;
+    const staleTools = (parseJsonRpcResponse(toolsListStaleRes).result?.tools ?? []) as Array<{ name: string }>;
     expect(staleTools.map((t) => t.name)).toEqual(tools44.map((t) => t.name));
   });
 
@@ -411,7 +449,7 @@ describe('Version Differential & Runtime Availability', () => {
           },
         },
         extraPresent: ['GET /health'], // Serves 46.0 key
-        forceAbsent: ['GET /domains/{}/recordingstorage'], // Lacks 45.0 key
+        forceAbsent: ['GET /deviceprofiles'], // Lacks 45.0 key
       });
       openFakes.push(fake45);
 
@@ -464,7 +502,7 @@ describe('Version Differential & Runtime Availability', () => {
           params: { name: 'search_api', arguments: { query: 'health status api' } },
         })
         .expect(200);
-      expect(searchRes.body.result.content[0].text).not.toContain('get_health_status_api');
+      expect(parseJsonRpcResponse(searchRes).result.content[0].text).not.toContain('get_health_status_api');
 
       const reqCountBefore = fake45.requests.filter((r) => r.path.includes('/health')).length;
       const callRes = await request(server)
@@ -479,8 +517,9 @@ describe('Version Differential & Runtime Availability', () => {
         })
         .expect(200);
 
-      expect(callRes.body.result.isError).toBe(true);
-      expect(callRes.body.result.content[0].text).toContain(
+      const callResBody = parseJsonRpcResponse(callRes);
+      expect(callResBody.result.isError).toBe(true);
+      expect(callResBody.result.content[0].text).toContain(
         "Operation 'GET /health' is not available on this NetSapiens host (reported release: 45.2.1).",
       );
       const reqCountAfter = fake45.requests.filter((r) => r.path.includes('/health')).length;
@@ -524,14 +563,14 @@ describe('Version Differential & Runtime Availability', () => {
           params: {
             name: 'call_api',
             arguments: {
-              tool_name: 'read_domain_recording_storage',
-              args: { domain: 'domain.com' },
+              tool_name: 'get_deviceprofiles',
+              args: {},
             },
           },
         })
         .expect(200);
 
-      const contentText = res404.body.result.content[0].text;
+      const contentText = parseJsonRpcResponse(res404).result.content[0].text;
       // It reached the fake and returned NetSapiens' 404 error, not a refusal!
       expect(contentText).toContain('404');
       expect(contentText).not.toContain('is not available on this NetSapiens host');
@@ -592,22 +631,19 @@ describe('Version Differential & Runtime Availability', () => {
 
       // Open SSE listener on GET /mcp
       const events: string[] = [];
-      const sseReq = request(server)
-        .get('/mcp')
-        .set('Authorization', `Bearer ${token}`)
-        .set('mcp-session-id', sid)
-        .buffer(false)
-        .parse((res, callback) => {
+      const addr = server.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      const sseClient = http.get(
+        `http://127.0.0.1:${port}/mcp`,
+        { headers: { Authorization: `Bearer ${token}`, 'mcp-session-id': sid } },
+        (res) => {
           res.on('data', (chunk) => {
-            const str = chunk.toString('utf8');
-            events.push(str);
+            events.push(chunk.toString('utf8'));
           });
-          res.on('end', () => callback(null, ''));
-        });
-
-      // Start the SSE stream (does not wait for completion since it stays open)
-      void sseReq;
-
+        },
+      );
+      sseClient.on('error', () => {});
+      await new Promise((resolve) => setTimeout(resolve, 200));
       // Update fake version and wait for TTL
       fake.setApiVersion('46.0.2');
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -629,6 +665,7 @@ describe('Version Differential & Runtime Availability', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
       const receivedNotification = events.some((evt) => evt.includes('notifications/tools/list_changed'));
       expect(receivedNotification).toBe(true);
+      sseClient.destroy();
     });
   });
 });

@@ -19,7 +19,7 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
-import { parsePlatforms } from './auth/platforms.js';
+import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import {
@@ -518,7 +518,7 @@ function wireApp(
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sid: string) => {
      sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo });
-     ensureSessionWatcher();
+     ensureSessionWatcher(sessions);
     },
    });
 
@@ -630,7 +630,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 }
 
 let sessionWatcherTimer: NodeJS.Timeout | null = null;
-function ensureSessionWatcher() {
+function ensureSessionWatcher(sessions: Map<string, McpSession>) {
  if (sessionWatcherTimer) return;
  sessionWatcherTimer = setInterval(async () => {
   if (sessions.size === 0) {
