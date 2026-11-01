@@ -11,10 +11,14 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CURATED_CATALOG } from '../tools/curated/catalog.js';
+import { recordCuratedDispatch } from './curated-operation-recorder.js';
 
 async function importTools() {
  vi.resetModules();
- return import('../tools/index.js');
+ // Reload the registry to exercise environment-dependent tool selection.
+ const tools = await import('../tools/index.js');
+ return { ...tools, handleToolCall: recordCuratedDispatch(tools.handleToolCall, CURATED_CATALOG) };
 }
 
 function clearEnv() {
