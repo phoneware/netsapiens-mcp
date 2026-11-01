@@ -121,9 +121,14 @@ function runCommand(cmd, args, options = {}) {
   });
 }
 
+function getPackageBinaryRunner() {
+  // Proven documented npx entry path
+  return { cmd: 'npx', args: ['--yes', 'netsapiens-mcp'] };
+}
+
 async function startMcpServerProcess(tempDir, env) {
-  // Proven npx entrypoint: run npx --yes netsapiens-mcp inside consumer tempDir
-  const cp = spawn('npx', ['--yes', 'netsapiens-mcp'], {
+  const runner = getPackageBinaryRunner(tempDir);
+  const cp = spawn(runner.cmd, runner.args, {
     cwd: tempDir,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -347,10 +352,10 @@ async function main() {
     // -------------------------------------------------------------------------
     if (opts.legs.includes('config')) {
       console.log('Running leg: config');
-      // Proven documented npx invocation: npx --yes netsapiens-mcp
+      const { cmd: runnerCmd, args: runnerArgs } = getPackageBinaryRunner(tempDir);
 
       // 1. Missing NETSAPIENS_API_URL
-      const missingUrlRes = await runCommand('npx', ['--yes', 'netsapiens-mcp'], {
+      const missingUrlRes = await runCommand(runnerCmd, runnerArgs, {
         cwd: tempDir,
         env: { PATH: process.env.PATH },
       });
@@ -364,7 +369,7 @@ async function main() {
       pass('config', 'missing-api-url');
 
       // 2. MCP_PERSISTENCE=file
-      const fileRes = await runCommand('npx', ['--yes', 'netsapiens-mcp'], {
+      const fileRes = await runCommand(runnerCmd, runnerArgs, {
         cwd: tempDir,
         env: {
           PATH: process.env.PATH,
@@ -386,7 +391,7 @@ async function main() {
       pass('config', 'persistence-file-removed');
 
       // 3. GOOGLE_CLOUD_PROJECT without MCP_PERSISTENCE
-      const gcpRes = await runCommand('npx', ['--yes', 'netsapiens-mcp'], {
+      const gcpRes = await runCommand(runnerCmd, runnerArgs, {
         cwd: tempDir,
         env: {
           PATH: process.env.PATH,
@@ -408,7 +413,7 @@ async function main() {
       pass('config', 'gcp-project-without-persistence');
 
       // 4. MCP_PERSISTENCE=firestore with package absent
-      const fsAbsentRes = await runCommand('npx', ['--yes', 'netsapiens-mcp'], {
+      const fsAbsentRes = await runCommand(runnerCmd, runnerArgs, {
         cwd: tempDir,
         env: {
           PATH: process.env.PATH,
@@ -569,7 +574,8 @@ async function main() {
 
           // Proves second server on same MCP_STORE_PATH exits with "is in use by another process"
           const port3 = await getAvailablePort();
-          const lockConflictRes = await runCommand('npx', ['--yes', 'netsapiens-mcp'], {
+          const sqliteRunner = getPackageBinaryRunner(tempDir);
+          const lockConflictRes = await runCommand(sqliteRunner.cmd, sqliteRunner.args, {
             cwd: tempDir,
             env: {
               ...serverEnv,
