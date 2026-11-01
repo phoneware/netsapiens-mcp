@@ -1,12 +1,12 @@
 {
-  "harnessSha": "3edf8a262e9d06f4849318b1e0d09f197738bff9",
-  "timestamp": "2026-11-01T21:52:29.009Z",
+  "harnessSha": "2d103fa41eca7b96121533f946c701bd3de0d9e7",
+  "timestamp": "2026-11-01T21:55:56.106Z",
   "emulatorHost": "127.0.0.1:8080",
   "artifacts": {
     "bridge": {
-      "path": "/Users/jwaldrip/dev/worktrees/netsapiens-mcp-2-bridge/netsapiens-mcp-2.4.1.tgz",
-      "sha256": "69f409772d600be238ec75214f884e2d80067f4f82d5e44d3595ffcbb8618600",
-      "integrity": "sha512-VPup+vJvYJYhNlNDgiriJtVYDcBHGw3uSnpaFFhU0ma5FoEyKsBHvJGTOlYaaHswEvDv/jvF4da+vVtZgKdyJQ=="
+      "path": "/tmp/netsapiens-mcp-2.4.1-3080249.tgz",
+      "sha256": "419f52889c42a162a0c6e071b232901b7249373473937abeab27283a8ad8fd64",
+      "integrity": "sha512-cPwa1k559wYz/yiTHt0n+vqV5MYkRIvcUQP28Pwb3RTPw3XKzjpwjomlZSkKtBCSoOnC/8KAc0xJ9r9hupZIJg=="
     },
     "v3": {
       "path": "/tmp/netsapiens-mcp-3.0.0-3edf8a2.tgz",
@@ -24,7 +24,7 @@
     "v3Version": "3.0.0",
     "mcpSdkVersion": "1.32.2",
     "firestoreSdkVersion": "8.7.1",
-    "canonicalFenceHash": "4c37ffe74a169b55532e97d30ceb85fad5de6f28a149d5092c0122234fba8c15"
+    "canonicalFenceHash": "60771c7952f4ae6743eb2747db197f3eb6815744c134a95955fa7415e1581888"
   },
   "cases": [
     {
@@ -38,7 +38,7 @@
         "dcrStatus": 201,
         "loginRedirected": true,
         "authCodeAcquired": true,
-        "mcpBearerStatus": 503,
+        "mcpBearerStatus": 400,
         "restartBearerValid": false,
         "refreshSucceeded": true,
         "fakeNsGrantCount": 2
