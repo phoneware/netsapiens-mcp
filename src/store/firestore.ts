@@ -1,5 +1,5 @@
 import type { AtomicIssueParams } from './types.js';
-import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
+import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted, adoptSingleLegacyToken, adoptSingleLegacyFamily } from './firestore-v2-adoption.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -175,10 +175,36 @@ export class FirestoreBackend implements StoreBackend {
       name: 'firestore',
       capabilities: this.capabilities,
 
-      async getAccess(id) {
+      async getAccess(id: string, rawToken?: string) {
         await ensureAdopted();
-        const snap = await sessions.doc(id).get();
-        return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
+        let snap = await sessions.doc(id).get();
+        if (snap.exists) {
+          return { ...snap.data(), id } as unknown as AccessRow;
+        }
+
+        // Old-writer drain fence: check if an old 2.x instance wrote this exact token
+        // to legacy collection during rolling cutover.
+        if (rawToken && key) {
+          const legacyDocId = rawToken.replace(/[\/.]/g, '_');
+          const legacySnap = await db.collection(`${namespace}_tokens`).doc(legacyDocId).get();
+          if (legacySnap.exists) {
+            const tokData = legacySnap.data();
+            if (tokData && tokData.refreshToken) {
+              await adoptSingleLegacyToken({
+                db,
+                namespace,
+                key,
+                accessToken: rawToken,
+                tokData,
+              });
+              snap = await sessions.doc(id).get();
+              if (snap.exists) {
+                return { ...snap.data(), id } as unknown as AccessRow;
+              }
+            }
+          }
+        }
+        return undefined;
       },
       async putAccess(row) {
         await sessions.doc(row.id).set(accessData(row));
@@ -187,10 +213,36 @@ export class FirestoreBackend implements StoreBackend {
         await sessions.doc(id).delete();
       },
 
-      async getRefresh(id) {
+      async getRefresh(id: string, rawRefreshToken?: string) {
         await ensureAdopted();
-        const snap = await refreshTokens.doc(id).get();
-        return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
+        let snap = await refreshTokens.doc(id).get();
+        if (snap.exists) {
+          return { ...snap.data(), id } as unknown as RefreshPointerRow;
+        }
+
+        // Old-writer drain fence: check if an old 2.x instance wrote this refresh token
+        // to legacy collection during rolling cutover.
+        if (rawRefreshToken && key) {
+          const legacyDocId = rawRefreshToken.replace(/[\/.]/g, '_');
+          const legacyRefSnap = await db.collection(`${namespace}_tokens_refresh`).doc(legacyDocId).get();
+          if (legacyRefSnap.exists) {
+            const refData = legacyRefSnap.data();
+            const familyId = refData?.familyId as string | undefined;
+            if (familyId) {
+              await adoptSingleLegacyFamily({
+                db,
+                namespace,
+                key,
+                familyId,
+              });
+              snap = await refreshTokens.doc(id).get();
+              if (snap.exists) {
+                return { ...snap.data(), id } as unknown as RefreshPointerRow;
+              }
+            }
+          }
+        }
+        return undefined;
       },
       async putRefresh(row) {
         await refreshTokens.doc(row.id).set(refreshData(row));
@@ -602,3 +654,4 @@ export function createFirestoreStore(options: { db: FirestoreLike; namespace: st
   return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
 }
 export { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
+export { adoptSingleLegacyToken, adoptSingleLegacyFamily } from './firestore-v2-adoption.js';

@@ -194,7 +194,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
 
       async get(accessToken: string): Promise<StoredSession | undefined> {
         const id = codec.id('session', accessToken);
-        const access = await backend.getAccess(id);
+        const access = await backend.getAccess(id, accessToken);
         if (!access) {
           if (backend.getSession) {
             const v1Row = await backend.getSession(id);
@@ -277,7 +277,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
 
       async lookupRefresh(refreshToken: string, expectedClientId: string, now: number): Promise<RefreshLookupResult> {
         const id = codec.id('refresh', refreshToken);
-        const refresh = await backend.getRefresh(id);
+        const refresh = await backend.getRefresh(id, refreshToken);
         if (!refresh) {
           if (backend.findFamilyByRetiredId) {
             let family = await backend.findFamilyByRetiredId(id);
@@ -344,7 +344,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         const newAccessId = codec.id('session', replacement.tokens.accessToken);
         const newRefreshId = codec.id('refresh', replacement.tokens.refreshToken);
 
-        const oldRef = await backend.getRefresh(oldRefreshId);
+        const oldRef = await backend.getRefresh(oldRefreshId, oldRefreshToken);
         const family = oldRef ? await backend.getFamily(oldRef.familyId) : undefined;
         const familyData = family
           ? codec.open<FamilySealedData>(family.sealed, familyAad({ id: family.id, generation: family.generation }))
