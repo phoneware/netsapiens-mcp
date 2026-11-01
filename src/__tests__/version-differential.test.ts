@@ -614,6 +614,7 @@ describe('Version Differential & Runtime Availability', () => {
       const mcpInit = await request(server)
         .post('/mcp')
         .set('Authorization', `Bearer ${token}`)
+        .set('Accept', 'application/json, text/event-stream')
         .send({
           jsonrpc: '2.0',
           id: 1,

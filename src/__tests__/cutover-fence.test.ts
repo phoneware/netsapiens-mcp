@@ -118,17 +118,32 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(init.activeOperations).toBe(0);
     expect(init.irreversible).toBe(false);
 
-    // Seed a legacy token in legacy_open
-    await db.collection(`${namespace}_tokens`).doc('test-legacy-tok').set({
-      accessToken: 'test-legacy-tok',
-      refreshToken: 'test-legacy-ref',
+    // Seed a valid legacy token family in legacy_open
+    const now = Date.now();
+    await db.collection(`${namespace}_tokens_refresh_families`).doc('fam-1').set({
+      currentRefreshToken: 'ref-1',
+      currentAccessToken: 'tok-1',
       clientId: 'client-leg',
-      expiresAt: Date.now() + 3600_000,
+      scope: 'read',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('ref-1').set({
+      familyId: 'fam-1',
+      createdAt: now,
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc('fam-1').set({
       nsAccessToken: 'ns-tok',
       nsRefreshToken: 'ns-ref',
       nsUsername: 'user@domain.com',
+      updatedAt: now,
     });
-
+    await db.collection(`${namespace}_tokens`).doc('tok-1').set({
+      familyId: 'fam-1',
+      accessToken: 'tok-1',
+      clientId: 'client-leg',
+      expiresAt: now + 3600_000,
+    });
     // 2. withLegacyOperation admits operation during legacy_open
     let executedOp = false;
     await withLegacyOperation({ db, namespace, kind: 'token_exchange' }, async (ctx) => {
@@ -190,12 +205,11 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
         toState: 'legacy_open',
         expectedEpoch: 1,
       }),
-    ).rejects.toThrow(/irreversible migration latch is engaged/);
+    ).rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
 
     // 8. Verify v3 store can open and read the migrated session with 200 OK
     const store = createFirestoreStore({ db, namespace, key });
-    const session = await store.sessions.get('test-legacy-tok');
-    expect(session).toBeDefined();
+    const session = await store.sessions.get('tok-1');
     expect(session?.clientId).toBe('client-leg');
     expect(session?.nsUsername).toBe('user@domain.com');
   });

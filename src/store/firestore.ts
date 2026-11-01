@@ -37,8 +37,9 @@ interface QuerySnapshotLike {
 interface DocumentReferenceLike {
   readonly id: string;
   get(): Promise<DocumentSnapshotLike>;
-  set(data: Record<string, unknown>): Promise<unknown>;
+  set(data: Record<string, unknown>, options?: { merge?: boolean }): Promise<unknown>;
   delete(): Promise<unknown>;
+  collection?(path: string): CollectionLike;
 }
 interface QueryLike {
   get(): Promise<QuerySnapshotLike>;
@@ -46,11 +47,11 @@ interface QueryLike {
 }
 interface CollectionLike extends QueryLike {
   doc(id: string): DocumentReferenceLike;
-  where(field: string, op: '==', value: string): QueryLike;
+  where(field: string, op: '==' | 'in', value: any): QueryLike;
 }
 interface TransactionLike {
-  get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike>;
-  set(ref: DocumentReferenceLike, data: Record<string, unknown>): unknown;
+  get(ref: DocumentReferenceLike | QueryLike): Promise<any>;
+  set(ref: DocumentReferenceLike, data: Record<string, unknown>, options?: { merge?: boolean }): unknown;
   delete(ref: DocumentReferenceLike): unknown;
 }
 export interface FirestoreLike {

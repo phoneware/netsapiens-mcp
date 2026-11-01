@@ -8,6 +8,16 @@ export function isSupportedCutoverNamespace(namespace: string): namespace is Sup
   return (SUPPORTED_CUTOVER_NAMESPACES as readonly string[]).includes(namespace);
 }
 
+export function assertSupportedCutoverNamespace(
+  namespace: string,
+): asserts namespace is SupportedCutoverNamespace {
+  if (!isSupportedCutoverNamespace(namespace)) {
+    throw new CutoverFenceError(
+      `Unsupported cutover namespace: ${namespace}. Supported namespaces are: ${SUPPORTED_CUTOVER_NAMESPACES.join(', ')}`,
+    );
+  }
+}
+
 export type CutoverFenceState =
   | 'legacy_open'
   | 'closing'
@@ -16,6 +26,14 @@ export type CutoverFenceState =
   | 'v3_ready'
   | 'v3_active';
 
+export const ALLOWED_STATE_TRANSITIONS: Readonly<Record<CutoverFenceState, readonly CutoverFenceState[]>> = {
+  legacy_open: ['closing'],
+  closing: ['fenced', 'legacy_open'],
+  fenced: ['migrating', 'closing'],
+  migrating: ['v3_ready'],
+  v3_ready: ['v3_active'],
+  v3_active: [],
+};
 export interface CutoverFenceControlRecord {
   schemaVersion: 1;
   namespace: string;
@@ -108,11 +126,16 @@ export function stripUndefined<T>(value: T): T {
 }
 
 export function getCutoverFenceDocRef(db: FirestoreLike, namespace: string): any {
+  assertSupportedCutoverNamespace(namespace);
   return db.collection(`${namespace}_meta`).doc('cutover_fence');
 }
 
 export function getCutoverOperationsColRef(db: FirestoreLike, namespace: string): any {
-  return db.collection(`${namespace}_meta/cutover_fence/operations`);
+  assertSupportedCutoverNamespace(namespace);
+  const docRef = db.collection(`${namespace}_meta`).doc('cutover_fence');
+  return typeof docRef.collection === 'function'
+    ? docRef.collection('operations')
+    : db.collection(`${namespace}_meta/cutover_fence/operations`);
 }
 
 export function getCutoverOperationDocRef(
@@ -120,10 +143,12 @@ export function getCutoverOperationDocRef(
   namespace: string,
   operationId: string,
 ): any {
+  assertSupportedCutoverNamespace(namespace);
   return getCutoverOperationsColRef(db, namespace).doc(operationId);
 }
 
 export function parseCutoverFenceRecord(data: unknown, namespace: string): CutoverFenceControlRecord {
+  assertSupportedCutoverNamespace(namespace);
   if (!data || typeof data !== 'object') {
     throw new CutoverFenceError(
       `Cutover fence control record for namespace ${namespace} is missing or not an object`,
@@ -173,6 +198,53 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
     );
   }
 
+  // Validate state-specific invariants
+  if (record.state === 'legacy_open') {
+    if (record.irreversible !== false) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: legacy_open cannot have irreversible: true`,
+      );
+    }
+    if (record.migrationRunId !== undefined || record.migrationManifestDigest !== undefined) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: legacy_open cannot have migration markers`,
+      );
+    }
+  } else if (record.state === 'closing' || record.state === 'fenced') {
+    if (record.migrationRunId !== undefined || record.migrationManifestDigest !== undefined) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} cannot have migration markers`,
+      );
+    }
+  } else if (record.state === 'migrating') {
+    if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: migrating requires non-empty migrationRunId`,
+      );
+    }
+    if (record.migrationManifestDigest !== undefined) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: migrating cannot have migrationManifestDigest before v3_ready`,
+      );
+    }
+  } else if (record.state === 'v3_ready' || record.state === 'v3_active') {
+    if (typeof record.migrationRunId !== 'string' || !record.migrationRunId) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationRunId`,
+      );
+    }
+    if (typeof record.migrationManifestDigest !== 'string' || !record.migrationManifestDigest) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationManifestDigest`,
+      );
+    }
+    if (record.irreversible !== true) {
+      throw new CutoverFenceError(
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} must be irreversible: true`,
+      );
+    }
+  }
+
   return {
     schemaVersion: 1,
     namespace,
@@ -195,6 +267,7 @@ export async function readCutoverFenceInTransaction(
   db: FirestoreLike,
   namespace: string,
 ): Promise<CutoverFenceControlRecord> {
+  assertSupportedCutoverNamespace(namespace);
   const ref = getCutoverFenceDocRef(db, namespace);
   const snap = await transaction.get(ref);
   if (!snap.exists) {
@@ -209,6 +282,7 @@ export async function getCutoverFenceRecord(
   db: FirestoreLike,
   namespace: string,
 ): Promise<CutoverFenceControlRecord | undefined> {
+  assertSupportedCutoverNamespace(namespace);
   const ref = getCutoverFenceDocRef(db, namespace);
   const snap = await ref.get();
   if (!snap.exists) return undefined;
@@ -224,6 +298,7 @@ export async function initializeCutoverFence(
     now?: () => number;
   },
 ): Promise<CutoverFenceControlRecord> {
+  assertSupportedCutoverNamespace(namespace);
   const now = options?.now ?? Date.now;
   const ref = getCutoverFenceDocRef(db, namespace);
 
@@ -233,11 +308,12 @@ export async function initializeCutoverFence(
       return parseCutoverFenceRecord(snap.data(), namespace);
     }
     const currentTime = now();
+    const state = options?.initialState ?? 'legacy_open';
     const initial: CutoverFenceControlRecord = {
       schemaVersion: 1,
       namespace,
       epoch: options?.initialEpoch ?? 1,
-      state: options?.initialState ?? 'legacy_open',
+      state,
       activeOperations: 0,
       irreversible: false,
       createdAt: currentTime,
@@ -248,8 +324,9 @@ export async function initializeCutoverFence(
   });
 }
 
+
 export interface CutoverTransitionParams {
-  fromState: CutoverFenceState | CutoverFenceState[];
+  fromState?: CutoverFenceState | CutoverFenceState[];
   toState: CutoverFenceState;
   expectedEpoch: number;
   nextEpoch?: number;
@@ -264,10 +341,11 @@ export async function transitionCutoverFenceState(
   namespace: string,
   params: CutoverTransitionParams,
 ): Promise<CutoverFenceControlRecord> {
+  assertSupportedCutoverNamespace(namespace);
   const now = params.now ?? Date.now;
   const ref = getCutoverFenceDocRef(db, namespace);
 
-  return await db.runTransaction(async (transaction) => {
+  return await db.runTransaction(async (transaction: any) => {
     const current = await readCutoverFenceInTransaction(transaction, db, namespace);
 
     if (current.epoch !== params.expectedEpoch) {
@@ -277,6 +355,19 @@ export async function transitionCutoverFenceState(
     }
 
     if (current.state === params.toState) {
+      if (params.migrationRunId && current.migrationRunId !== params.migrationRunId) {
+        throw new CutoverFenceError(
+          `Idempotent transition failed for namespace ${namespace}: migrationRunId mismatch`,
+        );
+      }
+      if (
+        params.migrationManifestDigest &&
+        current.migrationManifestDigest !== params.migrationManifestDigest
+      ) {
+        throw new CutoverFenceError(
+          `Idempotent transition failed for namespace ${namespace}: migrationManifestDigest mismatch`,
+        );
+      }
       if (params.allowIdempotent !== false) {
         return current;
       }
@@ -285,11 +376,21 @@ export async function transitionCutoverFenceState(
       );
     }
 
-    const fromList = Array.isArray(params.fromState) ? params.fromState : [params.fromState];
-    if (!fromList.includes(current.state)) {
+    // Verify allowed state transition according to the strict state graph
+    const allowed = ALLOWED_STATE_TRANSITIONS[current.state];
+    if (!allowed.includes(params.toState)) {
       throw new CutoverFenceError(
         `Invalid state transition for namespace ${namespace}: cannot transition from ${current.state} to ${params.toState}`,
       );
+    }
+
+    if (params.fromState) {
+      const fromList = Array.isArray(params.fromState) ? params.fromState : [params.fromState];
+      if (!fromList.includes(current.state)) {
+        throw new CutoverFenceError(
+          `Invalid caller fromState for namespace ${namespace}: current state is ${current.state}, expected one of ${fromList.join(', ')}`,
+        );
+      }
     }
 
     if (params.toState === 'fenced') {
@@ -314,12 +415,6 @@ export async function transitionCutoverFenceState(
           `Cannot transition to fenced for namespace ${namespace}: unresolved ambiguous remote operations exist`,
         );
       }
-    } else if (params.toState === 'v3_active') {
-      if (!params.migrationManifestDigest) {
-        throw new CutoverFenceError(
-          `Cannot transition to v3_active for namespace ${namespace}: migrationManifestDigest is required`,
-        );
-      }
     } else if (params.toState === 'legacy_open') {
       if (current.irreversible) {
         throw new CutoverFenceError(
@@ -337,15 +432,44 @@ export async function transitionCutoverFenceState(
         );
       }
     } else if (params.toState === 'migrating') {
-      if (!params.migrationRunId) {
+      if (!params.migrationRunId || typeof params.migrationRunId !== 'string') {
         throw new CutoverFenceError(
-          `Cannot transition to migrating for namespace ${namespace}: migrationRunId is required`,
+          `Cannot transition to migrating for namespace ${namespace}: non-empty migrationRunId is required`,
         );
       }
     } else if (params.toState === 'v3_ready') {
-      if (!params.migrationManifestDigest) {
+      if (!current.migrationRunId) {
         throw new CutoverFenceError(
-          `Cannot transition to v3_ready for namespace ${namespace}: migrationManifestDigest is required`,
+          `Cannot transition to v3_ready for namespace ${namespace}: current state has no migrationRunId`,
+        );
+      }
+      if (params.migrationRunId && current.migrationRunId !== params.migrationRunId) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_ready for namespace ${namespace}: migrationRunId mismatch`,
+        );
+      }
+      if (!params.migrationManifestDigest || typeof params.migrationManifestDigest !== 'string') {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_ready for namespace ${namespace}: non-empty migrationManifestDigest is required`,
+        );
+      }
+    } else if (params.toState === 'v3_active') {
+      if (!current.migrationRunId || !current.migrationManifestDigest) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_active for namespace ${namespace}: missing migrationRunId or migrationManifestDigest`,
+        );
+      }
+      if (params.migrationRunId && current.migrationRunId !== params.migrationRunId) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_active for namespace ${namespace}: migrationRunId mismatch`,
+        );
+      }
+      if (
+        params.migrationManifestDigest &&
+        current.migrationManifestDigest !== params.migrationManifestDigest
+      ) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_active for namespace ${namespace}: migrationManifestDigest mismatch`,
         );
       }
     }
@@ -362,6 +486,10 @@ export async function transitionCutoverFenceState(
       ...current,
       state: params.toState,
       epoch: nextEpoch,
+      irreversible:
+        params.toState === 'v3_ready' || params.toState === 'v3_active'
+          ? true
+          : current.irreversible,
       migrationRunId: params.migrationRunId ?? current.migrationRunId,
       migrationManifestDigest: params.migrationManifestDigest ?? current.migrationManifestDigest,
       updatedAt: currentTime,
@@ -379,12 +507,24 @@ export async function markIrreversibleInTransaction(
   db: FirestoreLike,
   namespace: string,
   expectedEpoch: number,
+  migrationRunId?: string,
   nowProvider: () => number = Date.now,
 ): Promise<CutoverFenceControlRecord> {
+  assertSupportedCutoverNamespace(namespace);
   const current = await readCutoverFenceInTransaction(transaction, db, namespace);
+  if (current.state !== 'migrating') {
+    throw new CutoverFenceError(
+      `Cannot set irreversible latch for namespace ${namespace}: state must be 'migrating', got '${current.state}'`,
+    );
+  }
   if (current.epoch !== expectedEpoch) {
     throw new CutoverFenceError(
       `Epoch mismatch when setting irreversible latch for namespace ${namespace}: expected ${expectedEpoch}, got ${current.epoch}`,
+    );
+  }
+  if (migrationRunId && current.migrationRunId !== migrationRunId) {
+    throw new CutoverFenceError(
+      `migrationRunId mismatch when setting irreversible latch: expected ${migrationRunId}, got ${current.migrationRunId}`,
     );
   }
   if (current.irreversible) {
@@ -397,7 +537,7 @@ export async function markIrreversibleInTransaction(
     updatedAt: currentTime,
   };
   const ref = getCutoverFenceDocRef(db, namespace);
-  transaction.set(ref, stripUndefined(updated as unknown as Record<string, unknown>));
+  transaction.set(ref, stripUndefined(updated as unknown as Record<string, unknown>), { merge: true });
   return updated;
 }
 

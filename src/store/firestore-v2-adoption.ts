@@ -418,7 +418,7 @@ export async function adoptFirestoreLegacyTokens(options: {
         // Buffer writes (at end of transaction)
         if (!dryRun) {
           if (isControlled && initialControl) {
-            await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+            await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
           tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
           tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
@@ -567,7 +567,7 @@ export async function adoptFirestoreLegacyTokens(options: {
 
         if (!dryRun) {
           if (isControlled && initialControl) {
-            await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+            await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
           tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
           tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
@@ -628,7 +628,7 @@ export async function adoptFirestoreLegacyTokens(options: {
 
             if (!dryRun) {
               if (isControlled && initialControl) {
-                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
               }
               tx.set(db.collection(v3Cols.authCodes).doc(hmacId), {
                 id: hmacId,
@@ -670,7 +670,7 @@ export async function adoptFirestoreLegacyTokens(options: {
 
             if (!dryRun) {
               if (isControlled && initialControl) {
-                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
               }
               tx.set(db.collection(v3Cols.resumeTokens).doc(rDoc.id), {
                 id: rDoc.id,
@@ -759,6 +759,7 @@ export async function adoptFirestoreLegacyTokens(options: {
           ctrlRef,
           {
             state: 'v3_ready',
+            irreversible: true,
             migrationRunId: runId,
             migrationManifestDigest: manifestDigest,
             updatedAt: nowProvider(),
@@ -769,7 +770,6 @@ export async function adoptFirestoreLegacyTokens(options: {
       }
     });
   }
-
   return report;
 }
 
