@@ -60,6 +60,11 @@ export interface AtomicIssueParams {
   familyRow: FamilyRow;
   upstreamRow: UpstreamGrantRow;
 }
+export interface AtomicRedeemAndIssueParams {
+  codeId: string;
+  now: number;
+  issue: AtomicIssueParams;
+}
 export interface UpstreamTokens {
   access_token: string;
   refresh_token?: string;
@@ -115,7 +120,14 @@ export interface SessionStore {
 export interface AuthCodeStore {
   put(code: string, data: AuthCodeData): Promise<void>;
   getChallenge(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<string | undefined>;
+  getEntry?(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined>;
   redeem(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined>;
+  redeemAndIssue?(
+    code: string,
+    expected: { serverBaseUrl?: string; clientId?: string },
+    tokens: { accessToken: string; refreshToken: string },
+    stored: StoredToken,
+  ): Promise<AuthCodeData | undefined>;
 }
 export interface ResumeTokenStore { consume(resumeId: string): Promise<boolean>; }
 export interface UsageStore { recordCall(userKey: string, toolName: string): Promise<void>; getUserUsage(userKey: string): Promise<Map<string, UsageRecord>>; }
@@ -212,6 +224,7 @@ export interface StoreBackend {
   putAuthCode(row: AuthCodeRow): Promise<void>;
   getAuthCode(id: string): Promise<AuthCodeRow | undefined>;
   takeAuthCode(id: string): Promise<AuthCodeRow | undefined>;
+  atomicRedeemCodeAndIssue?(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined>;
   insertResumeIfAbsent(row: ResumeRow, now: number): Promise<boolean>;
   incrementUsage(userHash: string, toolName: string, now: number): Promise<void>;
   listUsage(userHash: string): Promise<Array<{ toolName: string; count: number; lastUsed: number }>>;

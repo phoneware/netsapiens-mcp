@@ -6,7 +6,7 @@ import {
   CutoverFenceError,
   parseCutoverFenceRecord,
 } from '../auth/kit/cutover-fence.js';
-import type { AtomicIssueParams } from './types.js';
+import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-v2-adoption.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
@@ -98,14 +98,38 @@ function defined<T>(value: T): T {
 }
 
 export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
-  constructor(private readonly options: { db: FirestoreLike; collection: string }) { }
+  private readonly namespace?: string;
+  constructor(private readonly options: { db: FirestoreLike; collection: string; namespace?: string }) {
+    this.namespace = options.namespace ?? (options.collection.endsWith('_oauth_clients')
+      ? options.collection.slice(0, -'_oauth_clients'.length)
+      : undefined);
+  }
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
     const doc = await this.options.db.collection(this.options.collection).doc(clientId).get();
     return doc.exists ? doc.data() as OAuthClientInformationFull : undefined;
   }
   async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
     const full = createRegisteredClient(client);
-    await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
+    const ns = this.namespace;
+    if (ns && isSupportedCutoverNamespace(ns)) {
+      await this.options.db.runTransaction(async (tx) => {
+        const controlRef = getCutoverFenceDocRef(this.options.db, ns);
+        const snap = await tx.get(controlRef);
+        if (!snap.exists) {
+          throw new CutoverFenceError(`Cutover fence control record missing for namespace: ${ns}. Mutations refused.`);
+        }
+        const control = parseCutoverFenceRecord(snap.data(), ns);
+        if (control.state !== 'v3_active') {
+          throw new CutoverRefusedError(
+            `Cutover state is ${control.state}; v3 mutations require v3_active for namespace ${ns}`,
+            { cutoverState: control.state, epoch: control.epoch },
+          );
+        }
+        tx.set(this.options.db.collection(this.options.collection).doc(full.client_id), defined(full));
+      });
+    } else {
+      await this.options.db.collection(this.options.collection).doc(full.client_id).set(defined(full));
+    }
     return full;
   }
 }
@@ -139,6 +163,7 @@ export class FirestoreBackend implements StoreBackend {
   putAuthCode!: StoreBackend['putAuthCode'];
   getAuthCode!: StoreBackend['getAuthCode'];
   takeAuthCode!: StoreBackend['takeAuthCode'];
+  atomicRedeemCodeAndIssue!: NonNullable<StoreBackend['atomicRedeemCodeAndIssue']>;
   insertResumeIfAbsent!: StoreBackend['insertResumeIfAbsent'];
   incrementUsage!: StoreBackend['incrementUsage'];
   listUsage!: StoreBackend['listUsage'];
@@ -609,6 +634,23 @@ export class FirestoreBackend implements StoreBackend {
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as AuthCodeRow;
           tx.delete(ref);
+          return current;
+        });
+      },
+      async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
+        return db.runTransaction(async tx => {
+          await assertV3ActiveInTransaction(tx);
+          const codeRef = codes.doc(params.codeId);
+          const codeSnap = await tx.get(codeRef);
+          if (!codeSnap.exists) return undefined;
+          const current = { ...codeSnap.data(), id: params.codeId } as AuthCodeRow;
+
+          tx.delete(codeRef);
+          tx.set(sessions.doc(params.issue.accessRow.id), accessData(params.issue.accessRow));
+          tx.set(refreshTokens.doc(params.issue.refreshRow.id), refreshData(params.issue.refreshRow));
+          tx.set(refreshFamilies.doc(params.issue.familyRow.id), familyData(params.issue.familyRow));
+          tx.set(upstreamGrants.doc(params.issue.upstreamRow.id), upstreamData(params.issue.upstreamRow));
+
           return current;
         });
       },

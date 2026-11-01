@@ -1,4 +1,4 @@
-import type { AtomicIssueParams } from './types.js';
+import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
 import type {
@@ -212,6 +212,13 @@ export class MemoryBackend implements StoreBackend {
   async putAuthCode(row: AuthCodeRow): Promise<void> { this.state.authCodes.set(row.id, row); }
   async getAuthCode(id: string): Promise<AuthCodeRow | undefined> { return this.state.authCodes.get(id); }
   async takeAuthCode(id: string): Promise<AuthCodeRow | undefined> { const row = this.state.authCodes.get(id); this.state.authCodes.delete(id); return row; }
+  async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
+    const row = this.state.authCodes.get(params.codeId);
+    if (!row) return undefined;
+    this.state.authCodes.delete(params.codeId);
+    await this.atomicIssue(params.issue);
+    return row;
+  }
   async insertResumeIfAbsent(row: ResumeRow, now: number): Promise<boolean> {
     const current = this.state.resumeTokens.get(row.id);
     if (current && current.expiresAt > now) return false;

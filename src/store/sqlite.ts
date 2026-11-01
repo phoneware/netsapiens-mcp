@@ -1,4 +1,4 @@
-import type { AtomicIssueParams } from './types.js';
+import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import { closeSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRequire } from 'node:module';
@@ -503,6 +503,31 @@ export class SqliteBackend implements StoreBackend {
       async putAuthCode(row: AuthCodeRow) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
       async getAuthCode(id: string) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
       async takeAuthCode(id: string) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
+      async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
+        return transaction(() => {
+          const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(params.codeId));
+          if (!row) return undefined;
+          db.prepare('DELETE FROM auth_codes WHERE id=?').run(params.codeId);
+
+          db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,sealed=excluded.sealed`)
+            .run(params.issue.accessRow.id, params.issue.accessRow.familyId, params.issue.accessRow.expiresAt, params.issue.accessRow.retainUntil, params.issue.accessRow.sealed);
+
+          db.prepare(`INSERT INTO refresh_tokens(id,family_id,status,generation,consumed_at,successor_sealed) VALUES (?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,status=excluded.status,generation=excluded.generation,consumed_at=excluded.consumed_at,successor_sealed=excluded.successor_sealed`)
+            .run(params.issue.refreshRow.id, params.issue.refreshRow.familyId, params.issue.refreshRow.status, params.issue.refreshRow.generation, params.issue.refreshRow.consumedAt ?? null, params.issue.refreshRow.successorSealed ?? null);
+
+          db.prepare(`INSERT INTO refresh_families(id,generation,status,active_refresh_id,current_access_token_id,revoked_at,updated_at,sealed) VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,status=excluded.status,active_refresh_id=excluded.active_refresh_id,current_access_token_id=excluded.current_access_token_id,revoked_at=excluded.revoked_at,updated_at=excluded.updated_at,sealed=excluded.sealed`)
+            .run(params.issue.familyRow.id, params.issue.familyRow.generation, params.issue.familyRow.status, params.issue.familyRow.activeRefreshId, params.issue.familyRow.currentAccessTokenId, params.issue.familyRow.revokedAt ?? null, params.issue.familyRow.updatedAt, params.issue.familyRow.sealed);
+
+          db.prepare(`INSERT INTO upstream_grants(id,grant_version,ns_expires_at,lease_owner,lease_until,updated_at,sealed) VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET grant_version=excluded.grant_version,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,updated_at=excluded.updated_at,sealed=excluded.sealed`)
+            .run(params.issue.upstreamRow.id, params.issue.upstreamRow.grantVersion, params.issue.upstreamRow.nsExpiresAt ?? null, params.issue.upstreamRow.leaseOwner ?? null, params.issue.upstreamRow.leaseUntil ?? null, params.issue.upstreamRow.updatedAt, params.issue.upstreamRow.sealed);
+
+          return row;
+        });
+      },
       async insertResumeIfAbsent(row: ResumeRow, now) { return transaction(() => { db.prepare('DELETE FROM resume_tokens WHERE id=? AND expires_at<=?').run(row.id, now); return Number(db.prepare('INSERT INTO resume_tokens(id,consumed_at,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(row.id, row.consumedAt, row.expiresAt).changes) === 1; }); },
       async incrementUsage(userHash, toolName, now) { db.prepare('INSERT INTO usage(user_hash,tool_name,count,last_used) VALUES(?,?,1,?) ON CONFLICT(user_hash,tool_name) DO UPDATE SET count=count+1,last_used=excluded.last_used').run(userHash, toolName, now); },
       async listUsage(userHash) { return db.prepare('SELECT tool_name,count,last_used FROM usage WHERE user_hash=?').all(userHash).map(row => ({ toolName: row.tool_name as string, count: row.count as number, lastUsed: row.last_used as number })); },

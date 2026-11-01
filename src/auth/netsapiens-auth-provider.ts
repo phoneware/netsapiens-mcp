@@ -984,10 +984,57 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   client: OAuthClientInformationFull,
   authorizationCode: string,
  ): Promise<OAuthTokens> {
-  const entry = await this.store.authCodes.redeem(authorizationCode, {
+  const expected = {
    serverBaseUrl: this.serverBaseUrl,
    clientId: client.client_id,
-  });
+  };
+
+  if (this.store.authCodes.redeemAndIssue && this.store.authCodes.getEntry) {
+   const preview = await this.store.authCodes.getEntry(authorizationCode, expected);
+   if (!preview) {
+    throw new InvalidGrantError('Invalid authorization code');
+   }
+
+   const accessToken = randomBytes(32).toString('base64url');
+   const refreshToken = randomBytes(32).toString('base64url');
+   const expiresAt = Date.now() + this.tokenLifetimeSec * 1000;
+   const nsExpiresAt = preview.nsTokens.expires_in
+    ? Date.now() + preview.nsTokens.expires_in * 1000
+    : undefined;
+
+   const stored: StoredToken = {
+    clientId: preview.pending.clientId,
+    expiresAt,
+    extra: preview.extra,
+    nsAccessToken: preview.nsTokens.access_token,
+    nsRefreshToken: preview.nsTokens.refresh_token,
+    nsExpiresAt,
+    nsUsername: preview.nsTokens.username ?? 'unknown',
+    nsUserRole: preview.nsTokens.nsUserRole,
+    nsApiUrl: preview.nsTokens.nsApiUrl,
+    serverBaseUrl: this.serverBaseUrl,
+   };
+
+   const redeemed = await this.store.authCodes.redeemAndIssue(
+    authorizationCode,
+    expected,
+    { accessToken, refreshToken },
+    stored,
+   );
+
+   if (!redeemed) {
+    throw new InvalidGrantError('Invalid authorization code');
+   }
+
+   return {
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: this.tokenLifetimeSec,
+    refresh_token: refreshToken,
+   };
+  }
+
+  const entry = await this.store.authCodes.redeem(authorizationCode, expected);
   if (!entry) {
    throw new InvalidGrantError('Invalid authorization code');
   }

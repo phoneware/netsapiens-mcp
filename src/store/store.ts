@@ -4,6 +4,7 @@ import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/share
 import { createCodec, type Codec, LeaseLostError, RetryableRefreshError } from './codec.js';
 import type {
   AccessRow,
+  AtomicIssueParams,
   AuthCodeData,
   FamilyRow,
   McpStore,
@@ -645,10 +646,93 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       async getChallenge(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<string | undefined> {
         return decodeCode(await backend.getAuthCode(codec.id('code', code)), expected)?.pending.codeChallenge;
       },
+      async getEntry(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined> {
+        return decodeCode(await backend.getAuthCode(codec.id('code', code)), expected);
+      },
       async redeem(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined> {
         const id = codec.id('code', code);
         if (!decodeCode(await backend.getAuthCode(id), expected)) return undefined;
         return decodeCode(await backend.takeAuthCode(id), expected);
+      },
+      async redeemAndIssue(
+        code: string,
+        expected: { serverBaseUrl?: string; clientId?: string },
+        tokens: { accessToken: string; refreshToken: string },
+        stored: StoredToken,
+      ): Promise<AuthCodeData | undefined> {
+        const codeId = codec.id('code', code);
+        const existing = decodeCode(await backend.getAuthCode(codeId), expected);
+        if (!existing) return undefined;
+
+        const accessId = codec.id('session', tokens.accessToken);
+        const refreshId = codec.id('refresh', tokens.refreshToken);
+        const familyId = randomUUID();
+        const generation = 1;
+        const grantVersion = 1;
+        const now = Date.now();
+        const retainUntil = stored.expiresAt + ACCESS_RETENTION_MS;
+
+        const issueParams: AtomicIssueParams = {
+          accessRow: {
+            id: accessId,
+            familyId,
+            expiresAt: stored.expiresAt,
+            retainUntil,
+            sealed: codec.seal({
+              familyId,
+              clientId: stored.clientId,
+              serverBaseUrl: stored.serverBaseUrl,
+              extra: stored.extra,
+            }, accessAad({ id: accessId, familyId })),
+          },
+          refreshRow: {
+            id: refreshId,
+            familyId,
+            status: 'active',
+            generation,
+          },
+          familyRow: {
+            id: familyId,
+            generation,
+            status: 'active',
+            activeRefreshId: refreshId,
+            currentAccessTokenId: accessId,
+            updatedAt: now,
+            sealed: codec.seal({
+              clientId: stored.clientId,
+              serverBaseUrl: stored.serverBaseUrl,
+              extra: stored.extra,
+              retiredRefreshIds: [],
+            }, familyAad({ id: familyId, generation })),
+          },
+          upstreamRow: {
+            id: familyId,
+            grantVersion,
+            nsExpiresAt: stored.nsExpiresAt,
+            updatedAt: now,
+            sealed: codec.seal({
+              nsAccessToken: stored.nsAccessToken,
+              nsRefreshToken: stored.nsRefreshToken,
+              nsUsername: stored.nsUsername,
+              nsUserRole: stored.nsUserRole,
+              nsApiUrl: stored.nsApiUrl,
+            }, upstreamAad({ id: familyId, grantVersion })),
+          },
+        };
+
+        if (backend.atomicRedeemCodeAndIssue) {
+          const row = await backend.atomicRedeemCodeAndIssue({
+            codeId,
+            now,
+            issue: issueParams,
+          });
+          return row ? decodeCode(row, expected) : undefined;
+        }
+
+        const redeemed = decodeCode(await backend.takeAuthCode(codeId), expected);
+        if (!redeemed) return undefined;
+        await backend.atomicIssue(issueParams);
+        return redeemed;
       },
     },
 
