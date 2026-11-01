@@ -291,7 +291,7 @@ async function main() {
   try {
     // Initialize consumer directory with target package
     execSync('npm init -y', { cwd: tempDir, stdio: 'pipe' });
-    execSync(`npm i ${targetPkg}`, { cwd: tempDir, stdio: 'pipe' });
+    execSync(`npm i --legacy-peer-deps ${targetPkg}`, { cwd: tempDir, stdio: 'pipe' });
 
     // -------------------------------------------------------------------------
     // LEG 1: install
@@ -335,7 +335,7 @@ async function main() {
       pass('install', 'resolve-lib-export');
 
       // Proves import('netsapiens-mcp/testing/store-conformance') resolves (after installing vitest)
-      execSync('npm i vitest@^4.1.11', { cwd: tempDir, stdio: 'pipe' });
+      execSync('npm i --legacy-peer-deps vitest@^4.1.11', { cwd: tempDir, stdio: 'pipe' });
       const confRes = await runCommand('node', [
         '--input-type=module',
         '-e',
@@ -880,7 +880,7 @@ async function main() {
       // 1. Install @google-cloud/firestore@^<major>
       const fsPkg = `@google-cloud/firestore@^${opts.firestoreMajor}`;
       console.log(`Installing ${fsPkg} in consumer...`);
-      execSync(`npm i ${fsPkg}`, { cwd: tempDir, stdio: 'pipe' });
+      execSync(`npm i --legacy-peer-deps ${fsPkg}`, { cwd: tempDir, stdio: 'pipe' });
 
       const nsToken = 'ns-token-firestore-e2e-secret';
       const fakeUser = {
@@ -1065,7 +1065,7 @@ runStoreConformance({
     // -------------------------------------------------------------------------
     if (opts.legs.includes('library')) {
       console.log('Running leg: library');
-      execSync('npm i -D typescript @types/node', { cwd: tempDir, stdio: 'pipe' });
+      execSync('npm i --legacy-peer-deps -D typescript @types/node', { cwd: tempDir, stdio: 'pipe' });
       const consumerTsPath = path.join(tempDir, 'consumer-check.ts');
       fs.writeFileSync(consumerTsPath, `
 import {
