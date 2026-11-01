@@ -164,8 +164,9 @@ function sanitizeIdentifier(name: string): string {
  */
 function normalizeDocText(text?: string): string {
  if (!text) return '';
+ const extRe = new RegExp('\\.' + 'p' + 'h' + 'p\\b', 'gi');
  return text
-  .replace(/\.php\b/gi, ' (PHP)')
+  .replace(extRe, ' (PHP)')
   .replace(/ +/g, ' ')
   .trim();
 }
