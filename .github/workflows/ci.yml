@@ -68,7 +68,8 @@ jobs:
       - run: npm run build
       - name: Pack package
         run: |
-          TARBALL="$(npm pack | tail -n 1)"
+          npm pack
+          TARBALL="$(ls -1 netsapiens-mcp-*.tgz | head -n 1)"
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
       - name: Run consumer e2e
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL"
@@ -95,7 +96,8 @@ jobs:
           docker logs fs-emu; exit 1
       - name: Pack package
         run: |
-          TARBALL="$(npm pack | tail -n 1)"
+          npm pack
+          TARBALL="$(ls -1 netsapiens-mcp-*.tgz | head -n 1)"
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
       - name: Run consumer firestore e2e
         env:
