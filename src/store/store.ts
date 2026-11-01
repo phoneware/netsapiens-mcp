@@ -646,8 +646,12 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       async getChallenge(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<string | undefined> {
         return decodeCode(await backend.getAuthCode(codec.id('code', code)), expected)?.pending.codeChallenge;
       },
-      async getEntry(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined> {
-        return decodeCode(await backend.getAuthCode(codec.id('code', code)), expected);
+      async getEntry(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<{ data: AuthCodeData; sealed: string } | undefined> {
+        const id = codec.id('code', code);
+        const row = await backend.getAuthCode(id);
+        const decoded = decodeCode(row, expected);
+        if (!decoded || !row) return undefined;
+        return { data: decoded, sealed: row.sealed };
       },
       async redeem(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined> {
         const id = codec.id('code', code);
@@ -659,10 +663,12 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         expected: { serverBaseUrl?: string; clientId?: string },
         tokens: { accessToken: string; refreshToken: string },
         stored: StoredToken,
+        expectedSealed?: string,
       ): Promise<AuthCodeData | undefined> {
         const codeId = codec.id('code', code);
-        const existing = decodeCode(await backend.getAuthCode(codeId), expected);
-        if (!existing) return undefined;
+        const row = await backend.getAuthCode(codeId);
+        const existing = decodeCode(row, expected);
+        if (!existing || !row) return undefined;
 
         const accessId = codec.id('session', tokens.accessToken);
         const refreshId = codec.id('refresh', tokens.refreshToken);
@@ -721,12 +727,13 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         };
 
         if (backend.atomicRedeemCodeAndIssue) {
-          const row = await backend.atomicRedeemCodeAndIssue({
+          const redeemedRow = await backend.atomicRedeemCodeAndIssue({
             codeId,
+            expectedSealed: expectedSealed ?? row.sealed,
             now,
             issue: issueParams,
           });
-          return row ? decodeCode(row, expected) : undefined;
+          return redeemedRow ? decodeCode(redeemedRow, expected) : undefined;
         }
 
         const redeemed = decodeCode(await backend.takeAuthCode(codeId), expected);

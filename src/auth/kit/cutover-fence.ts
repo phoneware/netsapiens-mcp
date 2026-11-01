@@ -41,6 +41,7 @@ export interface CutoverFenceControlRecord {
   state: CutoverFenceState;
   activeOperations: number;
   irreversible: boolean;
+  emptyNamespace?: boolean;
   migrationRunId?: string;
   migrationManifestDigest?: string;
   createdAt?: number;
@@ -259,11 +260,7 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
         `Invalid cutover fence invariants for namespace ${namespace}: v3_active requires migrationManifestDigest`,
       );
     }
-    if (record.irreversible !== true) {
-      throw new CutoverFenceError(
-        `Invalid cutover fence invariants for namespace ${namespace}: v3_active must be irreversible: true`,
-      );
-    }
+    // C12: For empty namespaces, irreversible is false in v3_ready and v3_active until first credential mutation
   }
 
   return {
@@ -316,6 +313,8 @@ export async function initializeCutoverFence(
   options?: {
     initialEpoch?: number;
     initialState?: CutoverFenceState;
+    migrationRunId?: string;
+    migrationManifestDigest?: string;
     now?: () => number;
   },
 ): Promise<CutoverFenceControlRecord> {
@@ -328,17 +327,27 @@ export async function initializeCutoverFence(
     if (snap.exists) {
       return parseCutoverFenceRecord(snap.data(), namespace);
     }
+    const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
+    if (markerSnap.exists && (options?.initialState ?? 'legacy_open') === 'legacy_open') {
+      throw new CutoverFenceError(
+        `Cannot initialize legacy_open for namespace ${namespace}: v2_adopted marker exists in database`,
+      );
+    }
     const currentTime = now();
     const state = options?.initialState ?? 'legacy_open';
+    const isV3 = state === 'v3_ready' || state === 'v3_active';
     const initial: CutoverFenceControlRecord = {
       schemaVersion: 1,
       namespace,
       epoch: options?.initialEpoch ?? 1,
       state,
       activeOperations: 0,
-      irreversible: false,
+      irreversible: isV3 ? true : false,
+      migrationRunId: isV3 ? (options?.migrationRunId ?? 'bootstrap') : undefined,
+      migrationManifestDigest: isV3 ? (options?.migrationManifestDigest ?? 'bootstrap') : undefined,
       createdAt: currentTime,
       updatedAt: currentTime,
+      migratedAt: isV3 ? currentTime : undefined,
     };
     transaction.set(ref, stripUndefined(initial as unknown as Record<string, unknown>));
     return initial;
@@ -351,6 +360,7 @@ export interface CutoverTransitionParams {
   toState: CutoverFenceState;
   expectedEpoch: number;
   nextEpoch?: number;
+  emptyNamespace?: boolean;
   migrationRunId?: string;
   migrationManifestDigest?: string;
   allowIdempotent?: boolean;
@@ -437,6 +447,17 @@ export async function transitionCutoverFenceState(
         );
       }
     } else if (params.toState === 'legacy_open') {
+      const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
+      if (markerSnap.exists) {
+        throw new CutoverFenceError(
+          `Cannot return to legacy_open for namespace ${namespace}: v2_adopted marker exists`,
+        );
+      }
+      if (current.emptyNamespace) {
+        throw new CutoverFenceError(
+          `Cannot return to legacy_open for namespace ${namespace}: emptyNamespace cutover completed`,
+        );
+      }
       if (current.irreversible) {
         throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: irreversible migration latch is engaged`,
@@ -474,10 +495,31 @@ export async function transitionCutoverFenceState(
           `Cannot transition to v3_ready for namespace ${namespace}: non-empty migrationManifestDigest is required`,
         );
       }
-      if (!current.irreversible) {
-        throw new CutoverFenceError(
-          `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
-        );
+      if (params.emptyNamespace === true) {
+        const markerSnap = await transaction.get(db.collection(`${namespace}_meta`).doc('v2_adopted'));
+        if (!markerSnap.exists) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: v2_adopted marker is missing`,
+          );
+        }
+        const mData = markerSnap.data();
+        const markerRunId = mData?.migrationRunId ?? mData?.runId;
+        if (markerRunId !== (params.migrationRunId ?? current.migrationRunId)) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker runId mismatch`,
+          );
+        }
+        if (mData?.emptyNamespace !== true && mData?.empty !== true) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready with emptyNamespace for ${namespace}: marker is not marked empty`,
+          );
+        }
+      } else {
+        if (!current.irreversible) {
+          throw new CutoverFenceError(
+            `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
+          );
+        }
       }
     } else if (params.toState === 'v3_active') {
       if (!current.migrationRunId || !current.migrationManifestDigest) {
@@ -512,10 +554,8 @@ export async function transitionCutoverFenceState(
       ...current,
       state: params.toState,
       epoch: nextEpoch,
-      irreversible:
-        params.toState === 'v3_ready' || params.toState === 'v3_active'
-          ? true
-          : current.irreversible,
+      irreversible: current.irreversible,
+      emptyNamespace: params.emptyNamespace ?? current.emptyNamespace,
       migrationRunId: params.migrationRunId ?? current.migrationRunId,
       migrationManifestDigest: params.migrationManifestDigest ?? current.migrationManifestDigest,
       updatedAt: currentTime,
@@ -538,9 +578,9 @@ export async function markIrreversibleInTransaction(
 ): Promise<CutoverFenceControlRecord> {
   assertSupportedCutoverNamespace(namespace);
   const current = await readCutoverFenceInTransaction(transaction, db, namespace);
-  if (current.state !== 'migrating') {
+  if (current.state !== 'migrating' && current.state !== 'v3_ready' && current.state !== 'v3_active') {
     throw new CutoverFenceError(
-      `Cannot set irreversible latch for namespace ${namespace}: state must be 'migrating', got '${current.state}'`,
+      `Cannot set irreversible latch for namespace ${namespace}: state must be 'migrating', 'v3_ready', or 'v3_active', got '${current.state}'`,
     );
   }
   if (current.epoch !== expectedEpoch) {

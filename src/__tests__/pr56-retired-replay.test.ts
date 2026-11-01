@@ -129,7 +129,16 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
     });
     // 4. Initialize fence in fenced state, execute adoption, and transition to v3_active
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens({
+      db,
+      namespace,
+      key,
+      expectedEpoch: 1,
+      migrationRunId: 'pr56-retired-run',
+      codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
+      codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
+      packageIntegrity: 'sha512-test',
+    });
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
 

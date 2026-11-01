@@ -507,6 +507,8 @@ export class SqliteBackend implements StoreBackend {
         return transaction(() => {
           const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(params.codeId));
           if (!row) return undefined;
+          if (row.expiresAt <= params.now) return undefined;
+          if (params.expectedSealed && row.sealed !== params.expectedSealed) return undefined;
           db.prepare('DELETE FROM auth_codes WHERE id=?').run(params.codeId);
 
           db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)

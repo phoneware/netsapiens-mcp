@@ -42,7 +42,7 @@ describe('Firestore Adoption Preflight Fail-Closed Guard', () => {
 
   it('fails closed and writes NO marker when legacy collection reads fail', async () => {
     const db = new FailingMockFirestore();
-    const namespace = 'mcp';
+    const namespace = 'test-mcp';
 
     await expect(
       ensureFirestoreAdopted({ db, namespace, key }),

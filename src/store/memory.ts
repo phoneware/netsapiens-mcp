@@ -215,6 +215,8 @@ export class MemoryBackend implements StoreBackend {
   async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
     const row = this.state.authCodes.get(params.codeId);
     if (!row) return undefined;
+    if (row.expiresAt <= params.now) return undefined;
+    if (params.expectedSealed && row.sealed !== params.expectedSealed) return undefined;
     this.state.authCodes.delete(params.codeId);
     await this.atomicIssue(params.issue);
     return row;

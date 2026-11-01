@@ -998,20 +998,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const accessToken = randomBytes(32).toString('base64url');
    const refreshToken = randomBytes(32).toString('base64url');
    const expiresAt = Date.now() + this.tokenLifetimeSec * 1000;
-   const nsExpiresAt = preview.nsTokens.expires_in
-    ? Date.now() + preview.nsTokens.expires_in * 1000
+   const username = preview.data.nsTokens.username;
+   if (!username) {
+    throw new InvalidGrantError('Missing username in authorization code');
+   }
+
+   const nsExpiresAt = preview.data.nsTokens.expires_in
+    ? Date.now() + preview.data.nsTokens.expires_in * 1000
     : undefined;
 
    const stored: StoredToken = {
-    clientId: preview.pending.clientId,
+    clientId: preview.data.pending.clientId,
     expiresAt,
-    extra: preview.extra,
-    nsAccessToken: preview.nsTokens.access_token,
-    nsRefreshToken: preview.nsTokens.refresh_token,
+    extra: preview.data.extra,
+    nsAccessToken: preview.data.nsTokens.access_token,
+    nsRefreshToken: preview.data.nsTokens.refresh_token,
     nsExpiresAt,
-    nsUsername: preview.nsTokens.username ?? 'unknown',
-    nsUserRole: preview.nsTokens.nsUserRole,
-    nsApiUrl: preview.nsTokens.nsApiUrl,
+    nsUsername: username,
+    nsUserRole: preview.data.nsTokens.nsUserRole,
+    nsApiUrl: preview.data.nsTokens.nsApiUrl,
     serverBaseUrl: this.serverBaseUrl,
    };
 
@@ -1020,8 +1025,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     expected,
     { accessToken, refreshToken },
     stored,
+    preview.sealed,
    );
-
    if (!redeemed) {
     throw new InvalidGrantError('Invalid authorization code');
    }
@@ -1377,6 +1382,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    ? Date.now() + nsTokens.expires_in * 1000
    : undefined;
 
+  const username = nsTokens.username;
+  if (!username) {
+   throw new InvalidGrantError('Missing username in NetSapiens token response');
+  }
+
   const stored: StoredToken = {
    clientId,
    expiresAt,
@@ -1384,7 +1394,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    nsAccessToken: nsTokens.access_token,
    nsRefreshToken: nsTokens.refresh_token,
    nsExpiresAt,
-   nsUsername: nsTokens.username ?? 'unknown',
+   nsUsername: username,
    nsUserRole: nsTokens.nsUserRole,
    nsApiUrl: nsTokens.nsApiUrl,
    serverBaseUrl: this.serverBaseUrl,

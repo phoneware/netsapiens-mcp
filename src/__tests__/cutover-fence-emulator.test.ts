@@ -23,6 +23,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
   const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   const key = deriveStoreKey(secret);
   const codec = createCodec(key);
+
   const clearEmulator = async () => {
     try {
       const url = `http://${EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
@@ -32,6 +33,23 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     }
   };
 
+  const setupFencedState = async (epoch: number = 1): Promise<void> => {
+    await initializeCutoverFence(db, namespace, { initialEpoch: epoch, initialState: 'legacy_open' });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: epoch });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: epoch });
+  };
+
+  const testAdoptOpts = (opts: Record<string, unknown> = {}) => ({
+    db,
+    namespace,
+    key,
+    expectedEpoch: 1,
+    migrationRunId: 'test-run-1',
+    codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
+    codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
+    packageIntegrity: 'sha512-test',
+    ...opts,
+  });
   beforeAll(async () => {
     process.env.FIRESTORE_EMULATOR_HOST = EMULATOR_HOST;
     db = new Firestore({ projectId: PROJECT_ID });
@@ -108,17 +126,16 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     // 5. Run migration under fenced state
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-real-1' }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
-
     // Verify state transitioned to v3_ready and irreversible latch is engaged
     const controlRecord = await getCutoverFenceRecord(db, namespace);
     expect(controlRecord?.state).toBe('v3_ready');
     expect(controlRecord?.irreversible).toBe(true);
     expect(controlRecord?.migrationManifestDigest).toBeDefined();
 
-    // Verify ordinary writes refused in v3_ready
+    // Verify ordinary writes and protected reads refused in v3_ready (Sol Finding)
     const backend = createFirestoreBackend({ db, namespace, key });
     await expect(
       backend.putAccess({
@@ -129,6 +146,11 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
         sealed: 'sealed-data',
       }),
     ).rejects.toThrow(CutoverRefusedError);
+
+    await expect(backend.getAccess('acc-real-1')).rejects.toThrow(CutoverRefusedError);
+    await expect(backend.getRefresh('ref-real-1')).rejects.toThrow(CutoverRefusedError);
+    const storePreActive = createFirestoreStore({ db, namespace, key });
+    await expect(storePreActive.sessions.get('acc-real-1')).rejects.toThrow(CutoverRefusedError);
 
     // 6. Transition to v3_active
     await transitionCutoverFenceState(db, namespace, {
@@ -160,7 +182,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
   });
 
   it('real emulator: dryRun does zero writes and does not transition control state', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     const now = Date.now();
     await db.collection(`${namespace}_tokens_refresh_families`).doc('dry-fam').set({
@@ -188,10 +210,9 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       expiresAt: now + 3600_000,
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, dryRun: true, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ dryRun: true, expectedEpoch: 1 }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
-
     // Verify zero writes occurred in real Firestore
     const v3Families = await db.collection(`${namespace}_refresh_families`).get();
     expect(v3Families.empty).toBe(true);
@@ -205,7 +226,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
   });
 
   it('real emulator: orphan detection across real collections', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     // Seed orphan refresh
     await db.collection(`${namespace}_tokens_refresh`).doc('orphan-ref-real').set({
@@ -219,12 +240,12 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       nsRefreshToken: 'ns-ref',
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-orphan' }));
     expect(report.errors).toBe(2);
   });
 
   it('real emulator: valid v2.3 base pointer with { accessToken } and no familyId adopts cleanly', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     const now = Date.now();
     // Seed v2.3 base token
@@ -238,20 +259,20 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       expiresAt: now + 3600_000,
     });
 
-    // Seed v2.3 refresh pointer with accessToken but NO familyId
+    // Seed v2.3 refresh pointer with accessToken and ID matching refreshToken
     await db.collection(`${namespace}_tokens_refresh`).doc('base-ref-v23').set({
       accessToken: 'base-acc-v23',
       status: 'active',
       createdAt: now,
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-v23' }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
   });
 
   it('real emulator: PR56 retiredRefreshFingerprints conflicting across families causes error', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     const now = Date.now();
     const sharedFingerprint = 'shared-retired-sha256-fingerprint';
@@ -310,12 +331,12 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       expiresAt: now + 3600_000,
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-conflict' }));
     expect(report.errors).toBeGreaterThanOrEqual(1);
   });
 
   it('real emulator: unexpired auth code with nested pending migrates cleanly and exchanges atomically', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     const now = Date.now();
     const rawCode = 'auth-code-real-123';
@@ -341,10 +362,9 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       expiresAt: now + 600_000, // unexpired
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-auth' }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
-
     // Transition to v3_active to permit redemption and issuance
     const ctrl = await getCutoverFenceRecord(db, namespace);
     await transitionCutoverFenceState(db, namespace, {
@@ -362,7 +382,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       clientId: 'client-auth-test',
     });
     expect(preview).toBeDefined();
-    expect(preview?.pending.codeChallenge).toBe('challenge-xyz');
+    expect(preview?.data.pending.codeChallenge).toBe('challenge-xyz');
 
     const tokens = { accessToken: 'issued-acc-1', refreshToken: 'issued-ref-1' };
     const storedToken = {
@@ -379,6 +399,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       { serverBaseUrl: 'http://localhost:3000', clientId: 'client-auth-test' },
       tokens,
       storedToken,
+      preview!.sealed,
     );
     expect(redeemed).toBeDefined();
 
@@ -397,7 +418,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
   });
 
   it('real emulator: concurrent second migrator with wrong runId or wrong epoch is rejected', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+    await setupFencedState(1);
 
     // Migrator 1 starts migration with runId "run-owner-1"
     await transitionCutoverFenceState(db, namespace, {
@@ -453,14 +474,15 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
 
     // Seed an auth code directly
     const codeId = codec.id('code', rawCode);
+    const codeSealed = codec.seal({
+      pending: { clientId: 'c-test', codeChallenge: 'c-chal', redirectUri: 'http://cb', createdAt: now },
+      nsTokens: { access_token: 'ns-tok', username: 'testuser' },
+      clientId: 'c-test',
+    }, `code:${codeId}`);
     await db.collection(`${namespace}_auth_codes`).doc(codeId).set({
       id: codeId,
       expiresAt: now + 600_000,
-      sealed: codec.seal({
-        pending: { clientId: 'c-test', codeChallenge: 'c-chal', redirectUri: 'http://cb', createdAt: now },
-        nsTokens: { access_token: 'ns-tok' },
-        clientId: 'c-test',
-      }, `code:${codeId}`),
+      sealed: codeSealed,
     });
 
     // In v3_ready, credential issuance is refused by the fence!
@@ -471,6 +493,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
         { clientId: 'c-test' },
         { accessToken: 'fail-acc', refreshToken: 'fail-ref' },
         { clientId: 'c-test', expiresAt: now + 3600_000, nsAccessToken: 'ns-tok', nsUsername: 'user@test.com' },
+        codeSealed,
       ),
     ).rejects.toThrow(CutoverRefusedError);
 
@@ -493,6 +516,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       { clientId: 'c-test' },
       { accessToken: 'pass-acc', refreshToken: 'pass-ref' },
       { clientId: 'c-test', expiresAt: now + 3600_000, nsAccessToken: 'ns-tok', nsUsername: 'user@test.com' },
+      codeSealed,
     );
     expect(successfulRedeem).toBeDefined();
 
@@ -501,22 +525,53 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     expect(codeDocAfterSuccess.exists).toBe(false);
   });
 
-  it('real emulator: legacy OAuth client is inventoried, migrated, and usable after cutover', async () => {
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+  it('real emulator: v2.4 resume tokens without id field convert in-place and skip when v=2', async () => {
+    await setupFencedState(1);
 
-    const clientId = 'legacy-registered-client-1';
-    await db.collection(`${namespace}_clients`).doc(clientId).set({
-      client_id: clientId,
-      client_name: 'Legacy Client',
-      redirect_uris: ['https://example.com/oauth/callback'],
-      token_endpoint_auth_method: 'none',
-      client_id_issued_at: Date.now(),
+    const now = Date.now();
+    const resumeId = 'v24-resume-token-hash';
+
+    // Seed v2.4 resume record (actual shape has consumedAt, expiresAt, ttlAt, but NO id)
+    await db.collection(`${namespace}_resume_tokens`).doc(resumeId).set({
+      consumedAt: now,
+      expiresAt: now + 600_000,
+      ttlAt: new Date(now + 600_000),
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    // 1. Dry run detects unmigrated v2.4 record
+    const dryReport = await adoptFirestoreLegacyTokens(testAdoptOpts({ dryRun: true, expectedEpoch: 1 }));
+    expect(dryReport.errors).toBe(0);
+    expect(dryReport.migrated).toBe(1);
+
+    // 2. Real migration converts in-place
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-resume' }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
+    const docAfter = await db.collection(`${namespace}_resume_tokens`).doc(resumeId).get();
+    expect(docAfter.exists).toBe(true);
+    const d = docAfter.data()!;
+    expect(d.id).toBe(resumeId);
+    expect(d.v).toBe(2);
+  });
 
+  it('real emulator: client seeded in _oauth_clients converts in-place; dual collection conflict detected', async () => {
+    await setupFencedState(1);
+
+    const now = Date.now();
+    const clientId = 'c-default-v24';
+
+    // Seed in default v2.4 collection _oauth_clients
+    await db.collection(`${namespace}_oauth_clients`).doc(clientId).set({
+      client_id: clientId,
+      client_name: 'V2.4 Default Client',
+      redirect_uris: ['https://app.example.com/oauth'],
+      token_endpoint_auth_method: 'none',
+      client_id_issued_at: now,
+    });
+
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-client' }));
+    expect(report.errors).toBe(0);
+    expect(report.migrated).toBe(1);
     // Transition to v3_active
     const ctrl = await getCutoverFenceRecord(db, namespace);
     await transitionCutoverFenceState(db, namespace, {
@@ -526,13 +581,91 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       migrationRunId: ctrl!.migrationRunId!,
       migrationManifestDigest: ctrl!.migrationManifestDigest!,
     });
-
-    // Verify client can be read from v3 store
     const store = createFirestoreStore({ db, namespace, key });
-    const client = await store.clients.getClient(clientId);
-    expect(client).toBeDefined();
-    expect(client?.client_id).toBe(clientId);
-    expect(client?.client_name).toBe('Legacy Client');
-    expect(client?.redirect_uris).toEqual(['https://example.com/oauth/callback']);
+    const c = await store.clients.getClient(clientId);
+    expect(c?.client_name).toBe('V2.4 Default Client');
+  });
+
+  it('real emulator: dual collection client conflict reports error', async () => {
+    await setupFencedState(1);
+
+    const conflictId = 'conflicting-client';
+
+    // Seed same client ID with conflicting redirect_uris across _clients and _oauth_clients
+    await db.collection(`${namespace}_clients`).doc(conflictId).set({
+      client_id: conflictId,
+      redirect_uris: ['https://one.example.com'],
+      token_endpoint_auth_method: 'none',
+    });
+    await db.collection(`${namespace}_oauth_clients`).doc(conflictId).set({
+      client_id: conflictId,
+      redirect_uris: ['https://different.example.com'],
+      token_endpoint_auth_method: 'none',
+    });
+
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({ expectedEpoch: 1, migrationRunId: 'run-cli-conflict' }));
+    expect(report.errors).toBeGreaterThanOrEqual(1);
+  });
+
+  it('real emulator: C12 empty namespace full lifecycle legacy_open -> closing -> fenced -> migrating -> v3_ready (irreversible=false) -> v3_active -> first credential write latches irreversible=true', async () => {
+    // 1. Initialize control in legacy_open
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+
+    // 2. Run migration on empty database
+    const report = await adoptFirestoreLegacyTokens(testAdoptOpts({
+      expectedEpoch: 1,
+      migrationRunId: 'run-empty',
+    }));
+    expect(report.scanned).toBe(0);
+    expect(report.migrated).toBe(0);
+    expect(report.errors).toBe(0);
+
+    // Verify v3_ready and irreversible=false
+    const ctrlReady = await getCutoverFenceRecord(db, namespace);
+    expect(ctrlReady?.state).toBe('v3_ready');
+    expect(ctrlReady?.irreversible).toBe(false);
+
+    // Verify marker written with empty: true
+    const markerSnap = await db.collection(`${namespace}_meta`).doc('v2_adopted').get();
+    expect(markerSnap.exists).toBe(true);
+    expect(markerSnap.data()?.empty).toBe(true);
+
+    // Marker prohibits reopening legacy
+    await expect(
+      transitionCutoverFenceState(db, namespace, {
+        fromState: 'fenced',
+        toState: 'legacy_open',
+        expectedEpoch: 1,
+      }),
+    ).rejects.toThrow();
+
+    // 3. Transition to v3_active
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: 1,
+      migrationRunId: 'run-empty',
+      migrationManifestDigest: ctrlReady!.migrationManifestDigest!,
+    });
+
+    const ctrlActiveBeforeWrite = await getCutoverFenceRecord(db, namespace);
+    expect(ctrlActiveBeforeWrite?.state).toBe('v3_active');
+    expect(ctrlActiveBeforeWrite?.irreversible).toBe(false);
+
+    // 4. First credential write atomically engages irreversible latch
+    const backend = createFirestoreBackend({ db, namespace, key });
+    await backend.putAccess({
+      id: 'sess-first-empty',
+      familyId: 'fam-empty',
+      expiresAt: Date.now() + 3600_000,
+      retainUntil: Date.now() + 7200_000,
+      sealed: 'sealed-data',
+    });
+
+    // 5. Verify irreversible latch is now engaged
+    const ctrlAfterWrite = await getCutoverFenceRecord(db, namespace);
+    expect(ctrlAfterWrite?.irreversible).toBe(true);
   });
 });

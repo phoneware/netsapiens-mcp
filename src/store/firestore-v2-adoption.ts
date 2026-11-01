@@ -71,6 +71,7 @@ export interface MigrationManifest {
     authCodes: number;
     resumeTokens: number;
     clients: number;
+    oauthClients: number;
   };
   classifications: {
     pr56Families: number;
@@ -94,6 +95,12 @@ export interface MigrationManifest {
     sourceInventoryDigest: string;
     targetInventoryDigest: string;
   };
+  codeSha?: string;
+  codeArtifact?: string;
+  packageIntegrity?: string;
+  expectedSourceInventoryDigest?: string;
+  completionState?: 'completed';
+  targetCounts?: Record<string, number>;
   scanned: number;
   migrated: number;
   skipped: number;
@@ -143,15 +150,24 @@ function computeTargetRecordFingerprint(type: string, id: string, data: Record<s
   return hmac.digest('hex');
 }
 
-export async function adoptFirestoreLegacyTokens(options: {
+export interface AdoptFirestoreLegacyTokensOptions {
   db: FirestoreLike;
   namespace: string;
   key: Uint8Array;
   dryRun?: boolean;
   expectedEpoch?: number;
   migrationRunId?: string;
+  runId?: string;
+  codeSha?: string;
+  codeArtifact?: string;
+  packageIntegrity?: string;
+  expectedSourceInventoryDigest?: string;
   now?: () => number;
-}): Promise<FirestoreAdoptionReport> {
+}
+
+export async function adoptFirestoreLegacyTokens(
+  options: AdoptFirestoreLegacyTokensOptions,
+): Promise<FirestoreAdoptionReport> {
   const { db, namespace, key, dryRun = false } = options;
   const nowProvider = options.now ?? Date.now;
   const codec = createCodec(key);
@@ -191,14 +207,37 @@ export async function adoptFirestoreLegacyTokens(options: {
       `Cutover fence control record missing for namespace: ${namespace}. Cannot migrate without control record.`,
     );
   }
-  if (isControlled && !dryRun && options.expectedEpoch === undefined) {
-    throw new CutoverFenceError(
-      `expectedEpoch is required for controlled migration of namespace ${namespace}`,
-    );
-  }
+  const effectiveRunId = options.migrationRunId ?? options.runId ?? initialControl?.migrationRunId;
   let currentEpoch = options.expectedEpoch ?? initialControl?.epoch ?? 1;
-  let runId: string = options.migrationRunId ?? randomUUID();
+  let runId: string = effectiveRunId ?? `run-${Date.now()}`;
 
+  if (isControlled && !dryRun) {
+    if (!effectiveRunId) {
+      throw new CutoverFenceError(
+        `migrationRunId (or runId) is required for controlled migration of namespace ${namespace}`,
+      );
+    }
+    if (options.expectedEpoch === undefined) {
+      throw new CutoverFenceError(
+        `expectedEpoch is required for controlled migration of namespace ${namespace}`,
+      );
+    }
+    if (!options.codeSha) {
+      throw new CutoverFenceError(
+        `codeSha is required for controlled migration of namespace ${namespace}`,
+      );
+    }
+    if (!options.codeArtifact || !/^.+@sha256:[a-f0-9]{64}$/.test(options.codeArtifact)) {
+      throw new CutoverFenceError(
+        `codeArtifact must be an approved image reference ending in @sha256:<64 lowercase hex>, got ${options.codeArtifact}`,
+      );
+    }
+    if (!options.packageIntegrity) {
+      throw new CutoverFenceError(
+        `packageIntegrity is required for controlled migration of namespace ${namespace}`,
+      );
+    }
+  }
   // C7: Validate fence state machine
   if (isControlled && initialControl) {
     if (initialControl.state !== 'fenced' && initialControl.state !== 'migrating') {
@@ -223,9 +262,9 @@ export async function adoptFirestoreLegacyTokens(options: {
           now: nowProvider,
         });
       } else {
-        if (options.migrationRunId && initialControl.migrationRunId !== options.migrationRunId) {
+        if (effectiveRunId && initialControl.migrationRunId !== effectiveRunId) {
           throw new CutoverFenceError(
-            `Cannot resume migration for namespace ${namespace}: migrationRunId mismatch (expected ${options.migrationRunId}, control has ${initialControl.migrationRunId})`,
+            `Cannot resume migration for namespace ${namespace}: migrationRunId mismatch (expected ${effectiveRunId}, control has ${initialControl.migrationRunId})`,
           );
         }
         if (!initialControl.migrationRunId) {
@@ -254,12 +293,27 @@ export async function adoptFirestoreLegacyTokens(options: {
   const upstreamSnap = await db.collection(legacyUpstreamCol).get();
   const authCodesSnap = await db.collection(legacyAuthCodesCol).get();
   const resumeSnap = await db.collection(legacyResumeCol).get();
-  const oauthClientsSnap = await db.collection(legacyOauthClientsCol).get().catch(() => ({ docs: [] }));
-  const clientsSnap = await db.collection(legacyClientsCol).get().catch(() => ({ docs: [] }));
+  const oauthClientsSnap = await db.collection(legacyOauthClientsCol).get();
+  const clientsSnap = await db.collection(legacyClientsCol).get();
 
   const clientDocs = new Map<string, Record<string, unknown>>();
-  for (const doc of clientsSnap.docs) clientDocs.set(doc.id, doc.data() || {});
-  for (const doc of oauthClientsSnap.docs) clientDocs.set(doc.id, doc.data() || {});
+  for (const doc of clientsSnap.docs) {
+    clientDocs.set(doc.id, doc.data() || {});
+  }
+  for (const doc of oauthClientsSnap.docs) {
+    if (clientDocs.has(doc.id)) {
+      const prev = clientDocs.get(doc.id)!;
+      const cur = doc.data() || {};
+      const prevUris = JSON.stringify(prev.redirect_uris || []);
+      const curUris = JSON.stringify(cur.redirect_uris || []);
+      if (prevUris !== curUris) {
+        report.errors++;
+        reasons.conflictingClaims++;
+        continue;
+      }
+    }
+    clientDocs.set(doc.id, doc.data() || {});
+  }
 
   const physicalCounts = {
     families: familiesSnap.docs.length,
@@ -268,7 +322,8 @@ export async function adoptFirestoreLegacyTokens(options: {
     upstream: upstreamSnap.docs.length,
     authCodes: authCodesSnap.docs.length,
     resumeTokens: resumeSnap.docs.length,
-    clients: clientDocs.size,
+    clients: clientsSnap.docs.length,
+    oauthClients: oauthClientsSnap.docs.length,
   };
 
   const familiesById = new Map<string, Record<string, unknown>>();
@@ -302,7 +357,8 @@ export async function adoptFirestoreLegacyTokens(options: {
       }
     } else {
       const accId = (rData.accessToken as string | undefined) ?? (rData.access_token as string | undefined);
-      if (!accId || !tokensByAccessId.has(accId)) {
+      const parentTok = accId ? tokensByAccessId.get(accId) : undefined;
+      if (!accId || !parentTok || parentTok.refreshToken !== refDoc.id) {
         report.errors++;
         reasons.orphanRefreshPointers++;
       }
@@ -418,12 +474,13 @@ export async function adoptFirestoreLegacyTokens(options: {
         // Read control inside transaction if controlled
         if (isControlled && initialControl && !dryRun) {
           const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
-          if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
-            throw new CutoverFenceError(`Cutover state changed concurrently during family migration`);
+          if (ctrl.epoch !== currentEpoch || ctrl.state !== 'migrating') {
+            throw new CutoverFenceError(`Cannot migrate family ${familyId}: state is ${ctrl.state}; expected migrating`);
+          }
+          if (ctrl.migrationRunId !== runId) {
+            throw new CutoverFenceError(`Cannot migrate family ${familyId}: migrationRunId mismatch (expected ${runId}, got ${ctrl.migrationRunId})`);
           }
         }
-
-        // Read source records
         const famSnap = await tx.get(db.collection(legacyFamiliesCol).doc(familyId));
         if (!famSnap.exists) return 'skipped';
         const liveFamData = famSnap.data() as Record<string, unknown>;
@@ -494,21 +551,21 @@ export async function adoptFirestoreLegacyTokens(options: {
           ) {
             throw new Error(`Target family content mismatch for ${familyId}`);
           }
-          if (famData.previousRefreshToken) {
-            const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
+          if (liveFamData.previousRefreshToken) {
+            const prevRefreshId = codec.id('refresh', liveFamData.previousRefreshToken as string);
             const targetPrevRefSnap = await tx.get(db.collection(v3Cols.refreshTokens).doc(prevRefreshId));
             if (!targetPrevRefSnap.exists || targetPrevRefSnap.data()?.status !== 'consumed') {
               throw new Error(`Target previous refresh pointer missing or invalid for ${familyId}`);
             }
           }
-          return 'skipped';
+          return 'migrated';
         }
 
         // Read previous refresh pointer if present
         let prevRefreshRow: RefreshPointerRow | undefined;
-        if (famData.previousRefreshToken) {
-          const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
-          const prevRefDoc = await tx.get(db.collection(legacyRefreshCol).doc(famData.previousRefreshToken as string));
+        if (liveFamData.previousRefreshToken) {
+          const prevRefreshId = codec.id('refresh', liveFamData.previousRefreshToken as string);
+          const prevRefDoc = await tx.get(db.collection(legacyRefreshCol).doc(liveFamData.previousRefreshToken as string));
           if (!prevRefDoc.exists) {
             throw new Error(`Missing previous refresh pointer document for family ${familyId}`);
           }
@@ -537,14 +594,17 @@ export async function adoptFirestoreLegacyTokens(options: {
         const generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
         const grantVersion = typeof upData.grantVersion === 'number' ? (upData.grantVersion as number) : 1;
 
+        if (typeof accData?.expiresAt !== 'number' && typeof embeddedToken.expiresAt !== 'number') {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: access token expiresAt missing`);
+        }
         const expiresAt = typeof accData?.expiresAt === 'number'
           ? (accData.expiresAt as number)
-          : (typeof embeddedToken.expiresAt === 'number' ? (embeddedToken.expiresAt as number) : now + 3600_000);
+          : (embeddedToken.expiresAt as number);
         const retainUntil = expiresAt + ACCESS_RETENTION_MS;
 
         const serverBaseUrl = (embeddedToken.serverBaseUrl as string | undefined) ??
           (accData?.serverBaseUrl as string | undefined) ??
-          (famData.serverBaseUrl as string | undefined);
+          (liveFamData.serverBaseUrl as string | undefined);
 
         const extra = (embeddedToken.extra as Record<string, string> | undefined) ??
           (accData?.extra as Record<string, string> | undefined) ??
@@ -693,8 +753,11 @@ export async function adoptFirestoreLegacyTokens(options: {
       const outcome = await db.runTransaction(async (tx) => {
         if (isControlled && initialControl && !dryRun) {
           const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
-          if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
-            throw new CutoverFenceError(`Cutover state changed concurrently during token migration`);
+          if (ctrl.epoch !== currentEpoch || ctrl.state !== 'migrating') {
+            throw new CutoverFenceError(`Cannot migrate token: state is ${ctrl.state}; expected migrating`);
+          }
+          if (ctrl.migrationRunId !== runId) {
+            throw new CutoverFenceError(`Cannot migrate token: migrationRunId mismatch (expected ${runId}, got ${ctrl.migrationRunId})`);
           }
         }
 
@@ -739,6 +802,44 @@ export async function adoptFirestoreLegacyTokens(options: {
         const familyId = codec.id('family', accessToken);
         const refreshId = codec.id('refresh', refreshToken);
 
+        // Bi-directional pointer check in tx (Sol Finding)
+        const refSnap = await tx.get(db.collection(legacyRefreshCol).doc(refreshToken));
+        if (!refSnap.exists) {
+          throw new Error(`Matching refresh pointer document missing for base token ${accessToken}`);
+        }
+        const refData = refSnap.data() as Record<string, unknown>;
+        if (refData.accessToken !== accessToken) {
+          throw new Error(`Refresh pointer bijection mismatch for base token ${accessToken}`);
+        }
+
+        // Target verification (Sol Finding 4)
+        const targetAccSnap = await tx.get(db.collection(v3Cols.sessions).doc(accessId));
+        const targetRefSnap = await tx.get(db.collection(v3Cols.refreshTokens).doc(refreshId));
+        const targetFamSnap = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
+        const targetUpSnap = await tx.get(db.collection(v3Cols.upstreamGrants).doc(familyId));
+
+        const targetStates = [targetAccSnap.exists, targetRefSnap.exists, targetFamSnap.exists, targetUpSnap.exists];
+        const allExist = targetStates.every(Boolean);
+        const noneExist = targetStates.every(e => !e);
+        if (!allExist && !noneExist) {
+          throw new Error(`Partial target detected for base token ${accessToken}`);
+        }
+        if (allExist) {
+          const tFamData = targetFamSnap.data() as Record<string, unknown>;
+          const tRefData = targetRefSnap.data() as Record<string, unknown>;
+          const tAccData = targetAccSnap.data() as Record<string, unknown>;
+          if (
+            tFamData?.id !== familyId ||
+            tFamData?.activeRefreshId !== refreshId ||
+            tFamData?.currentAccessTokenId !== accessId ||
+            tRefData?.familyId !== familyId ||
+            tRefData?.status !== 'active' ||
+            tAccData?.familyId !== familyId
+          ) {
+            throw new Error(`Target content mismatch for base token ${accessToken}`);
+          }
+          return 'migrated';
+        }
         const accessRow: AccessRow = {
           id: accessId,
           familyId,
@@ -957,10 +1058,9 @@ export async function adoptFirestoreLegacyTokens(options: {
             const targetResumeSnap = await tx.get(db.collection(v3Cols.resumeTokens).doc(rDoc.id));
             if (targetResumeSnap.exists) {
               const tData = targetResumeSnap.data() as Record<string, unknown>;
-              if (tData.id !== rDoc.id) {
-                throw new Error(`Target resume token ID mismatch for ${rDoc.id}`);
+              if (tData.v === 2) {
+                return 'skipped';
               }
-              return 'skipped';
             }
 
             if (!dryRun) {
@@ -1000,11 +1100,32 @@ export async function adoptFirestoreLegacyTokens(options: {
               throw new CutoverFenceError(`Cutover state changed concurrently during client migration`);
             }
           }
+          // Reread source inside tx
+          const srcOauthSnap = await tx.get(db.collection(legacyOauthClientsCol).doc(clientId));
+          const srcLegacySnap = await tx.get(db.collection(legacyClientsCol).doc(clientId));
+          const srcSnap = srcOauthSnap.exists ? srcOauthSnap : srcLegacySnap;
+          if (!srcSnap.exists) return 'skipped';
+          const clientData = srcSnap.data() as Record<string, unknown>;
+
+          if (
+            typeof clientData.client_id !== 'string' ||
+            !Array.isArray(clientData.redirect_uris) ||
+            typeof clientData.token_endpoint_auth_method !== 'string'
+          ) {
+            throw new Error(`Malformed client ${clientId}`);
+          }
 
           // Target verification
           const targetClientSnap = await tx.get(db.collection(v3Cols.oauthClients).doc(clientId));
           if (targetClientSnap.exists) {
-            return 'skipped';
+            const tData = targetClientSnap.data() as Record<string, unknown>;
+            if (tData.client_id !== clientId || !Array.isArray(tData.redirect_uris)) {
+              throw new Error(`Target client content mismatch for ${clientId}`);
+            }
+            if (!dryRun && isControlled && initialControl) {
+              await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
+            }
+            return 'migrated';
           }
 
           if (!dryRun) {
@@ -1012,7 +1133,7 @@ export async function adoptFirestoreLegacyTokens(options: {
               await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
             }
             tx.set(db.collection(v3Cols.oauthClients).doc(clientId), defined({
-              ...initialClientData,
+              ...clientData,
               client_id: clientId,
             }));
           }
@@ -1067,12 +1188,34 @@ export async function adoptFirestoreLegacyTokens(options: {
     ...tClients.docs.map(d => computeTargetRecordFingerprint('client', d.id, d.data(), targetHmacKey)),
   ].sort();
   const targetInventoryDigest = createHmac('sha256', targetHmacKey).update(targetEntries.join('\n')).digest('hex');
+
+  if (options.expectedSourceInventoryDigest && options.expectedSourceInventoryDigest !== sourceInventoryDigest) {
+    throw new CutoverFenceError(
+      `Source inventory digest mismatch: expected ${options.expectedSourceInventoryDigest}, got ${sourceInventoryDigest}`,
+    );
+  }
+
   const manifest: MigrationManifest = {
     schemaVersion: 1,
     runId,
     epoch: currentEpoch,
     namespace,
+    codeSha: options.codeSha,
+    codeArtifact: options.codeArtifact,
+    packageIntegrity: options.packageIntegrity,
+    expectedSourceInventoryDigest: options.expectedSourceInventoryDigest,
+    completionState: 'completed',
     physicalCounts,
+    targetCounts: {
+      families: tFam.docs.length,
+      tokens: tSess.docs.length,
+      refresh: tRef.docs.length,
+      upstream: tUp.docs.length,
+      authCodes: tCodes.docs.length,
+      resumeTokens: tRes.docs.length,
+      retiredRefreshTokens: tRet.docs.length,
+      oauthClients: tClients.docs.length,
+    },
     classifications,
     reasons,
     digests: {
@@ -1085,7 +1228,6 @@ export async function adoptFirestoreLegacyTokens(options: {
     errors: report.errors,
     completedAt: nowProvider(),
   };
-
   const manifestJson = JSON.stringify(manifest);
   const manifestDigest = createHash('sha256').update(manifestJson).digest('hex');
 
@@ -1107,27 +1249,41 @@ export async function adoptFirestoreLegacyTokens(options: {
         if (report.migrated > 0 && !ctrl.irreversible) {
           throw new CutoverFenceError(`Inconsistency: credentials were migrated but irreversible latch was not engaged`);
         }
-        if (report.migrated === 0 && !ctrl.irreversible) {
-          ctrl = await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
-        }
+        // C12: For empty namespaces (report.migrated === 0), irreversible remains false until first credential mutation
       }
 
       // Write migration manifest
       tx.set(
         db.collection(`${namespace}_meta`).doc(`migration_manifest_${currentEpoch}`),
-        manifest as unknown as Record<string, unknown>,
+        stripUndefined(manifest as unknown as Record<string, unknown>),
       );
 
       // Write v2_adopted marker
+      const isActuallyEmpty = report.migrated === 0 && report.scanned === 0;
       tx.set(
         db.collection(`${namespace}_meta`).doc('v2_adopted'),
-        {
+        stripUndefined({
           adoptedAt: nowProvider(),
+          migrationRunId: runId,
           runId,
           epoch: currentEpoch,
           manifestDigest,
-          ...report,
-        },
+          migrationManifestDigest: manifestDigest,
+          empty: isActuallyEmpty,
+          emptyNamespace: isActuallyEmpty,
+          totalAdopted: report.migrated,
+          totalCandidateTokens: classifications.pr56Families + classifications.baseFormatTokens,
+          totalCandidateCodes: classifications.authCodes,
+          totalCandidateResumes: classifications.resumeTokens,
+          totalCandidateClients: classifications.clients,
+          scanned: report.scanned,
+          migrated: report.migrated,
+          skipped: report.skipped,
+          errors: report.errors,
+          codeSha: options.codeSha,
+          codeArtifact: options.codeArtifact,
+          packageIntegrity: options.packageIntegrity,
+        }),
       );
 
       // Transition to v3_ready
@@ -1135,14 +1291,15 @@ export async function adoptFirestoreLegacyTokens(options: {
         const ctrlRef = getCutoverFenceDocRef(db, namespace);
         tx.set(
           ctrlRef,
-          {
+          stripUndefined({
             state: 'v3_ready',
             irreversible: ctrl.irreversible,
+            emptyNamespace: isActuallyEmpty ? true : undefined,
             migrationRunId: runId,
             migrationManifestDigest: manifestDigest,
             updatedAt: nowProvider(),
             migratedAt: nowProvider(),
-          },
+          }),
           { merge: true },
         );
       }
@@ -1158,32 +1315,40 @@ export async function ensureFirestoreAdopted(options: {
   now?: () => number;
 }): Promise<void> {
   const { db, namespace } = options;
-
-  const markerDoc = db.collection(`${namespace}_meta`).doc('v2_adopted');
-  const snap = await markerDoc.get();
-  if (snap.exists) return;
-
-  const legacyFamiliesSnap = await db.collection(`${namespace}_tokens_refresh_families`).get();
-  const legacyTokensSnap = await db.collection(`${namespace}_tokens`).get();
-  const hasLegacy = !legacyFamiliesSnap.empty || !legacyTokensSnap.empty;
-
   const isControlled = isSupportedCutoverNamespace(namespace);
+
   if (isControlled) {
     const control = await getCutoverFenceRecord(db, namespace);
-    if (!control || (control.state !== 'v3_active' && control.state !== 'v3_ready')) {
+    if (!control || control.state !== 'v3_active') {
       const state = control?.state ?? 'uninitialized';
       throw new CutoverRefusedError(
         `Cutover state is ${state}; v3 operations require v3_active for namespace ${namespace}`,
         { cutoverState: state, epoch: control?.epoch },
       );
     }
+    return;
   }
+
+  // Non-controlled test namespaces only:
+  const markerDoc = db.collection(`${namespace}_meta`).doc('v2_adopted');
+  const snap = await markerDoc.get();
+  if (snap.exists) return;
+
+  const [legFam, legTok, legRef, legUp, legAuth, legRes] = await Promise.all([
+    db.collection(`${namespace}_tokens_refresh_families`).get(),
+    db.collection(`${namespace}_tokens`).get(),
+    db.collection(`${namespace}_tokens_refresh`).get(),
+    db.collection(`${namespace}_tokens_upstream`).get(),
+    db.collection(`${namespace}_auth_codes`).get(),
+    db.collection(`${namespace}_resume_tokens`).get(),
+  ]);
+  const hasLegacy = !legFam.empty || !legTok.empty || !legRef.empty || !legUp.empty || !legAuth.empty || !legRes.empty;
+
   if (hasLegacy) {
     throw new CutoverRefusedError(
       `Legacy credentials present for namespace ${namespace}. Explicit fenced cutover migration required; runtime auto-adoption is disabled.`,
     );
   }
 
-  // No legacy data present: write adopted marker
   await markerDoc.set({ adoptedAt: (options.now ?? Date.now)(), skipped: true, scanned: 0, migrated: 0, errors: 0 });
 }

@@ -62,6 +62,7 @@ export interface AtomicIssueParams {
 }
 export interface AtomicRedeemAndIssueParams {
   codeId: string;
+  expectedSealed: string;
   now: number;
   issue: AtomicIssueParams;
 }
@@ -120,13 +121,14 @@ export interface SessionStore {
 export interface AuthCodeStore {
   put(code: string, data: AuthCodeData): Promise<void>;
   getChallenge(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<string | undefined>;
-  getEntry?(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined>;
+  getEntry(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<{ data: AuthCodeData; sealed: string } | undefined>;
   redeem(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<AuthCodeData | undefined>;
-  redeemAndIssue?(
+  redeemAndIssue(
     code: string,
     expected: { serverBaseUrl?: string; clientId?: string },
     tokens: { accessToken: string; refreshToken: string },
     stored: StoredToken,
+    expectedSealed?: string,
   ): Promise<AuthCodeData | undefined>;
 }
 export interface ResumeTokenStore { consume(resumeId: string): Promise<boolean>; }
