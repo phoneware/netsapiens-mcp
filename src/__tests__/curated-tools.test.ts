@@ -215,7 +215,7 @@ describe('semantic filters carry through search_api and call_api', () => {
   const result = (await handleToolCall(
    fakeClient as never,
    'search_api',
-   { query: 'auditlog' },
+   { query: 'accesslog' },
    'user',
   )) as { content: Array<{ text: string }> };
   const parsed = JSON.parse(result.content[0].text);
@@ -1191,23 +1191,65 @@ describe('composite handlers translate args correctly', () => {
   expect(opts.pathParams.user).toBe('~');
  });
 
- it('transfer_call uses the /transfer/peer path for type=peer', async () => {
+ it('transfer_call sends blind transfer with call-term-user', async () => {
   const { handleToolCall } = await importTools();
   const calls: unknown[] = [];
   const fakeClient = {
    request: async (o: unknown) => {
     calls.push(o);
-    return { success: true };
+    return { success: true, data: { code: 202, message: 'Accepted' } };
    },
   };
   await handleToolCall(
    fakeClient as never,
    'transfer_call',
-   { call_id: 'c1', to: '4001', type: 'peer' },
+   { call_id: 'c1', to: '4001' },
    'domain_admin',
   );
-  const opts = calls[0] as { pathTemplate: string };
-  expect(opts.pathTemplate).toContain('/transfer/peer');
+  expect(calls.length).toBe(1);
+  const opts = calls[0] as { method: string; pathTemplate: string; body: Record<string, unknown> };
+  expect(opts.method).toBe('PATCH');
+  expect(opts.pathTemplate).toBe('/domains/{domain}/users/{user}/calls/{callid}/transfer');
+  expect(opts.body).toEqual({ 'call-term-user': '4001' });
+ });
+
+ it('transfer_call reads consultation call and sends attended transfer with hostname and session id', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: unknown[] = [];
+  const fakeClient = {
+   request: async (o: { method: string; pathTemplate: string }) => {
+    calls.push(o);
+    if (o.method === 'GET') {
+     return {
+      success: true,
+      data: {
+       'core-server': 'core1.example.com',
+       'call-session-id': 'sess-2026-999',
+      },
+     };
+    }
+    return { success: true, data: { code: 202, message: 'Accepted' } };
+   },
+  };
+  await handleToolCall(
+   fakeClient as never,
+   'transfer_call',
+   { call_id: 'c1', consult_call_id: 'c2', type: 'attended' },
+   'domain_admin',
+  );
+  expect(calls.length).toBe(2);
+  const getCall = calls[0] as { method: string; pathTemplate: string; pathParams: Record<string, string> };
+  expect(getCall.method).toBe('GET');
+  expect(getCall.pathTemplate).toBe('/domains/{domain}/users/{user}/calls/{callid}');
+  expect(getCall.pathParams.callid).toBe('c2');
+
+  const patchCall = calls[1] as { method: string; pathTemplate: string; body: Record<string, unknown> };
+  expect(patchCall.method).toBe('PATCH');
+  expect(patchCall.pathTemplate).toBe('/domains/{domain}/users/{user}/calls/{callid}/transfer');
+  expect(patchCall.body).toEqual({
+   hostname: 'core1.example.com',
+   'call-destination-session-id': 'sess-2026-999',
+  });
  });
 
  it('send_message POSTs chat message between users to /domains/~/users/~/messages', async () => {
@@ -1347,7 +1389,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('yes');
@@ -1365,7 +1407,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001', synchronous: 'no' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~', synchronous: 'no' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('no');
@@ -1384,7 +1426,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBeUndefined();
