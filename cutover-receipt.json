@@ -1,6 +1,6 @@
 {
-  "harnessSha": "85f6c5ebe930905f1ec704b8469237f103bff23c",
-  "timestamp": "2026-11-01T22:51:34.680Z",
+  "harnessSha": "9a258041ebf806b8ecad8954a02ce12385f647bb",
+  "timestamp": "2026-11-01T23:12:40.054Z",
   "emulatorHost": "127.0.0.1:8080",
   "artifacts": {
     "v231": {
@@ -19,10 +19,10 @@
     },
     "bridge": {
       "branch": "feat/netsapiens-mcp-2-bridge",
-      "gitSha": "1a8f2e954738904b2e2574d70f0c2937d49ac39b",
-      "path": "/tmp/netsapiens-mcp-2.4.1-1a8f2e9.tgz",
-      "sha256": "51d1efc3341258d0ea8fa711652aa8e6862a8d4e7292bbe1f160efa2d87fc384",
-      "integrity": "sha512-nieaFK+wvw0x+0Ikt5+Vx1xRrI4d+L731EmNCrBXbNm33ywlAD24CYGG/Rng5hJIFKUp31VtiX8RtoCfKWgkiw=="
+      "gitSha": "391e2b86860edc2943c30334b94dd7f30d9835be",
+      "path": "/tmp/netsapiens-mcp-2.4.1-391e2b8.tgz",
+      "sha256": "5ab2dd38198ebb11631776aa8a0d4f8d3258c8fdaadd63981aeb0bc62920bdf7",
+      "integrity": "sha512-UNouMap1zQYaUCs5qjeiWZT+aKmzOsV0IPEp6qsfXDQEdmB6yJ7UBfBAfmGLM68DA4LvHYsfQYPSIgsgUi+CWQ=="
     },
     "v3": {
       "branch": "feat/netsapiens-mcp-3",
@@ -37,7 +37,7 @@
     "v3Version": "3.0.0",
     "mcpSdkVersion": "1.32.2",
     "firestoreSdkVersion": "8.7.1",
-    "canonicalFenceHash": "6036aebd99b0a4898904e1b3d9d4a57a2c7b70741a0c6077105cba4b52b17e30"
+    "canonicalFenceHash": "d97a101532b2de19e8a063229434d8499c560ce035b149809e0ab5c1633b9594"
   },
   "cases": [
     {
