@@ -195,7 +195,7 @@ export const update_image_file_upload: ToolDefinition = {
     family: 'v2',
     key: 'PUT /images/{}',
     method: 'PUT',
-    multipartOnly: false,
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];

@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
+import { MULTIPART_ONLY_TOOLS } from '../src/tools/multipart.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -462,10 +463,11 @@ function parseOperationsAcrossBranches(): ParsedOperation[] {
   // Check multipartOnly
   const content = op.requestBody?.content;
   const contentTypes = content ? Object.keys(content) : [];
-  const multipartOnly =
+  const isMultipartBodyOnly =
    contentTypes.length > 0 &&
    contentTypes.includes('multipart/form-data') &&
    !contentTypes.includes('application/json');
+  const multipartOnly = isMultipartBodyOnly || MULTIPART_ONLY_TOOLS.has(toolName);
 
   const summary = normalizeDocText(op.summary || '');
   const description = normalizeDocText(op.description || '');

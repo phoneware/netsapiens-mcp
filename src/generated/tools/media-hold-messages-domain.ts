@@ -83,7 +83,7 @@ export const create_msg_domain_file_upload: ToolDefinition = {
     family: 'v2',
     key: 'POST /domains/{}/msg',
     method: 'POST',
-    multipartOnly: false,
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -132,7 +132,7 @@ export const update_msg_domain_file_upload: ToolDefinition = {
     family: 'v2',
     key: 'PUT /domains/{}/msg/{}',
     method: 'PUT',
-    multipartOnly: false,
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'index'];
