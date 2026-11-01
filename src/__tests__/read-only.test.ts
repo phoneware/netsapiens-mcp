@@ -1,5 +1,5 @@
 /**
- * Tests for NetSapiens MCP Read-Only Mode & Cross-Server Isolation (phoneware/monorepo#1129).
+ * Tests for NetSapiens MCP Read-Only Mode & Cross-Server Isolation.
  *
  * Covers:
  *  - Tool listing in read-only mode contains NO mutating tools
@@ -25,8 +25,8 @@ const openServers: HttpServer[] = [];
 async function importApp(envOverrides: Record<string, string> = {}) {
  vi.resetModules();
  process.env.MCP_TRANSPORT = 'http';
- process.env.MCP_BASE_URL = envOverrides.MCP_BASE_URL || 'https://mcp-readonly.edge.phoneware.cloud';
- process.env.NETSAPIENS_API_URL = 'https://edge.phoneware.cloud';
+ process.env.MCP_BASE_URL = envOverrides.MCP_BASE_URL || 'https://second.example.com';
+ process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
@@ -237,8 +237,8 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
 
  describe('OAuth State Isolation (cross-server token rejection)', () => {
   it('rejects a token issued for the standard server when presented to the read-only server', async () => {
-   const standardBaseUrl = 'https://mcp.edge.phoneware.cloud';
-   const readOnlyBaseUrl = 'https://mcp-readonly.edge.phoneware.cloud';
+   const standardBaseUrl = 'https://netsapiens.example.com';
+   const readOnlyBaseUrl = 'https://second.example.com';
 
    // 1. Create standard auth provider and mint a token with its baseUrl
    const standardProvider = new NetSapiensAuthProvider({
@@ -261,7 +261,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
     serverBaseUrl: standardBaseUrl,
    });
 
-   // 2. Start read-only HTTP server (MCP_BASE_URL=https://mcp-readonly.edge.phoneware.cloud)
+   // 2. Start read-only HTTP server (MCP_BASE_URL=https://second.example.com)
    const { app, authProvider: readOnlyProvider } = await importApp({
     MCP_BASE_URL: readOnlyBaseUrl,
     MCP_READ_ONLY: 'true',
@@ -296,7 +296,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
   });
 
   it('accepts a token issued for the read-only server on the read-only server', async () => {
-   const readOnlyBaseUrl = 'https://mcp-readonly.edge.phoneware.cloud';
+   const readOnlyBaseUrl = 'https://second.example.com';
 
    const { app, authProvider } = await importApp({
     MCP_BASE_URL: readOnlyBaseUrl,

@@ -1,38 +1,34 @@
 # Multi-stage build for optimal image size
-FROM node:18-alpine AS builder
+FROM node:24-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including devDependencies for TypeScript build)
+# Install dependencies including devDependencies for TypeScript compilation
 RUN npm ci
 
-# Copy source code
+# Copy source code and build
 COPY . .
-
-# Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:18-alpine
+# Runtime stage
+FROM node:24-alpine
 
-# Set working directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production && \
+RUN npm ci --omit=dev && \
     npm cache clean --force
 
 # Copy built files from builder
 COPY --from=builder /app/build ./build
 
-# Set environment variables (these can be overridden at runtime)
+# Set default runtime environment variables
 ENV NODE_ENV=production \
     DEBUG=false \
     MCP_TRANSPORT=http \
@@ -41,10 +37,13 @@ ENV NODE_ENV=production \
 # Expose HTTP port
 EXPOSE 3000
 
-# Run as non-root user for security
+# Configure non-root user and secure token directory
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app
+    adduser -S nodejs -u 1001 -G nodejs -h /home/nodejs && \
+    chown -R nodejs:nodejs /app && \
+    mkdir -p /home/nodejs/.netsapiens-mcp && \
+    chown nodejs:nodejs /home/nodejs/.netsapiens-mcp && \
+    chmod 700 /home/nodejs/.netsapiens-mcp
 
 USER nodejs
 

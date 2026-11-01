@@ -986,7 +986,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'readback_success',
           payload: {
             success: true,
-            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'automatic' },
+            data: { 'callqueue-agent-id': '2007@ExampleLab', 'callqueue-agent-availability-type': 'automatic' },
             note: 'Avery Example is logged in to the Appointments queue (2090).',
           },
         },
@@ -995,7 +995,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'readback_success',
           payload: {
             success: true,
-            data: { 'callqueue-agent-id': '2007@PhonewareLab', 'callqueue-agent-availability-type': 'manual' },
+            data: { 'callqueue-agent-id': '2007@ExampleLab', 'callqueue-agent-availability-type': 'manual' },
             note: 'Avery Example is logged out of the Appointments queue (2090).',
           },
         },
@@ -1004,7 +1004,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
           branch: 'readback_pending',
           payload: {
             success: true,
-            data: { 'callqueue-agent-id': '2007@PhonewareLab' },
+            data: { 'callqueue-agent-id': '2007@ExampleLab' },
             note: 'NetSapiens accepted the change; the agent record does not show it yet.',
           },
         },
@@ -1024,7 +1024,7 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
             step: 'resolve',
             from: '2090',
             to: '2099',
-            agent: '2007@PhonewareLab',
+            agent: '2007@ExampleLab',
             note: 'Avery Example is not an agent in the Billing queue (2099), so nothing was changed.',
           },
         },
@@ -1064,13 +1064,13 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
               ok: true,
               data: [
                 {
-                  'callqueue-agent-id': '2006@PhonewareLab',
+                  'callqueue-agent-id': '2006@ExampleLab',
                   'name-full-name': 'Casey Example',
                   'callqueue-agent-availability-type': 'automatic',
                   'active-calls-total-current': 1,
                 },
                 {
-                  'callqueue-agent-id': '2007@PhonewareLab',
+                  'callqueue-agent-id': '2007@ExampleLab',
                   'name-full-name': 'Avery Example',
                   'callqueue-agent-availability-type': 'manual',
                   'active-calls-total-current': 0,

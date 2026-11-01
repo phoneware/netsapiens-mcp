@@ -436,7 +436,7 @@ describe('workflow tools (multi-call composites)', () => {
         'text-to-speech-language': '',
         'voicemail-from-name': 'Alice Smith',
         'voicemail-from-user': '2021',
-        'voicemail-from-host': 'PhonewareLab',
+        'voicemail-from-host': 'ExampleLab',
         'voicemail-from-caller-id-number': '15551112222',
         'recorded-datetime': '2026-10-19 12:00:00',
         'voicemail-recording-started-datetime': '2026-10-19 12:00:00',
@@ -455,7 +455,7 @@ describe('workflow tools (multi-call composites)', () => {
         'text-to-speech-language': '',
         'voicemail-from-name': '',
         'voicemail-from-user': '2022',
-        'voicemail-from-host': 'PhonewareLab',
+        'voicemail-from-host': 'ExampleLab',
         'voicemail-from-caller-id-number': '15553334444',
         'recorded-datetime': '2026-10-19 12:30:00',
         'voicemail-recording-started-datetime': '2026-10-19 12:30:00',
@@ -473,7 +473,7 @@ describe('workflow tools (multi-call composites)', () => {
         id: 'cdr-1',
         'call-term-call-id': '20261019120000-call1',
         'call-term-user': '2001',
-        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+        'prefilled-transcription-api': '/ns-api/v2/domains/ExampleLab/transcriptions?id=179133950',
        },
       ],
      };
@@ -485,11 +485,11 @@ describe('workflow tools (multi-call composites)', () => {
        'call-intelligence-processing-status': 'finished',
        'call-intelligence-segments': [
         {
-         speaker: '2001@PhonewareLab',
+         speaker: '2001@ExampleLab',
          comment: '2 0 0 1 is unavailable. Please leave a message.',
         },
         {
-         speaker: 'sip:2021ct@PhonewareLab',
+         speaker: 'sip:2021ct@ExampleLab',
          comment: 'Hey it is Alice, please call me back.',
         },
        ],
@@ -539,7 +539,7 @@ describe('workflow tools (multi-call composites)', () => {
       'text-to-speech-language': '',
       'voicemail-from-name': 'Alice Smith',
       'voicemail-from-user': '2021',
-      'voicemail-from-host': 'PhonewareLab',
+      'voicemail-from-host': 'ExampleLab',
       'voicemail-from-caller-id-number': '15551112222',
       'recorded-datetime': '2026-10-19 12:00:00',
       'voicemail-recording-started-datetime': '2026-10-19 12:00:00',
@@ -559,7 +559,7 @@ describe('workflow tools (multi-call composites)', () => {
         id: 'cdr-1',
         'call-term-call-id': '20261019120000-call1',
         'call-term-user': '2001',
-        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+        'prefilled-transcription-api': '/ns-api/v2/domains/ExampleLab/transcriptions?id=179133950',
        },
       ],
      };
@@ -571,11 +571,11 @@ describe('workflow tools (multi-call composites)', () => {
        'call-intelligence-processing-status': 'finished',
        'call-intelligence-segments': [
         {
-         speaker: '2001@PhonewareLab',
+         speaker: '2001@ExampleLab',
          comment: '2 0 0 1 is unavailable. Please leave a message.',
         },
         {
-         speaker: 'sip:2021ct@PhonewareLab',
+         speaker: 'sip:2021ct@ExampleLab',
          comment: 'Hey it is Alice, please call me back.',
         },
        ],
@@ -622,7 +622,7 @@ describe('workflow tools (multi-call composites)', () => {
        {
         'call-term-call-id': '20261019120000-call1',
         'call-term-user': '2001',
-        'prefilled-transcription-api': '/ns-api/v2/domains/PhonewareLab/transcriptions?id=179133950',
+        'prefilled-transcription-api': '/ns-api/v2/domains/ExampleLab/transcriptions?id=179133950',
        },
       ],
      };
@@ -1007,51 +1007,51 @@ describe('composite handlers translate args correctly', () => {
   expect(parsed.data).toEqual([{ device: 'mac-1', user: '1001' }]);
  });
 
-	it('find_device looks up by MAC or model fragment from /domains/{domain}/phones', async () => {
-		const { handleToolCall } = await importTools();
-		const calls: Array<{ pathTemplate: string }> = [];
-		const fakeClient = {
-			request: async (o: { pathTemplate: string }) => {
-				calls.push(o);
-				if (o.pathTemplate === '/domains/{domain}/phones') {
-					return {
-						success: true,
-						data: [
-							{
-								'device-provisioning-mac-address': '0004f2112233',
-								'device-models-brand-and-model': 'Polycom VVX 450',
-								'device-provisioning-line-1-extensions': '1001',
-							},
-							{
-								'device-provisioning-mac-address': '0004f2aabbcc',
-								'device-models-brand-and-model': 'Yealink T46S',
-								'device-provisioning-line-1-extensions': '1002',
-							},
-						],
-					};
-				}
-				return { success: true, data: [] };
-			},
-		};
+ it('find_device looks up by MAC or model fragment from /domains/{domain}/phones', async () => {
+  const { handleToolCall } = await importTools();
+  const calls: Array<{ pathTemplate: string }> = [];
+  const fakeClient = {
+   request: async (o: { pathTemplate: string }) => {
+    calls.push(o);
+    if (o.pathTemplate === '/domains/{domain}/phones') {
+     return {
+      success: true,
+      data: [
+       {
+        'device-provisioning-mac-address': '0004f2112233',
+        'device-models-brand-and-model': 'Polycom VVX 450',
+        'device-provisioning-line-1-extensions': '1001',
+       },
+       {
+        'device-provisioning-mac-address': '0004f2aabbcc',
+        'device-models-brand-and-model': 'Yealink T46S',
+        'device-provisioning-line-1-extensions': '1002',
+       },
+      ],
+     };
+    }
+    return { success: true, data: [] };
+   },
+  };
 
-		// 1. Query by MAC
-		const macResult = (await handleToolCall(fakeClient as never, 'find_device', { query: '0004f2112233' }, 'domain_admin')) as {
-			content: Array<{ text: string }>;
-		};
-		const macParsed = JSON.parse(macResult.content[0].text);
-		expect(macParsed.data.length).toBe(1);
-		expect(macParsed.data[0].device).toBe('0004f2112233');
-		expect(macParsed.data[0]['device-models-model']).toBe('Polycom VVX 450');
+  // 1. Query by MAC
+  const macResult = (await handleToolCall(fakeClient as never, 'find_device', { query: '0004f2112233' }, 'domain_admin')) as {
+   content: Array<{ text: string }>;
+  };
+  const macParsed = JSON.parse(macResult.content[0].text);
+  expect(macParsed.data.length).toBe(1);
+  expect(macParsed.data[0].device).toBe('0004f2112233');
+  expect(macParsed.data[0]['device-models-model']).toBe('Polycom VVX 450');
 
-		// 2. Query by model fragment
-		const modelResult = (await handleToolCall(fakeClient as never, 'find_device', { query: 'Yealink' }, 'domain_admin')) as {
-			content: Array<{ text: string }>;
-		};
-		const modelParsed = JSON.parse(modelResult.content[0].text);
-		expect(modelParsed.data.length).toBe(1);
-		expect(modelParsed.data[0].device).toBe('0004f2112233' ? '0004f2aabbcc' : '');
-		expect(modelParsed.data[0]['device-models-model']).toBe('Yealink T46S');
-	});
+  // 2. Query by model fragment
+  const modelResult = (await handleToolCall(fakeClient as never, 'find_device', { query: 'Yealink' }, 'domain_admin')) as {
+   content: Array<{ text: string }>;
+  };
+  const modelParsed = JSON.parse(modelResult.content[0].text);
+  expect(modelParsed.data.length).toBe(1);
+  expect(modelParsed.data[0].device).toBe('0004f2112233' ? '0004f2aabbcc' : '');
+  expect(modelParsed.data[0]['device-models-model']).toBe('Yealink T46S');
+ });
 
  it('recent_calls sends the `datetime-start` + `datetime-end` pair, and the statistics routes send `start_date` + `end_date` as UTC "YYYY-MM-DD HH:MM:SS", for `since`', async () => {
   // `datetime-start`/`datetime-end` are a required pair on the CDR endpoint —
@@ -1818,7 +1818,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
+     return { success: true, data: { user: '2007', domain: 'ExampleLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1828,7 +1828,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
      return {
       success: true,
       data: {
-       'callqueue-agent-id': '2007@PhonewareLab',
+       'callqueue-agent-id': '2007@ExampleLab',
        'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': hasPatched ? 'automatic' : 'manual',
       },
@@ -1848,7 +1848,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   const patchWrites = calls.filter((c) => c.method === 'PATCH');
   expect(patchWrites.length).toBe(1);
   expect(patchWrites[0].pathTemplate).toBe('/domains/~/callqueues/{queue}/agents/{agent}/login');
-  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@PhonewareLab' });
+  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@ExampleLab' });
  });
 
  it('self non-member: refuses with C1 message and zero writes', async () => {
@@ -1858,7 +1858,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Blake Example' } };
+     return { success: true, data: { user: '2001', domain: 'ExampleLab', 'name-full-name': 'Blake Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1870,8 +1870,8 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
      return {
       success: true,
       data: [
-       { 'callqueue-agent-id': '2006@PhonewareLab', 'name-full-name': 'Casey Example', 'login-username': '2006@PhonewareLab' },
-       { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Avery Example', 'login-username': '2007@PhonewareLab' },
+       { 'callqueue-agent-id': '2006@ExampleLab', 'name-full-name': 'Casey Example', 'login-username': '2006@ExampleLab' },
+       { 'callqueue-agent-id': '2007@ExampleLab', 'name-full-name': 'Avery Example', 'login-username': '2007@ExampleLab' },
       ],
      };
     }
@@ -1896,7 +1896,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2001', domain: 'PhonewareLab', 'name-full-name': 'Blake Example' } };
+     return { success: true, data: { user: '2001', domain: 'ExampleLab', 'name-full-name': 'Blake Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1905,7 +1905,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
      return {
       success: true,
       data: {
-       'callqueue-agent-id': '2007@PhonewareLab',
+       'callqueue-agent-id': '2007@ExampleLab',
        'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': 'automatic',
       },
@@ -1923,7 +1923,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   expect(parsed.success).toBe(true);
   const patchWrites = calls.filter((c) => c.method === 'PATCH');
   expect(patchWrites.length).toBe(1);
-  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@PhonewareLab' });
+  expect(patchWrites[0].pathParams).toEqual({ queue: '2090', agent: '2007@ExampleLab' });
  });
 
  it('all: resolves immediately without membership read and PATCHes', async () => {
@@ -1933,7 +1933,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
+     return { success: true, data: { user: '2007', domain: 'ExampleLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'PATCH') {
      return { success: true, data: { status: 'ok' } };
@@ -1948,7 +1948,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   expect(parsed.note).toBe('Avery Example is logged in to all queues.');
   const patchWrites = calls.filter((c) => c.method === 'PATCH');
   expect(patchWrites.length).toBe(1);
-  expect(patchWrites[0].pathParams).toEqual({ queue: 'all', agent: '2007@PhonewareLab' });
+  expect(patchWrites[0].pathParams).toEqual({ queue: 'all', agent: '2007@ExampleLab' });
   expect(calls.some((c) => c.pathTemplate.includes('/callqueues/all/agents'))).toBe(false);
  });
 
@@ -1959,7 +1959,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
+     return { success: true, data: { user: '2007', domain: 'ExampleLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      if (o.pathParams?.queue === '2090') return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -1967,7 +1967,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}/agents/{agent}')) {
      if (o.pathParams?.queue === '2090') {
-      return { success: true, data: { 'callqueue-agent-id': '2007@PhonewareLab', 'name-full-name': 'Avery Example' } };
+      return { success: true, data: { 'callqueue-agent-id': '2007@ExampleLab', 'name-full-name': 'Avery Example' } };
      }
      return { success: false, error: '404 Not Found' };
     }
@@ -1984,7 +1984,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
   expect(parsed.step).toBe('resolve');
   expect(parsed.from).toBe('2090');
   expect(parsed.to).toBe('2099');
-  expect(parsed.agent).toBe('2007@PhonewareLab');
+  expect(parsed.agent).toBe('2007@ExampleLab');
   const writes = calls.filter((c) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.method));
   expect(writes.length).toBe(0);
  });
@@ -1997,7 +1997,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
    request: async (o: { method: string; pathTemplate: string; pathParams?: Record<string, string> }) => {
     calls.push(o);
     if (o.method === 'GET' && o.pathTemplate === '/domains/{domain}/users/{user}') {
-     return { success: true, data: { user: '2007', domain: 'PhonewareLab', 'name-full-name': 'Avery Example' } };
+     return { success: true, data: { user: '2007', domain: 'ExampleLab', 'name-full-name': 'Avery Example' } };
     }
     if (o.method === 'GET' && o.pathTemplate.endsWith('/callqueues/{queue}')) {
      return { success: true, data: { callqueue: '2090', description: 'Appointments' } };
@@ -2008,7 +2008,7 @@ describe('queue agent actions (agent_login, agent_logout, switch_queue)', () => 
      return {
       success: true,
       data: {
-       'callqueue-agent-id': '2007@PhonewareLab',
+       'callqueue-agent-id': '2007@ExampleLab',
        'name-full-name': 'Avery Example',
        'callqueue-agent-availability-type': avail,
       },
@@ -2043,7 +2043,7 @@ describe('queue_status live state (C2)', () => {
       success: true,
       data: {
        callqueue: '2090',
-       domain: 'PhonewareLab',
+       domain: 'ExampleLab',
        description: 'Appointments',
       },
      };
@@ -2054,19 +2054,19 @@ describe('queue_status live state (C2)', () => {
       data: [
        {
         'dial-rule-translation-source-name': 'Alice Smith',
-        from_uri: 'sip:1001@PhonewareLab',
+        from_uri: 'sip:1001@ExampleLab',
         time_queued: '2026-10-19 16:09:20',
         mysql_dura: '3',
        },
        {
         'dial-rule-translation-source-name': 'Bob Jones',
-        from_uri: 'sip:1002@PhonewareLab',
+        from_uri: 'sip:1002@ExampleLab',
         time_queued: '2026-10-19 16:09:16',
         mysql_dura: '7',
        },
        {
         'dial-rule-translation-source-name': 'Carol White',
-        from_uri: 'sip:1003@PhonewareLab',
+        from_uri: 'sip:1003@ExampleLab',
         time_queued: '2026-10-19 16:09:12',
         mysql_dura: '11',
        },
@@ -2078,13 +2078,13 @@ describe('queue_status live state (C2)', () => {
       success: true,
       data: [
        {
-        'callqueue-agent-id': '2006@PhonewareLab',
+        'callqueue-agent-id': '2006@ExampleLab',
         'name-full-name': 'Casey Example',
         'callqueue-agent-availability-type': 'automatic',
         'active-calls-total-current': 1,
        },
        {
-        'callqueue-agent-id': '2007@PhonewareLab',
+        'callqueue-agent-id': '2007@ExampleLab',
         'name-full-name': 'Avery Example',
         'callqueue-agent-availability-type': 'manual',
         'active-calls-total-current': 0,
@@ -2102,7 +2102,7 @@ describe('queue_status live state (C2)', () => {
    },
   };
 
-  const res = await handleToolCall(client as never, 'queue_status', { queue: '2090', domain: 'PhonewareLab' }, 'domain_admin');
+  const res = await handleToolCall(client as never, 'queue_status', { queue: '2090', domain: 'ExampleLab' }, 'domain_admin');
   const payload = JSON.parse(res.content[0].text);
 
   expect(payload.queue_id).toBe('2090');
