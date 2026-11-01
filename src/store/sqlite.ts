@@ -52,7 +52,9 @@ export class SqliteBackend implements StoreBackend {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     try { closeSync(openSync(path, 'wx', 0o600)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    if ((statSync(path).mode & 0o077) !== 0) throw new StoreConfigError(`${path} is readable by other users; chmod 600 ${path}`);
+    // Windows has no POSIX bits (Node reports 0666 and chmod only toggles read-only), so the
+    // store and SQLite's -wal and -journal get the ACL Windows gives new files in this directory.
+    if (process.platform !== 'win32' && (statSync(path).mode & 0o077) !== 0) throw new StoreConfigError(`${path} is readable by other users; chmod 600 ${path}`);
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => Database };
     const db = new DatabaseSync(path);
     this.db = db;

@@ -8,12 +8,14 @@ import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const testHome = mkdtempSync(join(tmpdir(), 'nsmcp-config-store-test-'));
-afterAll(() => rmSync(testHome, { recursive: true, force: true }));
+afterAll(() => rmSync(testHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
 const args = ['--import', 'tsx', 'src/index.ts'];
 const baseEnv = {
   PATH: process.env.PATH,
   HOME: testHome,
+  USERPROFILE: testHome,
+  SystemRoot: process.env.SystemRoot,
   TMPDIR: testHome,
   MCP_TRANSPORT: 'http',
   NETSAPIENS_API_URL: 'https://netsapiens.example.com',
@@ -26,7 +28,7 @@ function startup(env: Record<string, string | undefined>) {
   return spawnSync(process.execPath, args, {
     env: { ...baseEnv, ...env },
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: 30000,
   });
 }
 

@@ -1,7 +1,8 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { deriveStoreKey, StoreConfigError, StoreLockedError } from '../codec.js';
@@ -10,6 +11,7 @@ import { runStoreConformance } from '../conformance.js';
 import { logger } from '../../utils/logger.js';
 import type { McpStore } from '../types.js';
 
+const windows = process.platform === 'win32';
 const key = deriveStoreKey('a secret long enough for the sqlite tests');
 const directories: string[] = [];
 function location() {
@@ -17,10 +19,10 @@ function location() {
   directories.push(root);
   return { root, directory: join(root, 'private'), path: join(root, 'private', 'store.db') };
 }
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 const conformanceRoot = mkdtempSync(join(tmpdir(), 'sqlite-conformance-'));
-afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true }));
+afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 const conformancePath = (namespace: string) => join(conformanceRoot, `${namespace}.sqlite`);
 runStoreConformance({
   name: 'sqlite',
@@ -46,12 +48,12 @@ runStoreConformance({
   },
   async cleanup(namespace) {
     const path = conformancePath(namespace);
-    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true, maxRetries: 10, retryDelay: 100 });
   },
 });
 
 describe('SQLite storage', () => {
-  it('creates private directory, database and WAL', async () => {
+  it.skipIf(windows)('creates private directory, database and WAL', async () => {
     const { path, directory } = location();
     const oldMask = process.umask(0);
     let store: McpStore;
@@ -61,6 +63,31 @@ describe('SQLite storage', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(`${path}-wal`).mode & 0o777).toBe(0o600);
     await store.close();
+  });
+  it.runIf(windows)('reports group and other permission bits for a new 0600 file on Windows', () => {
+    const { root } = location();
+    const probe = join(root, 'probe');
+    closeSync(openSync(probe, 'wx', 0o600));
+    expect(statSync(probe).mode & 0o077).not.toBe(0);
+  });
+
+  it.runIf(windows)('opens, persists and reopens a store on Windows without a permission-bit check', async () => {
+    const { path } = location();
+    const store = createSqliteStore({ path, namespace: 'test', key });
+    expect(existsSync(`${path}-wal`)).toBe(true);
+    await store.sessions.create({ accessToken: 'access', refreshToken: 'refresh' }, {
+      clientId: 'client',
+      expiresAt: Date.now() + 60_000,
+      nsAccessToken: 'ns-tok',
+      nsRefreshToken: 'ns-ref',
+      nsUsername: 'user',
+      serverBaseUrl: 'http://localhost',
+    });
+    await store.close();
+
+    const reopened = createSqliteStore({ path, namespace: 'test', key });
+    expect((await reopened.sessions.get('access'))?.nsUsername).toBe('user');
+    await reopened.close();
   });
 
   it('closes idempotently and releases the lock', async () => {
@@ -84,7 +111,7 @@ describe('SQLite storage', () => {
     const { path } = location();
     const store = createSqliteStore({ path, namespace: 'test', key });
     const modulePath = resolve('src/store/sqlite.ts');
-    const script = `import {createSqliteStore} from ${JSON.stringify(modulePath)}; try { createSqliteStore({path:process.argv[1],namespace:'test',key:Buffer.alloc(32)}); process.exit(0); } catch(e) { console.error(e.name+': '+e.message); process.exit(1); }`;
+    const script = `import {createSqliteStore} from ${JSON.stringify(pathToFileURL(modulePath).href)}; try { createSqliteStore({path:process.argv[1],namespace:'test',key:Buffer.alloc(32)}); process.exit(0); } catch(e) { console.error(e.name+': '+e.message); process.exit(1); }`;
     const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, path], { encoding: 'utf8' });
     expect(child.status).toBe(1);
     expect(child.stderr).toContain('StoreLockedError');
@@ -92,7 +119,7 @@ describe('SQLite storage', () => {
     await store.close();
   });
 
-  it('rejects insecure files and newer schema versions', async () => {
+  it.skipIf(windows)('refuses a database other users can read', async () => {
     const { path } = location();
     const store = createSqliteStore({ path, namespace: 'test', key });
     await store.close();
@@ -100,11 +127,19 @@ describe('SQLite storage', () => {
     expect(() => createSqliteStore({ path, namespace: 'test', key })).toThrow(StoreConfigError);
     expect(() => createSqliteStore({ path, namespace: 'test', key })).toThrow('chmod 600');
     chmodSync(path, 0o600);
+    const reopened = createSqliteStore({ path, namespace: 'test', key });
+    await reopened.close();
+  });
+
+  it('refuses a newer schema version', async () => {
+    const { path } = location();
+    const store = createSqliteStore({ path, namespace: 'test', key });
+    await store.close();
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
     const db = new DatabaseSync(path);
     db.exec('PRAGMA user_version=99');
     db.close();
-    expect(() => createSqliteStore({ path, namespace: 'test', key })).toThrow(StoreConfigError);
+    expect(() => createSqliteStore({ path, namespace: 'test', key })).toThrow('Unsupported SQLite schema version 99');
   });
 
   it('refuses a different namespace', async () => {
