@@ -1,0 +1,227 @@
+{
+  "harnessSha": "3edf8a262e9d06f4849318b1e0d09f197738bff9",
+  "timestamp": "2026-11-01T21:52:29.009Z",
+  "emulatorHost": "127.0.0.1:8080",
+  "artifacts": {
+    "bridge": {
+      "path": "/Users/jwaldrip/dev/worktrees/netsapiens-mcp-2-bridge/netsapiens-mcp-2.4.1.tgz",
+      "sha256": "69f409772d600be238ec75214f884e2d80067f4f82d5e44d3595ffcbb8618600",
+      "integrity": "sha512-VPup+vJvYJYhNlNDgiriJtVYDcBHGw3uSnpaFFhU0ma5FoEyKsBHvJGTOlYaaHswEvDv/jvF4da+vVtZgKdyJQ=="
+    },
+    "v3": {
+      "path": "/tmp/netsapiens-mcp-3.0.0-3edf8a2.tgz",
+      "sha256": "f8ec93f12c0c252e6eb2e8e4d5264173ff51d7a90d5713c9869e416afeee136f",
+      "integrity": "sha512-l/Sqn0/xUlDTIMpi53cvoPb5UMJpVnlxTVNKPXdEjakkJN+9Mv+6wYQpKc6o8o22xTK92RREaw2BrY/5GISmOg=="
+    },
+    "unfenced": {
+      "path": "/tmp/netsapiens-mcp-2.4.0-released.tgz",
+      "sha256": "9bb9efd5114d0675cb8da826a1dcf7719662c21ff5b97e61987fba56014af6ec",
+      "integrity": "sha512-qDhw09qDzpvTt5LNQT+b3JdQYxzyKD27ny9uHQKX2bl71cBu0wZk4cNbGYxFTWiReo6vJ1GvHeDDY+awkFiJrQ=="
+    }
+  },
+  "installed": {
+    "bridgeVersion": "2.4.1",
+    "v3Version": "3.0.0",
+    "mcpSdkVersion": "1.32.2",
+    "firestoreSdkVersion": "8.7.1",
+    "canonicalFenceHash": "4c37ffe74a169b55532e97d30ceb85fad5de6f28a149d5092c0122234fba8c15"
+  },
+  "cases": [
+    {
+      "id": "open_state_happy_path",
+      "name": "Open-state happy path (DCR, auth, login, code exchange, bearer request, restart persistence, refresh rotation)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "healthStatus": "ok",
+        "dcrStatus": 201,
+        "loginRedirected": true,
+        "authCodeAcquired": true,
+        "mcpBearerStatus": 503,
+        "restartBearerValid": false,
+        "refreshSucceeded": true,
+        "fakeNsGrantCount": 2
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "admission_refusal",
+      "name": "Admission refusal when fenced (HTTP 503, Retry-After header, zero upstream calls)",
+      "status": "PASS",
+      "baselineStatus": "RED",
+      "candidateStatus": "PASS",
+      "observations": {
+        "registerStatus": 503,
+        "registerRetryAfter": "5",
+        "authorizeStatus": 503,
+        "tokenStatus": 503,
+        "fakeNsRequests": 0
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "close_races",
+      "name": "Close races (admitted completes during closing, new refuses, fenced waits for active operations to drain)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "newOpRefusedDuringClosing": true,
+        "transitionBlockedWhileActive": true,
+        "finalState": "fenced",
+        "finalActiveOperations": 0
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "sdk_mapping",
+      "name": "SDK mapping: normal errors yield 400, fence refusal yields 503 Retry-After",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "badRequestStatus": 400,
+        "fencedStatus": 503,
+        "retryAfter": "5"
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "refresh_ownership_dedup",
+      "name": "Refresh ownership and concurrent dedup (concurrent refresh calls yield single upstream grant; retry returns successor)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "req1Status": 200,
+        "req2Status": 200,
+        "retryStatus": 200,
+        "upstreamRefreshGrants": 1,
+        "successorMatched": true
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "faults_no_second_grant",
+      "name": "Fault handling (upstream pending locks family, preventing second grant)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "secondGrantBlocked": true,
+        "fakeNsGrants": 0
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "lifecycle_flag_leak_and_duplicate_ops",
+      "name": "Lifecycle: duplicate op IDs cause zero callback executions and no counter change",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "firstExecuted": true,
+        "duplicateCallbackRan": false,
+        "duplicateRefused": true,
+        "noCounterChange": true,
+        "activeOperations": 0
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "reconciliation_family_isolation",
+      "name": "Reconciliation: family isolation (reconciling Family A does not touch Family B)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "famBIsolate": true,
+        "famBToken": "h:9c93518f"
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "atomic_continuation_and_code",
+      "name": "Atomic code exchange (failure preserves code; commit consumes code atomically; replay refused)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "failedTxPreservesCode": true,
+        "atomicExchangeSucceeded": true,
+        "replayRefused": true
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "migration_graph_preservation",
+      "name": "Migration graph preservation (v2.3 base tokens, v2.4 PR56 families, upstream grants, no-ID resumes)",
+      "status": "FAIL",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "FAIL",
+      "observations": {
+        "scanned": 6,
+        "migrated": 4,
+        "skipped": 4,
+        "errors": 3,
+        "v3SessionsCount": 4,
+        "v3FamiliesCount": 4,
+        "seededPR56FamiliesCount": 3
+      },
+      "receiptValid": true,
+      "rejectionReason": "Adopter reported 3 errors on legacy graph: S3 firestore-v2-adoption requires embedded id and numeric consumedAt on resume records, whereas actual bridge stores doc ID without embedded id and unconsumed tokens lack consumedAt"
+    },
+    {
+      "id": "migration_recovery_and_empty_namespace",
+      "name": "Migration recovery and empty namespace (empty manifest, irreversible false until mutation, stale epoch refused)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "emptyScanned": 0,
+        "emptyErrors": 0,
+        "controlState": "v3_ready",
+        "irreversible": true,
+        "staleEpochRefused": true
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "secret_safety_audit",
+      "name": "Secret safety audit (receipts, metadata, logs contain zero raw tokens, client secrets, auth codes)",
+      "status": "PASS",
+      "baselineStatus": "GREEN",
+      "candidateStatus": "PASS",
+      "observations": {
+        "totalViolations": 0,
+        "violations": []
+      },
+      "receiptValid": true
+    },
+    {
+      "id": "unfenced_negative_control",
+      "name": "Unfenced 2.4 negative control (proves unfenced 2.4 ignores fence and mutates store; baseline RED)",
+      "status": "PASS",
+      "baselineStatus": "RED",
+      "candidateStatus": "PASS",
+      "observations": {
+        "unfencedMutatedDespiteFence": true,
+        "fenceStateDuringMutation": "fenced",
+        "writtenDocExists": true
+      },
+      "receiptValid": true
+    }
+  ],
+  "secretSafety": {
+    "passed": true,
+    "scannedFields": 0,
+    "violations": []
+  },
+  "summary": {
+    "total": 13,
+    "passed": 12,
+    "failed": 1,
+    "blocked": 0
+  }
+}
