@@ -555,7 +555,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
   } else if (useFirestore) {
-   this.tokenStore = new FirestoreTokenStore({ collection: tokensCollection, projectId, db });
+   this.tokenStore = new FirestoreTokenStore({ collection: tokensCollection, projectId, db: this.db });
   } else {
    this.tokenStore = new TokenStore(options.tokenStorePath);
   }
@@ -564,7 +564,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    this._clientsStore = options.clientsStore;
   } else if (useFirestore) {
    this._clientsStore = new LoopbackTolerantClientsStore(
-    new FirestoreClientsStore({ collection: clientsCollection, projectId, db }),
+    new FirestoreClientsStore({ collection: clientsCollection, projectId, db: this.db }),
    );
   } else {
    this._clientsStore = new LoopbackTolerantClientsStore(new InMemoryClientsStore());

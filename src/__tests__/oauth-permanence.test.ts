@@ -80,9 +80,9 @@ function createMemoryHarness(): PermanenceHarness<MemoryHarnessBacking> {
       return {
         url,
         close: async () => {
-          const { promise, resolve } = Promise.withResolvers<void>();
-          server.close(() => resolve());
-          await promise;
+          await new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          });
         },
       };
     },
@@ -241,9 +241,9 @@ function createFakeFirestoreHarness(): PermanenceHarness<FakeFirestoreBacking> {
       return {
         url,
         close: async () => {
-          const { promise, resolve } = Promise.withResolvers<void>();
-          server.close(() => resolve());
-          await promise;
+          await new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          });
         },
       };
     },
@@ -413,9 +413,9 @@ function createEmulatorHarness(): PermanenceHarness<EmulatorBacking> {
       return {
         url,
         close: async () => {
-          const { promise, resolve } = Promise.withResolvers<void>();
-          server.close(() => resolve());
-          await promise;
+          await new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          });
         },
       };
     },
