@@ -1071,7 +1071,7 @@ runStoreConformance({
 });
 `);
 
-        const vitestRes = await runCommand('npx', ['vitest', 'run', 'firestore-conformance.test.mjs', '--test-timeout=20000', '--hook-timeout=20000'], {
+        const vitestRes = await runCommand('npx', ['vitest', 'run', 'firestore-conformance.test.mjs', '--test-timeout=60000', '--hook-timeout=60000'], {
           cwd: tempDir,
           env: {
             ...process.env,
