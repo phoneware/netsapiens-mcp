@@ -1,5 +1,5 @@
 /**
- * Tests for NetSapiens Token Sign-In (phoneware/monorepo#1128).
+ * Tests for NetSapiens Token Sign-In.
  *
  * Covers:
  *  - Platform allowlist configuration and refusal of unauthorized hosts (SSRF prevention)
@@ -195,7 +195,7 @@ describe('NetSapiens Token Sign-In', () => {
 
    const authState = hiddenField(auth.text, 'auth_state')!;
 
-   // Mock user read on Viirtue
+   // Mock user read on second platform
    mockedAxios.get = vi.fn().mockImplementation((url: string) => {
     if (url === 'https://second.example.com/ns-api/v2/domains/~/users/~') {
      return Promise.resolve({
@@ -215,7 +215,7 @@ describe('NetSapiens Token Sign-In', () => {
     .type('form')
     .send({
      platform: 'https://second.example.com',
-     token: 'viirtue-user-token',
+     token: 'second-platform-user-token',
      auth_state: authState,
     })
     .expect(302);
