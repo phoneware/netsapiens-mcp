@@ -22,7 +22,8 @@ export interface ReadmeFacts {
   versionMatrix: string;
   backendsTable: string;
   firestoreCollectionsTable: string;
-  storeEnvTable: string;
+  envTable: string;
+  rolesTable: string;
   libExports: string[];
 }
 
@@ -107,25 +108,30 @@ export function generateReadmeFacts(): ReadmeFacts {
     '| Collection Name | Document Contents | TTL Field | Lifecycle / Retention |',
     '|---|---|---|---|',
     `| \`${collections.sessions}\` | Encrypted session tokens & NS refresh credentials | \`ttlAt\` | Cleaned up after 30 days retention |`,
-    `| \`${collections.authCodes}\` | PKCE authorization codes | \`expiresAt\` | Single-use, expires in 5 minutes |`,
-    `| \`${collections.resumeTokens}\` | MCP resumption nonces | \`expiresAt\` | Single-use, expires in 2 hours |`,
+    `| \`${collections.authCodes}\` | PKCE authorization codes | \`ttlAt\` | Single-use, expires in 5 minutes |`,
+    `| \`${collections.resumeTokens}\` | MCP resumption nonces | \`ttlAt\` | Single-use, expires in 2 hours |`,
     `| \`${collections.oauthClients}\` | Registered OAuth clients | None | Persistent client configurations |`,
     `| \`${collections.usage}\` | User rate-limiting counters | None | Persistent call count telemetry |`,
   ].join('\n');
 
-  // 5. Store environment table
-  const storeEnvVars = ENV_VARS.filter((v) =>
-    ['MCP_PERSISTENCE', 'MCP_STORE_NAMESPACE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'GOOGLE_CLOUD_PROJECT'].includes(
-      v.name,
-    ),
-  );
-  const storeEnvTable = [
-    '| Variable | Required | Default | Description |',
-    '|---|---|---|---|',
-    ...storeEnvVars.map(
+  // 5. Full environment variables table
+  const allEnvTable = [
+    '| Variable | Transports | Required | Default | Description |',
+    '|---|---|---|---|---|',
+    ...ENV_VARS.map(
       (v) =>
-        `| \`${v.name}\` | ${v.required ? 'Yes' : 'No'} | ${v.default ? `\`${v.default}\`` : 'None'} | ${v.effect} |`,
+        `| \`${v.name}\` | ${v.transports.join(', ')} | ${v.required ? 'Yes' : 'No'} | ${v.default ? `\`${v.default}\`` : 'None'} | ${v.effect} |`,
     ),
+  ].join('\n');
+
+  // 6. Roles hierarchy table
+  const rolesTable = [
+    '| Role Tier | Priority | NetSapiens User Scopes |',
+    '|---|---|---|',
+    '| `system_admin` | 4 | Super User, System Admin |',
+    '| `reseller` | 3 | Reseller |',
+    '| `domain_admin` | 2 | Office Manager, Site Manager, Domain Admin, Call Center Supervisor |',
+    '| `user` | 1 | Call Center Agent, Advanced User, Basic User, Simple User, No Portal |',
   ].join('\n');
 
   // 6. Lib exports
@@ -150,7 +156,8 @@ export function generateReadmeFacts(): ReadmeFacts {
     versionMatrix,
     backendsTable,
     firestoreCollectionsTable,
-    storeEnvTable,
+    envTable: allEnvTable,
+    rolesTable,
     libExports,
   };
 }
