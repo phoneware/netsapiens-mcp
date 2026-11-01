@@ -189,16 +189,19 @@ describe('curated writes use methods the spec declares', () => {
 describe('multipart-only operations are marked unreachable', () => {
   /** Operations whose only request body is multipart/form-data. */
   function multipartOnlyPaths(): string[] {
-    const out: string[] = [];
-    for (const [p, item] of Object.entries(spec.paths)) {
-      for (const [m, op] of Object.entries(item)) {
-        const content = op.requestBody?.content;
-        if (!content) continue;
-        const keys = Object.keys(content);
-        if (keys.length === 1 && keys[0] === 'multipart/form-data') out.push(`${m.toUpperCase()} ${p}`);
+    const out = new Set<string>();
+    for (const b of ['44.3', '44.4', '45.0', '46.0']) {
+      const s = JSON.parse(readFileSync(`spec/v2/${b}.json`, 'utf8')) as Spec;
+      for (const [p, item] of Object.entries(s.paths)) {
+        for (const [m, op] of Object.entries(item)) {
+          const content = op.requestBody?.content;
+          if (!content) continue;
+          const keys = Object.keys(content);
+          if (keys.length === 1 && keys[0] === 'multipart/form-data') out.add(`${m.toUpperCase()} ${p}`);
+        }
       }
     }
-    return out.sort();
+    return [...out].sort();
   }
 
   it('the tools marked multipartOnly match the spec', () => {

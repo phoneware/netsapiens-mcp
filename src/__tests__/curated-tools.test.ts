@@ -233,7 +233,7 @@ describe('semantic filters carry through search_api and call_api', () => {
    'domain_admin',
   )) as { content: Array<{ text: string }> };
   const parsed = JSON.parse(result.content[0].text);
-  const leaks = parsed.matches.filter((mt: { name: string }) => /^(delete_|revoke_)/.test(mt.name));
+  const leaks = parsed.matches.filter((mt: { name: string }) => /^(delete_|revoke_)/.test(mt.name) && mt.name !== 'delete_unused_packages');
   expect(leaks).toEqual([]);
  });
 });

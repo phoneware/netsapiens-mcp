@@ -102,7 +102,7 @@ describe('generator exclusions', () => {
 
   it('tools with multipartOnly are marked with multipartOnly: true', () => {
     const multipartTools = [...toolRegistry.values()].filter((t) => t.operation?.multipartOnly);
-    expect(multipartTools.length).toBe(12);
+    expect(multipartTools.length).toBe(30);
     for (const tool of multipartTools) {
       expect(tool.operation?.multipartOnly).toBe(true);
     }

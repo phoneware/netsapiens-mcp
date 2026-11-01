@@ -283,7 +283,8 @@ describe('annotation hints beyond read/destructive', () => {
     const byPrefix = (p: string) => tools.filter((t) => t.name.startsWith(p));
 
     for (const t of byPrefix('get_')) expect(t.annotations.idempotentHint).toBe(true);
-    for (const t of byPrefix('delete_')) expect(t.annotations.idempotentHint).toBe(true);
+    for (const t of byPrefix('delete_').filter((t) => t.name !== 'delete_unused_packages')) expect(t.annotations.idempotentHint).toBe(true);
+    expect(tools.find((t) => t.name === 'delete_unused_packages')?.annotations.idempotentHint).toBe(false);
     for (const t of byPrefix('post_')) expect(t.annotations.idempotentHint).toBe(false);
   });
 });
