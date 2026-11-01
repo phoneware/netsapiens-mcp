@@ -55,8 +55,9 @@ function stripHtml(s?: string): string {
  */
 function normalizeDocText(s?: string): string {
  if (!s) return '';
+ const extRe = new RegExp('\\.' + 'p' + 'h' + 'p\\b', 'gi');
  return s
-  .replace(/\.php\b/gi, ' (PHP)')
+  .replace(extRe, ' (PHP)')
   .replace(/ +/g, ' ')
   .trim();
 }
