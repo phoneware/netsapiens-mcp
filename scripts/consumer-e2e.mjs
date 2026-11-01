@@ -874,6 +874,7 @@ async function main() {
           await waitForHealth(serverPort);
           const curatedTokens = await performOAuthFlow(serverPort, fake44.origin, nsToken);
           const curRes = await sendMcpRequest(serverPort, curatedTokens.accessToken, 'tools/list');
+          const curatedToolNames = curRes.json?.result?.tools?.map((t) => t.name) ?? [];
           const hasObservations = fs.existsSync(availPath) && ((JSON.parse(fs.readFileSync(availPath, 'utf8')).observations?.length ?? 0) > 0);
           if (hasObservations) {
             if (!curatedToolNames.includes('call_statistics') && !curatedToolNames.includes('agent_statistics')) {
