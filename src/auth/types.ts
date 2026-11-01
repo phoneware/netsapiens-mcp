@@ -78,3 +78,9 @@ export interface AuthCodeData {
 
 export type { StoredToken } from './token-store.js';
 export type { NetSapiensAuthProviderOptions } from './netsapiens-auth-provider.js';
+export type {
+  CutoverFenceConfig,
+  CutoverFenceControlRecord,
+  CutoverFenceState,
+  LegacyOperationContext,
+} from './kit/cutover-fence.js';

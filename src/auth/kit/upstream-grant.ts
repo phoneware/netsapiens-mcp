@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 4ea97b0d2599a3372ea37b47977333c2827c443c). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Firestore } from '@google-cloud/firestore';
@@ -10,6 +10,12 @@ import {
 } from './errors.js';
 import { docId } from './firestore-ledger.js';
 import { stripUndefined } from './strip-undefined.js';
+import {
+  type CutoverFenceConfig,
+  checkMutationGuardInTransaction,
+  type GuardMutationResult,
+  type LegacyOperationContext,
+} from './cutover-fence.js';
 
 export interface StoredUpstreamRecord<G> {
   grant: G;
@@ -108,19 +114,55 @@ export class MemoryUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   }
 }
 
+export interface FirestoreUpstreamGrantStoreOptions {
+  db: Firestore;
+  collection: string;
+  now?: () => number;
+  fence?: CutoverFenceConfig;
+}
+
 export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   private readonly db: Firestore;
   private readonly collection: string;
   private readonly nowProvider: () => number;
+  private readonly fence?: CutoverFenceConfig;
 
-  constructor(opts: { db: Firestore; collection: string; now?: () => number }) {
+  constructor(opts: FirestoreUpstreamGrantStoreOptions) {
     this.db = opts.db;
     this.collection = opts.collection;
     this.nowProvider = opts.now ?? Date.now;
+    this.fence = opts.fence;
   }
 
-  async put(familyId: string, grant: G, expiresAt?: number): Promise<void> {
+  async put(
+    familyId: string,
+    grant: G,
+    expiresAt?: number,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<void> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
+    if (this.fence?.enforce) {
+      await this.db.runTransaction(async (transaction) => {
+        const guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: this.fence!.namespace,
+          operation: options?.operation,
+          now: this.nowProvider,
+        });
+        guard.bufferCompletion(this.nowProvider());
+        transaction.set(
+          docRef,
+          stripUndefined({
+            grant,
+            expiresAt,
+            updatedAt: this.nowProvider(),
+          }),
+          { merge: true },
+        );
+      });
+      return;
+    }
+
     await docRef.set(
       stripUndefined({
         grant,
@@ -136,14 +178,32 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     return snap.exists ? (snap.data() as StoredUpstreamRecord<G>) : undefined;
   }
 
-  async delete(familyId: string): Promise<void> {
-    await this.db.collection(this.collection).doc(docId(familyId)).delete();
+  async delete(
+    familyId: string,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<void> {
+    const docRef = this.db.collection(this.collection).doc(docId(familyId));
+    if (this.fence?.enforce) {
+      await this.db.runTransaction(async (transaction) => {
+        const guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: this.fence!.namespace,
+          operation: options?.operation,
+          now: this.nowProvider,
+        });
+        guard.bufferCompletion(this.nowProvider());
+        transaction.delete(docRef);
+      });
+      return;
+    }
+
+    await docRef.delete();
   }
 
   async ensureFresh(
     familyId: string,
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
-    options?: EnsureFreshOptions,
+    options?: EnsureFreshOptions & { operation?: LegacyOperationContext },
   ): Promise<G> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     const now = options?.now ?? this.nowProvider();
@@ -155,6 +215,16 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     const leaseOwner = randomUUID();
 
     const claimResult = await this.db.runTransaction(async (transaction) => {
+      let guard: GuardMutationResult | undefined;
+      if (this.fence?.enforce) {
+        guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: this.fence.namespace,
+          operation: options?.operation,
+          now: this.nowProvider,
+          completeOperation: false,
+        });
+      }
       const snap = await transaction.get(docRef);
       if (!snap.exists) {
         throw new UpstreamRevokedError('No upstream grant found for session');
@@ -222,10 +292,27 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       const commitNow = options?.now ?? this.nowProvider();
 
       await this.db.runTransaction(async (transaction) => {
+        let guard: GuardMutationResult | undefined;
+        if (this.fence?.enforce) {
+          guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.db,
+            namespace: this.fence.namespace,
+            operation: options?.operation,
+            now: this.nowProvider,
+            completeOperation: true,
+          });
+        }
+
         const snap = await transaction.get(docRef);
         if (!snap.exists) {
           throw new UpstreamRevokedError('Grant document deleted during refresh');
         }
+        const current = snap.data() as StoredUpstreamRecord<G>;
+        if (current.leaseOwner && current.leaseOwner !== leaseOwner) {
+          throw new UpstreamUnavailableError('Lease owner changed during refresh');
+        }
+
+        guard?.bufferCompletion(commitNow);
         transaction.set(
           docRef,
           stripUndefined({
@@ -241,13 +328,22 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
       return refreshed.grant;
     } catch (err) {
-      await docRef
-        .update({
-          leaseUntil: null,
-          leaseOwner: null,
-        })
-        .catch(() => { });
-
+      await this.db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (snap.exists) {
+          const current = snap.data() as StoredUpstreamRecord<G>;
+          if (current.leaseOwner === leaseOwner) {
+            transaction.set(
+              docRef,
+              {
+                leaseUntil: null,
+                leaseOwner: null,
+              },
+              { merge: true },
+            );
+          }
+        }
+      }).catch(() => {});
       if (kitCodeOf(err)) throw err;
 
       const classification = classifyUpstreamTokenResponse(
@@ -255,7 +351,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         err instanceof Error ? err.message : String(err),
       );
       if (classification === 'definitive') {
-        await this.delete(familyId);
+        await this.delete(familyId, options);
         throw new UpstreamRevokedError(err instanceof Error ? err.message : String(err));
       }
 

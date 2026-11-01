@@ -1,3 +1,4 @@
+import type { LegacyOperationContext } from './cutover-fence.js';
 // Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/ledger.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -50,21 +51,23 @@ export type RefreshRotationResult<T extends BaseStoredToken> =
   | { status: 'missing' };
 
 export interface TokenLedger<T extends BaseStoredToken> {
-  issue(token: T): Promise<T>;
+  issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T>;
   getByAccessToken(accessToken: string): Promise<T | undefined>;
   lookupRefresh(
     refreshToken: string,
     expectedClientId?: string,
     now?: number,
+    options?: { operation?: LegacyOperationContext },
   ): Promise<RefreshLookupResult<T>>;
   rotate(
     oldRefreshToken: string,
     replacement: T,
     expectedClientId: string,
     now?: number,
+    options?: { operation?: LegacyOperationContext },
   ): Promise<RefreshRotationResult<T>>;
-  revokeFamily(familyId: string): Promise<void>;
-  revokeByToken(token: string): Promise<void>;
+  revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
+  revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
 }
 
 export class MemoryTokenLedger<T extends BaseStoredToken> implements TokenLedger<T> {

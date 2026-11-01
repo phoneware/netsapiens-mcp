@@ -15,7 +15,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearer } from './auth/kit/bearer.js';
-import { UpstreamRevokedError, kitCodeOf } from './auth/kit/errors.js';
+import { UpstreamRevokedError, kitCodeOf, CutoverRefusedError, CutoverFenceError } from './auth/kit/errors.js';
+import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
@@ -508,6 +509,30 @@ function wireApp(
   res.end(JSON.stringify({ status: 'session terminated' }));
  });
 
+ // Cutover fence and transient store error handler
+ app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+   return next(err);
+  }
+  const code = kitCodeOf(err);
+  if (code === 'cutover_refused' || err instanceof CutoverRefusedError) {
+   const retryAfter = (err && typeof err === 'object' && 'retryAfterSeconds' in err && typeof (err as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number')
+    ? (err as { retryAfterSeconds: number }).retryAfterSeconds
+    : 30;
+   res.setHeader('Retry-After', String(retryAfter));
+   return res.status(503).json({
+    error: 'temporarily_unavailable',
+    error_description: err instanceof Error ? err.message : 'Cutover in progress; operation temporarily unavailable',
+   });
+  }
+  if (err instanceof TemporarilyUnavailableError || code === 'store_unavailable' || code === 'upstream_unavailable' || code === 'cutover_fence_error' || err instanceof CutoverFenceError) {
+   return res.status(503).json({
+    error: 'temporarily_unavailable',
+    error_description: err instanceof Error ? err.message : 'Service temporarily unavailable',
+   });
+  }
+  return next(err);
+ });
  return { app, sessions };
 }
 
