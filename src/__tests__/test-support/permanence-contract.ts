@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/test-support/permanence-contract.ts at 9e30af81cc69ed73bfc02cbd7ec1a85d05bcc701). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/test-support/permanence-contract.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
 import { expect } from 'vitest';
 
 export interface ServerInstance {
@@ -35,6 +35,10 @@ export interface PermanenceHarness<TBacking> {
   supportsRegistration?: boolean;
   supportsAdoption?: boolean;
   resourceMetadataUrl?: string;
+  getMcpHeaders?: (
+    baseUrl: string,
+    token?: string,
+  ) => Promise<Record<string, string>> | Record<string, string>;
 }
 
 async function postToken(
@@ -64,10 +68,12 @@ async function postToken(
 async function callMcp(
   baseUrl: string,
   token?: string,
+  extraHeaders?: Record<string, string>,
 ): Promise<{ status: number; headers: Headers; data: unknown }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
+    ...extraHeaders,
   };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
@@ -95,25 +101,29 @@ export async function runPermanenceContract<TBacking>(
 ): Promise<void> {
   const backing = await harness.newBacking();
   const instance1 = await harness.createInstance(backing, { instanceId: 'inst-1' });
-
   try {
+    const sendMcp = async (url: string, token?: string) => {
+      const extra = harness.getMcpHeaders ? await harness.getMcpHeaders(url, token) : undefined;
+      return callMcp(url, token, extra);
+    };
+
     // Step a: Sign in through /authorize, callback/form, and /token -> /mcp 2xx
     const initial = await harness.signIn(instance1.url, { email: 'user@example.com' });
     expect(initial.accessToken, 'initial accessToken must be present').toBeTruthy();
     expect(initial.refreshToken, 'initial refreshToken must be present').toBeTruthy();
 
-    const mcpA = await callMcp(instance1.url, initial.accessToken);
+    const mcpA = await sendMcp(instance1.url, initial.accessToken);
     expect(mcpA.status, 'step a: /mcp with initial token').toBe(200);
 
-    // Step b: Clock moves past access TTL (1 hour + 5 seconds)
+    // Step b: Clock moves past access TTL (server own TTL + 5 seconds)
     const baseNow = harness.getNow ? harness.getNow() : Date.now();
-    let currentNow = baseNow + 3605 * 1000;
+    const ttlMs = Math.max(3605, (initial.expiresIn ?? 0) + 5) * 1000;
+    let currentNow = baseNow + ttlMs;
     if (harness.setNow) {
       harness.setNow(currentNow);
     }
-
     // Step c: Call /mcp with expired access token -> 401 with WWW-Authenticate
-    const mcpC = await callMcp(instance1.url, initial.accessToken);
+    const mcpC = await sendMcp(instance1.url, initial.accessToken);
     expect(mcpC.status, 'step c: /mcp with expired token must return 401').toBe(401);
     const wwwAuth = mcpC.headers.get('www-authenticate') ?? '';
     expect(wwwAuth, 'step c: WWW-Authenticate must be present').toContain('Bearer');
@@ -139,10 +149,10 @@ export async function runPermanenceContract<TBacking>(
     expect(newAccessD).not.toBe(initial.accessToken);
     expect(newRefreshD).not.toBe(initial.refreshToken);
 
-    const mcpDNew = await callMcp(instance1.url, newAccessD);
+    const mcpDNew = await sendMcp(instance1.url, newAccessD);
     expect(mcpDNew.status, 'step d: new access token must return 200').toBe(200);
 
-    const mcpDOld = await callMcp(instance1.url, initial.accessToken);
+    const mcpDOld = await sendMcp(instance1.url, initial.accessToken);
     expect(mcpDOld.status, 'step d: old access token must return 401').toBe(401);
 
     // Step e: Replay the consumed refresh token at +1 second -> identical successor pair
@@ -171,7 +181,7 @@ export async function runPermanenceContract<TBacking>(
       const newAccessF = String(tokenF.data.access_token);
       const newRefreshF = String(tokenF.data.refresh_token);
 
-      const mcpF = await callMcp(instance2.url, newAccessF);
+      const mcpF = await sendMcp(instance2.url, newAccessF);
       expect(mcpF.status, 'step f: /mcp on fresh instance must return 200').toBe(200);
 
       // Step g: Two concurrent refreshes -> both return 200 with identical pairs
@@ -199,6 +209,8 @@ export async function runPermanenceContract<TBacking>(
       const activeAccessG = String(conc1.data.access_token);
       let activeRefreshG = String(conc1.data.refresh_token);
 
+      const mcpG = await sendMcp(instance1.url, activeAccessG);
+      expect(mcpG.status, 'step g: /mcp with concurrent access token must return 200').toBe(200);
       // Step h: Bogus refresh token -> 400 invalid_grant
       const tokenH = await postToken(instance1.url, {
         grant_type: 'refresh_token',
@@ -250,7 +262,7 @@ export async function runPermanenceContract<TBacking>(
             'temporarily_unavailable',
           );
 
-          const mcpJ = await callMcp(instance1.url, secondSession.accessToken);
+          const mcpJ = await sendMcp(instance1.url, secondSession.accessToken);
           expect(mcpJ.status, 'step j: /mcp under store outage must return 503').toBe(503);
           expect(mcpJ.headers.get('retry-after'), 'step j: Retry-After header must be set').toBe('5');
           expect((mcpJ.data as Record<string, unknown>).error).toBe('temporarily_unavailable');
@@ -258,7 +270,7 @@ export async function runPermanenceContract<TBacking>(
           await harness.setStoreOutage(backing, false);
         }
 
-        const mcpJHealed = await callMcp(instance1.url, secondSession.accessToken);
+        const mcpJHealed = await sendMcp(instance1.url, secondSession.accessToken);
         expect(mcpJHealed.status, 'step j: /mcp after store heals must return 200').toBe(200);
       }
 
@@ -266,7 +278,7 @@ export async function runPermanenceContract<TBacking>(
       if (harness.supportsUpstream && harness.setUpstreamState) {
         await harness.setUpstreamState(backing, 'transient');
         // While still valid, should proceed
-        const mcpKValid = await callMcp(instance1.url, secondSession.accessToken);
+        const mcpKValid = await sendMcp(instance1.url, secondSession.accessToken);
         expect([200, 503]).toContain(mcpKValid.status);
 
         // Definitive failure

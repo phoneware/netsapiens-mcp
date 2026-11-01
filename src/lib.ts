@@ -10,6 +10,18 @@ export { nsScopeToTier, ROLE_HIERARCHY } from './auth/roles.js';
 export { NS_RESOURCE_FIELDS } from './governance/ns-fields.generated.js';
 export { scrubSecrets } from './governance/scrub.js';
 export { resolveQueueAgent, resolveSelfIdentity } from './tools/curated/queue-agent.js';
+export { requireBearer } from './auth/kit/bearer.js';
+export {
+  StoreUnavailableError,
+  UpstreamUnavailableError,
+  UpstreamRevokedError,
+  kitCodeOf,
+  classifyUpstreamTokenResponse,
+  toTokenEndpointError,
+} from './auth/kit/errors.js';
+export { MemoryTokenLedger } from './auth/kit/ledger.js';
+export type { TokenLedger } from './auth/kit/ledger.js';
+export { FirestoreTokenLedger } from './auth/kit/firestore-ledger.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';

@@ -27,6 +27,14 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { InvalidTokenError, InvalidGrantError, ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import {
+ UpstreamRevokedError,
+ UpstreamUnavailableError,
+ classifyUpstreamTokenResponse,
+ toTokenEndpointError,
+} from './kit/errors.js';
+import { DEFAULT_ACCESS_TOKEN_TTL_MS } from './kit/ledger.js';
+import type { TokenLedger } from './kit/ledger.js';
 import type {
  OAuthClientInformationFull,
  OAuthTokens,
@@ -231,9 +239,9 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
  }
 
  registerClient(
-  client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>,
+  client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
  ): OAuthClientInformationFull {
-  const clientId = randomUUID();
+  const clientId = client.client_id ?? randomUUID();
   // Honor the client's requested authentication method. Public clients
   // (token_endpoint_auth_method=none) get no secret: they rely on PKCE
   // alone, which is correct for browser/native apps like ChatGPT.
@@ -518,7 +526,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   this.nsApiUrl = options.nsApiUrl;
   this.nsClientId = options.nsClientId;
   this.nsClientSecret = options.nsClientSecret;
-  this.tokenLifetimeSec = options.tokenLifetimeSec ?? 3600;
+  this.tokenLifetimeSec = options.tokenLifetimeSec ?? Math.round(DEFAULT_ACCESS_TOKEN_TTL_MS / 1000);
   this.serverBaseUrl = options.serverBaseUrl || process.env.MCP_BASE_URL;
   this.hooks = options.hooks;
   this.renderPages = options.renderPages;
@@ -561,7 +569,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (options.authCodeStore) {
    this.authCodeStore = options.authCodeStore;
   } else if (useFirestore) {
-   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db });
+   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db: this.db });
   }
 
   if (useFirestore) {
@@ -1131,48 +1139,125 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  }
 
  async exchangeRefreshToken(
-  _client: OAuthClientInformationFull,
+  client: OAuthClientInformationFull,
   refreshToken: string,
  ): Promise<OAuthTokens> {
-  const stored = await this.tokenStore.getByRefreshToken(refreshToken);
-  if (!stored) {
-   logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
-    // Log a fingerprint, never the token itself
-    refreshFingerprint: refreshToken.slice(0, 8),
-   });
-   throw new InvalidGrantError('Invalid refresh token');
-  }
+  try {
+   const expectedClientId = client?.client_id;
+   let stored: StoredToken | undefined;
 
-  // Try to refresh the upstream NS token if we have a refresh token
-  let nsTokens: NsTokenResponse;
-  if (stored.nsRefreshToken) {
+   if ('lookupRefresh' in this.tokenStore && typeof (this.tokenStore as any).lookupRefresh === 'function') {
+    const lookup = await (this.tokenStore as unknown as TokenLedger<StoredToken>).lookupRefresh(
+     refreshToken,
+     expectedClientId,
+    );
+    if (lookup.status === 'missing' || lookup.status === 'replay') {
+     logger.warn('Refresh token rejected', { status: lookup.status });
+     throw new InvalidGrantError('Invalid refresh token');
+    }
+    stored = lookup.token;
+   } else {
+    stored = await this.tokenStore.getByRefreshToken(refreshToken);
+    if (!stored) {
+     logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
+      refreshFingerprint: refreshToken.slice(0, 8),
+     });
+     throw new InvalidGrantError('Invalid refresh token');
+    }
+    if (expectedClientId && stored.clientId !== expectedClientId) {
+     logger.warn('Refresh token client mismatch', {
+      expected: expectedClientId,
+      actual: stored.clientId,
+     });
+     throw new InvalidGrantError('Invalid refresh token');
+    }
+   }
+
+   if (!stored.nsRefreshToken) {
+    logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
+     username: stored.nsUsername,
+    });
+    throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
+   }
+
+   let nsTokens: NsTokenResponse;
    try {
     nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
     nsTokens.username = stored.nsUsername;
     nsTokens.nsUserRole = stored.nsUserRole;
     nsTokens.nsApiUrl = stored.nsApiUrl;
-   } catch (err) {
-    logger.warn('Upstream NS refresh-grant failed during MCP refresh', {
-     username: stored.nsUsername,
-     error: err instanceof Error ? err.message : String(err),
-    });
-    throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+   } catch (err: unknown) {
+    if (err instanceof UpstreamGrantRejectedError) {
+     if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+      await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
+     } else {
+      await this.tokenStore.delete(stored.accessToken);
+     }
+     throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+    }
+    throw err;
    }
-  } else {
-   logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
+
+   const newAccess = randomBytes(32).toString('hex');
+   const newRefresh = randomBytes(32).toString('hex');
+   const expiresAt = Date.now() + this.tokenLifetimeSec * 1000;
+   const nsExpiresAt = nsTokens.expires_in
+    ? Date.now() + nsTokens.expires_in * 1000
+    : undefined;
+
+   const replacement: StoredToken = {
+    accessToken: newAccess,
+    refreshToken: newRefresh,
+    clientId: stored.clientId,
+    expiresAt,
+    ttlAt: new Date(expiresAt + 30 * 24 * 60 * 60 * 1000),
+    extra: stored.extra,
+    nsAccessToken: nsTokens.access_token,
+    nsRefreshToken: nsTokens.refresh_token,
+    nsExpiresAt,
+    nsUsername: nsTokens.username ?? 'unknown',
+    nsUserRole: nsTokens.nsUserRole,
+    nsApiUrl: nsTokens.nsApiUrl,
+    serverBaseUrl: this.serverBaseUrl,
+   };
+
+   if ('rotate' in this.tokenStore && typeof (this.tokenStore as any).rotate === 'function') {
+    const rot = await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
+     refreshToken,
+     replacement,
+     stored.clientId,
+    );
+    if (rot.status === 'retry') {
+     const remainingSec = Math.max(1, Math.round((rot.token.expiresAt - Date.now()) / 1000));
+     return {
+      access_token: rot.token.accessToken,
+      token_type: 'Bearer',
+      expires_in: remainingSec,
+      refresh_token: rot.token.refreshToken,
+     };
+    }
+    if (rot.status === 'replay' || rot.status === 'missing') {
+     throw new InvalidGrantError('Invalid refresh token');
+    }
+   } else {
+    await this.tokenStore.delete(stored.accessToken);
+    await this.tokenStore.set(replacement);
+   }
+
+   logger.info('MCP bearer refreshed via refresh_token', {
     username: stored.nsUsername,
+    clientId: stored.clientId,
    });
-   throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
+
+   return {
+    access_token: newAccess,
+    token_type: 'Bearer',
+    expires_in: this.tokenLifetimeSec,
+    refresh_token: newRefresh,
+   };
+  } catch (err: unknown) {
+   throw toTokenEndpointError(err);
   }
-
-  await this.tokenStore.delete(stored.accessToken);
-
-  logger.info('MCP bearer refreshed via refresh_token', {
-   username: stored.nsUsername,
-   clientId: stored.clientId,
-  });
-
-  return this.issueTokens(stored.clientId, nsTokens, stored.extra);
  }
 
  // -----------------------------------------------------------------------
@@ -1207,7 +1292,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     ageSec: Math.round(ageMs / 1000),
     hadRefreshToken: !!stored.refreshToken,
    });
-   await this.tokenStore.delete(token);
+   // Do NOT delete the token document here per C1
    throw new InvalidTokenError('Access token expired');
   }
 
@@ -1219,7 +1304,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    if (stored.nsRefreshToken) {
     if ('refreshNsToken' in this.tokenStore && typeof this.tokenStore.refreshNsToken === 'function') {
      try {
-      stored = await this.tokenStore.refreshNsToken(token, (current) =>
+      stored = await this.tokenStore.refreshNsToken(token, (current: StoredToken) =>
        this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
       );
      } catch (err: unknown) {
@@ -1589,14 +1674,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    };
   } catch (err: unknown) {
    if (axios.isAxiosError(err)) {
-    const status = err.response?.status;
-    if (status === 400 || status === 401) {
-     const desc = err.response?.data?.error_description || err.response?.data?.error || err.message;
-     throw new UpstreamGrantRejectedError(`Upstream refresh grant rejected (${status}): ${desc}`, status);
+    const status = err.response?.status ?? 500;
+    const data = err.response?.data;
+    const desc = (typeof data === 'object' && data && ((data as Record<string, unknown>).error_description || (data as Record<string, unknown>).error || (data as Record<string, unknown>).message)) || err.message;
+    const classification = classifyUpstreamTokenResponse(status, data ?? desc);
+    if (classification === 'definitive') {
+     throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status}): ${String(desc)}`);
     }
-    if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.message?.toLowerCase().includes('timeout')) {
-     throw new UpstreamTimeoutError(`Upstream refresh request timed out: ${err.message}`);
-    }
+    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status}): ${String(desc)}`);
    }
    throw err;
   }

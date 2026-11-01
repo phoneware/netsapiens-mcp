@@ -115,7 +115,7 @@ describe.skipIf(!emulatorRunning)('FirestoreTokenStore (emulator)', () => {
   expect(await store.getByRefreshToken('refresh-2')).toBeUndefined();
  });
 
- it('delete removes both access and refresh indexes', async () => {
+ it('revokeByToken revokes the session family per C1', async () => {
   await store.set({
    accessToken: 'access-3',
    refreshToken: 'refresh-3',

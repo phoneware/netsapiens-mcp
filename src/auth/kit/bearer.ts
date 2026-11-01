@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/bearer.ts at a7d4a18be44c522830690913543abc063304011a). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/bearer.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import {
  InsufficientScopeError,
@@ -23,7 +23,7 @@ export interface TokenVerifier {
 
 export interface RequireBearerOptions {
  verifier: TokenVerifier;
- resourceMetadataUrl?: string;
+ resourceMetadataUrl?: string | URL;
  requiredScopes?: string[];
  now?: () => number;
 }
@@ -53,7 +53,7 @@ export function requireBearer(opts: RequireBearerOptions): RequestHandler {
     header += `, scope="${extra.scope}"`;
    }
    if (opts.resourceMetadataUrl) {
-    header += `, resource_metadata="${opts.resourceMetadataUrl}"`;
+    header += `, resource_metadata="${String(opts.resourceMetadataUrl)}"`;
    }
    return header;
   };

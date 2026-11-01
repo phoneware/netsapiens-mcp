@@ -96,8 +96,8 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/router.js', () => ({
   getOAuthProtectedResourceMetadataUrl: vi.fn(() => 'http://localhost:3000/.well-known/oauth-protected-resource/mcp'),
 }));
 
-vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => ({
-  requireBearerAuth: vi.fn(() => {
+vi.mock('../auth/kit/bearer.js', () => ({
+  requireBearer: vi.fn(() => {
     // Return middleware that always passes with mock auth info
     return (req: any, _res: any, next: any) => {
       req.auth = {

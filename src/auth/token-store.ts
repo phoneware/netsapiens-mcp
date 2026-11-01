@@ -8,13 +8,14 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { MemoryTokenLedger, type BaseStoredToken } from './kit/ledger.js';
 import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
 // Token data structure
 // ---------------------------------------------------------------------------
 
-export interface StoredToken {
+export interface StoredToken extends BaseStoredToken {
  /** Our issued access token (opaque string) */
  accessToken: string;
  /** Our issued refresh token */
@@ -41,20 +42,10 @@ export interface StoredToken {
  extra?: Record<string, string>;
  /** Firestore TTL timestamp */
  ttlAt?: Date;
+  /** Refresh family id */
+  refreshFamilyId?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Persistence format
-// ---------------------------------------------------------------------------
-
-interface TokenStoreData {
- tokens: Record<string, StoredToken>;
-}
-
-/**
- * Async-friendly interface implemented by both the in-process file-backed
- * store and the Firestore-backed one. Auth provider code only sees this.
- */
 export interface TokenStoreLike {
  get(accessToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
  getByRefreshToken(refreshToken: string): StoredToken | undefined | Promise<StoredToken | undefined>;
@@ -74,12 +65,11 @@ export interface TokenStoreLike {
 // TokenStore
 // ---------------------------------------------------------------------------
 
-export class TokenStore {
- private tokens = new Map<string, StoredToken>();
- private refreshIdx = new Map<string, StoredToken>();
+export class TokenStore extends MemoryTokenLedger<StoredToken> {
  private readonly filePath: string;
 
  constructor(filePath?: string) {
+    super();
   const defaultFileName = process.env.MCP_READ_ONLY === 'true'
    ? 'http-tokens-readonly.json'
    : 'http-tokens.json';
@@ -90,77 +80,131 @@ export class TokenStore {
   this.load();
  }
 
+  async revokeByToken(token: string): Promise<void> {
+    const access = (this as unknown as { byAccess: Map<string, StoredToken> }).byAccess.get(token);
+    if (access) {
+      if (access.refreshFamilyId) {
+        await this.revokeFamily(access.refreshFamilyId);
+      } else {
+        (this as unknown as { byAccess: Map<string, StoredToken> }).byAccess.delete(token);
+        (this as unknown as { byRefresh: Map<string, { token: StoredToken }> }).byRefresh.delete(access.refreshToken);
+      }
+      this.save();
+      return;
+    }
+    await super.revokeByToken(token);
+    this.save();
+  }
+
  /** Get a token by its access token string. */
  get(accessToken: string): StoredToken | undefined {
-  return this.tokens.get(accessToken);
+    // MemoryTokenLedger.getByAccessToken is async, but local Map read is sync
+    return (this as unknown as { byAccess: Map<string, StoredToken> }).byAccess.get(accessToken);
  }
 
  /** Get a token by its refresh token string. */
  getByRefreshToken(refreshToken: string): StoredToken | undefined {
-  return this.refreshIdx.get(refreshToken);
+    const record = (this as unknown as { byRefresh: Map<string, { status: string; token: StoredToken }> }).byRefresh.get(refreshToken);
+    if (!record) return undefined;
+    return record.token;
  }
 
  /** Store a token (indexed by both access and refresh token). */
  set(token: StoredToken): void {
-  this.tokens.set(token.accessToken, token);
-  this.refreshIdx.set(token.refreshToken, token);
+  const familyId = token.refreshFamilyId;
+  const stored: StoredToken = token;
+  const priv = this as unknown as {
+   byAccess: Map<string, StoredToken>;
+   byRefresh: Map<string, { status: string; familyId: string; token: StoredToken }>;
+   families: Map<string, unknown>;
+  };
+  priv.byAccess.set(stored.accessToken, stored);
+  priv.byRefresh.set(stored.refreshToken, {
+   status: 'active',
+   familyId,
+   token: stored,
+  });
+  priv.families.set(familyId, {
+   id: familyId,
+   currentAccessToken: stored.accessToken,
+   currentRefreshToken: stored.refreshToken,
+   retiredRefreshFingerprints: [],
+   updatedAt: Date.now(),
+  });
   this.save();
  }
 
- /** Update an existing token in place (e.g. after refreshing the upstream NS token). */
- update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined {
-  const existing = this.tokens.get(accessToken);
-  if (!existing) return undefined;
-  const updated = { ...existing, ...patch };
-  this.tokens.set(updated.accessToken, updated);
-  if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
-   this.refreshIdx.delete(existing.refreshToken);
+ cleanup(): void {
+  const now = Date.now();
+  const priv = this as unknown as {
+   byAccess: Map<string, StoredToken>;
+   byRefresh: Map<string, { status: string; familyId: string; token: StoredToken }>;
+  };
+  for (const [key, token] of priv.byAccess.entries()) {
+   if (token.expiresAt <= now) {
+    priv.byAccess.delete(key);
+    priv.byRefresh.delete(token.refreshToken);
+   }
   }
-  this.refreshIdx.set(updated.refreshToken, updated);
+  this.save();
+ }
+
+  /** Update an existing token in place. */
+ update(accessToken: string, patch: Partial<StoredToken>): StoredToken | undefined {
+    const existing = this.get(accessToken);
+  if (!existing) return undefined;
+    const updated: StoredToken = { ...existing, ...patch };
+    const priv = this as unknown as {
+      byAccess: Map<string, StoredToken>;
+      byRefresh: Map<string, { status: string; familyId: string; token: StoredToken }>;
+    };
+    priv.byAccess.set(accessToken, updated);
+    const refreshRec = priv.byRefresh.get(existing.refreshToken);
+    if (refreshRec) {
+      refreshRec.token = updated;
+    }
+  if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
+      priv.byRefresh.delete(existing.refreshToken);
+      priv.byRefresh.set(patch.refreshToken, {
+        status: 'active',
+        familyId: updated.refreshFamilyId ?? 'default',
+        token: updated,
+      });
+  }
   this.save();
   return updated;
  }
 
  /** Delete a token by its access token. */
  delete(accessToken: string): void {
-  const token = this.tokens.get(accessToken);
+  const token = this.get(accessToken);
+  const priv = this as unknown as {
+   byAccess: Map<string, StoredToken>;
+   byRefresh: Map<string, { status: string; familyId?: string; token: StoredToken }>;
+  };
+  priv.byAccess.delete(accessToken);
   if (token) {
-   this.tokens.delete(accessToken);
-   this.refreshIdx.delete(token.refreshToken);
+   priv.byRefresh.delete(token.refreshToken);
+  }
+  if (token?.refreshFamilyId) {
+   void this.revokeFamily(token.refreshFamilyId).then(() => this.save());
+  } else {
    this.save();
   }
  }
 
  /** Delete a token by its refresh token. */
  deleteByRefreshToken(refreshToken: string): void {
-  const token = this.refreshIdx.get(refreshToken);
+  const token = this.getByRefreshToken(refreshToken);
+  const priv = this as unknown as {
+   byAccess: Map<string, StoredToken>;
+   byRefresh: Map<string, { status: string; familyId?: string; token: StoredToken }>;
+  };
+  priv.byRefresh.delete(refreshToken);
   if (token) {
-   this.refreshIdx.delete(refreshToken);
-   this.tokens.delete(token.accessToken);
-   this.save();
+   priv.byAccess.delete(token.accessToken);
   }
- }
-
- /** Remove all expired tokens. */
- cleanup(): void {
-  const now = Date.now();
-  let changed = false;
-  for (const [key, token] of this.tokens) {
-   if (token.expiresAt <= now) {
-    this.tokens.delete(key);
-    this.refreshIdx.delete(token.refreshToken);
-    changed = true;
-   }
-  }
-  if (changed) {
-   this.save();
-   logger.info('Cleaned up expired tokens');
-  }
- }
-
- /** Number of active (stored) tokens. */
- get size(): number {
-  return this.tokens.size;
+  void this.revokeByToken(refreshToken).then(() => this.save());
  }
 
  // -----------------------------------------------------------------------
@@ -171,12 +215,19 @@ export class TokenStore {
   try {
    if (!existsSync(this.filePath)) return;
    const raw = readFileSync(this.filePath, 'utf-8');
-   const data: TokenStoreData = JSON.parse(raw);
-   for (const [key, token] of Object.entries(data.tokens)) {
-    this.tokens.set(key, token);
-    this.refreshIdx.set(token.refreshToken, token);
+      if (!raw.trim()) return;
+      // Check if format is MemoryTokenLedger.toJSON or legacy format
+      if (raw.includes('"byAccess"')) {
+        this.fromJSON(raw);
+      } else {
+        const legacy = JSON.parse(raw) as { tokens?: Record<string, StoredToken> };
+        if (legacy && legacy.tokens) {
+          for (const token of Object.values(legacy.tokens)) {
+            void this.issue(token);
    }
-   logger.info('Loaded token store', { count: this.tokens.size, path: this.filePath });
+        }
+      }
+      logger.info('Loaded token store', { count: this.size, path: this.filePath });
   } catch (err) {
    logger.warn('Failed to load token store, starting fresh', { error: String(err) });
   }
@@ -188,10 +239,7 @@ export class TokenStore {
    if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
    }
-   const data: TokenStoreData = {
-    tokens: Object.fromEntries(this.tokens),
-   };
-   writeFileSync(this.filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
+      writeFileSync(this.filePath, this.toJSON(), { mode: 0o600 });
   } catch (err) {
    logger.error('Failed to save token store', { error: String(err) });
   }
