@@ -59,7 +59,7 @@ export function parseNsBound(value: string, edge: 'start' | 'end'): Date {
    : new Date(s);
  if (isNaN(parsed.getTime())) {
   throw new Error(`Could not read the date "${value}". Use YYYY-MM-DD, YYYY-MM-DD HH:MM:SS (UTC) or an ISO timestamp with an offset.`);
-    }
+ }
  return parsed;
 }
 
@@ -73,7 +73,7 @@ export function nsDateWindow(since?: unknown, until?: unknown, now = new Date())
  const endAt = given(until) ? parseNsBound(given(until)!, 'end') : now;
  const startAt = given(since) ? parseNsBound(given(since)!, 'start') : new Date(endAt.getTime() - DAY_MS);
  return { start: toNsDateTime(startAt), end: toNsDateTime(endAt) };
- }
+}
 
 /** The signed-in user's extension, for tools whose `~` means "me". Throws rather than widen. */
 export async function resolveSelfUser(client: GenericApiClient): Promise<string> {
@@ -663,8 +663,8 @@ const call_details: CuratedTool = {
    const matched = Array.isArray(r.data)
     ? (r.data as Array<Record<string, unknown>>).find((row) => matchesCallId(row, callid))
     : undefined;
-    if (matched) return textResult({ success: true, data: matched });
-   }
+   if (matched) return textResult({ success: true, data: matched });
+  }
   return textResult({ success: false, error: 'Call not found' });
  },
 };
@@ -801,37 +801,114 @@ const place_call: CuratedTool = {
 const transfer_call: CuratedTool = {
  operations: [
   'PATCH /domains/{}/users/{}/calls/{}/transfer',
-  'PATCH /domains/{}/users/{}/calls/{}/transfer/peer',
+  'GET /domains/{}/users/{}/calls/{}',
  ],
  minRole: 'domain_admin',
  schema: {
   name: 'transfer_call',
-  description: 'Transfer an active call. Blind by default; pass type="peer" for an attended transfer.',
+  description: 'Transfer an active call. Blind (default) sends the call to `to`. Attended joins it to your consultation call `consult_call_id` with the person taking the transfer.',
   inputSchema: {
    type: 'object',
    properties: {
-    call_id: { type: 'string' },
-    to: { type: 'string', description: 'Destination number/extension' },
-    type: { type: 'string', enum: ['blind', 'peer'], default: 'blind' },
-    user: { type: 'string', default: '~' },
-    domain: { type: 'string' },
+    call_id: { type: 'string', description: 'Call ID of the active call to transfer' },
+    type: { type: 'string', enum: ['blind', 'attended'], default: 'blind', description: 'Transfer type: "blind" (default) or "attended"' },
+    to: { type: 'string', description: 'Destination extension or number for a blind transfer' },
+    consult_call_id: { type: 'string', description: 'Call ID of consultation call with transfer recipient' },
+    user: { type: 'string', default: '~', description: "User's extension (~ for own user)" },
+    domain: { type: 'string', description: 'Domain name (~ for own domain)' },
    },
-   required: ['call_id', 'to'],
+   required: ['call_id'],
   },
  },
  targets: { domainArg: 'domain', userArg: 'user' },
  output: { rules: [...STANDARD_WRAPPER_RULES, { path: 'data', resource: 'CallRequest' }] },
  handler: async (args, client) => {
-  const isPeer = String(args.type ?? 'blind') === 'peer';
-  const pathTemplate = isPeer
-   ? '/domains/{domain}/users/{user}/calls/{callid}/transfer/peer'
-   : '/domains/{domain}/users/{user}/calls/{callid}/transfer';
+  const transferType = String(args.type ?? 'blind').toLowerCase();
+  const domain = str(args.domain);
+  const user = str(args.user);
+  const callId = String(args.call_id ?? '').trim();
+
+  if (transferType === 'attended') {
+   const consultCallId = args.consult_call_id != null ? String(args.consult_call_id).trim() : '';
+   if (!consultCallId) {
+    return {
+     isError: true,
+     content: [{ type: 'text' as const, text: 'Attended transfer requires consult_call_id.' }],
+    };
+   }
+
+   const consultRes = await client.request<{
+    'core-server'?: string;
+    'call-session-id'?: string;
+    [key: string]: unknown;
+   }>({
+    method: 'GET',
+    pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
+    pathParams: { domain, user, callid: consultCallId },
+   });
+
+   if (!consultRes.success || !consultRes.data) {
+    return {
+     isError: true,
+     content: [{ type: 'text' as const, text: `Consultation call not found: ${consultRes.error ?? 'Call not found'}` }],
+    };
+   }
+
+   const coreServer = consultRes.data['core-server'] ? String(consultRes.data['core-server']).trim() : '';
+   const callSessionId = consultRes.data['call-session-id'] ? String(consultRes.data['call-session-id']).trim() : '';
+
+   if (!coreServer || !callSessionId) {
+    return {
+     isError: true,
+     content: [{ type: 'text' as const, text: 'Consultation call is missing core-server or call-session-id.' }],
+    };
+   }
+
+   const r = await client.request({
+    method: 'PATCH',
+    pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/transfer',
+    pathParams: { domain, user, callid: callId },
+    body: {
+     hostname: coreServer,
+     'call-destination-session-id': callSessionId,
+    },
+   });
+
+   if (!r.success) {
+    return {
+     isError: true,
+     content: [{ type: 'text' as const, text: typeof r.error === 'string' ? r.error : JSON.stringify(r) }],
+    };
+   }
+
+   return textResult(r);
+  }
+
+  // Blind transfer
+  const to = args.to != null ? String(args.to).trim() : '';
+  if (!to) {
+   return {
+    isError: true,
+    content: [{ type: 'text' as const, text: 'Blind transfer requires destination "to".' }],
+   };
+  }
+
   const r = await client.request({
    method: 'PATCH',
-   pathTemplate,
-   pathParams: { domain: str(args.domain), user: str(args.user), callid: String(args.call_id) },
-   body: { destination: String(args.to) },
+   pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/transfer',
+   pathParams: { domain, user, callid: callId },
+   body: {
+    'call-term-user': to,
+   },
   });
+
+  if (!r.success) {
+   return {
+    isError: true,
+    content: [{ type: 'text' as const, text: typeof r.error === 'string' ? r.error : JSON.stringify(r) }],
+   };
+  }
+
   return textResult(r);
  },
 };
@@ -1304,25 +1381,25 @@ const queue_status: CuratedTool = {
 
   const queue = queueRes.ok
    ? Array.isArray(queueRes.data)
-     ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
-     : ((queueRes.data as Record<string, unknown>) ?? null)
+    ? ((queueRes.data[0] as Record<string, unknown>) ?? null)
+    : ((queueRes.data as Record<string, unknown>) ?? null)
    : null;
 
   let waiting:
    | {
-      ok: true;
-      count: number;
-      longest_wait_seconds: number;
-      callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
-     }
+    ok: true;
+    count: number;
+    longest_wait_seconds: number;
+    callers: Array<{ caller: string; queued_at: string; wait_seconds: number }>;
+   }
    | { ok: false; error: string };
 
   if (waitingRes.ok) {
    const rawCallers = Array.isArray(waitingRes.data)
     ? waitingRes.data
     : waitingRes.data
-      ? [waitingRes.data]
-      : [];
+     ? [waitingRes.data]
+     : [];
    const callers = rawCallers.map((row) => {
     const caller = String(row['dial-rule-translation-source-name'] ?? row['from_uri'] ?? '');
     const queued_at = String(row['time_queued'] ?? '');
@@ -1353,8 +1430,8 @@ const queue_status: CuratedTool = {
    const agentList = Array.isArray(agentsRes.data)
     ? agentsRes.data
     : agentsRes.data
-      ? [agentsRes.data]
-      : [];
+     ? [agentsRes.data]
+     : [];
    agents = {
     ok: true,
     data: agentList,
@@ -1368,11 +1445,11 @@ const queue_status: CuratedTool = {
 
   let statistics:
    | {
-      ok: true;
-      start: string;
-      end: string;
-      data: Array<Record<string, unknown>> | Record<string, unknown>;
-     }
+    ok: true;
+    start: string;
+    end: string;
+    data: Array<Record<string, unknown>> | Record<string, unknown>;
+   }
    | { ok: false; error: string };
 
   if (statsRes.ok) {
@@ -1615,16 +1692,16 @@ const agent_status: CuratedTool = {
     }
     // "~" is the signed-in agent: resolve it or fail, never fall through to the whole roster.
     const targetAgent = agent === '~' ? await resolveSelfUser(client) : agent;
-     agents = agents.filter((a) => {
-      const aid = String(a['callqueue-agent-id'] ?? '');
-      const login = String(a['login-username'] ?? '');
-      return (
-       aid === targetAgent ||
-       aid.startsWith(`${targetAgent}@`) ||
-       login === targetAgent ||
-       login.startsWith(`${targetAgent}@`)
-      );
-     });
+    agents = agents.filter((a) => {
+     const aid = String(a['callqueue-agent-id'] ?? '');
+     const login = String(a['login-username'] ?? '');
+     return (
+      aid === targetAgent ||
+      aid.startsWith(`${targetAgent}@`) ||
+      login === targetAgent ||
+      login.startsWith(`${targetAgent}@`)
+     );
+    });
     if (agents.length === 0) {
      return textResult({ success: false, error: 'Agent not found' });
     }
@@ -1869,10 +1946,10 @@ const agent_statistics: CuratedTool = {
   // Only the every-agent route answers with a dictionary keyed by agent; one agent is a flat object.
   if (!agent && r.success && r.data && typeof r.data === 'object' && !Array.isArray(r.data)) {
    const items = Object.entries(r.data as Record<string, unknown>).map(([agentId, stats]) => ({
-     agent: agentId,
-     ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
-    }));
-    return textResult({ ...r, data: items });
+    agent: agentId,
+    ...(typeof stats === 'object' && stats !== null ? (stats as Record<string, unknown>) : {}),
+   }));
+   return textResult({ ...r, data: items });
   }
   return textResult(r);
  },

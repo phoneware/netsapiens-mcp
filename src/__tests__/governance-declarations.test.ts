@@ -778,6 +778,14 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
         },
         {
           tool: 'transfer_call',
+          branch: 'attended transfer success',
+          payload: {
+            success: true,
+            data: { 'call-session-id': 'c-101' },
+          },
+        },
+        {
+          tool: 'transfer_call',
           branch: 'error',
           payload: {
             success: false,

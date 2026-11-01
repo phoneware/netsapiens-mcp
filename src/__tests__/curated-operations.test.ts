@@ -7,12 +7,6 @@ import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import { normalizeOperationKey } from '../netsapiens/operation-key.js';
 import { recordingClient } from './curated-operation-recorder.js';
 
-// The existing peer handler sends a destination, but the documented peer route
-// is a blind transfer while this tool describes an attended transfer. Its actual
-// route is retained until that behavioral mismatch is resolved.
-const KNOWN_UNDOCUMENTED_ROUTES = {
- transfer_call: ['PATCH /domains/{}/users/{}/calls/{}/transfer/peer'],
-};
 
 // Each entry is tied to the request expression, its tool, and every key it can
 // reach. Changing the expression requires reviewing the keys again.
@@ -21,7 +15,6 @@ const NON_LITERAL_REQUESTS: Record<string, Array<{ expression: string; keys: str
   { expression: "{ method: 'GET', ...cdrRoute, queryParams: filter }", keys: ['GET /domains/{}/cdrs', 'GET /domains/{}/users/{}/cdrs'], reason: 'role and scope select the CDR route' },
   { expression: "{ method: 'GET', ...cdrRoute, queryParams: filter }", keys: ['GET /domains/{}/users/{}/cdrs'], reason: 'scope rejection retries the user route' },
  ],
- transfer_call: [{ expression: "{\n   method: 'PATCH',\n   pathTemplate,\n   pathParams: { domain: str(args.domain), user: str(args.user), callid: String(args.call_id) },\n   body: { destination: String(args.to) },\n  }", keys: ['PATCH /domains/{}/users/{}/calls/{}/transfer', ...KNOWN_UNDOCUMENTED_ROUTES.transfer_call], reason: 'transfer type selects the path' }],
  call_statistics: [{ expression: "{\n   method: 'GET',\n   pathTemplate,\n   pathParams,\n   queryParams: { start_date: window.start, end_date: window.end },\n  }", keys: ['GET /domains/{}/statistics/callqueues/{}', 'GET /domains/{}/statistics/callqueues/aggregate'], reason: 'queue selects aggregate or individual statistics' }],
  agent_statistics: [{ expression: "{\n   method: 'GET',\n   pathTemplate,\n   pathParams,\n   queryParams: { start_date: window.start, end_date: window.end },\n  }", keys: ['GET /domains/{}/statistics/agent', 'GET /domains/{}/statistics/agent/{}'], reason: 'agent selects aggregate or individual statistics' }],
  set_hold_message: [{ expression: "{\n   method: replacing ? 'PUT' : 'POST',\n   pathTemplate,\n   pathParams,\n   multipart: { field: 'File', filename, base64: audio, contentType },\n  }", keys: ['POST /domains/{}/msg', 'PUT /domains/{}/msg/{}', 'POST /domains/{}/users/{}/msg', 'PUT /domains/{}/users/{}/msg/{}'], reason: 'scope and replacement select the method and path' }],
