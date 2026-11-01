@@ -22,8 +22,54 @@ describe('availability-data', () => {
     expect(data.schemaVersion).toBe(2);
   });
 
-  it('observations is empty array', () => {
-    expect(data.observations).toEqual([]);
+  it('contains two maintainer observations for 44.4.10 and 44.5.2', () => {
+    expect(data.observations).toHaveLength(2);
+    expect(data.observations[0]).toEqual({
+      apiVersion: '44.4.10',
+      line: '44.4',
+      probedAt: '2026-11-01',
+      source: 'maintainer',
+    });
+    expect(data.observations[1]).toEqual({
+      apiVersion: '44.5.2',
+      line: '44.5',
+      probedAt: '2026-11-01',
+      source: 'maintainer',
+    });
+  });
+
+  it('computes early-route counts and verifies 45.0-first statistics keys on line 44.4', () => {
+    const statsKeys = [
+      'GET /domains/{}/statistics/callqueues/aggregate',
+      'GET /domains/{}/statistics/callqueues/{}',
+      'GET /domains/{}/statistics/agent',
+      'GET /domains/{}/statistics/agent/{}',
+    ];
+    for (const key of statsKeys) {
+      expect(data.v2[key]?.observed?.['44.4.10']).toBe('present');
+    }
+
+    let e45 = 0;
+    let n45 = 0;
+    let e46 = 0;
+    let n46 = 0;
+    for (const [key, entry] of Object.entries(data.v2)) {
+      if (!key.startsWith('GET ')) continue;
+      const docs = entry.documented || [];
+      const firstDoc = docs[0];
+      const obs = entry.observed?.['44.4.10'];
+      if (firstDoc === '45.0') {
+        if (obs === 'present') e45++;
+        else if (obs === 'absent') n45++;
+      } else if (firstDoc === '46.0') {
+        if (obs === 'present') e46++;
+        else if (obs === 'absent') n46++;
+      }
+    }
+    expect(e45).toBe(20);
+    expect(n45).toBe(49);
+    expect(e46).toBe(53);
+    expect(n46).toBe(322);
   });
 
   it('branches equal BRANCHES.json', () => {

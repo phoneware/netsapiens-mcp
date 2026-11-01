@@ -110,7 +110,7 @@ The server detects each connected host's API version via `GET /ns-api/v2/version
 | Host line | Documentation used | Observed on a live host | Read tools | Write tools |
 |---|---|---|---|---|
 | 44.3 | 44.3 (retrieved 2026-10-29) | not yet | 132 | 198 |
-| 44.4 | 44.4 (retrieved 2026-10-29) | not yet | 139 | 199 |
+| 44.4 | 44.4 (retrieved 2026-10-29) | 44.4.10 (maintainer) | 139 | 199 |
 | 45.0 | 45.0 (retrieved 2026-10-29) | not yet | 207 | 247 |
 | 46.0 | 46.0 (retrieved 2026-10-29) | not yet | 568 | 548 |
 | newer than 46 | 46.0 (newer than documented) | not yet | 568 | 548 |

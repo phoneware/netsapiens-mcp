@@ -8,10 +8,21 @@
  * and the v1 apidoc specification.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
+import { validateObservation, type Observation } from './validate-observations.js';
+
+function compareNumericVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -119,15 +130,46 @@ export function buildAvailability(options?: { repoRoot?: string }): Availability
     };
   }
 
+  // 4. Load observations from spec/v2/observations/
+  const obsDir = resolve(repoRoot, 'spec/v2/observations');
+  const obsFiles = existsSync(obsDir)
+    ? readdirSync(obsDir).filter((f) => f.endsWith('.json') && f !== 'schema.json')
+    : [];
+
+  const rawObsList: Array<{ fileName: string; data: Observation }> = [];
+  for (const f of obsFiles) {
+    const raw = JSON.parse(readFileSync(resolve(obsDir, f), 'utf8'));
+    validateObservation(raw, f);
+    rawObsList.push({ fileName: f, data: raw });
+  }
+
+  rawObsList.sort((a, b) => compareNumericVersions(a.data.apiVersion, b.data.apiVersion));
+
+  const observations: AvailabilityData['observations'] = [];
+  for (const { data: obs } of rawObsList) {
+    const line = obs.apiVersion.split('.').slice(0, 2).join('.');
+    observations.push({
+      apiVersion: obs.apiVersion,
+      line,
+      probedAt: obs.probedAt,
+      source: obs.source,
+    });
+
+    for (const [key, res] of Object.entries(obs.results ?? {})) {
+      if (v2[key]) {
+        v2[key].observed[obs.apiVersion] = res.result;
+      }
+    }
+  }
+
   return {
     schemaVersion: 2,
     branches,
-    observations: [],
+    observations,
     v2,
     v1,
   };
 }
-
 function main(): void {
   const data = buildAvailability();
   const outPath = resolve(DEFAULT_REPO_ROOT, 'src/generated/availability.json');
