@@ -12,6 +12,9 @@ export class RetryableRefreshError extends Error {
 export class LeaseLostError extends Error {
   constructor(message = 'Refresh lease expired or owned by another instance') { super(message); this.name = 'LeaseLostError'; }
 }
+export class StoreUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = 'StoreUnavailableError'; }
+}
 
 export function deriveStoreKey(sessionSecret: string): Buffer {
   if (sessionSecret.length < 32) throw new StoreConfigError('MCP_SESSION_SECRET must be at least 32 characters');

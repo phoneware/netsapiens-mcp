@@ -357,7 +357,7 @@ export class FirestoreBackend implements StoreBackend {
           const refQuerySnap = await refreshTokens.where('familyId', '==', familyId).get();
           for (const doc of refQuerySnap.docs) {
             const data = doc.data() as unknown as RefreshPointerRow;
-            tx.set(doc.ref, refreshData({ ...data, status: 'consumed', consumedAt: now, successorSealed: undefined }));
+            tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: now, successorSealed: undefined }));
           }
           return 'revoked';
         });
@@ -517,7 +517,7 @@ export class FirestoreBackend implements StoreBackend {
         for (const doc of snap.docs) {
           const data = doc.data() as unknown as RefreshPointerRow;
           if (data && typeof data.consumedAt === 'number' && now - data.consumedAt > REFRESH_RETRY_WINDOW_MS && data.successorSealed) {
-            await doc.ref.set(defined({ ...data, successorSealed: undefined }));
+            await refreshTokens.doc(doc.id).set(defined({ ...data, successorSealed: undefined }));
           }
         }
         return 0;
