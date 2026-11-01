@@ -135,10 +135,10 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       expectedEpoch: 1,
     });
 
-    const frozen = await tokenStore.get('acc_pre_close');
-    expect(frozen).toBeDefined();
-    expect(frozen?.accessToken).toBe('acc_pre_close');
-    expect(frozen?.nsAccessToken).toBe('ns_token_valid');
+    const frozenSnap = await db.collection('mcp_tokens').doc(docId('acc_pre_close')).get();
+    expect(frozenSnap.exists).toBe(true);
+    expect(frozenSnap.data()?.accessToken).toBe('acc_pre_close');
+    expect(frozenSnap.data()?.nsAccessToken).toBe('ns_token_valid');
   });
 
   it('3. Writer transaction races closure: the final result is linearized correctly', async () => {
@@ -152,13 +152,18 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       fence: { namespace, enforce: true },
     });
 
-    await tokenStore.issue({
-      accessToken: 'acc_race',
-      refreshToken: 'ref_race',
-      clientId: 'client_race',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_race',
-      nsUsername: 'user_race',
+    await withLegacyOperation({ db, namespace, kind: 'issue' }, async (ctx) => {
+      await tokenStore.issue(
+        {
+          accessToken: 'acc_race',
+          refreshToken: 'ref_race',
+          clientId: 'client_race',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_race',
+          nsUsername: 'user_race',
+        },
+        { operation: ctx },
+      );
     });
 
     const { promise: fenceClosed, resolve: notifyFenceClosed } = Promise.withResolvers<void>();
@@ -215,13 +220,18 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       fence: { namespace, enforce: true },
     });
 
-    await tokenStore.issue({
-      accessToken: 'acc_pause',
-      refreshToken: 'ref_pause',
-      clientId: 'client_pause',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_old',
-      nsUsername: 'user_pause',
+    await withLegacyOperation({ db, namespace, kind: 'issue' }, async (ctx) => {
+      await tokenStore.issue(
+        {
+          accessToken: 'acc_pause',
+          refreshToken: 'ref_pause',
+          clientId: 'client_pause',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_old',
+          nsUsername: 'user_pause',
+        },
+        { operation: ctx },
+      );
     });
 
     let grantResolved = false;
@@ -399,15 +409,20 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       fence: { namespace, enforce: true },
     });
 
-    await tokenStore.issue({
-      accessToken: 'acc_lease_owner',
-      refreshToken: 'ref_lease_owner',
-      clientId: 'client_1',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_token_initial',
-      nsExpiresAt: Date.now() - 1000,
-      nsRefreshToken: 'ns_ref_token',
-      nsUsername: 'user_1',
+    await withLegacyOperation({ db, namespace, kind: 'issue' }, async (ctx) => {
+      await tokenStore.issue(
+        {
+          accessToken: 'acc_lease_owner',
+          refreshToken: 'ref_lease_owner',
+          clientId: 'client_1',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_token_initial',
+          nsExpiresAt: Date.now() - 1000,
+          nsRefreshToken: 'ns_ref_token',
+          nsUsername: 'user_1',
+        },
+        { operation: ctx },
+      );
     });
 
     const docRef = tokenStore.accessDocRef('acc_lease_owner');
@@ -462,20 +477,24 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       fence: { namespace, enforce: true },
     });
 
-    const rotResult = await tokenStore.rotate(
-      'ref_legacy_pointer',
-      {
-        accessToken: 'acc_adopted_new',
-        refreshToken: 'ref_adopted_new',
-        clientId: 'client_legacy',
-        expiresAt: Date.now() + 3600_000,
-        nsAccessToken: 'ns_adopted_new',
-        nsRefreshToken: 'ns_adopted_new_ref',
-        nsUsername: 'user_legacy',
-      },
-      'client_legacy',
-      Date.now(),
-    );
+    let rotResult: any;
+    await withLegacyOperation({ db, namespace, kind: 'rotate' }, async (ctx) => {
+      rotResult = await tokenStore.rotate(
+        'ref_legacy_pointer',
+        {
+          accessToken: 'acc_adopted_new',
+          refreshToken: 'ref_adopted_new',
+          clientId: 'client_legacy',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_adopted_new',
+          nsRefreshToken: 'ns_adopted_new_ref',
+          nsUsername: 'user_legacy',
+        },
+        'client_legacy',
+        Date.now(),
+        { operation: ctx },
+      );
+    });
 
     expect(rotResult.status).toBe('claimed');
     if (rotResult.status === 'claimed') {
@@ -514,14 +533,19 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     const client = { client_id: 'client_test_retry' } as any;
 
-    await (authProvider as any).tokenStore.issue({
-      accessToken: 'acc_orig_token',
-      refreshToken: 'ref_orig_token',
-      clientId: 'client_test_retry',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_initial',
-      nsRefreshToken: 'ns_initial_ref',
-      nsUsername: 'test_user',
+    await (authProvider as any).withOperation('issue', async (ctx: any) => {
+      await (authProvider as any).tokenStore.issue(
+        {
+          accessToken: 'acc_orig_token',
+          refreshToken: 'ref_orig_token',
+          clientId: 'client_test_retry',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_initial',
+          nsRefreshToken: 'ns_initial_ref',
+          nsUsername: 'test_user',
+        },
+        { operation: ctx },
+      );
     });
 
     const firstExchange = await authProvider.exchangeRefreshToken(client, 'ref_orig_token');
@@ -549,11 +573,17 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     const code = 'auth_code_redeemable';
-    await (authProvider as any).authCodeStore.set(code, {
-      pending: { clientId: 'client_1', codeChallenge: 'challenge', redirectUri: 'https://client.com/cb', createdAt: Date.now() },
-      nsTokens: { access_token: 'ns_code_acc', refresh_token: 'ns_code_ref', username: 'code_user' },
-      serverBaseUrl: undefined,
-      clientId: 'client_1',
+    await (authProvider as any).withOperation('auth_code', async (ctx: any) => {
+      await (authProvider as any).authCodeStore.set(
+        code,
+        {
+          pending: { clientId: 'client_1', codeChallenge: 'challenge', redirectUri: 'https://client.com/cb', createdAt: Date.now() },
+          nsTokens: { access_token: 'ns_code_acc', refresh_token: 'ns_code_ref', username: 'code_user' },
+          serverBaseUrl: undefined,
+          clientId: 'client_1',
+        },
+        { operation: ctx },
+      );
     });
 
     await transitionCutoverFenceState(db, namespace, {
@@ -600,14 +630,19 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       return { access_token: 'ns_should_not_reach', refresh_token: 'ns_ref', expires_in: 3600 };
     };
 
-    await (authProvider as any).tokenStore.issue({
-      accessToken: 'acc_revoked_seat',
-      refreshToken: 'ref_revoked_seat',
-      clientId: 'client_seat',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_seat_acc',
-      nsRefreshToken: 'ns_seat_ref',
-      nsUsername: 'revoked_user',
+    await (authProvider as any).withOperation('issue', async (ctx: any) => {
+      await (authProvider as any).tokenStore.issue(
+        {
+          accessToken: 'acc_revoked_seat',
+          refreshToken: 'ref_revoked_seat',
+          clientId: 'client_seat',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_seat_acc',
+          nsRefreshToken: 'ns_seat_ref',
+          nsUsername: 'revoked_user',
+        },
+        { operation: ctx },
+      );
     });
 
     const client = { client_id: 'client_seat' } as any;
@@ -641,14 +676,19 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       return { access_token: 'ns_acc', refresh_token: 'ns_ref', expires_in: 3600 };
     };
 
-    await (authProvider as any).tokenStore.issue({
-      accessToken: 'acc_transient_seat',
-      refreshToken: 'ref_transient_seat',
-      clientId: 'client_transient',
-      expiresAt: Date.now() + 3600_000,
-      nsAccessToken: 'ns_transient_acc',
-      nsRefreshToken: 'ns_transient_ref',
-      nsUsername: 'transient_user',
+    await (authProvider as any).withOperation('issue', async (ctx: any) => {
+      await (authProvider as any).tokenStore.issue(
+        {
+          accessToken: 'acc_transient_seat',
+          refreshToken: 'ref_transient_seat',
+          clientId: 'client_transient',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_transient_acc',
+          nsRefreshToken: 'ns_transient_ref',
+          nsUsername: 'transient_user',
+        },
+        { operation: ctx },
+      );
     });
 
     const client = { client_id: 'client_transient' } as any;
@@ -686,23 +726,27 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       fence: { namespace, enforce: true },
     });
 
-    const rotated = await tokenStore.rotate(
-      'ref_legacy_231',
-      {
-        accessToken: 'acc_231_rotated',
-        refreshToken: 'ref_231_rotated',
-        clientId: 'client_231',
-        expiresAt: Date.now() + 3600_000,
-        nsAccessToken: 'ns_231_rotated_token',
-        nsRefreshToken: 'ns_231_rotated_refresh',
-        nsExpiresAt: Date.now() + 3600_000,
-        nsUsername: 'user_231',
-        nsUserRole: 'admin',
-        nsApiUrl: 'https://edge.phoneware.cloud',
-      },
-      'client_231',
-      Date.now(),
-    );
+    let rotated: any;
+    await withLegacyOperation({ db, namespace, kind: 'rotate' }, async (ctx) => {
+      rotated = await tokenStore.rotate(
+        'ref_legacy_231',
+        {
+          accessToken: 'acc_231_rotated',
+          refreshToken: 'ref_231_rotated',
+          clientId: 'client_231',
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns_231_rotated_token',
+          nsRefreshToken: 'ns_231_rotated_refresh',
+          nsExpiresAt: Date.now() + 3600_000,
+          nsUsername: 'user_231',
+          nsUserRole: 'admin',
+          nsApiUrl: 'https://edge.phoneware.cloud',
+        },
+        'client_231',
+        Date.now(),
+        { operation: ctx },
+      );
+    });
 
     expect(rotated.status).toBe('claimed');
     if (rotated.status === 'claimed') {

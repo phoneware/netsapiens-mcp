@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at 3acde4a7f737eb25abde5a9de0d2904d8ee27a83). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -414,6 +414,11 @@ export async function transitionCutoverFenceState(
           `Cannot transition to v3_ready for namespace ${namespace}: non-empty migrationManifestDigest is required`,
         );
       }
+      if (!current.irreversible) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_ready for namespace ${namespace}: irreversible latch must have been engaged by the first credential write during migration`,
+        );
+      }
     } else if (params.toState === 'v3_active') {
       if (!current.migrationRunId || !current.migrationManifestDigest) {
         throw new CutoverFenceError(
@@ -447,10 +452,7 @@ export async function transitionCutoverFenceState(
       ...current,
       state: params.toState,
       epoch: nextEpoch,
-      irreversible:
-        params.toState === 'v3_ready' || params.toState === 'v3_active'
-          ? true
-          : current.irreversible,
+      irreversible: current.irreversible,
       migrationRunId: params.migrationRunId ?? current.migrationRunId,
       migrationManifestDigest: params.migrationManifestDigest ?? current.migrationManifestDigest,
       updatedAt: currentTime,
@@ -528,6 +530,22 @@ export async function withLegacyOperation<R>(
         `Cutover state is ${control.state} (irreversible=${control.irreversible}); admissions closed for namespace ${options.namespace}`,
         { cutoverState: control.state, epoch: control.epoch },
       );
+    }
+
+    const existingOp = await transaction.get(opRef);
+    if (existingOp.exists) {
+      const existingRecord = existingOp.data() as LegacyOperationRecord;
+      if (existingRecord.phase === 'completed' || existingRecord.phase === 'failed') {
+        throw new CutoverFenceError(
+          `Operation ID ${opId} has already reached terminal phase ${existingRecord.phase}; cannot be re-admitted`,
+        );
+      }
+      if (existingRecord.epoch !== control.epoch) {
+        throw new CutoverFenceError(
+          `Operation ID ${opId} epoch mismatch with current fence epoch: expected ${control.epoch}, got ${existingRecord.epoch}`,
+        );
+      }
+      return existingRecord;
     }
 
     const currentTime = now();
@@ -724,12 +742,16 @@ export async function checkMutationGuardInTransaction(
       );
     }
   } else if (control.state === 'legacy_open') {
-    if (options.operation) {
-      if (options.operation.epoch !== control.epoch) {
-        throw new CutoverFenceError(
-          `Operation epoch mismatch: expected ${control.epoch}, got ${options.operation.epoch}`,
-        );
-      }
+    if (!options.operation) {
+      throw new CutoverFenceError(
+        `Durable operation context is required for fence-enforced mutations in namespace ${options.namespace}`,
+      );
+    }
+    if (options.operation.epoch !== control.epoch) {
+      throw new CutoverFenceError(
+        `Operation epoch mismatch: expected ${control.epoch}, got ${options.operation.epoch}`,
+      );
+    }
       const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
       const opSnap = await transaction.get(opRef);
       if (!opSnap.exists) {
@@ -748,7 +770,6 @@ export async function checkMutationGuardInTransaction(
           `Operation ${options.operation.id} is already in phase ${opRecord.phase}; cannot be reused for mutation`,
         );
       }
-    }
   }
 
   const shouldComplete = options.operation && options.completeOperation !== false;

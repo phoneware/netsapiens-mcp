@@ -1,8 +1,9 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 3acde4a7f737eb25abde5a9de0d2904d8ee27a83). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Firestore } from '@google-cloud/firestore';
 import {
+  CutoverFenceError,
   UpstreamRevokedError,
   UpstreamUnavailableError,
   classifyUpstreamTokenResponse,
@@ -143,6 +144,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   ): Promise<void> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     if (this.fence?.enforce) {
+      if (!options?.operation) {
+        throw new CutoverFenceError(
+          `Durable operation context is required for fence-enforced put in namespace ${this.fence.namespace}`,
+        );
+      }
       await this.db.runTransaction(async (transaction) => {
         const guard = await checkMutationGuardInTransaction(transaction, {
           db: this.db,
@@ -186,6 +192,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   ): Promise<void> {
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     if (this.fence?.enforce) {
+      if (!options?.operation) {
+        throw new CutoverFenceError(
+          `Durable operation context is required for fence-enforced delete in namespace ${this.fence.namespace}`,
+        );
+      }
       await this.db.runTransaction(async (transaction) => {
         const guard = await checkMutationGuardInTransaction(transaction, {
           db: this.db,
@@ -207,6 +218,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
     options?: EnsureFreshOptions & { operation?: LegacyOperationContext; completeOperation?: boolean },
   ): Promise<G> {
+    if (this.fence?.enforce && !options?.operation) {
+      throw new CutoverFenceError(
+        `Durable operation context is required for fence-enforced ensureFresh in namespace ${this.fence.namespace}`,
+      );
+    }
     const docRef = this.db.collection(this.collection).doc(docId(familyId));
     const now = options?.now ?? this.nowProvider();
     const skewMs = options?.skewMs ?? 300_000;
@@ -320,22 +336,24 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         }).catch(() => {});
       }
 
-      await this.db.runTransaction(async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (snap.exists) {
-          const current = snap.data() as StoredUpstreamRecord<G>;
-          if (current.leaseOwner === leaseOwner) {
-            transaction.set(
-              docRef,
-              {
-                leaseUntil: null,
-                leaseOwner: null,
-              },
-              { merge: true },
-            );
+      if (!this.fence?.enforce || !options?.operation) {
+        await this.db.runTransaction(async (transaction) => {
+          const snap = await transaction.get(docRef);
+          if (snap.exists) {
+            const current = snap.data() as StoredUpstreamRecord<G>;
+            if (current.leaseOwner && current.leaseOwner === leaseOwner) {
+              transaction.set(
+                docRef,
+                {
+                  leaseUntil: null,
+                  leaseOwner: null,
+                },
+                { merge: true },
+              );
+            }
           }
-        }
-      }).catch(() => {});
+        }).catch(() => {});
+      }
 
       if (kitCodeOf(err)) throw err;
 
@@ -379,7 +397,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamRevokedError('Grant document deleted during refresh');
         }
         const current = snap.data() as StoredUpstreamRecord<G>;
-        if (current.leaseOwner && current.leaseOwner !== leaseOwner) {
+        if (!current.leaseOwner || current.leaseOwner !== leaseOwner) {
           throw new UpstreamUnavailableError('Lease owner changed during refresh');
         }
 

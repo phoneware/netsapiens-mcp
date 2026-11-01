@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/errors.ts at 4ea97b0d2599a3372ea37b47977333c2827c443c). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/errors.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
 import {
  InvalidGrantError,
  OAuthError,

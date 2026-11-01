@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 3acde4a7f737eb25abde5a9de0d2904d8ee27a83). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -18,7 +18,7 @@ import {
   type StoredRefreshRecord,
   type TokenLedger,
 } from './ledger.js';
-import { StoreUnavailableError, kitCodeOf } from './errors.js';
+import { StoreUnavailableError, CutoverFenceError, CutoverRefusedError, kitCodeOf } from './errors.js';
 import { stripUndefined } from './strip-undefined.js';
 import {
   type CutoverFenceConfig,
@@ -94,7 +94,10 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     return this.db.collection(this.familyCollection);
   }
 
-  async issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T> {
+  async issue(
+    token: T,
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
+  ): Promise<T> {
     try {
       const familyId = token.refreshFamilyId ?? randomUUID();
       const stored: T = { ...token, refreshFamilyId: familyId };
@@ -107,9 +110,9 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             db: this.db,
             namespace: this.fence!.namespace,
             operation: options?.operation,
+            completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
-
           guard.bufferCompletion(this.nowProvider());
           transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
           transaction.set(
@@ -186,31 +189,58 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     }
   }
 
-  async getByAccessToken(accessToken: string): Promise<T | undefined> {
+  async getByAccessToken(
+    accessToken: string,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<T | undefined> {
     try {
+      if (this.fence?.enforce) {
+        const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
+        if (!control) {
+          throw new CutoverFenceError(
+            `Missing cutover fence control record for namespace ${this.fence.namespace}`,
+          );
+        }
+        if (control.state !== 'legacy_open') {
+          if (
+            control.state === 'closing' &&
+            options?.operation &&
+            options.operation.epoch === control.epoch
+          ) {
+            // Admitted operation permitted during closing
+          } else {
+            throw new CutoverRefusedError(
+              `Cutover state is ${control.state}; access token lookup refused for namespace ${this.fence.namespace}`,
+              { cutoverState: control.state, epoch: control.epoch },
+            );
+          }
+        }
+      }
+
       const snap = await this.accessCol().doc(docId(accessToken)).get();
       if (!snap.exists) return undefined;
       const data = snap.data() as Record<string, unknown>;
 
       if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
-        if (this.fence?.enforce) {
-          const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
-          if (control && control.state !== 'legacy_open') {
-            return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
-          }
+        if (this.fence?.enforce && !options?.operation) {
+          throw new CutoverFenceError(
+            `Durable operation context is required for legacy adoption during getByAccessToken in namespace ${this.fence.namespace}`,
+          );
         }
-        return await this.adoptLegacyEmbeddedDoc(data);
+        return await this.adoptLegacyEmbeddedDoc(data, { operation: options?.operation });
       }
-
-      return data as unknown as T;
+      return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
     } catch (err) {
       this.wrapError(err);
     }
   }
 
-  async getByRefreshToken(refreshToken: string): Promise<T | undefined> {
+  async getByRefreshToken(
+    refreshToken: string,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<T | undefined> {
     try {
-      const res = await this.lookupRefresh(refreshToken);
+      const res = await this.lookupRefresh(refreshToken, undefined, undefined, options);
       if (res.status === 'active' || res.status === 'retry') {
         return res.token;
       }
@@ -227,6 +257,29 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     options?: { operation?: LegacyOperationContext },
   ): Promise<RefreshLookupResult<T>> {
     try {
+      if (this.fence?.enforce) {
+        const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
+        if (!control) {
+          throw new CutoverFenceError(
+            `Missing cutover fence control record for namespace ${this.fence.namespace}`,
+          );
+        }
+        if (control.state !== 'legacy_open') {
+          if (
+            control.state === 'closing' &&
+            options?.operation &&
+            options.operation.epoch === control.epoch
+          ) {
+            // Admitted operation permitted during closing
+          } else {
+            throw new CutoverRefusedError(
+              `Cutover state is ${control.state}; refresh lookup refused for namespace ${this.fence.namespace}`,
+              { cutoverState: control.state, epoch: control.epoch },
+            );
+          }
+        }
+      }
+
       const refreshRef = this.refreshCol().doc(docId(refreshToken));
       const snap = await refreshRef.get();
 
@@ -240,17 +293,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (!legacyMatch.empty) {
             const rawDoc = legacyMatch.docs[0]!.data() as Record<string, unknown>;
             if (!rawDoc.refreshFamilyId) {
-              if (this.fence?.enforce) {
-                const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
-                if (control && control.state !== 'legacy_open') {
-                  const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(rawDoc) : rawDoc) as unknown as T;
-                  if (expectedClientId && tokenObj.clientId !== expectedClientId) {
-                    return { status: 'missing' };
-                  }
-                  return { status: 'active', token: tokenObj, familyId: '' };
-                }
+              if (this.fence?.enforce && !options?.operation) {
+                throw new CutoverFenceError(
+                  `Durable operation context is required for legacy adoption during lookupRefresh in namespace ${this.fence.namespace}`,
+                );
               }
-              const adopted = await this.adoptLegacyEmbeddedDoc(rawDoc, options);
+              const adopted = await this.adoptLegacyEmbeddedDoc(rawDoc, { operation: options?.operation });
               if (adopted) {
                 if (expectedClientId && adopted.clientId !== expectedClientId) {
                   return { status: 'missing' };
@@ -264,7 +312,6 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             }
           }
         }
-
         const retiredMatch = await this.findFamilyByRetiredFingerprint(refreshToken);
         if (retiredMatch) {
           await this.revokeFamily(retiredMatch, options);
@@ -280,20 +327,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         const legacyAccessSnap = await this.accessCol().doc(docId(raw.accessToken)).get();
         if (!legacyAccessSnap.exists) return { status: 'missing' };
         const rawAccess = legacyAccessSnap.data() as Record<string, unknown>;
-        if (this.fence?.enforce) {
-          const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
-          if (control && control.state !== 'legacy_open') {
-            const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(rawAccess) : rawAccess) as unknown as T;
-            if (expectedClientId && tokenObj.clientId !== expectedClientId) {
-              return { status: 'missing' };
-            }
-            return { status: 'active', token: tokenObj, familyId: '' };
-          }
+        if (this.fence?.enforce && !options?.operation) {
+          throw new CutoverFenceError(
+            `Durable operation context is required for legacy pointer adoption during lookupRefresh in namespace ${this.fence.namespace}`,
+          );
         }
-        const adopted = await this.adoptLegacyEmbeddedDoc(
-          rawAccess,
-          options,
-        );
+        const adopted = await this.adoptLegacyEmbeddedDoc(rawAccess, { operation: options?.operation });
         if (!adopted) return { status: 'missing' };
         if (expectedClientId && adopted.clientId !== expectedClientId) {
           return { status: 'missing' };
@@ -335,7 +374,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           }
         }
 
-        await this.revokeFamily(raw.familyId, options);
+        await this.revokeFamily(raw.familyId);
         return { status: 'replay', familyId: raw.familyId };
       }
 
@@ -350,7 +389,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     replacement: T,
     expectedClientId: string,
     now: number = this.nowProvider(),
-    options?: { operation?: LegacyOperationContext },
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
   ): Promise<RefreshRotationResult<T>> {
     try {
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
@@ -362,6 +401,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             db: this.db,
             namespace: this.fence.namespace,
             operation: options?.operation,
+            completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
         }
@@ -628,6 +668,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
   async revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
+      if (this.fence?.enforce && !options?.operation) {
+        throw new CutoverFenceError(
+          `Durable operation context is required for fence-enforced revokeFamily in namespace ${this.fence.namespace}`,
+        );
+      }
       const familyRef = this.familyCol().doc(docId(familyId));
       await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
@@ -655,6 +700,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
   async revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
+      if (this.fence?.enforce && !options?.operation) {
+        throw new CutoverFenceError(
+          `Durable operation context is required for fence-enforced revokeByToken in namespace ${this.fence.namespace}`,
+        );
+      }
       const accessRef = this.accessCol().doc(docId(token));
       const refreshRef = this.refreshCol().doc(docId(token));
 
@@ -766,27 +816,31 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     return matches.docs[0]!.id;
   }
 
-  private async adoptLegacyEmbeddedDoc(raw: Record<string, unknown>, options?: { operation?: LegacyOperationContext }): Promise<T | undefined> {
+  private async adoptLegacyEmbeddedDoc(
+    raw: Record<string, unknown>,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<T | undefined> {
     return await this.db.runTransaction(async (transaction: Transaction) => {
-      let guard: GuardMutationResult | undefined;
-      if (this.fence?.enforce) {
-        guard = await checkMutationGuardInTransaction(transaction, {
-          db: this.db,
-          namespace: this.fence.namespace,
-          operation: options?.operation,
-          now: this.nowProvider,
-        });
-      }
-      const res = await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw);
-      guard?.bufferCompletion(this.nowProvider());
-      return res;
+      return await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw, options);
     });
   }
 
   private async adoptLegacyEmbeddedDocInTransaction(
     transaction: Transaction,
     raw: Record<string, unknown>,
+    options?: { operation?: LegacyOperationContext },
   ): Promise<T | undefined> {
+    let guard: GuardMutationResult | undefined;
+    if (this.fence?.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db,
+        namespace: this.fence.namespace,
+        operation: options?.operation,
+        completeOperation: false,
+        now: this.nowProvider,
+      });
+    }
+
     const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(raw) : raw) as unknown as T;
     if (!tokenObj.accessToken || !tokenObj.refreshToken) {
       return undefined;
@@ -798,13 +852,15 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
     const currentData = accessSnap.data() as Record<string, unknown>;
     if (currentData.refreshFamilyId) {
-      return currentData as unknown as T;
+      return (this.legacy?.toToken ? this.legacy.toToken(currentData) : currentData) as unknown as T;
     }
 
     const familyId = randomUUID();
-    const migrated: T = { ...tokenObj, refreshFamilyId: familyId };
+    const freshToken = (this.legacy?.toToken ? this.legacy.toToken(currentData) : currentData) as unknown as T;
+    const migrated: T = { ...freshToken, refreshFamilyId: familyId };
     const extras = this.accessDocExtras ? this.accessDocExtras(migrated) : {};
 
+    guard?.bufferCompletion(this.nowProvider());
     transaction.set(accessRef, stripUndefined({ ...migrated, ...extras }));
     transaction.set(
       this.refreshCol().doc(docId(migrated.refreshToken)),
