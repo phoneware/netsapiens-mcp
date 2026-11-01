@@ -215,7 +215,7 @@ describe('semantic filters carry through search_api and call_api', () => {
   const result = (await handleToolCall(
    fakeClient as never,
    'search_api',
-   { query: 'auditlog' },
+   { query: 'accesslog' },
    'user',
   )) as { content: Array<{ text: string }> };
   const parsed = JSON.parse(result.content[0].text);
@@ -1389,7 +1389,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('yes');
@@ -1407,7 +1407,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001', synchronous: 'no' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~', synchronous: 'no' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBe('no');
@@ -1426,7 +1426,7 @@ describe('synchronous writes', () => {
   await handleToolCall(
    client as never,
    'call_api',
-   { tool_name: 'create_user', args: { domain: 'd.com', user: '1001' } },
+   { tool_name: 'create_domain', args: { domain: 'd.com', reseller: '~' } },
    'system_admin',
   );
   expect((bodies[0] as Record<string, unknown>)?.synchronous).toBeUndefined();

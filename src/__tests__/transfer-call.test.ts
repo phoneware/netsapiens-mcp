@@ -3,6 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import Ajv, { type ValidateFunction } from 'ajv';
+import { startFakeNetSapiens } from '../../scripts/fake-netsapiens/index.mjs';
 import { callsRoute, addCall, getCallsList } from '../../scripts/fake-netsapiens/routes/calls.mjs';
 import { NetSapiensClient } from '../netsapiens-client.js';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
@@ -231,6 +232,8 @@ describe('transfer_call (Contract C7)', () => {
   });
 
   it('5. Every PATCH body validates (ajv) against vendored CallActions schema', () => {
+    const branches = ['44.3', '44.4', '45.0', '46.0'];
+    const schemas: Record<string, Record<string, unknown>> = {};
     for (const b of branches) {
       const specPath = resolve(__dirname, `../../spec/v2/${b}.json`);
       const spec = JSON.parse(readFileSync(specPath, 'utf8'));
