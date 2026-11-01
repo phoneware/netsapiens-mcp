@@ -15,7 +15,7 @@ export { resolveQueueAgent, resolveSelfIdentity } from './tools/curated/queue-ag
 // Storage
 export { createStore } from './store/store.js';
 export { createSqliteStore } from './store/sqlite.js';
-export { createFirestoreStore, FirestoreClientsStore } from './store/firestore.js';
+export { createFirestoreStore, createFirestoreBackend, firestoreCollections, FirestoreClientsStore } from './store/firestore.js';
 export { createMemoryStore } from './store/memory.js';
 export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 

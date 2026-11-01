@@ -21,8 +21,14 @@ function readAvailabilityAtRef(ref: string): AvailabilityData {
       maxBuffer: 50 * 1024 * 1024,
     });
     return JSON.parse(raw) as AvailabilityData;
-  } catch (err) {
-    throw new Error(`Failed to read src/generated/availability.json at ref '${ref}': ${(err as Error).message}`);
+  } catch {
+    return {
+      schemaVersion: 2,
+      branches: [],
+      observations: [],
+      v2: {},
+      v1: {},
+    };
   }
 }
 

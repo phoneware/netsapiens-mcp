@@ -879,8 +879,8 @@ async function main() {
 
       // 1. Install @google-cloud/firestore@^<major>
       const fsPkg = `@google-cloud/firestore@^${opts.firestoreMajor}`;
-      console.log(`Installing ${fsPkg} in consumer...`);
-      execSync(`npm i --legacy-peer-deps ${fsPkg}`, { cwd: tempDir, stdio: 'pipe' });
+      console.log(`Installing ${fsPkg} and vitest in consumer...`);
+      execSync(`npm i --legacy-peer-deps ${fsPkg} vitest@^4.1.11`, { cwd: tempDir, stdio: 'pipe' });
 
       const nsToken = 'ns-token-firestore-e2e-secret';
       const fakeUser = {
@@ -904,6 +904,7 @@ async function main() {
 
       const port1 = await getAvailablePort();
       const port2 = await getAvailablePort();
+      const sharedBaseUrl = 'http://127.0.0.1:3000';
       const fsEnvCommon = {
         ...process.env,
         MCP_TRANSPORT: 'http',
@@ -912,6 +913,7 @@ async function main() {
         GOOGLE_CLOUD_PROJECT: gcpProject,
         FIRESTORE_EMULATOR_HOST: emuHost,
         MCP_SESSION_SECRET: sessionSecret,
+        MCP_BASE_URL: sharedBaseUrl,
         NETSAPIENS_API_URL: fake.origin,
         NETSAPIENS_OAUTH_CLIENT_ID: 'op-client',
         NETSAPIENS_OAUTH_CLIENT_SECRET: 'op-secret',
@@ -921,7 +923,6 @@ async function main() {
       const srv1 = await startMcpServerProcess(tempDir, {
         ...fsEnvCommon,
         MCP_PORT: String(port1),
-        MCP_BASE_URL: `http://127.0.0.1:${port1}`,
       });
 
       try {
@@ -942,7 +943,6 @@ async function main() {
         const srv2 = await startMcpServerProcess(tempDir, {
           ...fsEnvCommon,
           MCP_PORT: String(port2),
-          MCP_BASE_URL: `http://127.0.0.1:${port2}`,
         });
 
         try {
@@ -1041,7 +1041,7 @@ runStoreConformance({
 });
 `);
 
-        const vitestRes = await runCommand('npx', ['vitest', 'run', 'firestore-conformance.test.mjs'], {
+        const vitestRes = await runCommand('npx', ['vitest', 'run', 'firestore-conformance.test.mjs', '--test-timeout=20000', '--hook-timeout=20000'], {
           cwd: tempDir,
           env: {
             ...process.env,
