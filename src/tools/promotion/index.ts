@@ -10,7 +10,7 @@
 
 import { getUsageStore } from './usage-store.js';
 import { logger } from '../../utils/logger.js';
-
+import type { AvailabilityContext } from '../../netsapiens/availability.js';
 export { getUsageStore, setUsageStore, _resetUsageStoreForTests } from './usage-store.js';
 export type { UsageRecord, UsageStore } from './usage-store.js';
 
@@ -38,7 +38,10 @@ function getWindowMs(): number {
  * Returns the names of tools that should be promoted into the user's default
  * tool list. Empty when promotion is disabled or the user is unknown.
  */
-export async function getPromotedToolNames(userKey: string | undefined): Promise<string[]> {
+export async function getPromotedToolNames(
+ userKey: string | undefined,
+ availabilityContext?: AvailabilityContext,
+): Promise<string[]> {
  if (!userKey || !promotionEnabled()) return [];
  const threshold = getThreshold();
  const windowMs = getWindowMs();
@@ -47,7 +50,13 @@ export async function getPromotedToolNames(userKey: string | undefined): Promise
   const usage = await getUsageStore().getUserUsage(userKey);
   const names: string[] = [];
   for (const [name, rec] of usage) {
-   if (rec.count >= threshold && rec.lastUsed >= cutoff) names.push(name);
+   if (rec.count >= threshold && rec.lastUsed >= cutoff) {
+    if (availabilityContext) {
+     const meta = availabilityContext.getToolAvailability(name);
+     if (!meta.documented && meta.observed !== 'present') continue;
+    }
+    names.push(name);
+   }
   }
   return names;
  } catch (err) {
@@ -55,7 +64,6 @@ export async function getPromotedToolNames(userKey: string | undefined): Promise
   return [];
  }
 }
-
 /**
  * Best-effort record of a successful call_api invocation. Returns whether
  * THIS call took the tool over the promotion threshold (so the caller can

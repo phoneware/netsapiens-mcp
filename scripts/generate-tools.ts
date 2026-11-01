@@ -12,7 +12,20 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
-import { MULTIPART_ONLY_TOOLS } from '../src/tools/multipart.js';
+const MULTIPART_ONLY_TOOLS = new Set([
+ 'create_greeting_file_upload',
+ 'update_greeting_file_upload',
+ 'create_moh_domain_file_upload',
+ 'update_moh_domain_file_upload',
+ 'create_moh_user_file_upload',
+ 'update_moh_user_file_upload',
+ 'create_msg_domain_file_upload',
+ 'update_msg_domain_file_upload',
+ 'post_domains_by_domain_users_by_user_msg',
+ 'update_msg_user_file_upload',
+ 'create_image_file_upload',
+ 'update_image_file_upload',
+]);
 
 // ---------------------------------------------------------------------------
 // Types
