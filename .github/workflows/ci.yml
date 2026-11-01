@@ -6,20 +6,28 @@ on:
     branches: [main]
 
 jobs:
-  ci:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Token guard
+        run: |
+          if git grep -nE 'NPM_TOK[E]N|NODE_AUTH_TOK[E]N' -- .github; then exit 1; fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - name: Start Firestore emulator
         run: |
           docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
             gcloud emulators firestore start --host-port=0.0.0.0:8080
-          for i in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
           docker logs fs-emu; exit 1
       - run: npm test
         env:
@@ -27,6 +35,7 @@ jobs:
           GOOGLE_CLOUD_PROJECT: firestore-test
           NSMCP_REQUIRE_FIRESTORE_EMULATOR: 1
       - run: npm run build
+      - run: git diff --exit-code
       - name: Scan tracked content
         env:
           FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
@@ -37,3 +46,20 @@ jobs:
             exit 0
           fi
           node scripts/scan-forbidden.mjs --tree
+      - name: Availability diff
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep -q '^spec/v2/observations/'; then if [ -f scripts/availability-diff.ts ]; then npx tsx scripts/availability-diff.ts "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"; fi; fi
+
+  ci:
+    needs: [test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Aggregate test matrix results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test job failed: ${{ needs.test.result }}"
+            exit 1
+          fi
+          echo "All test matrix jobs succeeded."
