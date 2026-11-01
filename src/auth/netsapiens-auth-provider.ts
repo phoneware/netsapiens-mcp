@@ -1045,13 +1045,21 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    };
   }
 
-  let nsTokens: NsTokenResponse;
+  let refreshedSession: StoredSession;
   if (session.nsRefreshToken) {
    try {
-    nsTokens = await this.nsRefreshGrant(session.nsRefreshToken, session.nsApiUrl);
-    nsTokens.username = session.nsUsername;
-    nsTokens.nsUserRole = session.nsUserRole;
-    nsTokens.nsApiUrl = session.nsApiUrl;
+    refreshedSession = await this.store.sessions.refreshUpstream(
+     familyId,
+     async (current) => {
+      const refreshed = await this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl);
+      return {
+       access_token: refreshed.access_token,
+       refresh_token: refreshed.refresh_token,
+       expires_in: refreshed.expires_in,
+      };
+     },
+     { force: true },
+    );
    } catch (err: unknown) {
     if (err instanceof UpstreamGrantRejectedError) {
      logger.warn('Upstream NS refresh grant rejected definitively by NetSapiens', {
@@ -1083,9 +1091,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const newStoredSession: StoredToken = {
    clientId: session.clientId,
    expiresAt: newExpiresAt,
-   nsAccessToken: nsTokens.access_token,
-   nsRefreshToken: nsTokens.refresh_token ?? session.nsRefreshToken,
-   nsExpiresAt: nsTokens.expires_in ? now + nsTokens.expires_in * 1000 : session.nsExpiresAt,
+   nsAccessToken: refreshedSession.nsAccessToken,
+   nsRefreshToken: refreshedSession.nsRefreshToken ?? session.nsRefreshToken,
+   nsExpiresAt: refreshedSession.nsExpiresAt,
    nsUsername: session.nsUsername,
    nsUserRole: session.nsUserRole,
    nsApiUrl: session.nsApiUrl,

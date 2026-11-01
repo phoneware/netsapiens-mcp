@@ -182,7 +182,7 @@ describe('OAuth Permanence Contract v3', () => {
       expect(refreshSpy).toHaveBeenCalledTimes(0); // Zero upstream calls!
 
       // 5. Concurrent refreshes -> both return 200 with identical pairs
-      vi.spyOn(axios, 'post').mockResolvedValue({
+      const concSpy = vi.spyOn(axios, 'post').mockResolvedValue({
         data: { access_token: 'ns-tok-3', refresh_token: 'ns-ref-3', expires_in: 3600 },
       });
 
@@ -199,6 +199,7 @@ describe('OAuth Permanence Contract v3', () => {
       expect(conc2.status).toBe(200);
       expect(conc1.body.access_token).toBe(conc2.body.access_token);
       expect(conc1.body.refresh_token).toBe(conc2.body.refresh_token);
+      expect(concSpy).toHaveBeenCalledTimes(1);
 
       const activeRefresh = conc1.body.refresh_token;
 
