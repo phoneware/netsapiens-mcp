@@ -114,7 +114,11 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export async function createApp(options?: { store?: McpStore }): Promise<{
+export async function createApp(options?: {
+ store?: McpStore;
+ authProvider?: NetSapiensAuthProvider;
+ hooks?: import('./auth/types.js').AuthHooks;
+}): Promise<{
  app: express.Express;
  authProvider: NetSapiensAuthProvider;
  baseUrl: URL;
@@ -148,7 +152,7 @@ export async function createApp(options?: { store?: McpStore }): Promise<{
  setUsageStore(store.usage);
 
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
- const authProvider = new NetSapiensAuthProvider({
+ const authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
   platforms,
   nsClientId,
@@ -156,8 +160,8 @@ export async function createApp(options?: { store?: McpStore }): Promise<{
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
   store,
+  hooks: options?.hooks,
  });
-
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms);
  return { app, authProvider, baseUrl, mcpUrl, store, platforms };
 }
@@ -477,9 +481,15 @@ function wireApp(
   verifier: authProvider,
   resourceMetadataUrl,
  });
- const mcpAuthMiddleware: express.RequestHandler = (req, res, next) => {
-  bearerAuth(req, res, (err) => {
-   if (err) {
+ const mcpAuthMiddleware: express.RequestHandler = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (typeof authProvider?.verifyAccessToken === 'function' && authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+   const token = authHeader.slice(7).trim();
+   try {
+    const authInfo = await authProvider.verifyAccessToken(token);
+    (req as AuthenticatedRequest).auth = authInfo;
+    return next();
+   } catch (err: unknown) {
     if (
      err instanceof StoreConfigError ||
      err instanceof StoreLockedError ||
@@ -496,10 +506,10 @@ function wireApp(
      });
      return;
     }
-    return next(err);
+    return bearerAuth(req, res, next);
    }
-   next();
-  });
+  }
+  return bearerAuth(req, res, next);
  };
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {

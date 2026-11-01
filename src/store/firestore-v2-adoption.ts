@@ -17,7 +17,6 @@ export interface FirestoreAdoptionReport {
   migrated: number;
   skipped: number;
   errors: number;
-  details?: Array<{ id: string; status: 'migrated' | 'skipped' | 'error'; reason?: string }>;
 }
 
 export async function adoptFirestoreLegacyTokens(options: {
@@ -35,15 +34,14 @@ export async function adoptFirestoreLegacyTokens(options: {
     migrated: 0,
     skipped: 0,
     errors: 0,
-    details: [],
   };
 
-  // Legacy collections:
   const legacyTokensCol = `${namespace}_tokens`;
+  const legacyRefreshCol = `${namespace}_tokens_refresh`;
   const legacyFamiliesCol = `${namespace}_tokens_refresh_families`;
   const legacyUpstreamCol = `${namespace}_tokens_upstream`;
 
-  // 1. Check for PR56 style families
+  // 1. Adopt established PR56 refresh families
   try {
     const familiesSnap = await db.collection(legacyFamiliesCol).get();
     for (const famDoc of familiesSnap.docs) {
@@ -56,19 +54,19 @@ export async function adoptFirestoreLegacyTokens(options: {
         continue;
       }
 
-      // Check if already migrated to v3
+      // Check if already migrated
       const existingV3 = await db.collection(v3Cols.refreshFamilies).doc(familyId).get();
       if (existingV3.exists) {
         report.skipped++;
-        report.details?.push({ id: familyId, status: 'skipped', reason: 'already migrated' });
         continue;
       }
 
-      // Read matching upstream doc
+      // Read upstream grant doc (nested { grant: { ... } } or flat)
       const upDoc = await db.collection(legacyUpstreamCol).doc(familyId).get();
-      const upData = upDoc.data() ?? {};
+      const upData = (upDoc.data() ?? {}) as Record<string, unknown>;
+      const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
 
-      // Read matching access doc
+      // Read access doc
       const accessId = famData.currentAccessToken as string;
       const accDoc = accessId ? await db.collection(legacyTokensCol).doc(accessId).get() : undefined;
       const accData = accDoc?.data();
@@ -85,6 +83,21 @@ export async function adoptFirestoreLegacyTokens(options: {
       const expiresAt = typeof accData?.expiresAt === 'number' ? accData.expiresAt : now + 3600_000;
       const retainUntil = expiresAt + ACCESS_RETENTION_MS;
 
+      const nsAccessToken = (grant.nsAccessToken ?? grant.access_token ?? accData?.nsAccessToken ?? '') as string;
+      const nsRefreshToken = (grant.nsRefreshToken ?? grant.refresh_token ?? accData?.nsRefreshToken) as string | undefined;
+      const nsUsername = (grant.nsUsername ?? grant.username ?? accData?.nsUsername ?? '') as string;
+      const nsUserRole = (grant.nsUserRole ?? grant.user_role ?? grant.userRole ?? accData?.nsUserRole) as string | undefined;
+      const nsApiUrl = (grant.nsApiUrl ?? grant.api_url ?? grant.apiUrl ?? accData?.nsApiUrl) as string | undefined;
+      const nsExpiresAt = typeof upData.expiresAt === 'number'
+        ? (upData.expiresAt as number)
+        : (typeof grant.expires_in === 'number'
+          ? now + (grant.expires_in as number) * 1000
+          : (typeof accData?.nsExpiresAt === 'number' ? (accData.nsExpiresAt as number) : undefined));
+
+      const retiredFingerprints = Array.isArray(famData.retiredRefreshFingerprints)
+        ? (famData.retiredRefreshFingerprints as string[])
+        : [];
+
       const familyRow: FamilyRow = {
         id: familyId,
         generation,
@@ -93,24 +106,24 @@ export async function adoptFirestoreLegacyTokens(options: {
         currentAccessTokenId: newAccessId,
         updatedAt: now,
         sealed: codec.seal({
-          clientId: famData.clientId ?? accData?.clientId ?? 'migrated',
-          serverBaseUrl: famData.serverBaseUrl ?? accData?.serverBaseUrl,
-          extra: accData?.extra ?? {},
-          retiredRefreshIds: Array.isArray(famData.retiredRefreshFingerprints) ? famData.retiredRefreshFingerprints : [],
+          clientId: (famData.clientId ?? accData?.clientId ?? 'migrated') as string,
+          serverBaseUrl: (famData.serverBaseUrl ?? accData?.serverBaseUrl) as string | undefined,
+          extra: (accData?.extra ?? {}) as Record<string, string>,
+          retiredRefreshIds: retiredFingerprints,
         }, familyAad({ id: familyId, generation })),
       };
 
       const upstreamRow: UpstreamGrantRow = {
         id: familyId,
         grantVersion,
-        nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : undefined,
+        nsExpiresAt,
         updatedAt: now,
         sealed: codec.seal({
-          nsAccessToken: upData.nsAccessToken ?? accData?.nsAccessToken ?? '',
-          nsRefreshToken: upData.nsRefreshToken ?? accData?.nsRefreshToken,
-          nsUsername: upData.nsUsername ?? accData?.nsUsername ?? '',
-          nsUserRole: upData.nsUserRole ?? accData?.nsUserRole,
-          nsApiUrl: upData.nsApiUrl ?? accData?.nsApiUrl,
+          nsAccessToken,
+          nsRefreshToken,
+          nsUsername,
+          nsUserRole,
+          nsApiUrl,
         }, upstreamAad({ id: familyId, grantVersion })),
       };
 
@@ -121,9 +134,9 @@ export async function adoptFirestoreLegacyTokens(options: {
         retainUntil,
         sealed: codec.seal({
           familyId,
-          clientId: famData.clientId ?? accData?.clientId ?? 'migrated',
-          serverBaseUrl: famData.serverBaseUrl ?? accData?.serverBaseUrl,
-          extra: accData?.extra ?? {},
+          clientId: (famData.clientId ?? accData?.clientId ?? 'migrated') as string,
+          serverBaseUrl: (famData.serverBaseUrl ?? accData?.serverBaseUrl) as string | undefined,
+          extra: (accData?.extra ?? {}) as Record<string, string>,
         }, accessAad({ id: newAccessId, familyId })),
       };
 
@@ -134,23 +147,46 @@ export async function adoptFirestoreLegacyTokens(options: {
         generation,
       };
 
+      // Check if previous refresh pointer exists (consumed retry window)
+      let prevRefreshRow: RefreshPointerRow | undefined;
+      if (famData.previousRefreshToken && famData.currentRefreshToken && accessId) {
+        const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
+        const prevRefDoc = await db.collection(legacyRefreshCol).doc(famData.previousRefreshToken as string).get();
+        const prevData = prevRefDoc?.data();
+        const consumedAt = typeof prevData?.consumedAt === 'number' ? prevData.consumedAt : now;
+
+        prevRefreshRow = {
+          id: prevRefreshId,
+          familyId,
+          status: 'consumed',
+          generation: Math.max(1, generation - 1),
+          consumedAt,
+          successorSealed: codec.seal({
+            accessToken: accessId,
+            refreshToken: famData.currentRefreshToken as string,
+          }, `successor:${prevRefreshId}`),
+        };
+      }
+
       if (!dryRun) {
         await db.runTransaction(async (tx) => {
           tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
           tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
           tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), defined({ ...refreshRow, v: 2 }));
           tx.set(db.collection(v3Cols.sessions).doc(newAccessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
+          if (prevRefreshRow) {
+            tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
+          }
         });
       }
 
       report.migrated++;
-      report.details?.push({ id: familyId, status: 'migrated' });
     }
   } catch (err: unknown) {
     report.errors++;
   }
 
-  // 2. Check for unattached legacy tokens in <ns>_tokens
+  // 2. Adopt unattached base-format token documents
   try {
     const tokensSnap = await db.collection(legacyTokensCol).get();
     for (const tokDoc of tokensSnap.docs) {
@@ -167,7 +203,6 @@ export async function adoptFirestoreLegacyTokens(options: {
       const existingV3Access = await db.collection(v3Cols.sessions).doc(accessId).get();
       if (existingV3Access.exists) {
         report.skipped++;
-        report.details?.push({ id: accessToken, status: 'skipped', reason: 'already migrated' });
         continue;
       }
 
@@ -186,9 +221,9 @@ export async function adoptFirestoreLegacyTokens(options: {
         retainUntil,
         sealed: codec.seal({
           familyId,
-          clientId: tokData.clientId ?? 'migrated',
-          serverBaseUrl: tokData.serverBaseUrl,
-          extra: tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {}),
+          clientId: (tokData.clientId ?? 'migrated') as string,
+          serverBaseUrl: tokData.serverBaseUrl as string | undefined,
+          extra: (tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {})) as Record<string, string>,
         }, accessAad({ id: accessId, familyId })),
       };
 
@@ -207,9 +242,9 @@ export async function adoptFirestoreLegacyTokens(options: {
         currentAccessTokenId: accessId,
         updatedAt: now,
         sealed: codec.seal({
-          clientId: tokData.clientId ?? 'migrated',
-          serverBaseUrl: tokData.serverBaseUrl,
-          extra: tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {}),
+          clientId: (tokData.clientId ?? 'migrated') as string,
+          serverBaseUrl: tokData.serverBaseUrl as string | undefined,
+          extra: (tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {})) as Record<string, string>,
           retiredRefreshIds: [],
         }, familyAad({ id: familyId, generation })),
       };
@@ -217,14 +252,14 @@ export async function adoptFirestoreLegacyTokens(options: {
       const upstreamRow: UpstreamGrantRow = {
         id: familyId,
         grantVersion,
-        nsExpiresAt: typeof tokData.nsExpiresAt === 'number' ? tokData.nsExpiresAt : undefined,
+        nsExpiresAt: typeof tokData.nsExpiresAt === 'number' ? (tokData.nsExpiresAt as number) : undefined,
         updatedAt: now,
         sealed: codec.seal({
-          nsAccessToken: tokData.nsAccessToken ?? '',
-          nsRefreshToken: tokData.nsRefreshToken,
-          nsUsername: tokData.nsUsername ?? '',
-          nsUserRole: tokData.nsUserRole,
-          nsApiUrl: tokData.nsApiUrl,
+          nsAccessToken: (tokData.nsAccessToken ?? '') as string,
+          nsRefreshToken: tokData.nsRefreshToken as string | undefined,
+          nsUsername: (tokData.nsUsername ?? '') as string,
+          nsUserRole: tokData.nsUserRole as string | undefined,
+          nsApiUrl: tokData.nsApiUrl as string | undefined,
         }, upstreamAad({ id: familyId, grantVersion })),
       };
 
@@ -238,7 +273,6 @@ export async function adoptFirestoreLegacyTokens(options: {
       }
 
       report.migrated++;
-      report.details?.push({ id: accessToken, status: 'migrated' });
     }
   } catch (err: unknown) {
     report.errors++;

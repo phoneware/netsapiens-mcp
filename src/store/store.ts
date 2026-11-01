@@ -185,13 +185,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           } satisfies UpstreamSealedData, upstreamAad({ id: familyId, grantVersion })),
         };
 
-        await backend.putAccess(accessRow);
-        await backend.putRefresh(refreshRow);
-        await backend.putFamily(familyRow);
-        await backend.putUpstream(upstreamRow);
-
-
-
+        await backend.atomicIssue({ accessRow, refreshRow, familyRow, upstreamRow });
         return {
           ...session,
           refreshFamilyId: familyId,
@@ -332,7 +326,8 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         const session = await decodeCurrentSession(family, familyData, backend, codec);
         if (!session) return { status: 'missing' };
 
-        return { status: 'active', familyId: family.id, generation: family.generation, session };
+        const upstream = await backend.getUpstream(family.id);
+        return { status: 'active', familyId: family.id, generation: family.generation, grantVersion: upstream?.grantVersion, session };
       },
 
       async rotate(
@@ -603,7 +598,16 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
               nsRefreshToken: refreshed.refresh_token ?? session.nsRefreshToken,
               nsExpiresAt: newNsExpiresAt,
             };
-          } catch (error) {
+          } catch (error: any) {
+            if (error?.name === 'UpstreamGrantRejectedError' || error?.isDefinitive === true) {
+              const fam = await backend.getFamily(familyId).catch(() => undefined);
+              if (fam) {
+                await backend.atomicRevokeFamily(familyId, {
+                  expectedFamilyGeneration: fam.generation,
+                  expectedUpstreamGrantVersion: updated.grantVersion,
+                }).catch(() => {});
+              }
+            }
             await backend.updateUpstream(familyId, (cur) => {
               if (cur.leaseOwner !== owner) return undefined;
               return { ...cur, leaseOwner: undefined, leaseUntil: undefined };
@@ -678,6 +682,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       },
     },
 
+    sweep: (now: number) => backend.sweep(now),
     close: () => backend.close(),
   };
 }

@@ -1,3 +1,5 @@
+import type { AtomicIssueParams } from './types.js';
+import { adoptFirestoreLegacyTokens } from './firestore-v2-adoption.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -64,9 +66,9 @@ export interface FirestoreCollections {
 export function firestoreCollections(namespace: string): FirestoreCollections {
   return {
     sessions: `${namespace}_sessions`,
-    refreshTokens: `${namespace}_refresh_tokens`,
+    refreshTokens: `${namespace}_refresh`,
     refreshFamilies: `${namespace}_refresh_families`,
-    upstreamGrants: `${namespace}_upstream_grants`,
+    upstreamGrants: `${namespace}_upstream`,
     oauthClients: `${namespace}_oauth_clients`,
     authCodes: `${namespace}_auth_codes`,
     resumeTokens: `${namespace}_resume_tokens`,
@@ -116,7 +118,7 @@ export class FirestoreBackend implements StoreBackend {
   getUpstream!: StoreBackend['getUpstream'];
   putUpstream!: StoreBackend['putUpstream'];
   updateUpstream!: StoreBackend['updateUpstream'];
-
+  atomicIssue!: StoreBackend['atomicIssue'];
   atomicRotate!: StoreBackend['atomicRotate'];
   atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
 
@@ -131,8 +133,8 @@ export class FirestoreBackend implements StoreBackend {
   sweep!: StoreBackend['sweep'];
   close!: StoreBackend['close'];
 
-  constructor(options: { db: FirestoreLike; namespace: string }) {
-    const { db, namespace } = options;
+  constructor(options: { db: FirestoreLike; namespace: string; key?: Uint8Array }) {
+    const { db, namespace, key } = options;
     this.db = db;
     const names = this.collections = firestoreCollections(namespace);
     const sessions = db.collection(names.sessions);
@@ -156,7 +158,11 @@ export class FirestoreBackend implements StoreBackend {
       capabilities: this.capabilities,
 
       async getAccess(id) {
-        const snap = await sessions.doc(id).get();
+        let snap = await sessions.doc(id).get();
+        if (!snap.exists && key) {
+          await adoptFirestoreLegacyTokens({ db, namespace, key }).catch(() => {});
+          snap = await sessions.doc(id).get();
+        }
         return snap.exists ? ({ ...snap.data(), id } as unknown as AccessRow) : undefined;
       },
       async putAccess(row) {
@@ -167,7 +173,11 @@ export class FirestoreBackend implements StoreBackend {
       },
 
       async getRefresh(id) {
-        const snap = await refreshTokens.doc(id).get();
+        let snap = await refreshTokens.doc(id).get();
+        if (!snap.exists && key) {
+          await adoptFirestoreLegacyTokens({ db, namespace, key }).catch(() => {});
+          snap = await refreshTokens.doc(id).get();
+        }
         return snap.exists ? ({ ...snap.data(), id } as unknown as RefreshPointerRow) : undefined;
       },
       async putRefresh(row) {
@@ -175,6 +185,14 @@ export class FirestoreBackend implements StoreBackend {
       },
       async deleteRefresh(id) {
         await refreshTokens.doc(id).delete();
+      },
+      async atomicIssue(params: AtomicIssueParams): Promise<void> {
+        return db.runTransaction(async tx => {
+          tx.set(sessions.doc(params.accessRow.id), accessData(params.accessRow));
+          tx.set(refreshTokens.doc(params.refreshRow.id), refreshData(params.refreshRow));
+          tx.set(refreshFamilies.doc(params.familyRow.id), familyData(params.familyRow));
+          tx.set(upstreamGrants.doc(params.upstreamRow.id), upstreamData(params.upstreamRow));
+        });
       },
 
       async getFamily(id) {
@@ -327,10 +345,16 @@ export class FirestoreBackend implements StoreBackend {
           if (fam.currentAccessTokenId) {
             tx.delete(sessions.doc(fam.currentAccessTokenId));
           }
-          if (refDoc && refSnap && refSnap.exists) {
-            tx.set(refDoc, refreshData({ ...(refSnap.data() as unknown as RefreshPointerRow), status: 'consumed', consumedAt: now }));
-          }
+          tx.delete(upstreamGrants.doc(familyId));
 
+          if (refDoc && refSnap && refSnap.exists) {
+            tx.set(refDoc, refreshData({
+              ...(refSnap.data() as unknown as RefreshPointerRow),
+              status: 'consumed',
+              consumedAt: now,
+              successorSealed: undefined,
+            }));
+          }
           return 'revoked';
         });
       },
@@ -492,7 +516,7 @@ export class FirestoreBackend implements StoreBackend {
   }
 }
 
-export function createFirestoreBackend(options: { db: FirestoreLike; namespace: string }): FirestoreBackend {
+export function createFirestoreBackend(options: { db: FirestoreLike; namespace: string; key?: Uint8Array }): FirestoreBackend {
   return new FirestoreBackend(options);
 }
 

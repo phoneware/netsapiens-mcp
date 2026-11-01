@@ -223,7 +223,7 @@ describe('OAuth Permanence Contract v3', () => {
       await store.close();
     });
 
-    it('refresh at +31 days succeeds without calendar expiry', async () => {
+    it('refresh at +31 days succeeds after access token retention expiry and sweep', async () => {
       const store = storeFactory();
       const { app } = createHarness(store);
 
@@ -233,19 +233,32 @@ describe('OAuth Permanence Contract v3', () => {
       const t = { accessToken: `acc_${randomUUID()}`, refreshToken: `ref_${randomUUID()}` };
       const s: StoredToken = {
         clientId,
-        expiresAt: Date.now() - 1000,
+        expiresAt: Date.now() + 3600_000,
         nsAccessToken: 'ns-tok',
         nsRefreshToken: 'ns-ref',
-        nsExpiresAt: Date.now() - 1000,
+        nsExpiresAt: Date.now() + 3600_000,
         nsUsername: 'user@example.com',
       };
       await store.sessions.create(t, s);
+
+      const accessBefore = await store.sessions.get(t.accessToken);
+      expect(accessBefore).toBeDefined();
+
+      const futureNow = Date.now() + 31 * 86400 * 1000;
+      vi.useFakeTimers({ now: futureNow, toFake: ['Date'] });
+
+      await store.sweep(futureNow);
+
+      const accessAfterSweep = await store.sessions.get(t.accessToken);
+      expect(accessAfterSweep).toBeUndefined();
+
+      const lookup = await store.sessions.lookupRefresh(t.refreshToken, clientId, futureNow);
+      expect(lookup.status).toBe('active');
 
       vi.spyOn(axios, 'post').mockResolvedValueOnce({
         data: { access_token: 'ns-tok-new', refresh_token: 'ns-ref-new', expires_in: 3600 },
       });
 
-      // Calling /token with refresh token at +31 days (no calendar expiry)
       const res = await request(app)
         .post('/token')
         .send(`grant_type=refresh_token&refresh_token=${t.refreshToken}&client_id=${clientId}`)
@@ -253,7 +266,10 @@ describe('OAuth Permanence Contract v3', () => {
 
       expect(res.body.access_token).toBeDefined();
       expect(res.body.refresh_token).toBeDefined();
+      expect(res.body.access_token).not.toBe(t.accessToken);
+      expect(res.body.refresh_token).not.toBe(t.refreshToken);
 
+      vi.useRealTimers();
       await store.close();
     });
   });

@@ -1,3 +1,4 @@
+import type { AtomicIssueParams } from './types.js';
 import { closeSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRequire } from 'node:module';
@@ -102,7 +103,7 @@ export class SqliteBackend implements StoreBackend {
   getUpstream!: StoreBackend['getUpstream'];
   putUpstream!: StoreBackend['putUpstream'];
   updateUpstream!: StoreBackend['updateUpstream'];
-
+  atomicIssue!: StoreBackend['atomicIssue'];
   atomicRotate!: StoreBackend['atomicRotate'];
   atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
   findFamilyByRetiredId!: NonNullable<StoreBackend['findFamilyByRetiredId']>;
@@ -162,7 +163,18 @@ export class SqliteBackend implements StoreBackend {
       if (version === 1) {
         // v1 -> v2 migration inside transaction BEFORE sweep
         transaction(() => {
-          const v1Rows = db.prepare('SELECT id, refresh_id, expires_at, retain_until, ns_expires_at, sealed FROM sessions').all();
+          const v1Rows = db.prepare('SELECT id, refresh_id, expires_at, retain_until, ns_expires_at, sealed FROM sessions').all() as Array<{
+            id: string;
+            refresh_id: string;
+            expires_at: number;
+            retain_until: number;
+            ns_expires_at?: number;
+            sealed: string;
+          }>;
+
+          if (v1Rows.length > 0 && !key) {
+            throw new StoreConfigError('Key required to migrate SQLite v1 store containing sessions');
+          }
 
           db.exec(`
             CREATE TABLE IF NOT EXISTS refresh_families (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, status TEXT NOT NULL, active_refresh_id TEXT NOT NULL, current_access_token_id TEXT NOT NULL, revoked_at INTEGER, updated_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
@@ -173,65 +185,67 @@ export class SqliteBackend implements StoreBackend {
             CREATE TABLE sessions (id TEXT PRIMARY KEY CHECK(length(id)=64), family_id TEXT NOT NULL, expires_at INTEGER NOT NULL, retain_until INTEGER NOT NULL CHECK(retain_until >= expires_at), sealed TEXT NOT NULL) STRICT;
           `);
 
-          if (key) {
+          if (v1Rows.length > 0 && key) {
             const codec = createCodec(key);
             for (const row of v1Rows) {
-              const legacy = codec.open<StoredToken>(row.sealed as string, `session:${row.id}:${row.refresh_id}`);
-              if (legacy) {
-                const familyId = randomUUID();
-                const now = Date.now();
-                const gen = 1;
-                const gVer = 1;
-
-                db.prepare('INSERT INTO refresh_families(id,generation,status,active_refresh_id,current_access_token_id,updated_at,sealed) VALUES (?,?,?,?,?,?,?)').run(
-                  familyId,
-                  gen,
-                  'active',
-                  row.refresh_id,
-                  row.id,
-                  now,
-                  codec.seal({
-                    clientId: legacy.clientId,
-                    serverBaseUrl: legacy.serverBaseUrl,
-                    extra: legacy.extra,
-                    retiredRefreshIds: [],
-                  }, `family:${familyId}:${gen}`),
-                );
-
-                db.prepare('INSERT INTO refresh_tokens(id,family_id,status,generation) VALUES (?,?,?,?)').run(
-                  row.refresh_id,
-                  familyId,
-                  'active',
-                  gen,
-                );
-
-                db.prepare('INSERT INTO upstream_grants(id,grant_version,ns_expires_at,updated_at,sealed) VALUES (?,?,?,?,?)').run(
-                  familyId,
-                  gVer,
-                  row.ns_expires_at ?? null,
-                  now,
-                  codec.seal({
-                    nsAccessToken: legacy.nsAccessToken,
-                    nsRefreshToken: legacy.nsRefreshToken,
-                    nsUsername: legacy.nsUsername,
-                    nsUserRole: legacy.nsUserRole,
-                    nsApiUrl: legacy.nsApiUrl,
-                  }, `upstream:${familyId}:${gVer}`),
-                );
-
-                db.prepare('INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)').run(
-                  row.id,
-                  familyId,
-                  row.expires_at,
-                  row.retain_until,
-                  codec.seal({
-                    familyId,
-                    clientId: legacy.clientId,
-                    serverBaseUrl: legacy.serverBaseUrl,
-                    extra: legacy.extra,
-                  }, `access:${row.id}:${familyId}`),
-                );
+              const legacy = codec.open<StoredToken>(row.sealed, `session:${row.id}:${row.refresh_id}`);
+              if (!legacy) {
+                throw new StoreConfigError(`Failed to decode SQLite v1 session ${row.id} during migration: aborted to prevent data loss`);
               }
+
+              const familyId = randomUUID();
+              const now = Date.now();
+              const gen = 1;
+              const gVer = 1;
+
+              db.prepare('INSERT INTO refresh_families(id,generation,status,active_refresh_id,current_access_token_id,updated_at,sealed) VALUES (?,?,?,?,?,?,?)').run(
+                familyId,
+                gen,
+                'active',
+                row.refresh_id,
+                row.id,
+                now,
+                codec.seal({
+                  clientId: legacy.clientId,
+                  serverBaseUrl: legacy.serverBaseUrl,
+                  extra: legacy.extra,
+                  retiredRefreshIds: [],
+                }, `family:${familyId}:${gen}`),
+              );
+
+              db.prepare('INSERT INTO refresh_tokens(id,family_id,status,generation) VALUES (?,?,?,?)').run(
+                row.refresh_id,
+                familyId,
+                'active',
+                gen,
+              );
+
+              db.prepare('INSERT INTO upstream_grants(id,grant_version,ns_expires_at,updated_at,sealed) VALUES (?,?,?,?,?)').run(
+                familyId,
+                gVer,
+                row.ns_expires_at ?? null,
+                now,
+                codec.seal({
+                  nsAccessToken: legacy.nsAccessToken,
+                  nsRefreshToken: legacy.nsRefreshToken,
+                  nsUsername: legacy.nsUsername,
+                  nsUserRole: legacy.nsUserRole,
+                  nsApiUrl: legacy.nsApiUrl,
+                }, `upstream:${familyId}:${gVer}`),
+              );
+
+              db.prepare('INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)').run(
+                row.id,
+                familyId,
+                row.expires_at,
+                row.retain_until,
+                codec.seal({
+                  familyId,
+                  clientId: legacy.clientId,
+                  serverBaseUrl: legacy.serverBaseUrl,
+                  extra: legacy.extra,
+                }, `access:${row.id}:${familyId}`),
+              );
             }
           }
 
@@ -319,6 +333,15 @@ export class SqliteBackend implements StoreBackend {
           ON CONFLICT(id) DO UPDATE SET grant_version=excluded.grant_version,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,updated_at=excluded.updated_at,sealed=excluded.sealed`)
           .run(row.id, row.grantVersion, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.updatedAt, row.sealed);
       },
+      async atomicIssue(params: AtomicIssueParams): Promise<void> {
+        return transaction(() => {
+          backend.putAccess(params.accessRow);
+          backend.putRefresh(params.refreshRow);
+          backend.putFamily(params.familyRow);
+          backend.putUpstream(params.upstreamRow);
+        });
+      },
+
       async updateUpstream(id: string, mutate) {
         return transaction(() => {
           const current = upstreamRow(db.prepare('SELECT * FROM upstream_grants WHERE id=?').get(id));
@@ -435,14 +458,14 @@ export class SqliteBackend implements StoreBackend {
             }
           }
 
+          const now = Date.now();
           db.prepare("UPDATE refresh_families SET status='revoked', revoked_at=?, generation=generation+1, updated_at=? WHERE id=?")
-            .run(Date.now(), Date.now(), fam.id);
+            .run(now, now, fam.id);
 
-          if (fam.currentAccessTokenId) {
-            db.prepare('DELETE FROM sessions WHERE id=?').run(fam.currentAccessTokenId);
-          }
-          db.prepare("UPDATE refresh_tokens SET status='consumed', consumed_at=? WHERE id=?")
-            .run(Date.now(), fam.activeRefreshId);
+          db.prepare('DELETE FROM sessions WHERE family_id=?').run(fam.id);
+          db.prepare('DELETE FROM upstream_grants WHERE id=?').run(fam.id);
+          db.prepare("UPDATE refresh_tokens SET status='consumed', consumed_at=?, successor_sealed=NULL WHERE family_id=?")
+            .run(now, fam.id);
 
           return 'revoked';
         });

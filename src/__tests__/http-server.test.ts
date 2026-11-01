@@ -116,6 +116,12 @@ vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
     this.clientsStore = { getClient: vi.fn() };
     this.handleLogin = vi.fn();
+    this.verifyAccessToken = vi.fn().mockResolvedValue({
+      token: 'test-bearer-token',
+      clientId: 'test-client',
+      scopes: [],
+      extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
+    });
   }),
 }));
 

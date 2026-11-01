@@ -22,7 +22,7 @@ export interface OAuthTokenPair {
   refreshToken: string;
 }
 export type RefreshLookupResult =
-  | { status: 'active'; familyId: string; generation: number; session: StoredSession }
+  | { status: 'active'; familyId: string; generation: number; grantVersion?: number; session: StoredSession }
   | { status: 'retry'; familyId: string; generation: number; session: StoredSession; tokens: OAuthTokenPair }
   | { status: 'replay'; familyId: string }
   | { status: 'missing' };
@@ -52,6 +52,12 @@ export type BackendRotateResult =
   | { status: 'retry'; familyId: string; generation: number; successorSealed: string }
   | { status: 'replay'; familyId?: string }
   | { status: 'missing' };
+export interface AtomicIssueParams {
+  accessRow: AccessRow;
+  refreshRow: RefreshPointerRow;
+  familyRow: FamilyRow;
+  upstreamRow: UpstreamGrantRow;
+}
 export interface UpstreamTokens {
   access_token: string;
   refresh_token?: string;
@@ -115,6 +121,7 @@ export interface McpStore {
   readonly backend: string; readonly namespace: string; readonly capabilities: StoreCapabilities;
   readonly sessions: SessionStore; readonly clients: OAuthRegisteredClientsStore;
   readonly authCodes: AuthCodeStore; readonly resumeTokens: ResumeTokenStore; readonly usage: UsageStore;
+  sweep?(now: number): Promise<number>;
   close(): Promise<void>;
 }
 export interface AccessRow {
@@ -184,6 +191,7 @@ export interface StoreBackend {
     id: string,
     mutate: (cur: UpstreamGrantRow) => UpstreamGrantRow | null | undefined,
   ): Promise<UpstreamGrantRow | undefined>;
+  atomicIssue(params: AtomicIssueParams): Promise<void>;
 
   atomicRotate(params: BackendRotateParams): Promise<BackendRotateResult>;
   atomicRevokeFamily(

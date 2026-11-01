@@ -998,9 +998,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   client: OAuthClientInformationFull,
   refreshToken: string,
  ): Promise<OAuthTokens> {
-  const now = Date.now();
-  const lookup = await this.store.sessions.lookupRefresh(refreshToken, client?.client_id ?? '', now);
-
+  try {
+   const now = Date.now();
+   const lookup = await this.store.sessions.lookupRefresh(refreshToken, client?.client_id ?? '', now);
   if (lookup.status === 'missing') {
    logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
     refreshFingerprint: refreshToken.slice(0, 8),
@@ -1067,7 +1067,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       username: session.nsUsername,
       error: err instanceof Error ? err.message : String(err),
      });
-     await this.store.sessions.revokeFamily(familyId, { expectedFamilyGeneration: generation });
+     await this.store.sessions.revokeFamily(familyId, {
+      expectedFamilyGeneration: generation,
+      expectedUpstreamGrantVersion: lookup.grantVersion,
+     });
      throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
     }
     logger.warn('Upstream NS refresh failed with transient error during refresh', {
@@ -1134,8 +1137,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     scope: session.nsUserRole,
    };
   }
-
-  throw new InvalidGrantError('Invalid refresh token');
+   throw new InvalidGrantError('Invalid refresh token');
+  } catch (err: unknown) {
+   if (err instanceof InvalidGrantError || err instanceof TemporarilyUnavailableError) {
+    throw err;
+   }
+   logger.warn('Unexpected error or store outage during token exchange', {
+    error: err instanceof Error ? err.message : String(err),
+   });
+   throw new TemporarilyUnavailableError('Service temporarily unavailable, please retry');
+  }
  }
 
  async forceRefreshUpstream(bearerToken: string): Promise<StoredSession | undefined> {
@@ -1273,7 +1284,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (err instanceof InvalidTokenError) {
      throw err;
     }
-    throw new InvalidTokenError(err instanceof Error ? err.message : String(err));
+    logger.warn('Token verification hook failed with operational error', {
+     error: err instanceof Error ? err.message : String(err),
+    });
+    throw new ServerError('Verification service temporarily unavailable, please retry');
    }
   }
 

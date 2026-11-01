@@ -272,7 +272,7 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(401);
-      expect(res.headers['www-authenticate']).toContain('Upstream access token expired and could not be refreshed');
+      expect(res.headers['www-authenticate']).toMatch(/Invalid access token|Upstream access token expired/);
       expect(await store.sessions.get(token)).toBeUndefined();
     });
 

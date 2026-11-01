@@ -1,3 +1,4 @@
+import type { AtomicIssueParams } from './types.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
 import type {
@@ -42,6 +43,13 @@ export class MemoryBackend implements StoreBackend {
 
   async getFamily(id: string): Promise<FamilyRow | undefined> { return this.state.families.get(id); }
   async putFamily(row: FamilyRow): Promise<void> { this.state.families.set(row.id, row); }
+
+  async atomicIssue(params: AtomicIssueParams): Promise<void> {
+    this.state.access.set(params.accessRow.id, params.accessRow);
+    this.state.refresh.set(params.refreshRow.id, params.refreshRow);
+    this.state.families.set(params.familyRow.id, params.familyRow);
+    this.state.upstream.set(params.upstreamRow.id, params.upstreamRow);
+  }
 
   async getUpstream(id: string): Promise<UpstreamGrantRow | undefined> { return this.state.upstream.get(id); }
   async putUpstream(row: UpstreamGrantRow): Promise<void> { this.state.upstream.set(row.id, row); }
@@ -160,13 +168,14 @@ export class MemoryBackend implements StoreBackend {
     if (family.currentAccessTokenId) {
       this.state.access.delete(family.currentAccessTokenId);
     }
+    this.state.upstream.delete(familyId);
 
     const activeRef = this.state.refresh.get(family.activeRefreshId);
     if (activeRef) {
       activeRef.status = 'consumed';
       activeRef.consumedAt = Date.now();
+      activeRef.successorSealed = undefined;
     }
-
     return 'revoked';
   }
 
