@@ -1,5 +1,5 @@
 import type { UserRole } from './roles.js';
-import type { StoredToken } from './token-store.js';
+import type { StoredToken } from '../store/types.js';
 
 export interface NsUserSnapshot {
   user: string;
@@ -65,16 +65,5 @@ export interface NsTokenResponse {
   nsApiUrl?: string;
 }
 
-export interface AuthCodeData {
-  pending: PendingAuthorization;
-  nsTokens: NsTokenResponse;
-  extra?: Record<string, string>;
-  expiresAt: number;
-  ttlAt: Date;
-  used?: boolean;
-  serverBaseUrl?: string;
-  clientId?: string;
-}
-
-export type { StoredToken } from './token-store.js';
+export type { StoredToken, AuthCodeData } from '../store/types.js';
 export type { NetSapiensAuthProviderOptions } from './netsapiens-auth-provider.js';

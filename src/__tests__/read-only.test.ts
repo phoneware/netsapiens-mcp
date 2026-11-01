@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Server as HttpServer } from 'node:http';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
 import { isReadOnlyMode, isToolReadOnly, getAllToolDefinitions, handleToolCall } from '../tools/index.js';
 import type { NetSapiensClient } from '../netsapiens-client.js';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
@@ -34,11 +36,11 @@ async function importApp(envOverrides: Record<string, string> = {}) {
  for (const [k, v] of Object.entries(envOverrides)) {
   process.env[k] = v;
  }
- delete process.env.MCP_PERSISTENCE;
+ process.env.MCP_PERSISTENCE = envOverrides.MCP_PERSISTENCE || 'memory';
 
  // Dynamic import required because env vars must be applied before loadConfig initializes.
  const mod = await import('../http-server.js');
- const created = mod.createApp();
+ const created = await mod.createApp();
  const server = created.app.listen(0);
  openServers.push(server);
  return { ...created, app: server as unknown as typeof created.app };
@@ -241,18 +243,18 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
    const readOnlyBaseUrl = 'https://mcp-readonly.edge.phoneware.cloud';
 
    // 1. Create standard auth provider and mint a token with its baseUrl
+   const standardStore = createMemoryStore({ namespace: 'mcp', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
    const standardProvider = new NetSapiensAuthProvider({
     platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
     nsApiUrl: 'https://netsapiens.example.com',
     nsClientId: 'cid',
     nsClientSecret: 'csec',
     serverBaseUrl: standardBaseUrl,
+    store: standardStore,
    });
 
    const standardBearer = 'bearer-from-standard-server-12345';
-   await (standardProvider as any).tokenStore.set({
-    accessToken: standardBearer,
-    refreshToken: 'refresh-standard',
+   await standardProvider.store.sessions.create({ accessToken: standardBearer, refreshToken: 'refresh-standard' }, {
     clientId: 'client-std',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-std',
@@ -268,9 +270,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
    });
 
    // Populate token into readOnlyProvider's store to simulate shared backend storage
-   await (readOnlyProvider as any).tokenStore.set({
-    accessToken: standardBearer,
-    refreshToken: 'refresh-standard',
+   await readOnlyProvider.store.sessions.create({ accessToken: standardBearer, refreshToken: 'refresh-standard' }, {
     clientId: 'client-std',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-std',
@@ -304,9 +304,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
    });
 
    const validBearer = 'bearer-from-readonly-server-54321';
-   await (authProvider as any).tokenStore.set({
-    accessToken: validBearer,
-    refreshToken: 'refresh-ro',
+   await authProvider.store.sessions.create({ accessToken: validBearer, refreshToken: 'refresh-ro' }, {
     clientId: 'client-ro',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-ro',

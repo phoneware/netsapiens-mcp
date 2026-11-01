@@ -7,6 +7,8 @@ import { toolRegistry } from '../generated/registry.js';
 import { logger } from '../utils/logger.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
 import { recordCuratedHandlers } from './curated-operation-recorder.js';
 
 recordCuratedHandlers(CURATED_CATALOG);
@@ -339,11 +341,13 @@ describe('Tool call arguments and scope resolution', () => {
       data: { 'user-scope': 'Domain Admin', user: 'pat' },
     });
 
+    const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey('a'.repeat(32)) });
     const provider = new NetSapiensAuthProvider({
       platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://example.com' }],
       nsApiUrl: 'https://example.com',
       nsClientId: 'test',
       nsClientSecret: 'test',
+      store,
     });
 
     try {
