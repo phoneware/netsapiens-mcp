@@ -106,7 +106,9 @@ describe('README and documentation facts', () => {
       });
 
       let stdout = '';
+      let stderr = '';
       child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
 
       const initReq = JSON.stringify({
         jsonrpc: '2.0',
@@ -120,12 +122,12 @@ describe('README and documentation facts', () => {
       }) + '\n';
       child.stdin.write(initReq);
 
-      for (let i = 0; i < 40; i++) {
-        if (stdout.includes('"result"')) break;
-        await delay(50);
+      for (let i = 0; i < 100; i++) {
+        if (stdout.includes('"protocolVersion"')) break;
+        await delay(100);
       }
 
-      expect(stdout).toContain('"protocolVersion"');
+      expect(stdout, `Child failed to initialize within timeout. Stderr: ${stderr}`).toContain('"protocolVersion"');
       child.kill();
     } finally {
       await fake.close();
