@@ -380,6 +380,13 @@ function wireApp(
      },
      async (opCtx) => {
       (req as any).cutoverOperation = opCtx;
+      const inFlightTasks = new Set<Promise<unknown>>();
+      (opCtx as any).trackTask = <T>(p: Promise<T>): Promise<T> => {
+       inFlightTasks.add(p);
+       p.finally(() => inFlightTasks.delete(p));
+       return p;
+      };
+
       let resolved = false;
       let resolveFn: () => void = () => {};
       const promise = new Promise<void>((resolve) => {
@@ -390,17 +397,28 @@ function wireApp(
         }
        };
       });
-      res.once('finish', resolveFn);
+
+      const settle = async () => {
+       if (inFlightTasks.size > 0) {
+        await Promise.allSettled(Array.from(inFlightTasks));
+       }
+       resolveFn();
+      };
+
+      res.once('finish', () => void settle());
       const origEnd = res.end.bind(res);
       res.end = (...args: any[]) => {
        const ret = (origEnd as any)(...args);
-       resolveFn();
+       void settle();
        return ret;
       };
+      res.once('close', () => {
+       void settle();
+      });
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {
-        resolveFn();
+        void settle();
         return (origWriteHead as any)(...args);
        };
       }

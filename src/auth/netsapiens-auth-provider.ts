@@ -555,7 +555,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  ): Promise<R> {
   const existing = requestOperationContext.getStore();
   if (existing && !existing.isCompleted()) {
-   return await fn(existing);
+   const p = fn(existing);
+   if (typeof (existing as any).trackTask === 'function') {
+    (existing as any).trackTask(p);
+   }
+   return await p;
   }
   if (this.db && this.fenceConfig?.enforce) {
    return await withLegacyOperation(
