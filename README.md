@@ -153,6 +153,8 @@ When configured with `MCP_PERSISTENCE=firestore`, the following collection layou
 | `<namespace>_refresh` | Refresh token pointers & successor states | None | Permanent until explicit revocation or replay |
 | `<namespace>_refresh_families` | Refresh family generation & client bindings | None | Permanent until explicit revocation or replay |
 | `<namespace>_upstream` | Encrypted NetSapiens credentials & leases | None | Permanent until explicit revocation |
+| `<namespace>_retired_refresh` | Bounded retired refresh token replay index | None | Permanent until replay detection |
+| `<namespace>_meta` | Migration census and durable adoption marker | None | Persistent operational metadata |
 | `<namespace>_auth_codes` | PKCE authorization codes | `ttlAt` | Single-use, expires in 5 minutes |
 | `<namespace>_resume_tokens` | MCP resumption nonces | `ttlAt` | Single-use, expires in 2 hours |
 | `<namespace>_oauth_clients` | Registered OAuth clients | None | Persistent client configurations |

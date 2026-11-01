@@ -116,6 +116,8 @@ export function generateReadmeFacts(): ReadmeFacts {
     `| \`${collections.refreshTokens}\` | Refresh token pointers & successor states | None | Permanent until explicit revocation or replay |`,
     `| \`${collections.refreshFamilies}\` | Refresh family generation & client bindings | None | Permanent until explicit revocation or replay |`,
     `| \`${collections.upstreamGrants}\` | Encrypted NetSapiens credentials & leases | None | Permanent until explicit revocation |`,
+    `| \`${collections.retiredRefreshTokens}\` | Bounded retired refresh token replay index | None | Permanent until replay detection |`,
+    `| \`${collections.meta}\` | Migration census and durable adoption marker | None | Persistent operational metadata |`,
     `| \`${collections.authCodes}\` | PKCE authorization codes | \`ttlAt\` | Single-use, expires in 5 minutes |`,
     `| \`${collections.resumeTokens}\` | MCP resumption nonces | \`ttlAt\` | Single-use, expires in 2 hours |`,
     `| \`${collections.oauthClients}\` | Registered OAuth clients | None | Persistent client configurations |`,

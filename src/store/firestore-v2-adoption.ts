@@ -324,7 +324,15 @@ export async function adoptFirestoreLegacyTokens(options: {
   } catch (err: unknown) {
     report.errors++;
   }
-
+  if (!dryRun && report.errors === 0) {
+    await db.collection(`${namespace}_meta`).doc('v2_adopted').set({
+      adoptedAt: Date.now(),
+      scanned: report.scanned,
+      migrated: report.migrated,
+      skipped: report.skipped,
+      errors: 0,
+    });
+  }
   return report;
 }
 
@@ -347,11 +355,8 @@ export async function ensureFirestoreAdopted(options: {
     await markerDoc.set({ adoptedAt: Date.now(), skipped: true, scanned: 0, migrated: 0, errors: 0 });
     return;
   }
-
   const report = await adoptFirestoreLegacyTokens({ db, namespace, key });
   if (report.errors > 0) {
     throw new StoreUnavailableError(`Firestore legacy adoption failed with ${report.errors} error(s); cannot start`);
   }
-
-  await markerDoc.set({ adoptedAt: Date.now(), ...report });
 }
