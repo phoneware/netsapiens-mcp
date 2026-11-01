@@ -238,7 +238,8 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
 
    // 1. Create standard auth provider and mint a token with its baseUrl
    const standardProvider = new NetSapiensAuthProvider({
-    nsApiUrl: 'https://edge.phoneware.cloud',
+    platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
+    nsApiUrl: 'https://netsapiens.example.com',
     nsClientId: 'cid',
     nsClientSecret: 'csec',
     serverBaseUrl: standardBaseUrl,

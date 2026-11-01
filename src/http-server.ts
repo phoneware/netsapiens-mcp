@@ -19,6 +19,7 @@ import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { parsePlatforms } from './auth/platforms.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import {
@@ -103,6 +104,10 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  */
 export function createApp(): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
  const config = loadConfig();
+ const platforms = parsePlatforms(process.env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
+ if (!process.env.MCP_SESSION_SECRET || process.env.MCP_SESSION_SECRET.length < 32) {
+  throw new Error('ConfigError: MCP_SESSION_SECRET must be at least 32 characters');
+ }
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
@@ -125,6 +130,7 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  const authProvider = new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
+  platforms,
   nsClientId,
   nsClientSecret,
   tokenLifetimeSec,

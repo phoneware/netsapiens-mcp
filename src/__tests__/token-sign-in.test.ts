@@ -15,7 +15,7 @@ import request from 'supertest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import axios from 'axios';
-import { getAllowedPlatforms, isPlatformAllowed, parsePlatformsConfig } from '../auth/platforms.js';
+import { parsePlatforms, isPlatformAllowed } from '../auth/platforms.js';
 
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
@@ -33,7 +33,8 @@ async function importApp() {
  vi.resetModules();
  process.env.MCP_TRANSPORT = 'http';
  process.env.MCP_BASE_URL = 'http://localhost';
- process.env.NETSAPIENS_API_URL = 'https://edge.phoneware.cloud';
+ process.env.NETSAPIENS_API_URL = 'https://primary.example.com';
+ process.env.NETSAPIENS_PLATFORMS = JSON.stringify({ second: 'https://second.example.com', third: 'https://third.example.com' });
  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
@@ -82,24 +83,23 @@ describe('NetSapiens Token Sign-In', () => {
  });
 
  describe('Platform allowlist', () => {
-  it('always includes Phoneware Edge by default', () => {
-   const platforms = getAllowedPlatforms();
-   expect(platforms.some((p) => p.apiUrl === 'https://edge.phoneware.cloud')).toBe(true);
-   expect(platforms.some((p) => p.apiUrl === 'https://vps.phoneware.us')).toBe(true);
-   expect(platforms.some((p) => p.apiUrl === 'https://mars.phoneware.cloud')).toBe(true);
+  it('uses only the configured primary host by default', () => {
+   expect(parsePlatforms(undefined, 'https://primary.example.com')).toEqual([
+    { id: 'default', label: 'primary.example.com', apiUrl: 'https://primary.example.com' },
+   ]);
   });
 
-  it('injects Edge even when operator allowlist omits it', () => {
-   const parsed = parsePlatformsConfig('Custom=https://custom.example.com');
-   expect(parsed.some((p) => p.apiUrl === 'https://edge.phoneware.cloud')).toBe(true);
-   expect(parsed.some((p) => p.apiUrl === 'https://custom.example.com')).toBe(true);
+  it('prepends the primary host when the allowlist omits it', () => {
+   const parsed = parsePlatforms('{"Custom":"https://custom.example.com"}', 'https://primary.example.com');
+   expect(parsed.map((p) => p.apiUrl)).toEqual(['https://primary.example.com', 'https://custom.example.com']);
   });
 
-  it('refuses unknown hosts before making any network request (SSRF check)', () => {
-   expect(isPlatformAllowed('https://evil.attacker.com')).toBe(false);
-   expect(isPlatformAllowed('http://169.254.169.254/latest/meta-data')).toBe(false);
-   expect(isPlatformAllowed('https://edge.phoneware.cloud')).toBe(true);
-   expect(isPlatformAllowed('https://vps.phoneware.us')).toBe(true);
+  it('refuses unknown hosts before making any network request', () => {
+   const platforms = parsePlatforms('{"second":"https://second.example.com"}', 'https://primary.example.com');
+   expect(isPlatformAllowed(platforms, 'https://evil.attacker.com')).toBe(false);
+   expect(isPlatformAllowed(platforms, 'http://169.254.169.254/latest/meta-data')).toBe(false);
+   expect(isPlatformAllowed(platforms, 'https://primary.example.com')).toBe(true);
+   expect(isPlatformAllowed(platforms, 'https://second.example.com')).toBe(true);
   });
  });
 
@@ -132,9 +132,9 @@ describe('NetSapiens Token Sign-In', () => {
    expect(auth.text).toContain('Sign in with a NetSapiens token');
    expect(auth.text).toContain('name="platform"');
    expect(auth.text).toContain('name="token"');
-   expect(auth.text).toContain('https://edge.phoneware.cloud');
-   expect(auth.text).toContain('https://vps.phoneware.us');
-   expect(auth.text).toContain('https://mars.phoneware.cloud');
+   expect(auth.text).toContain('https://primary.example.com');
+   expect(auth.text).toContain('https://second.example.com');
+   expect(auth.text).toContain('https://third.example.com');
   });
  });
 
@@ -197,7 +197,7 @@ describe('NetSapiens Token Sign-In', () => {
 
    // Mock user read on Viirtue
    mockedAxios.get = vi.fn().mockImplementation((url: string) => {
-    if (url === 'https://vps.phoneware.us/ns-api/v2/domains/~/users/~') {
+    if (url === 'https://second.example.com/ns-api/v2/domains/~/users/~') {
      return Promise.resolve({
       data: {
        login: 'alice@domain.com',
@@ -214,7 +214,7 @@ describe('NetSapiens Token Sign-In', () => {
     .post('/login')
     .type('form')
     .send({
-     platform: 'https://vps.phoneware.us',
+     platform: 'https://second.example.com',
      token: 'viirtue-user-token',
      auth_state: authState,
     })
@@ -263,12 +263,12 @@ describe('NetSapiens Token Sign-In', () => {
 
    // Mock user read: 400 Unable to expand domain, followed by /apikeys/~ returning 200
    mockedAxios.get = vi.fn().mockImplementation((url: string) => {
-    if (url === 'https://edge.phoneware.cloud/ns-api/v2/domains/~/users/~') {
+    if (url === 'https://primary.example.com/ns-api/v2/domains/~/users/~') {
      const err = new Error('Request failed with status code 400');
      (err as any).response = { status: 400, data: { message: 'Unable to expand domain from token' } };
      return Promise.reject(err);
     }
-    if (url === 'https://edge.phoneware.cloud/ns-api/v2/apikeys/~') {
+    if (url === 'https://primary.example.com/ns-api/v2/apikeys/~') {
      return Promise.resolve({
       data: {
        description: 'Operator Key',
@@ -284,7 +284,7 @@ describe('NetSapiens Token Sign-In', () => {
     .post('/login')
     .type('form')
     .send({
-     platform: 'https://edge.phoneware.cloud',
+     platform: 'https://primary.example.com',
      token: 'nss_valid_api_key',
      auth_state: authState,
     })
@@ -339,7 +339,7 @@ describe('NetSapiens Token Sign-In', () => {
     .post('/login')
     .type('form')
     .send({
-     platform: 'https://edge.phoneware.cloud',
+     platform: 'https://primary.example.com',
      token: 'bad-token',
      auth_state: authState,
     })
@@ -380,7 +380,7 @@ describe('NetSapiens Token Sign-In', () => {
     .post('/login')
     .type('form')
     .send({
-     platform: 'https://mars.phoneware.cloud',
+     platform: 'https://third.example.com',
      token: 'mcu-token-xyz',
      auth_state: authState,
     })
@@ -421,10 +421,10 @@ describe('NetSapiens Token Sign-In', () => {
 
    // Verify that NetSapiensClient was constructed targeting MCU platform!
    expect(createdClients.length).toBeGreaterThan(0);
-   const mcuClient = createdClients.find((c) => c.baseURL?.includes('mars.phoneware.cloud'));
+   const mcuClient = createdClients.find((c) => c.baseURL?.includes('third.example.com'));
    expect(mcuClient).toBeDefined();
-   expect(mcuClient?.baseURL).toBe('https://mars.phoneware.cloud/ns-api/v2');
-   expect(mcuClient?.baseURL).not.toContain('edge.phoneware.cloud');
+   expect(mcuClient?.baseURL).toBe('https://third.example.com/ns-api/v2');
+   expect(mcuClient?.baseURL).not.toContain('primary.example.com');
   });
  });
  describe('Expiring token behavior', () => {
@@ -443,7 +443,7 @@ describe('NetSapiens Token Sign-In', () => {
     nsExpiresAt: Date.now() - 10_000, // Upstream token already expired
     nsUsername: 'bob',
     nsUserRole: 'user',
-    nsApiUrl: 'https://edge.phoneware.cloud',
+    nsApiUrl: 'https://primary.example.com',
    });
 
    // Calling /mcp must return 401 with WWW-Authenticate containing invalid_token

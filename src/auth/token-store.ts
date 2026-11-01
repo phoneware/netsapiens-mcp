@@ -33,7 +33,7 @@ export interface StoredToken {
  nsUsername: string;
  /** Detected NS user role */
  nsUserRole?: string;
- /** Upstream NetSapiens platform API URL (e.g. https://edge.phoneware.cloud) */
+ /** Upstream NetSapiens platform API URL. */
  nsApiUrl?: string;
  /** MCP Server base URL this token was issued for (cross-server isolation) */
  serverBaseUrl?: string;
