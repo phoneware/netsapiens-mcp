@@ -437,6 +437,7 @@ export class FirestoreBackend implements StoreBackend {
             if (fam.currentAccessTokenId) {
               tx.delete(sessions.doc(fam.currentAccessTokenId));
             }
+            tx.delete(upstreamGrants.doc(fam.id));
             for (const doc of refQuerySnap.docs) {
               const data = doc.data() as unknown as RefreshPointerRow;
               tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
