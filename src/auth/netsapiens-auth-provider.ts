@@ -1176,7 +1176,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      });
      throw new InvalidGrantError('Invalid refresh token');
     }
-   }
+  }
 
    if (!stored.nsRefreshToken) {
    logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
@@ -1185,23 +1185,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
   }
 
-   let nsTokens: NsTokenResponse;
+  let nsTokens: NsTokenResponse;
    try {
     nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
     nsTokens.username = stored.nsUsername;
     nsTokens.nsUserRole = stored.nsUserRole;
     nsTokens.nsApiUrl = stored.nsApiUrl;
    } catch (err: unknown) {
-    if (err instanceof UpstreamGrantRejectedError) {
+    if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
      if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
       await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
      } else {
   await this.tokenStore.delete(stored.accessToken);
      }
-     throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+    throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
     }
-    throw err;
-   }
+    throw toTokenEndpointError(err);
+  }
 
    const newAccess = randomBytes(32).toString('hex');
    const newRefresh = randomBytes(32).toString('hex');
@@ -1246,7 +1246,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      throw new InvalidGrantError('Invalid refresh token');
     }
    } else {
-    await this.tokenStore.delete(stored.accessToken);
+  await this.tokenStore.delete(stored.accessToken);
     await this.tokenStore.set(replacement);
    }
 
@@ -1327,7 +1327,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       if (latest && (!latest.nsExpiresAt || this.nowProvider() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
        stored = latest;
       } else {
-       throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
+       throw new UpstreamUnavailableError('Upstream token refresh temporarily unavailable, please retry');
       }
      }
     } else {
@@ -1354,7 +1354,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       if (latest && (!latest.nsExpiresAt || this.nowProvider() <= latest.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
        stored = latest;
       } else {
-       throw new ServerError('Upstream token refresh temporarily unavailable, please retry');
+       throw new UpstreamUnavailableError('Upstream token refresh temporarily unavailable, please retry');
       }
      }
     }

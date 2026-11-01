@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { TemporarilyUnavailableError, InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { Server as HttpServer } from 'node:http';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { InternalAxiosRequestConfig } from 'axios';
@@ -593,10 +594,10 @@ async function runLegacyAdoptionTest(db: Firestore): Promise<void> {
     accessToken: expiredAccess,
     refreshToken: expiredRefresh,
     clientId: 'client-base-2',
-    expiresAt: Date.now() - 10_000, // expired
+    expiresAt: Date.now() - 10_000, // expired MCP access token
     nsAccessToken: 'ns-at-expired-2',
     nsRefreshToken: 'ns-rt-expired-2',
-    nsExpiresAt: Date.now() + 3600_000,
+    nsExpiresAt: Date.now() - 10_000, // expired NS access token needing NS refresh grant
     nsUsername: 'bob@example.com',
     nsUserRole: 'reseller',
     nsApiUrl: 'https://ns.example.com',
@@ -648,6 +649,42 @@ async function runLegacyAdoptionTest(db: Firestore): Promise<void> {
   expect(expiredUpstreamData.grant.nsAccessToken).toBe('new-ns-access-token-from-refresh');
   expect(expiredUpstreamData.grant.nsRefreshToken).toBe('new-ns-refresh-token-from-refresh');
 
+  // 3. Seed base-format valid MCP token with an expired NS access token needing NS refresh grant
+  const validExpNsAccess = 'at-base-valid-expns-' + randomBytes(4).toString('hex');
+  const validExpNsRefresh = 'rt-base-valid-expns-' + randomBytes(4).toString('hex');
+  const baseValidExpNsToken = {
+    accessToken: validExpNsAccess,
+    refreshToken: validExpNsRefresh,
+    clientId: 'client-base-3',
+    expiresAt: Date.now() + 3600_000, // valid MCP token
+    nsAccessToken: 'ns-at-stale-3',
+    nsRefreshToken: 'ns-rt-stale-3',
+    nsExpiresAt: Date.now() - 10_000, // expired NS access token
+    nsUsername: 'carol@example.com',
+    nsUserRole: 'reseller',
+    nsApiUrl: 'https://ns.example.com',
+    ttlAt: new Date(Date.now() + 30 * 24 * 3600_000),
+  };
+  await db.collection(collection).doc(validExpNsAccess).set(baseValidExpNsToken);
+  await db.collection(refreshCollection).doc(validExpNsRefresh).set({
+    accessToken: validExpNsAccess,
+  });
+
+  // Verify adopts the document and transparently refreshes the expired NS access token
+  const validExpAuthInfo = await authProvider.verifyAccessToken(validExpNsAccess);
+  expect(validExpAuthInfo).toBeDefined();
+  expect(validExpAuthInfo.token).toBe(validExpNsAccess);
+
+  const expNsAccessSnap = await db.collection(collection).doc(validExpNsAccess).get();
+  const expNsAccessData = expNsAccessSnap.data() as Record<string, unknown>;
+  expect(expNsAccessData.refreshFamilyId).toBeDefined();
+  const expNsFamilyId = String(expNsAccessData.refreshFamilyId);
+
+  const expNsUpstreamSnap = await db.collection(upstreamCollection).doc(expNsFamilyId).get();
+  expect(expNsUpstreamSnap.exists).toBe(true);
+  const expNsUpstreamData = expNsUpstreamSnap.data() as { grant: { nsAccessToken: string; nsRefreshToken: string } };
+  expect(expNsUpstreamData.grant.nsAccessToken).toBe('new-ns-access-token-from-refresh');
+
   postSpy.mockRestore();
 }
 describe('OAuth Permanence Contract (Memory)', () => {
@@ -681,5 +718,85 @@ describe.skipIf(!emulatorRunning)('OAuth Permanence Contract (Firestore Emulator
       ignoreUndefinedProperties: true,
     });
     await runLegacyAdoptionTest(db);
+  });
+});
+
+describe('Upstream NS refresh error classification (M5 guard)', () => {
+  it('treats 401 from NS refresh as transient: does not revoke session, returns temporarily_unavailable', async () => {
+    const fakeDb = new FakeFirestore();
+    const tokenStore = new FirestoreTokenStore({
+      db: fakeDb as unknown as Firestore,
+      collection: 'mcp_m5_tokens',
+    });
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://ns.example.com',
+      nsClientId: 'op-client-id',
+      nsClientSecret: 'op-client-secret',
+      tokenStore,
+      firestore: fakeDb as unknown as Firestore,
+      tokenLifetimeSec: 3600,
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const access = 'at-m5-test';
+    const refresh = 'rt-m5-test';
+    const client_id = 'client-m5';
+    await authProvider.tokenStore.set({
+      accessToken: access,
+      refreshToken: refresh,
+      clientId: client_id,
+      expiresAt: Date.now() - 1000, // expired
+      nsAccessToken: 'old-ns-token',
+      nsRefreshToken: 'old-ns-refresh',
+      nsExpiresAt: Date.now() - 1000,
+      nsUsername: 'test@example.com',
+      nsUserRole: 'domain_admin',
+      nsApiUrl: 'https://ns.example.com',
+    });
+
+    // 1. NS refresh returns 401 (e.g. transient proxy/secret blip)
+    const postSpy = vi.spyOn(axios, 'post').mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        status: 401,
+        data: { error: 'unauthorized', message: 'Invalid credentials or proxy blip' },
+      },
+      message: 'Request failed with status code 401',
+    });
+
+    const clientInfo = { client_id } as unknown as OAuthClientInformationFull;
+    let thrownError: unknown;
+    try {
+      await authProvider.exchangeRefreshToken(clientInfo, refresh);
+    } catch (err) {
+      thrownError = err;
+    }
+
+    expect(thrownError).toBeDefined();
+    // Must be TemporarilyUnavailableError, NOT InvalidGrantError
+    expect(thrownError).toBeInstanceOf(TemporarilyUnavailableError);
+
+    // Crucial: token/family must NOT be revoked or deleted!
+    const lookup = await (tokenStore as unknown as TokenLedger<StoredToken>).lookupRefresh(refresh, client_id);
+    expect(lookup.status, 'family must remain intact on transient 401').not.toBe('missing');
+    expect(lookup.status, 'family must remain intact on transient 401').not.toBe('replay');
+
+    // 2. When NS recovers, refresh succeeds without re-authenticating
+    postSpy.mockResolvedValueOnce({
+      data: {
+        access_token: 'new-ns-access-after-recovery',
+        refresh_token: 'new-ns-refresh-after-recovery',
+        expires_in: 3600,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {} as unknown as InternalAxiosRequestConfig,
+    });
+
+    const recovered = await authProvider.exchangeRefreshToken(clientInfo, refresh);
+    expect(recovered.access_token).toBeDefined();
+
+    postSpy.mockRestore();
   });
 });

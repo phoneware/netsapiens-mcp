@@ -15,6 +15,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearer } from './auth/kit/bearer.js';
+import { UpstreamRevokedError, kitCodeOf } from './auth/kit/errors.js';
 import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
@@ -542,8 +543,10 @@ function createAuthenticatedMcpServer(
       if (newNsToken) {
        client.setApiToken(newNsToken);
       }
-     } catch {
+     } catch (err) {
+      if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
      await authProvider.invalidateToken(bearerToken);
+      }
      }
     }
    },

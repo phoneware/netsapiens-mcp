@@ -14,6 +14,7 @@ import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
@@ -427,11 +428,16 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
   const hit = this.cache.get(clientId);
   if (hit) return hit;
+  try {
   const snap = await this.db.collection(this.collection).doc(clientId).get();
   if (!snap.exists) return undefined;
   const client = snap.data() as OAuthClientInformationFull;
   this.cache.set(clientId, client);
   return client;
+  } catch (err: unknown) {
+   if (err instanceof TemporarilyUnavailableError) throw err;
+   throw new TemporarilyUnavailableError('Client store temporarily unavailable');
+  }
  }
 
  async registerClient(

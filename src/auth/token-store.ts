@@ -144,7 +144,6 @@ export class TokenStore extends MemoryTokenLedger<StoredToken> {
   for (const [key, token] of priv.byAccess.entries()) {
    if (token.expiresAt <= now) {
     priv.byAccess.delete(key);
-    priv.byRefresh.delete(token.refreshToken);
    }
   }
   this.save();
