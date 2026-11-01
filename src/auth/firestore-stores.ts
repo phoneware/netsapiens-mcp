@@ -438,7 +438,8 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   const accessRef = this.accessDocRef(accessToken);
   const upstreamRef = this.upstreamDocRef(familyId);
   let guardResult: GuardMutationResult | undefined;
-  const result = await this.rawDb.runTransaction(async (transaction) => {
+  const runTx = async () => {
+    return await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
@@ -497,7 +498,9 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       }
     }
     return updated;
-  });
+    });
+  };
+  const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
   guardResult?.commitCompletion?.();
   return result;
  }
@@ -604,19 +607,26 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   }
   const docRef = this.db.collection(this.collection).doc(clientId);
   try {
-   await this.db.runTransaction(async (transaction) => {
-    let guard: GuardMutationResult | undefined;
-    const fence = this.fenceConfig;
-    if (fence && fence.enforce) {
-      guard = await checkMutationGuardInTransaction(transaction, {
-        db: this.db,
-        namespace: fence.namespace,
-        operation: op,
-      });
-    }
-    guard?.bufferCompletion();
-    transaction.set(docRef, stripUndefined(full));
-   });
+   const runTx = async () => {
+    await this.db.runTransaction(async (transaction) => {
+     let guard: GuardMutationResult | undefined;
+     const fence = this.fenceConfig;
+     if (fence && fence.enforce) {
+       guard = await checkMutationGuardInTransaction(transaction, {
+         db: this.db,
+         namespace: fence.namespace,
+         operation: op,
+       });
+     }
+     guard?.bufferCompletion();
+     transaction.set(docRef, stripUndefined(full));
+    });
+   };
+   if (op?.trackWriter) {
+    await op.trackWriter(runTx());
+   } else {
+    await runTx();
+   }
    this.cache.set(clientId, full);
    return full;
   } catch (err: unknown) {
@@ -683,20 +693,27 @@ export class FirestoreAuthCodeStore {
    clientId: data.clientId ?? data.pending.clientId,
   };
   const docRef = this.db.collection(this.collection).doc(code);
-  await this.db.runTransaction(async (transaction) => {
-    let guard: GuardMutationResult | undefined;
-    const fence = this.fenceConfig;
-    if (fence && fence.enforce) {
-      guard = await checkMutationGuardInTransaction(transaction, {
-        db: this.db,
-        namespace: fence.namespace,
-        operation: op,
-        completeOperation: options?.completeOperation !== false,
-      });
-    }
-    guard?.bufferCompletion(now);
-    transaction.set(docRef, stripUndefined(docData));
-  });
+  const runTx = async () => {
+    await this.db.runTransaction(async (transaction) => {
+      let guard: GuardMutationResult | undefined;
+      const fence = this.fenceConfig;
+      if (fence && fence.enforce) {
+        guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: fence.namespace,
+          operation: op,
+          completeOperation: options?.completeOperation !== false,
+        });
+      }
+      guard?.bufferCompletion(now);
+      transaction.set(docRef, stripUndefined(docData));
+    });
+  };
+  if (op?.trackWriter) {
+    await op.trackWriter(runTx());
+  } else {
+    await runTx();
+  }
  }
 
  async getChallenge(
@@ -728,42 +745,45 @@ export class FirestoreAuthCodeStore {
  ): Promise<{ pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> } | undefined> {
   const op = options?.operation ?? requestOperationContext.getStore();
   const docRef = this.db.collection(this.collection).doc(code);
-  return await this.db.runTransaction(async (transaction) => {
-   let guard: GuardMutationResult | undefined;
-   const fence = this.fenceConfig;
-   if (fence && fence.enforce) {
-     guard = await checkMutationGuardInTransaction(transaction, {
-       db: this.db,
-       namespace: fence.namespace,
-       operation: op,
-       completeOperation: false,
-     });
-   }
-   const snap = await transaction.get(docRef);
-   if (!snap.exists) return undefined;
-   const data = snap.data() as AuthCodeData;
-   if (data.used || this.localNow() > data.expiresAt) {
-    return undefined;
-   }
-   if (data.serverBaseUrl || expected?.serverBaseUrl) {
-    if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
-     logger.warn('Auth code redemption rejected: serverBaseUrl mismatch');
+  const runTx = async () => {
+   return await this.db.runTransaction(async (transaction) => {
+    let guard: GuardMutationResult | undefined;
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db,
+        namespace: fence.namespace,
+        operation: op,
+        completeOperation: false,
+      });
+    }
+    const snap = await transaction.get(docRef);
+    if (!snap.exists) return undefined;
+    const data = snap.data() as AuthCodeData;
+    if (data.used || this.localNow() > data.expiresAt) {
      return undefined;
     }
-   }
-   const codeClientId = data.clientId ?? data.pending?.clientId;
-   if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
-    logger.warn('Auth code redemption rejected: clientId mismatch');
-    return undefined;
-   }
-   guard?.bufferCompletion();
-   transaction.delete(docRef);
-   return {
-    pending: data.pending,
-    nsTokens: data.nsTokens,
-    extra: data.extra,
-   };
-  });
+    if (data.serverBaseUrl || expected?.serverBaseUrl) {
+     if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
+      logger.warn('Auth code redemption rejected: serverBaseUrl mismatch');
+      return undefined;
+     }
+    }
+    const codeClientId = data.clientId ?? data.pending?.clientId;
+    if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
+     logger.warn('Auth code redemption rejected: clientId mismatch');
+     return undefined;
+    }
+    guard?.bufferCompletion();
+    transaction.delete(docRef);
+    return {
+     pending: data.pending,
+     nsTokens: data.nsTokens,
+     extra: data.extra,
+    };
+   });
+  };
+  return op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
  }
 
  async redeemAndIssue(
@@ -774,17 +794,20 @@ export class FirestoreAuthCodeStore {
  ): Promise<{ tokens: OAuthTokens } | undefined> {
   const op = options?.operation ?? requestOperationContext.getStore();
   const codeRef = this.db.collection(this.collection).doc(code);
-  return await this.db.runTransaction(async (transaction) => {
-   let guard: GuardMutationResult | undefined;
-   const fence = this.fenceConfig;
-   if (fence && fence.enforce) {
-     guard = await checkMutationGuardInTransaction(transaction, {
-       db: this.db,
-       namespace: fence.namespace,
-       operation: op,
-       completeOperation: true,
-     });
-   }
+  let guardResult: GuardMutationResult | undefined;
+  const runTx = async () => {
+   return await this.db.runTransaction(async (transaction) => {
+    let guard: GuardMutationResult | undefined;
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db,
+        namespace: fence.namespace,
+        operation: op,
+        completeOperation: true,
+      });
+      guardResult = guard;
+    }
    const snap = await transaction.get(codeRef);
    if (!snap.exists) return undefined;
    const data = snap.data() as AuthCodeData;
@@ -866,5 +889,9 @@ export class FirestoreAuthCodeStore {
      },
    };
   });
+ };
+ const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
+ guardResult?.commitCompletion?.();
+  return result;
  }
 }

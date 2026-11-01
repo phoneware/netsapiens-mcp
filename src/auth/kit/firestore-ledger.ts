@@ -567,8 +567,10 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     try {
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
 
+      const op = options?.operation ?? requestOperationContext.getStore();
       let guardResult: GuardMutationResult | undefined;
-      const result = await this.db.runTransaction(async (transaction: Transaction) => {
+      const runTx = async () => {
+        return await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce) {
           const op = options?.operation ?? requestOperationContext.getStore();
@@ -863,7 +865,9 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
 
         return { status: 'claimed', token: stored } as const;
-      });
+        });
+      };
+      const result = op?.trackWriter ? await op.trackWriter(runTx()) : await runTx();
       guardResult?.commitCompletion?.();
       return result;
     } catch (err) {
@@ -881,7 +885,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       }
       const familyRef = this.familyCol().doc(docId(familyId));
       let guardResult: GuardMutationResult | undefined;
-      await this.db.runTransaction(async (transaction: Transaction) => {
+      const runTx = async () => {
+        await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
@@ -900,7 +905,13 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         const family = familySnap.data() as StoredRefreshFamily;
         guard?.bufferCompletion(this.nowProvider());
         this.deleteFamilyInTransaction(transaction, familyRef, family);
-      });
+        });
+      };
+      if (op?.trackWriter) {
+        await op.trackWriter(runTx());
+      } else {
+        await runTx();
+      }
       guardResult?.commitCompletion?.();
     } catch (err) {
       this.wrapError(err);
@@ -919,7 +930,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const refreshRef = this.refreshCol().doc(docId(token));
 
       let guardResult: GuardMutationResult | undefined;
-      await this.db.runTransaction(async (transaction: Transaction) => {
+      const runTx = async () => {
+        await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
@@ -988,7 +1000,13 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
 
         guard?.bufferCompletion(this.nowProvider());
-      });
+        });
+      };
+      if (op?.trackWriter) {
+        await op.trackWriter(runTx());
+      } else {
+        await runTx();
+      }
       guardResult?.commitCompletion?.();
     } catch (err) {
       this.wrapError(err);
@@ -1036,9 +1054,16 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     raw: Record<string, unknown>,
     options?: { operation?: LegacyOperationContext },
   ): Promise<T | undefined> {
-    return await this.db.runTransaction(async (transaction: Transaction) => {
-      return await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw, options);
-    });
+    const op = options?.operation ?? requestOperationContext.getStore();
+    const runTx = async () => {
+      return await this.db.runTransaction(async (transaction: Transaction) => {
+        return await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw, options);
+      });
+    };
+    if (op?.trackWriter) {
+      return await op.trackWriter(runTx());
+    }
+    return await runTx();
   }
 
   private async adoptLegacyEmbeddedDocInTransaction(

@@ -380,52 +380,78 @@ function wireApp(
      },
      async (opCtx) => {
       (req as any).cutoverOperation = opCtx;
-      const inFlightTasks = new Set<Promise<unknown>>();
-      (opCtx as any).trackTask = <T>(p: Promise<T>): Promise<T> => {
-       inFlightTasks.add(p);
-       p.finally(() => inFlightTasks.delete(p));
-       return p;
+      let activeWriters = 0;
+      let routeCompleted = false;
+      let closedToNewTasks = false;
+      let resolveQuiescence: (() => void) | undefined;
+
+      const checkQuiescent = () => {
+       if (closedToNewTasks && routeCompleted && activeWriters === 0) {
+        if (resolveQuiescence) {
+         const r = resolveQuiescence;
+         resolveQuiescence = undefined;
+         r();
+        }
+       }
       };
 
-      let resolved = false;
-      let resolveFn: () => void = () => {};
-      const promise = new Promise<void>((resolve) => {
-       resolveFn = () => {
-        if (!resolved) {
-         resolved = true;
-         resolve();
-        }
-       };
+      (opCtx as any).enterWriter = () => {
+       if (closedToNewTasks) {
+        throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
+       }
+       activeWriters++;
+      };
+
+      (opCtx as any).exitWriter = () => {
+       activeWriters = Math.max(0, activeWriters - 1);
+       checkQuiescent();
+      };
+
+      (opCtx as any).trackWriter = async <T>(promise: Promise<T>): Promise<T> => {
+       (opCtx as any).enterWriter();
+       try {
+        return await promise;
+       } finally {
+        (opCtx as any).exitWriter();
+       }
+      };
+
+      const quiescencePromise = new Promise<void>((resolve) => {
+       resolveQuiescence = resolve;
       });
 
-      const settle = async () => {
-       if (inFlightTasks.size > 0) {
-        await Promise.allSettled(Array.from(inFlightTasks));
+      const markRouteComplete = () => {
+       if (!routeCompleted) {
+        routeCompleted = true;
+        closedToNewTasks = true;
+        checkQuiescent();
        }
-       resolveFn();
       };
 
-      res.once('finish', () => void settle());
+      res.once('finish', markRouteComplete);
       const origEnd = res.end.bind(res);
       res.end = (...args: any[]) => {
        const ret = (origEnd as any)(...args);
-       void settle();
+       markRouteComplete();
        return ret;
       };
       res.once('close', () => {
-       void settle();
+       markRouteComplete();
       });
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {
-        void settle();
-        return (origWriteHead as any)(...args);
+        const ret = (origWriteHead as any)(...args);
+        markRouteComplete();
+        return ret;
        };
       }
+
       requestOperationContext.run(opCtx, () => {
        next();
       });
-      await promise;
+
+      await quiescencePromise;
      },
     );
    } catch (err: unknown) {

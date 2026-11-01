@@ -540,98 +540,13 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
   }
 
   async reconcileAmbiguousGrant(
-    familyId: string,
-    grant: G,
-    expiresAt: number | undefined,
-    options: { operationId: string; operation?: LegacyOperationContext },
+    _familyId: string,
+    _grant: G,
+    _expiresAt: number | undefined,
+    _options: { operationId: string; operation?: LegacyOperationContext },
   ): Promise<void> {
-    const docRef = this.db.collection(this.collection).doc(docId(familyId));
-    const now = this.nowProvider();
-
-    if (!options?.operationId) {
-      throw new CutoverFenceError('Cannot reconcile grant: options.operationId is required');
-    }
-    if (!grant || typeof grant !== 'object') {
-      throw new CutoverFenceError('Cannot reconcile grant: provider-backed durable evidence is required; ambiguous outcome remains held');
-    }
-    await this.db.runTransaction(async (transaction) => {
-      const grantSnap = await transaction.get(docRef);
-      if (!grantSnap.exists) {
-        throw new CutoverFenceError('Cannot reconcile grant: document does not exist');
-      }
-      const currentGrant = grantSnap.data() as StoredUpstreamRecord<G>;
-      if (!currentGrant.ambiguousOutcome) {
-        throw new CutoverFenceError('Cannot reconcile grant: grant does not have an ambiguous outcome');
-      }
-
-      if (currentGrant.ambiguousOperationId && options.operationId !== currentGrant.ambiguousOperationId) {
-        throw new CutoverFenceError('Cannot reconcile grant: operationId mismatch');
-      }
-
-      if (this.fence?.enforce) {
-        const controlRef = getCutoverFenceDocRef(this.db, this.fence.namespace);
-        const control = await readCutoverFenceInTransaction(transaction, this.db, this.fence.namespace);
-        if (['migrating', 'v3_ready', 'v3_active'].includes(control.state)) {
-          throw new CutoverRefusedError(
-            `Cannot reconcile legacy upstream grant: cutover state is ${control.state}`,
-            { cutoverState: control.state, epoch: control.epoch },
-          );
-        }
-
-        const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operationId);
-        const opSnap = await transaction.get(opRef);
-        if (!opSnap.exists) {
-          throw new CutoverFenceError(`Ambiguous operation record missing: ${options.operationId}`);
-        }
-        const opData = opSnap.data() as LegacyOperationRecord;
-        if (opData.familyId && opData.familyId !== familyId) {
-          throw new CutoverFenceError(
-            `Operation family mismatch: expected ${familyId}, got ${opData.familyId}`,
-          );
-        }
-        if (!opData.ambiguousRemoteOutcome && opData.phase !== 'upstream_pending') {
-          throw new CutoverFenceError(`Operation ${options.operationId} is not ambiguous or pending`);
-        }
-
-        transaction.set(
-          opRef,
-          {
-            phase: 'completed',
-            ambiguousRemoteOutcome: false,
-            updatedAt: now,
-          },
-          { merge: true },
-        );
-        if (control.activeOperations <= 0) {
-          throw new CutoverFenceError(
-            `Active operations underflow on reconciliation for namespace ${this.fence.namespace}: count is ${control.activeOperations}`,
-          );
-        }
-        transaction.set(
-          controlRef,
-          {
-            activeOperations: control.activeOperations - 1,
-            updatedAt: now,
-          },
-          { merge: true },
-        );
-      }
-
-      transaction.set(
-        docRef,
-        stripUndefined({
-          grant,
-          expiresAt,
-          leaseUntil: null,
-          leaseOwner: null,
-          ambiguousOutcome: null,
-          ambiguousReason: null,
-          ambiguousAt: null,
-          ambiguousOperationId: null,
-          updatedAt: now,
-        }),
-        { merge: true },
-      );
-    });
+    throw new CutoverFenceError(
+      'Ambiguous upstream grant reconciliation is refused: provider-backed durable evidence mechanism is not available in legacy bridge; ambiguous grants remain permanently held',
+    );
   }
 }
