@@ -354,10 +354,13 @@ function wireApp(
  // Publishes the requested loopback redirect_uri for the clients store, which
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
  // scoped to /authorize so every other endpoint keeps exact redirect matching.
- const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
+ const wrapAdmittedHandler = (
+  endpointName: string,
+  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
+ ): express.RequestHandler => {
   return async (req, res, next) => {
    if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
-    return next();
+    return Promise.resolve(handler(req, res, next)).catch(next);
    }
    try {
     const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
@@ -380,9 +383,8 @@ function wireApp(
      },
      async (opCtx) => {
       (req as any).cutoverOperation = opCtx;
-      // Whole-task lifecycle: starts at 1 covering the route execution itself
+      // Whole-task lifecycle: starts at 1 covering the route handler execution itself
       let activeTasks = 1;
-      let routeCompleted = false;
       let closedToNewTasks = false;
       let resolveQuiescence: (() => void) | undefined;
 
@@ -425,42 +427,24 @@ function wireApp(
        resolveQuiescence = resolve;
       });
 
-      // Route handler completion: closes registration and drains the initial 1 count
-      const markRouteHandlerComplete = () => {
-       if (!routeCompleted) {
-        routeCompleted = true;
-        closedToNewTasks = true;
-        activeTasks--;
-        if (activeTasks < 0) {
-         throw new CutoverFenceError('Active tasks underflow on route completion');
-        }
-        checkQuiescent();
-       }
-      };
-
-      res.once('finish', markRouteHandlerComplete);
-      const origEnd = res.end.bind(res);
-      res.end = (...args: any[]) => {
-       const ret = (origEnd as any)(...args);
-       markRouteHandlerComplete();
-       return ret;
-      };
-      // Close ONLY notes transport loss; it NEVER decrements or releases early!
+      // Transport close ONLY notes transport loss
       res.once('close', () => {
-       // Transport disconnected; handler work continues until markRouteHandlerComplete & quiescence
+       // Transport disconnected
       });
-      if (req.method === 'GET') {
-       const origWriteHead = res.writeHead.bind(res);
-       res.writeHead = (...args: any[]) => {
-        const ret = (origWriteHead as any)(...args);
-        markRouteHandlerComplete();
-        return ret;
-       };
-      }
 
-      requestOperationContext.run(opCtx, () => {
-       next();
-      });
+      try {
+       await requestOperationContext.run(opCtx, async () => {
+        await handler(req, res, next);
+       });
+      } finally {
+       // Explicit route handler finally signal!
+       closedToNewTasks = true;
+       activeTasks--;
+       if (activeTasks < 0) {
+        throw new CutoverFenceError('Active tasks underflow on route completion');
+       }
+       checkQuiescent();
+      }
 
       await quiescencePromise;
      },
@@ -483,12 +467,37 @@ function wireApp(
  };
 
  // HTTP cutover admission precedes ALL mutating middleware, including client adoption (C9.1)
- app.use('/register', cutoverAdmissionMiddleware('register'));
- app.use('/token', cutoverAdmissionMiddleware('token'));
- app.use('/revoke', cutoverAdmissionMiddleware('revoke'));
- app.use('/authorize', cutoverAdmissionMiddleware('authorize'));
- app.use('/login', cutoverAdmissionMiddleware('login'));
- app.use('/mfa', cutoverAdmissionMiddleware('mfa'));
+ const authRouter = mcpAuthRouter({
+  provider: authProvider,
+  issuerUrl: baseUrl,
+  resourceServerUrl: mcpUrl,
+ });
+
+ const handleAuthRoute = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  return new Promise<void>((resolve, reject) => {
+   const origEnd = res.end.bind(res);
+   let done = false;
+   const finish = (err?: unknown) => {
+    if (!done) {
+     done = true;
+     if (err) reject(err);
+     else resolve();
+    }
+   };
+   res.end = (...args: any[]) => {
+    const ret = (origEnd as any)(...args);
+    finish();
+    return ret;
+   };
+   res.once('close', () => finish());
+   authRouter(req, res, (err) => finish(err));
+  });
+ };
+
+ app.use('/register', wrapAdmittedHandler('register', handleAuthRoute));
+ app.use('/token', wrapAdmittedHandler('token', handleAuthRoute));
+ app.use('/revoke', wrapAdmittedHandler('revoke', handleAuthRoute));
+ app.use('/authorize', wrapAdmittedHandler('authorize', handleAuthRoute));
 
  app.use('/authorize', allowLoopbackRedirectUri());
  app.use(
@@ -521,11 +530,7 @@ function wireApp(
 
   next();
  });
- app.use(mcpAuthRouter({
-  provider: authProvider,
-  issuerUrl: baseUrl,
-  resourceServerUrl: mcpUrl,
- }));
+ // Mounted via wrapAdmittedHandler on /register, /token, /revoke, /authorize
 
  // Compatibility: also serve protected-resource metadata at the root path.
  // The SDK mounts it at /.well-known/oauth-protected-resource/mcp (RFC 9728),
@@ -538,7 +543,7 @@ function wireApp(
  });
 
  // Login form submission: the authorize() method shows the page, this handles POST
- app.post('/login', async (req, res) => {
+ app.post('/login', wrapAdmittedHandler('login', async (req, res) => {
   const { token, platform, username, password } = req.body;
 
   if (token) {
@@ -556,10 +561,10 @@ function wireApp(
   }
 
   await authProvider.handleLogin(req, res, String(username), String(password));
- });
+ }));
 
  // MFA passcode submission (second step when NS requires MFA)
- app.post('/mfa', async (req, res) => {
+ app.post('/mfa', wrapAdmittedHandler('mfa', async (req, res) => {
   const { passcode } = req.body;
 
   if (!passcode) {
@@ -568,7 +573,7 @@ function wireApp(
   }
 
   await authProvider.handleMfa(req, res, passcode);
- });
+ }));
 
  // -----------------------------------------------------------------------
  // MCP transport: all routes require bearer auth
@@ -580,7 +585,8 @@ function wireApp(
   resourceMetadataUrl,
   now: authProvider.nowProvider,
  });
- app.use('/mcp', cutoverAdmissionMiddleware('mcp'));
+ // Note: /mcp cutover admission is applied per mutating route (POST, DELETE);
+ // GET /mcp SSE stream is handled separate read-only after bearerAuth.
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
   const negotiated = negotiateProtocolVersion(req);
@@ -592,7 +598,7 @@ function wireApp(
 
 
  // POST /mcp: JSON-RPC requests
- app.post('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.post('/mcp', bearerAuth, wrapAdmittedHandler('mcp', async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   const body = (req as any).body;
 
@@ -649,7 +655,7 @@ function wireApp(
   const session = sessions.get(sessionId)!;
   syncSessionNsToken(session, req);
   await session.transport.handleRequest(req, res, body);
- });
+ }));
 
  // GET /mcp: SSE stream for server-initiated messages
  app.get('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
@@ -676,7 +682,7 @@ function wireApp(
  });
 
  // DELETE /mcp: session termination
- app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.delete('/mcp', bearerAuth, wrapAdmittedHandler('mcp', async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
   if (isStatelessMode()) {
@@ -700,7 +706,7 @@ function wireApp(
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ status: 'session terminated' }));
- });
+ }));
 
  // Cutover fence and transient store error handler
  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {

@@ -176,25 +176,35 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           `Durable operation context is required for fence-enforced put in namespace ${this.fence.namespace}`,
         );
       }
-      await this.db.runTransaction(async (transaction) => {
-        const guard = await checkMutationGuardInTransaction(transaction, {
-          db: this.db,
-          namespace: this.fence!.namespace,
-          operation: op,
-          completeOperation: options?.completeOperation,
-          now: this.nowProvider,
+      let guardResult: GuardMutationResult | undefined;
+      const runPutTx = async () => {
+        await this.db.runTransaction(async (transaction) => {
+          const guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.db,
+            namespace: this.fence!.namespace,
+            operation: op,
+            completeOperation: options?.completeOperation,
+            now: this.nowProvider,
+          });
+          guardResult = guard;
+          guard.bufferCompletion(this.nowProvider());
+          transaction.set(
+            docRef,
+            stripUndefined({
+              grant,
+              expiresAt,
+              updatedAt: this.nowProvider(),
+            }),
+            { merge: true },
+          );
         });
-        guard.bufferCompletion(this.nowProvider());
-        transaction.set(
-          docRef,
-          stripUndefined({
-            grant,
-            expiresAt,
-            updatedAt: this.nowProvider(),
-          }),
-          { merge: true },
-        );
-      });
+      };
+      if (op?.trackWriter) {
+        await op.trackWriter(runPutTx);
+      } else {
+        await runPutTx();
+      }
+      guardResult?.commitCompletion?.();
       return;
     }
 
@@ -225,15 +235,25 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           `Durable operation context is required for fence-enforced delete in namespace ${this.fence.namespace}`,
         );
       }
-      await this.db.runTransaction(async (transaction) => {
-        const guard = await checkMutationGuardInTransaction(transaction, {
-          db: this.db,
-          namespace: this.fence!.namespace,
-          operation: op,
-          now: this.nowProvider,
+      let guardResult: GuardMutationResult | undefined;
+      const runDeleteTx = async () => {
+        await this.db.runTransaction(async (transaction) => {
+          const guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.db,
+            namespace: this.fence!.namespace,
+            operation: op,
+            now: this.nowProvider,
+          });
+          guardResult = guard;
+          transaction.delete(docRef);
         });
-        transaction.delete(docRef);
-      });
+      };
+      if (op?.trackWriter) {
+        await op.trackWriter(runDeleteTx);
+      } else {
+        await runDeleteTx();
+      }
+      guardResult?.commitCompletion?.();
       return;
     }
 
@@ -380,15 +400,22 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         (!code && classifyUpstreamTokenResponse(0, err instanceof Error ? err.message : String(err)) === 'definitive');
 
       if (isDefinitive) {
-        await this.db.runTransaction(async (transaction) => {
-          const snap = await transaction.get(docRef);
-          if (snap.exists) {
-            const current = snap.data() as StoredUpstreamRecord<G>;
-            if (current.leaseOwner === leaseOwner) {
-              transaction.delete(docRef);
+        const runDefinitiveTx = async () => {
+          await this.db.runTransaction(async (transaction) => {
+            const snap = await transaction.get(docRef);
+            if (snap.exists) {
+              const current = snap.data() as StoredUpstreamRecord<G>;
+              if (current.leaseOwner === leaseOwner) {
+                transaction.delete(docRef);
+              }
             }
-          }
-        }).catch(() => {});
+          }).catch(() => {});
+        };
+        if (op?.trackWriter) {
+          await op.trackWriter(runDefinitiveTx);
+        } else {
+          await runDefinitiveTx();
+        }
 
 
         if (err instanceof UpstreamRevokedError) {
@@ -406,49 +433,62 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       if (this.fence?.enforce && op) {
         op.markAmbiguousRemoteOutcome(reasonCode);
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
-        await this.db.runTransaction(async (transaction) => {
-          transaction.set(
-            opRef,
-            {
-              phase: 'upstream_pending',
-              ambiguousRemoteOutcome: true,
-              familyId,
-              updatedAt: this.nowProvider(),
-            },
-            { merge: true },
-          );
-          transaction.set(
-            docRef,
-            {
-              ambiguousOutcome: true,
-              ambiguousReason: reasonCode,
-              ambiguousAt: this.nowProvider(),
-              ambiguousOperationId: op.id,
-            },
-            { merge: true },
-          );
-        }).catch(() => {});
+        const runAmbiguityTx = async () => {
+          await this.db.runTransaction(async (transaction) => {
+            transaction.set(
+              opRef,
+              {
+                phase: 'upstream_pending',
+                ambiguousRemoteOutcome: true,
+                familyId,
+                updatedAt: this.nowProvider(),
+              },
+              { merge: true },
+            );
+            transaction.set(
+              docRef,
+              {
+                ambiguousOutcome: true,
+                ambiguousReason: reasonCode,
+                ambiguousAt: this.nowProvider(),
+                ambiguousOperationId: op.id,
+              },
+              { merge: true },
+            );
+          }).catch(() => {});
+        };
+        if (op.trackWriter) {
+          await op.trackWriter(runAmbiguityTx);
+        } else {
+          await runAmbiguityTx();
+        }
       }
 
       if (!this.fence?.enforce || !op) {
-        await this.db.runTransaction(async (transaction) => {
-          const snap = await transaction.get(docRef);
-          if (snap.exists) {
-            const current = snap.data() as StoredUpstreamRecord<G>;
-            if (current.leaseOwner === leaseOwner) {
-              transaction.set(
-                docRef,
-                {
-                  leaseUntil: null,
-                  leaseOwner: null,
-                },
-                { merge: true },
-              );
+        const runLeaseTx = async () => {
+          await this.db.runTransaction(async (transaction) => {
+            const snap = await transaction.get(docRef);
+            if (snap.exists) {
+              const current = snap.data() as StoredUpstreamRecord<G>;
+              if (current.leaseOwner === leaseOwner) {
+                transaction.set(
+                  docRef,
+                  {
+                    leaseUntil: null,
+                    leaseOwner: null,
+                  },
+                  { merge: true },
+                );
+              }
             }
-          }
-        }).catch(() => {});
+          }).catch(() => {});
+        };
+        if (op?.trackWriter) {
+          await op.trackWriter(runLeaseTx);
+        } else {
+          await runLeaseTx();
+        }
       }
-
       const snap = await docRef.get();
       if (snap.exists) {
         const data = snap.data() as StoredUpstreamRecord<G>;
@@ -523,28 +563,35 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       if (this.fence?.enforce && op) {
         op.markAmbiguousRemoteOutcome('local_commit_failure');
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
-        await this.db.runTransaction(async (transaction) => {
-          transaction.set(
-            opRef,
-            {
-              phase: 'upstream_pending',
-              ambiguousRemoteOutcome: true,
-              familyId,
-              updatedAt: this.nowProvider(),
-            },
-            { merge: true },
-          );
-          transaction.set(
-            docRef,
-            {
-              ambiguousOutcome: true,
-              ambiguousReason: 'local_commit_failure',
-              ambiguousAt: this.nowProvider(),
-              ambiguousOperationId: op.id,
-            },
-            { merge: true },
-          );
-        }).catch(() => {});
+        const runLocalCommitFailureTx = async () => {
+          await this.db.runTransaction(async (transaction) => {
+            transaction.set(
+              opRef,
+              {
+                phase: 'upstream_pending',
+                ambiguousRemoteOutcome: true,
+                familyId,
+                updatedAt: this.nowProvider(),
+              },
+              { merge: true },
+            );
+            transaction.set(
+              docRef,
+              {
+                ambiguousOutcome: true,
+                ambiguousReason: 'local_commit_failure',
+                ambiguousAt: this.nowProvider(),
+                ambiguousOperationId: op.id,
+              },
+              { merge: true },
+            );
+          }).catch(() => {});
+        };
+        if (op.trackWriter) {
+          await op.trackWriter(runLocalCommitFailureTx);
+        } else {
+          await runLocalCommitFailureTx();
+        }
       }
       throw err;
     }

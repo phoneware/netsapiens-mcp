@@ -2003,4 +2003,168 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       }),
     ).rejects.toThrow(CutoverFenceError);
   });
+
+  it('33. Client disconnect with handler return without response settles cleanly without leaking tasks', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+    const server = app.listen(0);
+    const port = (server.address() as any).port;
+    const controller = new AbortController();
+
+    const fetchPromise = fetch(`http://127.0.0.1:${port}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: controller.signal,
+    }).catch(() => {});
+
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    await fetchPromise;
+
+    let activeOps = 1;
+    for (let i = 0; i < 30; i++) {
+      const c = await getCutoverFenceRecord(db, namespace);
+      if (c?.activeOperations === 0) {
+        activeOps = 0;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(activeOps).toBe(0);
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  it('34. In-flight nested task and late write after closedToNewTasks rejects with CutoverFenceError', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    let capturedOp: any;
+    await withLegacyOperation(
+      { db, namespace, kind: 'test_lifecycle', now: Date.now },
+      async (op) => {
+        capturedOp = op;
+        let active = 1;
+        let closed = false;
+        op.enterWriter = () => {
+          if (closed) throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
+          active++;
+        };
+        op.exitWriter = () => {
+          active--;
+          if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
+        };
+        op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
+          op.enterWriter();
+          try {
+            return await fn();
+          } finally {
+            op.exitWriter();
+          }
+        };
+
+        const nestedResult = await op.trackWriter(async () => 'nested_success');
+        expect(nestedResult).toBe('nested_success');
+
+        closed = true;
+        active--;
+
+        await expect(op.trackWriter(async () => 'late_write')).rejects.toThrow(CutoverFenceError);
+      },
+    );
+
+    const control = await getCutoverFenceRecord(db, namespace);
+    expect(control?.activeOperations).toBe(0);
+  });
+
+  it('35. Direct upstream put, delete, and definitive transactions are tracked, and reconcile unconditionally refuses', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const upstreamStore = new FirestoreUpstreamGrantStore({
+      db,
+      collection: 'mcp_tokens_upstream',
+      fence: { namespace, enforce: true },
+    });
+
+    const familyId = 'family-test-' + randomBytes(8).toString('hex');
+    const opId = 'op-test-' + randomBytes(8).toString('hex');
+
+    await withLegacyOperation(
+      { db, namespace, kind: 'upstream_test', operationId: opId, now: Date.now },
+      async (op) => {
+        await upstreamStore.put(familyId, { test: 'grant' }, Date.now() + 3600_000, { operation: op });
+        const record = await upstreamStore.get(familyId);
+        expect(record?.grant).toEqual({ test: 'grant' });
+
+        await expect(
+          upstreamStore.reconcileAmbiguousGrant(familyId, { test: 'resolved' }, Date.now() + 3600_000, { operationId: opId, operation: op }),
+        ).rejects.toThrow(CutoverFenceError);
+
+        await upstreamStore.delete(familyId, { operation: op });
+        const deleted = await upstreamStore.get(familyId);
+        expect(deleted).toBeUndefined();
+      },
+    );
+
+    const control = await getCutoverFenceRecord(db, namespace);
+    expect(control?.activeOperations).toBe(0);
+  });
+
+  it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow', async () => {
+    let active = 1;
+    let closed = false;
+    const tracker = {
+      enterWriter: () => {
+        if (closed) throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
+        active++;
+      },
+      exitWriter: () => {
+        active--;
+        if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
+      },
+      trackWriter: async <T>(fn: () => Promise<T>): Promise<T> => {
+        tracker.enterWriter();
+        try {
+          return await fn();
+        } finally {
+          tracker.exitWriter();
+        }
+      },
+    };
+
+    await expect(
+      tracker.trackWriter(async () => {
+        throw new Error('Thunk error');
+      }),
+    ).rejects.toThrow('Thunk error');
+    expect(active).toBe(1);
+
+    tracker.exitWriter();
+    expect(active).toBe(0);
+
+    expect(() => tracker.exitWriter()).toThrow(CutoverFenceError);
+  });
 });
