@@ -298,6 +298,28 @@ export async function transitionCutoverFenceState(
           `Cannot transition to fenced for namespace ${namespace}: activeOperations is ${current.activeOperations}`,
         );
       }
+      const pendingOps = await transaction.get(
+        getCutoverOperationsColRef(db, namespace).where('phase', 'in', ['admitted', 'upstream_pending']).limit(1),
+      );
+      if (!pendingOps.empty) {
+        throw new CutoverFenceError(
+          `Cannot transition to fenced for namespace ${namespace}: active or pending operations exist`,
+        );
+      }
+      const ambiguousOps = await transaction.get(
+        getCutoverOperationsColRef(db, namespace).where('ambiguousRemoteOutcome', '==', true).limit(1),
+      );
+      if (!ambiguousOps.empty) {
+        throw new CutoverFenceError(
+          `Cannot transition to fenced for namespace ${namespace}: unresolved ambiguous remote operations exist`,
+        );
+      }
+    } else if (params.toState === 'v3_active') {
+      if (!params.migrationManifestDigest) {
+        throw new CutoverFenceError(
+          `Cannot transition to v3_active for namespace ${namespace}: migrationManifestDigest is required`,
+        );
+      }
     } else if (params.toState === 'legacy_open') {
       if (current.irreversible) {
         throw new CutoverFenceError(

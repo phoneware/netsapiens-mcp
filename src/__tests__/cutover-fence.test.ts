@@ -276,5 +276,99 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
 
     const markerSnap = await db.collection(`${namespace}_meta`).doc('v2_adopted').get();
     expect(markerSnap.exists).toBe(false);
+    // Assert that control record remained strictly in 'fenced' state with irreversible: false
+    const ctrlAfterDryRun = await getCutoverFenceRecord(db, namespace);
+    expect(ctrlAfterDryRun?.state).toBe('fenced');
+    expect(ctrlAfterDryRun?.epoch).toBe(1);
+    expect(ctrlAfterDryRun?.irreversible).toBe(false);
+    expect(ctrlAfterDryRun?.migrationRunId).toBeUndefined();
+  });
+
+  it('orphan family-linked token with missing legacy family reports error rather than silent omission', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    // Seed an orphan access doc pointing to nonexistent family
+    await db.collection(`${namespace}_tokens`).doc('orphan-access-tok').set({
+      accessToken: 'orphan-access-tok',
+      refreshToken: 'orphan-ref-tok',
+      refreshFamilyId: 'nonexistent-fam-123',
+      clientId: 'client-orphan',
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    // Must report error, NOT silent skip!
+    expect(report.errors).toBe(1);
+  });
+
+  it('partial target family in v3 causes migration conflict error', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    const familyId = 'fam-partial-conflict';
+
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    // Seed legacy family
+    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
+      id: familyId,
+      currentAccessToken: 'partial-acc',
+      currentRefreshToken: 'partial-ref',
+      retiredRefreshFingerprints: [],
+      updatedAt: Date.now(),
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('partial-ref').set({
+      accessToken: 'partial-acc',
+      familyId,
+      status: 'active',
+      token: {
+        accessToken: 'partial-acc',
+        refreshToken: 'partial-ref',
+        clientId: 'client-partial',
+        expiresAt: Date.now() + 3600_000,
+        nsAccessToken: 'ns-tok',
+        nsRefreshToken: 'ns-ref',
+        nsUsername: 'user@domain.com',
+      },
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+      grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' },
+      expiresAt: Date.now() + 3600_000,
+      updatedAt: Date.now(),
+    });
+
+    // Seed partial target: ONLY refresh_families in v3, leaving sessions and upstream missing!
+    await db.collection(`${namespace}_refresh_families`).doc(familyId).set({
+      id: familyId,
+      generation: 1,
+      status: 'active',
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBe(1);
+  });
+
+  it('missing access or refresh token identifier rejects with error rather than inventing random IDs', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    const familyId = 'fam-missing-ids';
+
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    // Seed legacy family missing currentAccessToken AND currentRefreshToken
+    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
+      id: familyId,
+      retiredRefreshFingerprints: [],
+      updatedAt: Date.now(),
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+      grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' },
+      expiresAt: Date.now() + 3600_000,
+      updatedAt: Date.now(),
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, expectedEpoch: 1 });
+    expect(report.errors).toBe(1);
   });
 });

@@ -62,16 +62,35 @@ export interface MigrationManifest {
   runId: string;
   epoch: number;
   namespace: string;
-  scanned: number;
-  migrated: number;
-  skipped: number;
-  errors: number;
+  physicalCounts: {
+    families: number;
+    tokens: number;
+    refresh: number;
+    upstream: number;
+    authCodes: number;
+    resumeTokens: number;
+  };
   classifications: {
     pr56Families: number;
     baseFormatTokens: number;
     authCodes: number;
     resumeTokens: number;
   };
+  reasons: {
+    orphanAccessTokens: number;
+    missingUpstreamGrants: number;
+    missingRefreshPointers: number;
+    partialTargets: number;
+    malformedRecords: number;
+  };
+  digests: {
+    sourceInventoryDigest: string;
+    targetInventoryDigest: string;
+  };
+  scanned: number;
+  migrated: number;
+  skipped: number;
+  errors: number;
   completedAt: number;
 }
 
@@ -102,6 +121,14 @@ export async function adoptFirestoreLegacyTokens(options: {
     resumeTokens: 0,
   };
 
+  const reasons = {
+    orphanAccessTokens: 0,
+    missingUpstreamGrants: 0,
+    missingRefreshPointers: 0,
+    partialTargets: 0,
+    malformedRecords: 0,
+  };
+
   const isControlled = isSupportedCutoverNamespace(namespace);
   const initialControl = isControlled ? await getCutoverFenceRecord(db, namespace) : undefined;
   let currentEpoch = options.expectedEpoch ?? initialControl?.epoch ?? 1;
@@ -121,16 +148,18 @@ export async function adoptFirestoreLegacyTokens(options: {
     }
     currentEpoch = initialControl.epoch;
 
-    if (initialControl.state === 'fenced') {
-      await transitionCutoverFenceState(db, namespace, {
-        fromState: 'fenced',
-        toState: 'migrating',
-        expectedEpoch: currentEpoch,
-        migrationRunId: runId,
-        now: nowProvider,
-      });
-    } else if (initialControl.migrationRunId) {
-      runId = initialControl.migrationRunId;
+    if (!dryRun) {
+      if (initialControl.state === 'fenced') {
+        await transitionCutoverFenceState(db, namespace, {
+          fromState: 'fenced',
+          toState: 'migrating',
+          expectedEpoch: currentEpoch,
+          migrationRunId: runId,
+          now: nowProvider,
+        });
+      } else if (initialControl.migrationRunId) {
+        runId = initialControl.migrationRunId;
+      }
     }
   }
 
@@ -141,457 +170,604 @@ export async function adoptFirestoreLegacyTokens(options: {
   const legacyAuthCodesCol = `${namespace}_auth_codes`;
   const legacyResumeCol = `${namespace}_resume_tokens`;
 
-  // 1. Adopt established PR56 refresh families
-  try {
-    const familiesSnap = await db.collection(legacyFamiliesCol).get();
-    for (const famDoc of familiesSnap.docs) {
-      report.scanned++;
-      const familyId = famDoc.id;
+  // Enumerate all physical source collections for candidate graph
+  const familiesSnap = await db.collection(legacyFamiliesCol).get().catch(() => ({ docs: [] }));
+  const tokensSnap = await db.collection(legacyTokensCol).get().catch(() => ({ docs: [] }));
+  const refreshSnap = await db.collection(legacyRefreshCol).get().catch(() => ({ docs: [] }));
+  const upstreamSnap = await db.collection(legacyUpstreamCol).get().catch(() => ({ docs: [] }));
+  const authCodesSnap = await db.collection(legacyAuthCodesCol).get().catch(() => ({ docs: [] }));
+  const resumeSnap = await db.collection(legacyResumeCol).get().catch(() => ({ docs: [] }));
 
-      try {
-        const outcome = await db.runTransaction(async (tx) => {
+  const physicalCounts = {
+    families: familiesSnap.docs.length,
+    tokens: tokensSnap.docs.length,
+    refresh: refreshSnap.docs.length,
+    upstream: upstreamSnap.docs.length,
+    authCodes: authCodesSnap.docs.length,
+    resumeTokens: resumeSnap.docs.length,
+  };
+
+  const familiesById = new Map<string, Record<string, unknown>>();
+  for (const doc of familiesSnap.docs) {
+    familiesById.set(doc.id, doc.data() as Record<string, unknown>);
+  }
+
+  const refreshPointersById = new Map<string, Record<string, unknown>>();
+  for (const doc of refreshSnap.docs) {
+    refreshPointersById.set(doc.id, doc.data() as Record<string, unknown>);
+  }
+
+  const upstreamById = new Map<string, Record<string, unknown>>();
+  for (const doc of upstreamSnap.docs) {
+    upstreamById.set(doc.id, doc.data() as Record<string, unknown>);
+  }
+
+  const tokensByAccessId = new Map<string, Record<string, unknown>>();
+  for (const doc of tokensSnap.docs) {
+    tokensByAccessId.set(doc.id, doc.data() as Record<string, unknown>);
+  }
+
+
+  // 1. Adopt established PR56 refresh families
+  for (const famDoc of familiesSnap.docs) {
+    report.scanned++;
+    const familyId = famDoc.id;
+    const famData = famDoc.data() as Record<string, unknown>;
+
+    // Pre-validate family integrity
+    if (!upstreamById.has(familyId)) {
+      report.errors++;
+      reasons.missingUpstreamGrants++;
+      continue;
+    }
+    const currentRefId = famData.currentRefreshToken as string | undefined;
+    if (!currentRefId || (!refreshPointersById.has(currentRefId) && !famData.currentAccessToken)) {
+      report.errors++;
+      reasons.missingRefreshPointers++;
+      continue;
+    }
+    if (famData.previousRefreshToken && famData.previousRefreshToken === currentRefId) {
+      report.errors++;
+      reasons.malformedRecords++;
+      continue;
+    }
+
+    try {
+      const outcome = await db.runTransaction(async (tx) => {
+        // Read control inside transaction if controlled
+        if (isControlled && initialControl && !dryRun) {
+          const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
+          if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
+            throw new CutoverFenceError(`Cutover state changed concurrently during family migration`);
+          }
+        }
+
+        // Read source records
+        const famSnap = await tx.get(db.collection(legacyFamiliesCol).doc(familyId));
+        if (!famSnap.exists) return 'skipped';
+
+        const currentRefreshToken = famData.currentRefreshToken as string | undefined;
+        const refSnap = currentRefreshToken
+          ? await tx.get(db.collection(legacyRefreshCol).doc(currentRefreshToken))
+          : null;
+        const refData = (refSnap?.exists ? refSnap.data() : null) as Record<string, unknown> | null;
+        const embeddedToken = (refData?.token as Record<string, unknown> | undefined) ?? {};
+
+        const upSnap = await tx.get(db.collection(legacyUpstreamCol).doc(familyId));
+        const upData = (upSnap.exists ? upSnap.data() : {}) as Record<string, unknown>;
+        const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
+
+        const accessId = (famData.currentAccessToken as string | undefined) ?? (embeddedToken.accessToken as string | undefined);
+        if (!accessId) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: access token identifier missing`);
+        }
+        if (!currentRefreshToken && !embeddedToken.refreshToken) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: refresh token identifier missing`);
+        }
+
+        const accSnap = await tx.get(db.collection(legacyTokensCol).doc(accessId));
+        const accData = (accSnap.exists ? accSnap.data() : null) as Record<string, unknown> | null;
+
+        const clientId = (embeddedToken.clientId as string | undefined) ??
+          (accData?.clientId as string | undefined) ??
+          (famData.clientId as string | undefined);
+
+        if (!clientId) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: clientId missing`);
+        }
+
+        const rawAccessId = accessId;
+        const newAccessId = codec.id('session', rawAccessId);
+        const rawRefreshId = currentRefreshToken || (embeddedToken.refreshToken as string);
+        const newRefreshId = codec.id('refresh', rawRefreshId);
+
+        // Target verification (Finding 2: detect partial target families)
+        const targetFamSnap = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
+        const targetUpSnap = await tx.get(db.collection(v3Cols.upstreamGrants).doc(familyId));
+        const targetRefSnap = await tx.get(db.collection(v3Cols.refreshTokens).doc(newRefreshId));
+        const targetAccSnap = await tx.get(db.collection(v3Cols.sessions).doc(newAccessId));
+
+        const targetStates = [targetFamSnap.exists, targetUpSnap.exists, targetRefSnap.exists, targetAccSnap.exists];
+        const allTargetExist = targetStates.every(Boolean);
+        const noneTargetExist = targetStates.every(e => !e);
+
+        if (!allTargetExist && !noneTargetExist) {
+          throw new Error(`Partial target family detected in v3 for ${familyId}`);
+        }
+        if (allTargetExist) {
+          return 'skipped';
+        }
+
+        // Read previous refresh pointer if present
+        let prevRefreshRow: RefreshPointerRow | undefined;
+        if (famData.previousRefreshToken) {
+          const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
+          const prevRefDoc = await tx.get(db.collection(legacyRefreshCol).doc(famData.previousRefreshToken as string));
+          if (!prevRefDoc.exists) {
+            throw new Error(`Missing previous refresh pointer document for family ${familyId}`);
+          }
+          const prevData = prevRefDoc.data() as Record<string, unknown>;
+          if (typeof prevData?.consumedAt !== 'number') {
+            throw new Error(`Previous refresh pointer missing consumedAt for family ${familyId}`);
+          }
+          const consumedAt = prevData.consumedAt;
+          const generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
+
+          prevRefreshRow = {
+            id: prevRefreshId,
+            familyId,
+            status: 'consumed',
+            generation: Math.max(1, generation - 1),
+            consumedAt,
+            successorSealed: codec.seal({
+              accessToken: rawAccessId,
+              refreshToken: rawRefreshId,
+            }, `successor:${prevRefreshId}`),
+          };
+        }
+
+        // All reads complete. Derive write data.
+        const now = nowProvider();
+        const generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
+        const grantVersion = typeof upData.grantVersion === 'number' ? (upData.grantVersion as number) : 1;
+
+        const expiresAt = typeof accData?.expiresAt === 'number'
+          ? (accData.expiresAt as number)
+          : (typeof embeddedToken.expiresAt === 'number' ? (embeddedToken.expiresAt as number) : now + 3600_000);
+        const retainUntil = expiresAt + ACCESS_RETENTION_MS;
+
+        const serverBaseUrl = (embeddedToken.serverBaseUrl as string | undefined) ??
+          (accData?.serverBaseUrl as string | undefined) ??
+          (famData.serverBaseUrl as string | undefined);
+
+        const extra = (embeddedToken.extra as Record<string, string> | undefined) ??
+          (accData?.extra as Record<string, string> | undefined) ??
+          {};
+
+        const nsAccessToken = (grant.nsAccessToken ?? grant.access_token ?? embeddedToken.nsAccessToken ?? accData?.nsAccessToken) as string | undefined;
+        const nsRefreshToken = (grant.nsRefreshToken ?? grant.refresh_token ?? embeddedToken.nsRefreshToken ?? accData?.nsRefreshToken) as string | undefined;
+        const nsUsername = (grant.nsUsername ?? grant.username ?? embeddedToken.nsUsername ?? accData?.nsUsername) as string | undefined;
+        const nsUserRole = (grant.nsUserRole ?? grant.user_role ?? grant.userRole ?? embeddedToken.nsUserRole ?? accData?.nsUserRole) as string | undefined;
+        const nsApiUrl = (grant.nsApiUrl ?? grant.api_url ?? grant.apiUrl ?? embeddedToken.nsApiUrl ?? accData?.nsApiUrl) as string | undefined;
+
+        if (!nsAccessToken && !nsRefreshToken) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: upstream NetSapiens credentials missing`);
+        }
+        if (!nsUsername) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: NetSapiens username missing`);
+        }
+
+        const nsExpiresAt = typeof upData.expiresAt === 'number'
+          ? (upData.expiresAt as number)
+          : (typeof grant.expires_in === 'number'
+            ? now + (grant.expires_in as number) * 1000
+            : (typeof accData?.nsExpiresAt === 'number' ? (accData.nsExpiresAt as number) : (typeof embeddedToken.nsExpiresAt === 'number' ? (embeddedToken.nsExpiresAt as number) : undefined)));
+
+        const rawRetired = Array.isArray(famData.retiredRefreshFingerprints) ? (famData.retiredRefreshFingerprints as string[]) : [];
+        const retiredFingerprints = Array.from(new Set(rawRetired));
+
+        const familyRow: FamilyRow = {
+          id: familyId,
+          generation,
+          status: (famData.status === 'revoked' ? 'revoked' : 'active'),
+          activeRefreshId: newRefreshId,
+          currentAccessTokenId: newAccessId,
+          updatedAt: now,
+          sealed: codec.seal({
+            clientId,
+            serverBaseUrl,
+            extra,
+            retiredRefreshIds: retiredFingerprints,
+          }, familyAad({ id: familyId, generation })),
+        };
+
+        const upstreamRow: UpstreamGrantRow = {
+          id: familyId,
+          grantVersion,
+          nsExpiresAt,
+          updatedAt: now,
+          sealed: codec.seal({
+            nsAccessToken: nsAccessToken || '',
+            nsRefreshToken,
+            nsUsername,
+            nsUserRole,
+            nsApiUrl,
+          }, upstreamAad({ id: familyId, grantVersion })),
+        };
+
+        const accessRow: AccessRow = {
+          id: newAccessId,
+          familyId,
+          expiresAt,
+          retainUntil,
+          sealed: codec.seal({
+            familyId,
+            clientId,
+            serverBaseUrl,
+            extra,
+          }, accessAad({ id: newAccessId, familyId })),
+        };
+
+        const refreshRow: RefreshPointerRow = {
+          id: newRefreshId,
+          familyId,
+          status: 'active',
+          generation,
+        };
+
+        // Buffer writes (at end of transaction)
+        if (!dryRun) {
           if (isControlled && initialControl) {
-            const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
-            if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
-              throw new CutoverFenceError(`Cutover state changed concurrently during family migration`);
-            }
-            // Latch irreversible on first v3 mutation
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
           }
-
-          // Check if already migrated inside transaction
-          const existingV3 = await tx.get(db.collection(v3Cols.refreshFamilies).doc(familyId));
-          if (existingV3.exists) {
-            return 'skipped';
+          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
+          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
+          tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), defined({ ...refreshRow, v: 2 }));
+          tx.set(db.collection(v3Cols.sessions).doc(newAccessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
+          if (prevRefreshRow) {
+            tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
           }
-
-          // Read source legacy family inside transaction
-          const famSnap = await tx.get(db.collection(legacyFamiliesCol).doc(familyId));
-          if (!famSnap.exists) return 'skipped';
-          const famData = famSnap.data() as Record<string, unknown>;
-
-          // Read active refresh pointer inside transaction (AUTHORITATIVE FOR CLIENT BINDING)
-          const currentRefreshToken = famData.currentRefreshToken as string | undefined;
-          const refSnap = currentRefreshToken
-            ? await tx.get(db.collection(legacyRefreshCol).doc(currentRefreshToken))
-            : null;
-          const refData = (refSnap?.exists ? refSnap.data() : null) as Record<string, unknown> | null;
-          const embeddedToken = (refData?.token as Record<string, unknown> | undefined) ?? {};
-
-          // Read upstream grant doc inside transaction (nested { grant: { ... } } or flat)
-          const upSnap = await tx.get(db.collection(legacyUpstreamCol).doc(familyId));
-          const upData = (upSnap.exists ? upSnap.data() : {}) as Record<string, unknown>;
-          const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
-
-          // Read access doc inside transaction (may be absent due to Firestore TTL)
-          const accessId = (famData.currentAccessToken as string | undefined) ?? (embeddedToken.accessToken as string | undefined);
-          const accSnap = accessId ? await tx.get(db.collection(legacyTokensCol).doc(accessId)) : null;
-          const accData = (accSnap?.exists ? accSnap.data() : null) as Record<string, unknown> | null;
-
-          const clientId = (embeddedToken.clientId as string | undefined) ??
-            (accData?.clientId as string | undefined) ??
-            (famData.clientId as string | undefined);
-
-          if (!clientId) {
-            throw new Error(`Cannot adopt PR56 family ${familyId}: client binding missing across pointer, access, and family docs`);
-          }
-
-          const now = nowProvider();
-          const generation = typeof famData.generation === 'number' ? (famData.generation as number) : 1;
-          const grantVersion = typeof upData.grantVersion === 'number' ? (upData.grantVersion as number) : 1;
-
-          const rawAccessId = accessId || randomUUID();
-          const newAccessId = codec.id('session', rawAccessId);
-          const rawRefreshId = currentRefreshToken || (embeddedToken.refreshToken as string | undefined) || randomUUID();
-          const newRefreshId = codec.id('refresh', rawRefreshId);
-
-          const expiresAt = typeof accData?.expiresAt === 'number'
-            ? (accData.expiresAt as number)
-            : (typeof embeddedToken.expiresAt === 'number' ? (embeddedToken.expiresAt as number) : now + 3600_000);
-          const retainUntil = expiresAt + ACCESS_RETENTION_MS;
-
-          const serverBaseUrl = (embeddedToken.serverBaseUrl as string | undefined) ??
-            (accData?.serverBaseUrl as string | undefined) ??
-            (famData.serverBaseUrl as string | undefined);
-
-          const extra = (embeddedToken.extra as Record<string, string> | undefined) ??
-            (accData?.extra as Record<string, string> | undefined) ??
-            {};
-
-          const nsAccessToken = (grant.nsAccessToken ?? grant.access_token ?? embeddedToken.nsAccessToken ?? accData?.nsAccessToken) as string | undefined;
-          const nsRefreshToken = (grant.nsRefreshToken ?? grant.refresh_token ?? embeddedToken.nsRefreshToken ?? accData?.nsRefreshToken) as string | undefined;
-          const nsUsername = (grant.nsUsername ?? grant.username ?? embeddedToken.nsUsername ?? accData?.nsUsername) as string | undefined;
-          const nsUserRole = (grant.nsUserRole ?? grant.user_role ?? grant.userRole ?? embeddedToken.nsUserRole ?? accData?.nsUserRole) as string | undefined;
-          const nsApiUrl = (grant.nsApiUrl ?? grant.api_url ?? grant.apiUrl ?? embeddedToken.nsApiUrl ?? accData?.nsApiUrl) as string | undefined;
-
-          if (!nsAccessToken && !nsRefreshToken) {
-            throw new Error(`Cannot adopt PR56 family ${familyId}: upstream NetSapiens credentials missing`);
-          }
-          if (!nsUsername) {
-            throw new Error(`Cannot adopt PR56 family ${familyId}: NetSapiens username missing`);
-          }
-
-          const nsExpiresAt = typeof upData.expiresAt === 'number'
-            ? (upData.expiresAt as number)
-            : (typeof grant.expires_in === 'number'
-              ? now + (grant.expires_in as number) * 1000
-              : (typeof accData?.nsExpiresAt === 'number' ? (accData.nsExpiresAt as number) : (typeof embeddedToken.nsExpiresAt === 'number' ? (embeddedToken.nsExpiresAt as number) : undefined)));
-
-          const retiredFingerprints = Array.isArray(famData.retiredRefreshFingerprints)
-            ? (famData.retiredRefreshFingerprints as string[])
-            : [];
-
-          const familyRow: FamilyRow = {
-            id: familyId,
-            generation,
-            status: (famData.status === 'revoked' ? 'revoked' : 'active'),
-            activeRefreshId: newRefreshId,
-            currentAccessTokenId: newAccessId,
-            updatedAt: now,
-            sealed: codec.seal({
-              clientId,
-              serverBaseUrl,
-              extra,
-              retiredRefreshIds: retiredFingerprints,
-            }, familyAad({ id: familyId, generation })),
-          };
-
-          const upstreamRow: UpstreamGrantRow = {
-            id: familyId,
-            grantVersion,
-            nsExpiresAt,
-            updatedAt: now,
-            sealed: codec.seal({
-              nsAccessToken: nsAccessToken || '',
-              nsRefreshToken,
-              nsUsername,
-              nsUserRole,
-              nsApiUrl,
-            }, upstreamAad({ id: familyId, grantVersion })),
-          };
-
-          const accessRow: AccessRow = {
-            id: newAccessId,
-            familyId,
-            expiresAt,
-            retainUntil,
-            sealed: codec.seal({
+          for (const fp of retiredFingerprints) {
+            tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), {
               familyId,
-              clientId,
-              serverBaseUrl,
-              extra,
-            }, accessAad({ id: newAccessId, familyId })),
-          };
-
-          const refreshRow: RefreshPointerRow = {
-            id: newRefreshId,
-            familyId,
-            status: 'active',
-            generation,
-          };
-
-          let prevRefreshRow: RefreshPointerRow | undefined;
-          if (famData.previousRefreshToken && currentRefreshToken && rawAccessId) {
-            const prevRefreshId = codec.id('refresh', famData.previousRefreshToken as string);
-            const prevRefDoc = await tx.get(db.collection(legacyRefreshCol).doc(famData.previousRefreshToken as string));
-            const prevData = prevRefDoc.exists ? (prevRefDoc.data() as Record<string, unknown>) : null;
-            const consumedAt = typeof prevData?.consumedAt === 'number' ? (prevData.consumedAt as number) : now;
-
-            prevRefreshRow = {
-              id: prevRefreshId,
-              familyId,
-              status: 'consumed',
-              generation: Math.max(1, generation - 1),
-              consumedAt,
-              successorSealed: codec.seal({
-                accessToken: rawAccessId,
-                refreshToken: currentRefreshToken,
-              }, `successor:${prevRefreshId}`),
-            };
+              retiredAt: now,
+            });
           }
-
-          if (!dryRun) {
-            tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
-            tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
-            tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), defined({ ...refreshRow, v: 2 }));
-            tx.set(db.collection(v3Cols.sessions).doc(newAccessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
-            if (prevRefreshRow) {
-              tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
-            }
-            for (const fp of retiredFingerprints) {
-              tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), {
-                familyId,
-                retiredAt: now,
-              });
-            }
-          }
-          return 'migrated';
-        });
-
-        if (outcome === 'skipped') {
-          report.skipped++;
-        } else {
-          report.migrated++;
-          classifications.pr56Families++;
         }
-      } catch (err: unknown) {
-        report.errors++;
+        return 'migrated';
+      });
+
+      if (outcome === 'skipped') {
+        report.skipped++;
+      } else {
+        report.migrated++;
+        classifications.pr56Families++;
       }
+    } catch (err: unknown) {
+      report.errors++;
+      reasons.malformedRecords++;
     }
-  } catch (err: unknown) {
-    report.errors++;
   }
 
   // 2. Adopt unattached base-format token documents
-  try {
-    const tokensSnap = await db.collection(legacyTokensCol).get();
-    for (const tokDoc of tokensSnap.docs) {
-      report.scanned++;
-      const accessToken = tokDoc.id;
-      const accessId = codec.id('session', accessToken);
+  for (const tokDoc of tokensSnap.docs) {
+    report.scanned++;
+    const accessToken = tokDoc.id;
+    const tokData = tokDoc.data() as Record<string, unknown>;
+    const accessId = codec.id('session', accessToken);
 
-      try {
-        const outcome = await db.runTransaction(async (tx) => {
+    // If family-linked, verify family exists
+    if (tokData.refreshFamilyId) {
+      const famId = tokData.refreshFamilyId as string;
+      if (!familiesById.has(famId)) {
+        // Orphan family-linked token!
+        report.errors++;
+        reasons.orphanAccessTokens++;
+        continue;
+      }
+      // Family exists; handled in loop 1
+      report.skipped++;
+      continue;
+    }
+
+    try {
+      const outcome = await db.runTransaction(async (tx) => {
+        if (isControlled && initialControl && !dryRun) {
+          const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
+          if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
+            throw new CutoverFenceError(`Cutover state changed concurrently during token migration`);
+          }
+        }
+
+        const existingV3Access = await tx.get(db.collection(v3Cols.sessions).doc(accessId));
+        if (existingV3Access.exists) {
+          return 'skipped';
+        }
+
+        const legacyTokSnap = await tx.get(db.collection(legacyTokensCol).doc(accessToken));
+        if (!legacyTokSnap.exists) {
+          return 'skipped';
+        }
+        const data = legacyTokSnap.data();
+        if (!data || !data.refreshToken) {
+          return 'skipped';
+        }
+
+        const clientId = data.clientId as string | undefined;
+        if (!clientId) {
+          throw new Error(`Cannot adopt legacy token ${accessToken}: clientId is missing`);
+        }
+
+        const nsAccessToken = data.nsAccessToken as string | undefined;
+        const nsRefreshToken = data.nsRefreshToken as string | undefined;
+        const nsUsername = data.nsUsername as string | undefined;
+        if (!nsAccessToken && !nsRefreshToken) {
+          throw new Error(`Cannot adopt legacy token ${accessToken}: upstream tokens missing`);
+        }
+        if (!nsUsername) {
+          throw new Error(`Cannot adopt legacy token ${accessToken}: nsUsername is missing`);
+        }
+
+        const familyId = randomUUID();
+        const refreshId = codec.id('refresh', data.refreshToken as string);
+        const now = nowProvider();
+        const expiresAt = typeof data.expiresAt === 'number' ? (data.expiresAt as number) : now + 3600_000;
+        const retainUntil = expiresAt + ACCESS_RETENTION_MS;
+        const generation = 1;
+        const grantVersion = 1;
+
+        const accessRow: AccessRow = {
+          id: accessId,
+          familyId,
+          expiresAt,
+          retainUntil,
+          sealed: codec.seal({
+            familyId,
+            clientId,
+            serverBaseUrl: data.serverBaseUrl as string | undefined,
+            extra: (data.extra ?? (data.seatId ? { seatId: String(data.seatId) } : {})) as Record<string, string>,
+          }, accessAad({ id: accessId, familyId })),
+        };
+
+        const refreshRow: RefreshPointerRow = {
+          id: refreshId,
+          familyId,
+          status: 'active',
+          generation,
+        };
+
+        const familyRow: FamilyRow = {
+          id: familyId,
+          generation,
+          status: 'active',
+          activeRefreshId: refreshId,
+          currentAccessTokenId: accessId,
+          updatedAt: now,
+          sealed: codec.seal({
+            clientId,
+            serverBaseUrl: data.serverBaseUrl as string | undefined,
+            extra: (data.extra ?? (data.seatId ? { seatId: String(data.seatId) } : {})) as Record<string, string>,
+            retiredRefreshIds: [],
+          }, familyAad({ id: familyId, generation })),
+        };
+
+        const upstreamRow: UpstreamGrantRow = {
+          id: familyId,
+          grantVersion,
+          nsExpiresAt: typeof data.nsExpiresAt === 'number' ? (data.nsExpiresAt as number) : undefined,
+          updatedAt: now,
+          sealed: codec.seal({
+            nsAccessToken: nsAccessToken || '',
+            nsRefreshToken,
+            nsUsername,
+            nsUserRole: data.nsUserRole as string | undefined,
+            nsApiUrl: data.nsApiUrl as string | undefined,
+          }, upstreamAad({ id: familyId, grantVersion })),
+        };
+
+        if (!dryRun) {
           if (isControlled && initialControl) {
-            const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
-            if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
-              throw new CutoverFenceError(`Cutover state changed concurrently during token migration`);
-            }
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
           }
-
-          const existingV3Access = await tx.get(db.collection(v3Cols.sessions).doc(accessId));
-          if (existingV3Access.exists) {
-            return 'skipped';
-          }
-
-          const legacyTokSnap = await tx.get(db.collection(legacyTokensCol).doc(accessToken));
-          if (!legacyTokSnap.exists) {
-            return 'skipped';
-          }
-          const tokData = legacyTokSnap.data();
-          if (!tokData || !tokData.refreshToken) {
-            return 'skipped';
-          }
-          if (tokData.refreshFamilyId) {
-            return 'skipped';
-          }
-
-          const clientId = tokData.clientId as string | undefined;
-          if (!clientId) {
-            throw new Error(`Cannot adopt legacy token ${accessToken}: clientId is missing`);
-          }
-
-          const nsAccessToken = tokData.nsAccessToken as string | undefined;
-          const nsRefreshToken = tokData.nsRefreshToken as string | undefined;
-          if (!nsAccessToken && !nsRefreshToken) {
-            throw new Error(`Cannot adopt legacy token ${accessToken}: upstream tokens missing`);
-          }
-
-          const familyId = (tokData.refreshFamilyId as string) || randomUUID();
-          const refreshId = codec.id('refresh', tokData.refreshToken as string);
-          const now = nowProvider();
-          const expiresAt = typeof tokData.expiresAt === 'number' ? (tokData.expiresAt as number) : now + 3600_000;
-          const retainUntil = expiresAt + ACCESS_RETENTION_MS;
-          const generation = 1;
-          const grantVersion = 1;
-
-          const accessRow: AccessRow = {
-            id: accessId,
-            familyId,
-            expiresAt,
-            retainUntil,
-            sealed: codec.seal({
-              familyId,
-              clientId,
-              serverBaseUrl: tokData.serverBaseUrl as string | undefined,
-              extra: (tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {})) as Record<string, string>,
-            }, accessAad({ id: accessId, familyId })),
-          };
-
-          const refreshRow: RefreshPointerRow = {
-            id: refreshId,
-            familyId,
-            status: 'active',
-            generation,
-          };
-
-          const familyRow: FamilyRow = {
-            id: familyId,
-            generation,
-            status: 'active',
-            activeRefreshId: refreshId,
-            currentAccessTokenId: accessId,
-            updatedAt: now,
-            sealed: codec.seal({
-              clientId,
-              serverBaseUrl: tokData.serverBaseUrl as string | undefined,
-              extra: (tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {})) as Record<string, string>,
-              retiredRefreshIds: [],
-            }, familyAad({ id: familyId, generation })),
-          };
-
-          const upstreamRow: UpstreamGrantRow = {
-            id: familyId,
-            grantVersion,
-            nsExpiresAt: typeof tokData.nsExpiresAt === 'number' ? (tokData.nsExpiresAt as number) : undefined,
-            updatedAt: now,
-            sealed: codec.seal({
-              nsAccessToken: nsAccessToken || '',
-              nsRefreshToken,
-              nsUsername: (tokData.nsUsername ?? '') as string,
-              nsUserRole: tokData.nsUserRole as string | undefined,
-              nsApiUrl: tokData.nsApiUrl as string | undefined,
-            }, upstreamAad({ id: familyId, grantVersion })),
-          };
-
-          if (!dryRun) {
-            tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
-            tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
-            tx.set(db.collection(v3Cols.refreshTokens).doc(refreshId), defined({ ...refreshRow, v: 2 }));
-            tx.set(db.collection(v3Cols.sessions).doc(accessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
-          }
-          return 'migrated';
-        });
-
-        if (outcome === 'skipped') {
-          report.skipped++;
-        } else {
-          report.migrated++;
-          classifications.baseFormatTokens++;
+          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({ ...familyRow, v: 2 }));
+          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({ ...upstreamRow, v: 2 }));
+          tx.set(db.collection(v3Cols.refreshTokens).doc(refreshId), defined({ ...refreshRow, v: 2 }));
+          tx.set(db.collection(v3Cols.sessions).doc(accessId), defined({ ...accessRow, v: 2, ttlAt: new Date(retainUntil) }));
         }
-      } catch (err: unknown) {
-        report.errors++;
+        return 'migrated';
+      });
+
+      if (outcome === 'skipped') {
+        report.skipped++;
+      } else {
+        report.migrated++;
+        classifications.baseFormatTokens++;
       }
+    } catch (err: unknown) {
+      report.errors++;
+      reasons.malformedRecords++;
     }
-  } catch (err: unknown) {
-    report.errors++;
   }
 
   // 3. Convert legacy authorization codes
-  try {
-    const authCodesSnap = await db.collection(legacyAuthCodesCol).get().catch(() => null);
-    if (authCodesSnap && !authCodesSnap.empty) {
-      for (const codeDoc of authCodesSnap.docs) {
-        const rawCode = codeDoc.id;
-        const codeData = codeDoc.data();
-        if (!codeData) continue;
+  if (authCodesSnap.docs.length > 0) {
+    for (const codeDoc of authCodesSnap.docs) {
+      const rawCode = codeDoc.id;
+      const codeData = codeDoc.data() as Record<string, unknown>;
+      if (!codeData) continue;
 
-        const expiresAt = typeof codeData.expiresAt === 'number'
-          ? (codeData.expiresAt as number)
-          : (typeof codeData.expires_at === 'number' ? (codeData.expires_at as number) : 0);
+      const expiresAt = typeof codeData.expiresAt === 'number'
+        ? (codeData.expiresAt as number)
+        : (typeof codeData.expires_at === 'number' ? (codeData.expires_at as number) : 0);
 
-        if (expiresAt > nowProvider()) {
-          try {
-            await db.runTransaction(async (tx) => {
-              const hmacId = codec.id('code', rawCode);
-              const payload = {
-                pending: {
-                  clientId: codeData.clientId ?? codeData.client_id,
-                  codeChallenge: codeData.codeChallenge ?? codeData.code_challenge,
-                  redirectUri: codeData.redirectUri ?? codeData.redirect_uri,
-                  createdAt: codeData.createdAt ?? codeData.created_at ?? nowProvider(),
-                },
-                nsTokens: codeData.nsTokens ?? { access_token: codeData.nsAccessToken ?? '' },
-                extra: codeData.extra,
-                serverBaseUrl: codeData.serverBaseUrl,
-              };
-
-              if (!dryRun) {
-                tx.set(db.collection(v3Cols.authCodes).doc(hmacId), {
-                  id: hmacId,
-                  expiresAt,
-                  sealed: codec.seal(payload, `code:${hmacId}`),
-                  v: 2,
-                  ttlAt: new Date(expiresAt),
-                });
-                tx.delete(db.collection(legacyAuthCodesCol).doc(rawCode));
+      if (expiresAt > nowProvider()) {
+        try {
+          await db.runTransaction(async (tx) => {
+            if (isControlled && initialControl && !dryRun) {
+              const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
+              if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
+                throw new CutoverFenceError(`Cutover state changed concurrently during auth code migration`);
               }
-            });
-            classifications.authCodes++;
-          } catch {
-            report.errors++;
-          }
+            }
+
+            const hmacId = codec.id('code', rawCode);
+            const targetCodeSnap = await tx.get(db.collection(v3Cols.authCodes).doc(hmacId));
+            if (targetCodeSnap.exists) return;
+
+            const payload = {
+              pending: {
+                clientId: (codeData.clientId ?? codeData.client_id) as string,
+                codeChallenge: (codeData.codeChallenge ?? codeData.code_challenge) as string,
+                redirectUri: (codeData.redirectUri ?? codeData.redirect_uri) as string,
+                createdAt: (codeData.createdAt ?? codeData.created_at ?? nowProvider()) as number,
+              },
+              nsTokens: codeData.nsTokens ?? { access_token: (codeData.nsAccessToken as string) || '' },
+              extra: codeData.extra as Record<string, string> | undefined,
+              serverBaseUrl: codeData.serverBaseUrl as string | undefined,
+            };
+
+            if (!dryRun) {
+              if (isControlled && initialControl) {
+                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+              }
+              tx.set(db.collection(v3Cols.authCodes).doc(hmacId), {
+                id: hmacId,
+                expiresAt,
+                sealed: codec.seal(payload, `code:${hmacId}`),
+                v: 2,
+                ttlAt: new Date(expiresAt),
+              });
+              tx.delete(db.collection(legacyAuthCodesCol).doc(rawCode));
+            }
+          });
+          classifications.authCodes++;
+        } catch {
+          report.errors++;
+          reasons.malformedRecords++;
         }
       }
     }
-  } catch {
-    // Non-fatal if auth_codes collection not present
   }
 
   // 4. Retain resume tokens
-  try {
-    const resumeSnap = await db.collection(legacyResumeCol).get().catch(() => null);
-    if (resumeSnap && !resumeSnap.empty) {
-      for (const rDoc of resumeSnap.docs) {
-        const rData = rDoc.data();
-        if (!rData) continue;
-        const expiresAt = typeof rData.expiresAt === 'number' ? (rData.expiresAt as number) : 0;
-        if (expiresAt > nowProvider()) {
-          try {
-            await db.runTransaction(async (tx) => {
-              if (!dryRun) {
-                tx.set(db.collection(v3Cols.resumeTokens).doc(rDoc.id), {
-                  id: rDoc.id,
-                  consumedAt: rData.consumedAt ?? nowProvider(),
-                  expiresAt,
-                  v: 2,
-                  ttlAt: new Date(expiresAt),
-                });
+  if (resumeSnap.docs.length > 0) {
+    for (const rDoc of resumeSnap.docs) {
+      const rData = rDoc.data() as Record<string, unknown>;
+      if (!rData) continue;
+      const expiresAt = typeof rData.expiresAt === 'number' ? (rData.expiresAt as number) : 0;
+      if (expiresAt > nowProvider()) {
+        try {
+          await db.runTransaction(async (tx) => {
+            if (isControlled && initialControl && !dryRun) {
+              const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
+              if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
+                throw new CutoverFenceError(`Cutover state changed concurrently during resume token migration`);
               }
-            });
-            classifications.resumeTokens++;
-          } catch {
-            report.errors++;
-          }
+            }
+
+            const targetResumeSnap = await tx.get(db.collection(v3Cols.resumeTokens).doc(rDoc.id));
+            if (targetResumeSnap.exists) return;
+
+            if (!dryRun) {
+              if (isControlled && initialControl) {
+                await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, nowProvider);
+              }
+              tx.set(db.collection(v3Cols.resumeTokens).doc(rDoc.id), {
+                id: rDoc.id,
+                consumedAt: (rData.consumedAt as number) ?? nowProvider(),
+                expiresAt,
+                v: 2,
+                ttlAt: new Date(expiresAt),
+              });
+            }
+          });
+          classifications.resumeTokens++;
+        } catch {
+          report.errors++;
         }
       }
     }
-  } catch {
-    // Non-fatal if resume_tokens collection not present
   }
 
-  // 5. Compute manifest & finalize
+  // 5. Compute keyed inventory digests (Finding 5)
+  const sourceIds = [
+    ...familiesSnap.docs.map(d => codec.id('family', d.id)),
+    ...tokensSnap.docs.map(d => codec.id('session', d.id)),
+  ].sort();
+  const sourceInventoryDigest = createHash('sha256').update(sourceIds.join('\n')).digest('hex');
+
+  const targetIds = [
+    ...familiesSnap.docs.map(d => codec.id('family', d.id)),
+  ].sort();
+  const targetInventoryDigest = createHash('sha256').update(targetIds.join('\n')).digest('hex');
+
   const manifest: MigrationManifest = {
     schemaVersion: 1,
     runId,
     epoch: currentEpoch,
     namespace,
+    physicalCounts,
+    classifications,
+    reasons,
+    digests: {
+      sourceInventoryDigest,
+      targetInventoryDigest,
+    },
     scanned: report.scanned,
     migrated: report.migrated,
     skipped: report.skipped,
     errors: report.errors,
-    classifications,
     completedAt: nowProvider(),
   };
 
   const manifestJson = JSON.stringify(manifest);
   const manifestDigest = createHash('sha256').update(manifestJson).digest('hex');
 
+  // If dryRun, do NOT write manifest, marker, or transition state
   if (!dryRun && report.errors === 0) {
-    // Store migration manifest
-    await db.collection(`${namespace}_meta`).doc(`migration_manifest_${currentEpoch}`).set(manifest as unknown as Record<string, unknown>);
+    await db.runTransaction(async (tx) => {
+      // Read control record first
+      if (isControlled && initialControl) {
+        const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
+        if (ctrl.epoch !== currentEpoch || ctrl.state !== 'migrating') {
+          throw new CutoverFenceError(`Cannot finalize migration: state is ${ctrl.state}; expected migrating`);
+        }
+      }
 
-    // Store v2_adopted marker
-    await db.collection(`${namespace}_meta`).doc('v2_adopted').set({
-      adoptedAt: nowProvider(),
-      runId,
-      epoch: currentEpoch,
-      manifestDigest,
-      ...report,
+      // Write migration manifest
+      tx.set(
+        db.collection(`${namespace}_meta`).doc(`migration_manifest_${currentEpoch}`),
+        manifest as unknown as Record<string, unknown>,
+      );
+
+      // Write v2_adopted marker
+      tx.set(
+        db.collection(`${namespace}_meta`).doc('v2_adopted'),
+        {
+          adoptedAt: nowProvider(),
+          runId,
+          epoch: currentEpoch,
+          manifestDigest,
+          ...report,
+        },
+      );
+
+      // Transition to v3_ready
+      if (isControlled && initialControl) {
+        const ctrlRef = getCutoverFenceDocRef(db, namespace);
+        tx.set(
+          ctrlRef,
+          {
+            state: 'v3_ready',
+            migrationRunId: runId,
+            migrationManifestDigest: manifestDigest,
+            updatedAt: nowProvider(),
+            migratedAt: nowProvider(),
+          },
+          { merge: true },
+        );
+      }
     });
-
-    // Advance fence state to v3_ready
-    if (isControlled && initialControl) {
-      await transitionCutoverFenceState(db, namespace, {
-        fromState: 'migrating',
-        toState: 'v3_ready',
-        expectedEpoch: currentEpoch,
-        migrationRunId: runId,
-        migrationManifestDigest: manifestDigest,
-        now: nowProvider,
-      });
-    }
   }
 
   return report;
@@ -609,7 +785,6 @@ export async function ensureFirestoreAdopted(options: {
   const snap = await markerDoc.get();
   if (snap.exists) return;
 
-  // Read without swallowing errors: network or permission failure MUST fail closed
   const legacyFamiliesSnap = await db.collection(`${namespace}_tokens_refresh_families`).get();
   const legacyTokensSnap = await db.collection(`${namespace}_tokens`).get();
 
