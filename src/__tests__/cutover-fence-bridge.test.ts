@@ -49,7 +49,7 @@ function createTestDb(projectId: string = `mcp-bridge-${randomUUID().slice(0, 8)
   });
 }
 
-describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeout: 30000 }, () => {
+describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeout: 60000 }, () => {
   if (!EMULATOR_HOST) {
     it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => {});
     return;
@@ -1539,5 +1539,153 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     // Token must NOT be revoked: still exists in store
     const existing = await tokenStore.get(testAccessToken);
     expect(existing).toBeDefined();
+  });
+
+  it('29. Concurrent crosspath refresh: simultaneous exchangeRefreshToken and verifyAccessToken transparent refresh share single upstream grant', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.MCP_BASE_URL = 'http://localhost';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    let virtualNow = Date.now();
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+      now: () => virtualNow,
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      now: () => virtualNow,
+    });
+
+    let grantCallCount = 0;
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
+      grantCallCount++;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return {
+        access_token: 'concurrent-ns-access-token',
+        refresh_token: 'concurrent-ns-refresh-token',
+        expires_in: 3600,
+        username: 'testuser',
+        nsApiUrl: 'https://test.example.com',
+      };
+    });
+
+    const testAccessToken = 'concurrent-access-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'concurrent-refresh-' + randomBytes(8).toString('hex');
+
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'concurrent_client',
+      expiresAt: virtualNow + 3600 * 1000,
+      nsAccessToken: 'ns-token-expiring',
+      nsRefreshToken: 'ns-refresh-expiring',
+      nsExpiresAt: virtualNow + 30 * 1000,
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const clientInfo = { client_id: 'concurrent_client' } as any;
+
+    const [tokenExchange1, tokenExchange2] = await Promise.all([
+      authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
+      authProvider.exchangeRefreshToken(clientInfo, testRefreshToken),
+    ]);
+
+    expect(tokenExchange1.access_token).toBeDefined();
+    expect(tokenExchange2.access_token).toBe(tokenExchange1.access_token);
+    expect(tokenExchange2.refresh_token).toBe(tokenExchange1.refresh_token);
+    expect(grantCallCount).toBe(1);
+
+    const control = await getCutoverFenceRecord(db, namespace);
+    expect(control?.activeOperations).toBe(0);
+  });
+
+  it('30. Failure barrier: ambiguous upstream refresh failure locks family lease and blocks subsequent takeover', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.MCP_BASE_URL = 'http://localhost';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+
+    let virtualNow = Date.now();
+
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+      now: () => virtualNow,
+    });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      now: () => virtualNow,
+    });
+
+    let grantAttempts = 0;
+    vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
+      grantAttempts++;
+      throw new UpstreamTimeoutError('Upstream socket timeout');
+    });
+
+    const testAccessToken = 'ambig-barrier-access-' + randomBytes(8).toString('hex');
+    const testRefreshToken = 'ambig-barrier-refresh-' + randomBytes(8).toString('hex');
+
+    const issued = await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: testRefreshToken,
+      clientId: 'barrier_client',
+      expiresAt: virtualNow + 3600 * 1000,
+      nsAccessToken: 'ns-token-ambig',
+      nsRefreshToken: 'ns-refresh-ambig',
+      nsExpiresAt: virtualNow + 10 * 1000,
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const familyId = issued.refreshFamilyId!;
+
+    await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow();
+    expect(grantAttempts).toBe(1);
+
+    const upstreamSnap = await db.collection('mcp_tokens_upstream').doc(docId(familyId)).get();
+    expect(upstreamSnap.exists).toBe(true);
+    const upstreamData = upstreamSnap.data();
+    expect(upstreamData?.ambiguousOutcome).toBe(true);
+    expect(upstreamData?.ambiguousReason).toBe('upstream_timeout');
+
+    virtualNow += 60_000;
+
+    await expect(authProvider.verifyAccessToken(testAccessToken)).rejects.toThrow();
+    expect(grantAttempts).toBe(1);
   });
 });

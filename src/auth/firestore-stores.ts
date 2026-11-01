@@ -378,18 +378,52 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       async (opCtx) => this.refreshNsToken(accessToken, doRefresh, { ...opts, operation: opCtx }),
     );
   }
-  const docRef = this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
-  const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
-  const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
-  const LEASE_DURATION_MS = opts?.leaseDurationMs ?? 15_000;
-  const startTime = Date.now();
-  const NS_REFRESH_SKEW_MS = 60_000;
 
-  while (Date.now() - startTime < MAX_WAIT_MS) {
-   let shouldRefresh = false;
-   let tokenToRefresh: StoredToken | undefined;
-   let currentLeaseOwner: string | undefined;
-   await this.rawDb.runTransaction(async (transaction) => {
+  const stored = await this.getByAccessToken(accessToken, { operation: op });
+  if (!stored) {
+    throw new Error('Token document not found');
+  }
+  const familyId = stored.refreshFamilyId;
+  if (!familyId) {
+    throw new Error('Token document missing refreshFamilyId');
+  }
+
+  let upstreamGrant: NsUpstreamGrant;
+  try {
+    upstreamGrant = await this.upstreamStore.ensureFresh(
+      familyId,
+      async (currentGrant: NsUpstreamGrant) => {
+        const refreshed = await doRefresh(stored);
+        return {
+          grant: {
+            nsAccessToken: refreshed.access_token,
+            nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+            nsExpiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+            nsUsername: stored.nsUsername,
+            nsUserRole: stored.nsUserRole,
+            nsApiUrl: stored.nsApiUrl,
+          },
+          expiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+        };
+      },
+      {
+        operation: op,
+        now: this.localNow(),
+        leaseMs: opts?.leaseDurationMs ?? 30_000,
+        waitMs: opts?.maxWaitMs ?? 15_000,
+        pollIntervalMs: opts?.pollIntervalMs ?? 150,
+        completeOperation: false,
+      },
+    );
+  } catch (err) {
+    if (err instanceof Error && (err.message.includes('Lease owner changed') || err.message.includes('lease expired') || err instanceof LeaseLostError)) {
+      throw new LeaseLostError(err.message);
+    }
+    throw err;
+  }
+
+  const accessRef = this.accessDocRef(accessToken);
+  return await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
@@ -398,189 +432,24 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         namespace: fence.namespace,
         operation: op,
         now: this.localNow,
-        completeOperation: false,
+        completeOperation: true,
       });
     }
-    const snap = await transaction.get(docRef);
+    const snap = await transaction.get(accessRef);
     if (!snap.exists) {
-     throw new Error('Token document not found');
-    }
-    const data = snap.data() as StoredToken & { refreshLockUntil?: number; refreshLockOwner?: string };
-    const convertedDate = toDate(data.ttlAt);
-    if (convertedDate) {
-     data.ttlAt = convertedDate;
-    }
-        const now = this.localNow();
-    if (data.ambiguousRemoteOutcome) {
-     throw new UpstreamUnavailableError('Cannot refresh: prior remote grant outcome is ambiguous and pending reconciliation');
-    }
-    const isExpiring = data.nsExpiresAt && now > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
-    if (!isExpiring) {
-     tokenToRefresh = data;
-     shouldRefresh = false;
-     return;
-    }
-
-    if (data.refreshLockUntil && data.refreshLockUntil > now && data.refreshLockOwner) {
-     shouldRefresh = false;
-     return;
-    }
-
-    shouldRefresh = true;
-    tokenToRefresh = data;
-    currentLeaseOwner = randomUUID();
-    transaction.update(docRef, {
-     refreshLockUntil: now + LEASE_DURATION_MS,
-     refreshLockOwner: currentLeaseOwner,
-    });
-   });
-
-   if (!shouldRefresh) {
-        if (tokenToRefresh && (!tokenToRefresh.nsExpiresAt || this.localNow() <= tokenToRefresh.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
-     return tokenToRefresh;
-    }
-    await delay(POLL_INTERVAL_MS);
-    continue;
-   }
-
-   try {
-    const refreshed = await doRefresh(tokenToRefresh!);
-    const updatedNsExpiresAt = refreshed.expires_in
-          ? this.localNow() + refreshed.expires_in * 1000
-     : undefined;
-    const newRefreshToken = refreshed.refresh_token ?? tokenToRefresh!.nsRefreshToken;
-    let resultToken: StoredToken | undefined;
-        await this.rawDb.runTransaction(async (transaction) => {
-     let guard: GuardMutationResult | undefined;
-     const fence = this.fenceConfig;
-     if (fence && fence.enforce) {
-       guard = await checkMutationGuardInTransaction(transaction, {
-         db: this.rawDb,
-         namespace: fence.namespace,
-         operation: opts?.operation,
-         now: this.localNow,
-         completeOperation: true,
-       });
-     }
-     const snap = await transaction.get(docRef);
-     if (!snap.exists) {
       throw new Error('Token document was deleted/revoked during refresh');
-     }
-          const current = snap.data() as StoredToken & { refreshLockOwner?: string; refreshLockUntil?: number };
-          const now = this.localNow();
-     if (current.refreshLockOwner !== currentLeaseOwner) {
-      logger.warn('Refresh lease expired or owned by another instance, aborting late completion', {
-       expectedOwner: currentLeaseOwner,
-       actualOwner: current.refreshLockOwner,
-      });
-      throw new LeaseLostError('Refresh lease expired or owned by another instance');
-          }
-          if (current.refreshLockUntil && current.refreshLockUntil < now) {
-            throw new LeaseLostError('Refresh lease expired before refresh completed');
-     }
-     const updated: StoredToken = {
+    }
+    const current = snap.data() as StoredToken;
+    const updated: StoredToken = {
       ...current,
-      nsAccessToken: refreshed.access_token,
-      nsRefreshToken: newRefreshToken,
-      nsExpiresAt: updatedNsExpiresAt,
-     };
-     delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
-     delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
-     delete (updated as unknown as Record<string, unknown>).refreshLockOwner;
-     delete (updated as unknown as Record<string, unknown>).ambiguousRemoteOutcome;
-     guard?.bufferCompletion(now);
-     transaction.set(docRef, cleanDoc(updated));
-     if (updated.refreshFamilyId) {
-       const upstreamRef = this.upstreamDocRef(updated.refreshFamilyId);
-       transaction.set(
-         upstreamRef,
-         stripUndefined({
-           grant: {
-             nsAccessToken: refreshed.access_token,
-             nsRefreshToken: newRefreshToken,
-             nsExpiresAt: updatedNsExpiresAt,
-             nsUsername: updated.nsUsername,
-             nsUserRole: updated.nsUserRole,
-             nsApiUrl: updated.nsApiUrl,
-           },
-           expiresAt: updatedNsExpiresAt,
-           leaseUntil: null,
-           leaseOwner: null,
-           updatedAt: now,
-         }),
-         { merge: true },
-       );
-     }
-     resultToken = updated;
-    });
-
-    return resultToken!;
-   } catch (err) {
-    const isTimeout =
-      err instanceof UpstreamTimeoutError ||
-      (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
-      (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
-      (err instanceof Error && err.message.toLowerCase().includes('timeout'));
-
-    const isDefinitive =
-      err instanceof UpstreamGrantRejectedError ||
-      err instanceof UpstreamRevokedError ||
-      kitCodeOf(err) === 'upstream_revoked';
-
-    if (isDefinitive) {
-      if (currentLeaseOwner) {
-        await this.rawDb.runTransaction(async (transaction) => {
-          const snap = await transaction.get(docRef);
-          if (snap.exists) {
-            const current = snap.data() as StoredToken & { refreshLockOwner?: string };
-            if (current.refreshLockOwner === currentLeaseOwner) {
-              transaction.update(docRef, {
-                refreshLockUntil: null,
-                refreshLockOwner: null,
-              });
-            }
-          }
-        }).catch(() => {});
-      }
-      throw err;
-    }
-
-    const reasonCode: AmbiguousGrantReasonCode = isTimeout ? 'upstream_timeout' : 'upstream_transport_error';
-    if (opts?.operation) {
-      opts.operation.markAmbiguousRemoteOutcome(reasonCode);
-    }
-    await this.rawDb.runTransaction(async (transaction) => {
-      const snap = await transaction.get(docRef);
-      if (snap.exists) {
-        const current = snap.data() as StoredToken;
-        transaction.set(docRef, { ambiguousRemoteOutcome: true }, { merge: true });
-        if (current.refreshFamilyId) {
-          transaction.set(
-            this.upstreamDocRef(current.refreshFamilyId),
-            {
-              ambiguousOutcome: true,
-              ambiguousReason: reasonCode,
-              ambiguousAt: this.localNow(),
-              ambiguousOperationId: opts?.operation?.id,
-            },
-            { merge: true },
-          );
-        }
-      }
-    }).catch(() => {});
-    throw err;
-   }
-  }
-
-  const snap = await docRef.get();
-  if (snap.exists) {
-   const data = snap.data() as StoredToken;
-      const isExpiring = data.nsExpiresAt && this.localNow() > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
-   if (!isExpiring) {
-    return data;
-   }
-  }
-  throw new RetryableRefreshError('Timed out waiting for upstream token refresh');
+      nsAccessToken: upstreamGrant.nsAccessToken,
+      nsRefreshToken: upstreamGrant.nsRefreshToken ?? current.nsRefreshToken,
+      nsExpiresAt: upstreamGrant.nsExpiresAt,
+    };
+    guard?.bufferCompletion(this.localNow());
+    transaction.set(accessRef, cleanDoc(updated));
+    return updated;
+  });
  }
 
  async delete(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {

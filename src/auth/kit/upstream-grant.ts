@@ -348,8 +348,12 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamRevokedError('Grant document deleted while awaiting refresh');
         }
         const checkData = checkSnap.data() as StoredUpstreamRecord<G>;
-        const refreshedCommitted =
-          !checkData.leaseUntil || (checkData.expiresAt && checkData.expiresAt - skewMs > Date.now());
+        if (checkData.ambiguousOutcome) {
+          throw new UpstreamUnavailableError(
+            `Upstream grant for family ${familyId} has an unresolved ambiguous outcome: ${checkData.ambiguousReason ?? 'pending reconciliation'}`,
+          );
+        }
+        const refreshedCommitted = !checkData.leaseUntil;
         if (refreshedCommitted) {
           return checkData.grant;
         }
@@ -457,7 +461,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       const snap = await docRef.get();
       if (snap.exists) {
         const data = snap.data() as StoredUpstreamRecord<G>;
-        if (data.expiresAt && data.expiresAt > now) {
+        if (!data.ambiguousOutcome && data.expiresAt && data.expiresAt > now) {
           return data.grant;
         }
       }

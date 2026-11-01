@@ -912,6 +912,11 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    // This callback runs only after provider 1's acquisition transaction commits.
    // Make takeover eligible without waiting for wall-clock expiry.
    await tokenRef.update({ refreshLockUntil: 0 });
+   const tokenSnap = await tokenRef.get();
+   const familyId = tokenSnap.data()?.refreshFamilyId;
+   if (familyId) {
+     await store1WithDb.db.collection(`${collection}_upstream`).doc(familyId).set({ leaseUntil: 0 }, { merge: true });
+   }
 
    // Complete the real second-instance refresh before provider 1 returns.
    await store2.refreshNsToken(bearerToken, newerGrant);

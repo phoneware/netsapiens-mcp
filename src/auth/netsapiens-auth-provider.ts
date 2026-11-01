@@ -1358,10 +1358,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError('Invalid refresh token');
      }
      if (expectedClientId && stored.clientId !== expectedClientId) {
-      logger.warn('Refresh token client mismatch', {
-       expected: expectedClientId,
-       actual: stored.clientId,
-      });
+      logger.warn('Refresh token client mismatch');
       throw new InvalidGrantError('Invalid refresh token');
      }
     }
@@ -1445,9 +1442,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       throw toTokenEndpointError(err);
      }
     } else {
-     logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
-      username: stored.nsUsername,
-     });
+     logger.warn('MCP refresh attempted but no upstream NS refresh token on file');
      throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
     }
 
@@ -1504,10 +1499,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      throw rotErr;
     }
 
-    logger.info('MCP bearer refreshed via refresh_token', {
-     username: stored.nsUsername,
-     clientId: stored.clientId,
-    });
+    logger.info('MCP bearer refreshed via refresh_token');
 
     return {
      access_token: newAccess,
@@ -1550,8 +1542,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.nowProvider() > stored.expiresAt) {
    const ageMs = this.nowProvider() - stored.expiresAt;
    logger.info('MCP bearer expired: client should refresh', {
-    username: stored.nsUsername,
-    clientId: stored.clientId,
     ageSec: Math.round(ageMs / 1000),
     hadRefreshToken: !!stored.refreshToken,
    });
@@ -1868,10 +1858,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const status = err.response?.status;
    const data = err.response?.data;
    logger.warn('NS password grant failed', {
-    tokenUrl,
-    username,
     status,
-    nsResponse: data,
    });
    const nsMessage = (typeof data === 'object' && data)
     ? (data.error_description || data.error || data.message)
@@ -1911,10 +1898,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const status = err.response?.status;
    const data = err.response?.data;
    logger.warn('NS MFA grant failed', {
-    tokenUrl,
-    username: challenge.username,
     status,
-    nsResponse: data,
    });
    const nsMessage = (typeof data === 'object' && data)
     ? (data.error_description || data.error || data.message)
