@@ -459,11 +459,6 @@ function wireApp(
        };
       }
 
-      res.once('close', () => {
-       setImmediate(() => {
-        markHandlerSettled();
-       });
-      });
 
       requestOperationContext.run(opCtx, () => {
        next();

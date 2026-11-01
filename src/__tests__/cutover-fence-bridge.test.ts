@@ -19,6 +19,7 @@ import {
   markIrreversibleInTransaction,
   transitionCutoverFenceState,
   withLegacyOperation,
+  requestOperationContext,
 } from '../auth/kit/cutover-fence.js';
 import {
   FirestoreTokenStore,
@@ -29,6 +30,7 @@ import {
   NetSapiensAuthProvider,
   UpstreamGrantRejectedError,
   UpstreamTimeoutError,
+  signValue,
 } from '../auth/netsapiens-auth-provider.js';
 import {
   InvalidGrantError,
@@ -2047,11 +2049,20 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const server = app.listen(0);
     const port = (server.address() as any).port;
     const controller = new AbortController();
+    const pending = {
+      clientId: 'test_client_id',
+      redirectUri: 'http://localhost/callback',
+      codeChallenge: 'challenge',
+      codeChallengeMethod: 'S256',
+      scope: 'openid',
+      state: 'test-oauth-state',
+    };
+    const signedState = signValue(pending, 600);
 
     const fetchPromise = fetch(`http://127.0.0.1:${port}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'realuser', password: 'realpassword' }),
+      body: JSON.stringify({ username: 'realuser', password: 'realpassword', auth_state: signedState }),
       signal: controller.signal,
     }).catch(() => {});
 
@@ -2088,36 +2099,66 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
 
-    await withLegacyOperation(
-      { db, namespace, kind: 'lifecycle_proof', now: Date.now },
-      async (op) => {
-        let active = 1;
-        let closed = false;
-        op.enterWriter = () => {
-          if (closed) throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
-          active++;
-        };
-        op.exitWriter = () => {
-          active--;
-          if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
-        };
-        op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
-          op.enterWriter();
-          try {
-            return await fn();
-          } finally {
-            op.exitWriter();
-          }
-        };
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
 
-        const nestedResult = await op.trackWriter(async () => 'nested_success');
-        expect(nestedResult).toBe('nested_success');
-
-        closed = true;
-        active--;
-        await expect(op.trackWriter(async () => 'late_write')).rejects.toThrow(CutoverFenceError);
+    let capturedOpCtx: any;
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      hooks: {
+        onVerify: async () => {
+          capturedOpCtx = requestOperationContext.getStore();
+        },
       },
-    );
+    });
+
+    const testAccessToken = 'test-token-lifecycle-' + randomBytes(8).toString('hex');
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: 'test-ref-lifecycle',
+      clientId: 'lifecycle_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-token',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    const res = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'ping' });
+
+    expect(res.status).toBe(200);
+    expect(capturedOpCtx).toBeDefined();
+
+    let activeOps = 1;
+    for (let i = 0; i < 30; i++) {
+      const c = await getCutoverFenceRecord(db, namespace);
+      if (c?.activeOperations === 0) {
+        activeOps = 0;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(activeOps).toBe(0);
+
+    await expect(
+      capturedOpCtx.trackWriter(async () => 'late_write'),
+    ).rejects.toThrow(CutoverFenceError);
   });
 
   it('35. Direct upstream put, delete, and definitive transactions are tracked via op.trackWriter, and reconcile unconditionally refuses', async () => {
@@ -2166,41 +2207,62 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(control?.activeOperations).toBe(0);
   });
 
-  it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow on op context', async () => {
+  it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow on real admission op context', async () => {
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
 
-    await withLegacyOperation(
-      { db, namespace, kind: 'lifecycle_underflow', now: Date.now },
-      async (op) => {
-        let active = 1;
-        op.enterWriter = () => { active++; };
-        op.exitWriter = () => {
-          active--;
-          if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
-        };
-        op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
-          op.enterWriter();
-          try {
-            return await fn();
-          } finally {
-            op.exitWriter();
-          }
-        };
+    const tokenStore = new FirestoreTokenStore({
+      db,
+      collection: 'mcp_tokens',
+      fence: { namespace, enforce: true },
+    });
 
-        await expect(
-          op.trackWriter(async () => {
-            throw new Error('Thunk error');
-          }),
-        ).rejects.toThrow('Thunk error');
-        expect(active).toBe(1);
-
-        op.exitWriter();
-        expect(active).toBe(0);
-
-        expect(() => op.exitWriter()).toThrow(CutoverFenceError);
+    let capturedOpCtx: any;
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      tokenStore,
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      serverBaseUrl: 'http://localhost',
+      hooks: {
+        onVerify: async () => {
+          capturedOpCtx = requestOperationContext.getStore();
+          await expect(
+            capturedOpCtx.trackWriter(async () => {
+              throw new Error('Real thunk error');
+            }),
+          ).rejects.toThrow('Real thunk error');
+        },
       },
-    );
+    });
+
+    const testAccessToken = 'test-token-underflow-' + randomBytes(8).toString('hex');
+    await tokenStore.issue({
+      accessToken: testAccessToken,
+      refreshToken: 'test-ref-underflow',
+      clientId: 'underflow_client',
+      expiresAt: Date.now() + 3600 * 1000,
+      nsAccessToken: 'ns-token',
+      nsUsername: 'testuser',
+      nsApiUrl: 'https://test.example.com',
+      serverBaseUrl: 'http://localhost',
+    });
+
+    const { app } = createApp(authProvider);
+
+    const res = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'ping' });
+
+    expect(res.status).toBe(200);
+    expect(capturedOpCtx).toBeDefined();
+
+    expect(() => capturedOpCtx.exitWriter()).toThrow(CutoverFenceError);
   });
 });
