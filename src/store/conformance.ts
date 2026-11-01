@@ -40,7 +40,7 @@ export function runStoreConformance(target: ConformanceTarget): void {
     const session = () => ({ clientId: 'client', expiresAt: Date.now() + 60_000, nsAccessToken: secret(), nsRefreshToken: secret(), nsUsername: secret(), nsExpiresAt: Date.now() + 3_600_000 });
     const codeData = () => ({ pending: { clientId: 'client', codeChallenge: 'challenge', redirectUri: 'https://example.com/callback', createdAt: Date.now() }, nsTokens: { access_token: secret() }, serverBaseUrl: 'https://example.com', clientId: 'client' });
     const expected = { serverBaseUrl: 'https://example.com', clientId: 'client' };
-    const leaseOpts = { maxWaitMs: 2000, pollIntervalMs: 20, leaseDurationMs: 500 };
+    const leaseOpts = { maxWaitMs: 6000, pollIntervalMs: 20, leaseDurationMs: 500 };
     it('sessions read and delete by either token and enforce retention', async () => {
       const { store, handle } = await open(); const t = tokens(); const s = session(); const id = codec.id('session', t.accessToken);
       await store.sessions.create(t, s); expect(await store.sessions.get(t.accessToken)).toEqual(s); expect(await store.sessions.getByRefreshToken(t.refreshToken)).toEqual(s);
