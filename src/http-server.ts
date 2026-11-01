@@ -384,6 +384,7 @@ function wireApp(
  const bearerAuth = requireBearer({
   verifier: authProvider,
   resourceMetadataUrl,
+  now: authProvider.nowProvider,
  });
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
@@ -536,7 +537,14 @@ function createAuthenticatedMcpServer(
    timeout: config.netsapiens.timeout,
    onUnauthorized: async () => {
     if (authProvider && bearerToken) {
+     try {
+      const newNsToken = await authProvider.forceRefreshUpstream(bearerToken);
+      if (newNsToken) {
+       client.setApiToken(newNsToken);
+      }
+     } catch {
      await authProvider.invalidateToken(bearerToken);
+     }
     }
    },
   }

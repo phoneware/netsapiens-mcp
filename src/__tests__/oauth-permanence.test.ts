@@ -1,5 +1,6 @@
-import { describe, it, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Server as HttpServer } from 'node:http';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { InternalAxiosRequestConfig } from 'axios';
 import axios from 'axios';
 import { Firestore } from '@google-cloud/firestore';
@@ -62,6 +63,7 @@ function createMemoryHarness(): PermanenceHarness<MemoryHarnessBacking> {
         authCodeStore: backing.authCodeStore,
         tokenLifetimeSec: 3600,
         serverBaseUrl: 'http://localhost',
+        now: () => virtualNow,
       });
       if (!backing.clientsStore) {
         backing.clientsStore = authProvider.clientsStore;
@@ -184,7 +186,6 @@ function createMemoryHarness(): PermanenceHarness<MemoryHarnessBacking> {
     },
     setNow: (now: number) => {
       virtualNow = now;
-      vi.setSystemTime(now);
     },
     getNow: () => virtualNow,
     supportsAdoption: true,
@@ -226,6 +227,7 @@ function createFakeFirestoreHarness(): PermanenceHarness<FakeFirestoreBacking> {
         firestore: backing.fakeDb as unknown as Firestore,
         tokenLifetimeSec: 3600,
         serverBaseUrl: 'http://localhost',
+        now: () => virtualNow,
       });
 
       const created = createApp(authProvider);
@@ -345,7 +347,6 @@ function createFakeFirestoreHarness(): PermanenceHarness<FakeFirestoreBacking> {
     },
     setNow: (now: number) => {
       virtualNow = now;
-      vi.setSystemTime(now);
     },
     getNow: () => virtualNow,
     setStoreOutage: async (backing, active) => {
@@ -398,6 +399,7 @@ function createEmulatorHarness(): PermanenceHarness<EmulatorBacking> {
         firestore: backing.db,
         tokenLifetimeSec: 3600,
         serverBaseUrl: 'http://localhost',
+        now: () => virtualNow,
       });
 
       const created = createApp(authProvider);
@@ -517,7 +519,6 @@ function createEmulatorHarness(): PermanenceHarness<EmulatorBacking> {
     },
     setNow: (now: number) => {
       virtualNow = now;
-      vi.setSystemTime(now);
     },
     getNow: () => virtualNow,
     supportsAdoption: false,
@@ -525,38 +526,160 @@ function createEmulatorHarness(): PermanenceHarness<EmulatorBacking> {
   };
 }
 
+async function runLegacyAdoptionTest(db: Firestore): Promise<void> {
+  const collection = `mcp_legacy_${randomBytes(4).toString('hex')}`;
+  const refreshCollection = `${collection}_refresh`;
+  const upstreamCollection = `${collection}_upstream`;
+
+  const tokenStore = new FirestoreTokenStore({
+    db,
+    collection,
+  });
+
+  const authProvider = new NetSapiensAuthProvider({
+    nsApiUrl: 'https://ns.example.com',
+    nsClientId: 'op-client-id',
+    nsClientSecret: 'op-client-secret',
+    tokenStore,
+    firestore: db,
+    tokenLifetimeSec: 3600,
+    serverBaseUrl: 'http://localhost',
+  });
+
+  // 1. Seed base-format valid token (no refreshFamilyId, pointer doc with only accessToken)
+  const validAccess = 'at-base-valid-' + randomBytes(4).toString('hex');
+  const validRefresh = 'rt-base-valid-' + randomBytes(4).toString('hex');
+  const baseValidToken = {
+    accessToken: validAccess,
+    refreshToken: validRefresh,
+    clientId: 'client-base-1',
+    expiresAt: Date.now() + 3600_000,
+    nsAccessToken: 'ns-at-valid-1',
+    nsRefreshToken: 'ns-rt-valid-1',
+    nsExpiresAt: Date.now() + 3600_000,
+    nsUsername: 'alice@example.com',
+    nsUserRole: 'reseller',
+    nsApiUrl: 'https://ns.example.com',
+    ttlAt: new Date(Date.now() + 30 * 24 * 3600_000),
+  };
+  await db.collection(collection).doc(validAccess).set(baseValidToken);
+  await db.collection(refreshCollection).doc(validRefresh).set({
+    accessToken: validAccess,
+  });
+
+  // Verify while valid adopts the document
+  const authInfo = await authProvider.verifyAccessToken(validAccess);
+  expect(authInfo).toBeDefined();
+  expect(authInfo.token).toBe(validAccess);
+  expect(authInfo.clientId).toBe('client-base-1');
+
+  // Verify that the document was adopted into a family and upstream record was created in _upstream
+  const adoptedAccessSnap = await db.collection(collection).doc(validAccess).get();
+  const adoptedData = adoptedAccessSnap.data() as Record<string, unknown>;
+  expect(adoptedData.refreshFamilyId).toBeDefined();
+  const familyId = String(adoptedData.refreshFamilyId);
+
+  const upstreamSnap = await db.collection(upstreamCollection).doc(familyId).get();
+  expect(upstreamSnap.exists).toBe(true);
+  const upstreamRecord = upstreamSnap.data() as { grant: { nsAccessToken: string; nsRefreshToken: string; nsUsername: string } };
+  expect(upstreamRecord.grant.nsAccessToken).toBe('ns-at-valid-1');
+  expect(upstreamRecord.grant.nsRefreshToken).toBe('ns-rt-valid-1');
+  expect(upstreamRecord.grant.nsUsername).toBe('alice@example.com');
+
+  // 2. Seed base-format expired token (expired access token, pointer doc)
+  const expiredAccess = 'at-base-expired-' + randomBytes(4).toString('hex');
+  const expiredRefresh = 'rt-base-expired-' + randomBytes(4).toString('hex');
+  const baseExpiredToken = {
+    accessToken: expiredAccess,
+    refreshToken: expiredRefresh,
+    clientId: 'client-base-2',
+    expiresAt: Date.now() - 10_000, // expired
+    nsAccessToken: 'ns-at-expired-2',
+    nsRefreshToken: 'ns-rt-expired-2',
+    nsExpiresAt: Date.now() + 3600_000,
+    nsUsername: 'bob@example.com',
+    nsUserRole: 'reseller',
+    nsApiUrl: 'https://ns.example.com',
+    ttlAt: new Date(Date.now() + 30 * 24 * 3600_000),
+  };
+  await db.collection(collection).doc(expiredAccess).set(baseExpiredToken);
+  await db.collection(refreshCollection).doc(expiredRefresh).set({
+    accessToken: expiredAccess,
+  });
+
+  // Mock upstream refresh endpoint for NetSapiens
+  const postSpy = vi.spyOn(axios, 'post').mockImplementation(async (url: string) => {
+    if (url.includes('/ns-api/v2/tokens')) {
+      return {
+        data: {
+          access_token: 'new-ns-access-token-from-refresh',
+          refresh_token: 'new-ns-refresh-token-from-refresh',
+          expires_in: 3600,
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as unknown as InternalAxiosRequestConfig,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config: {} as unknown as InternalAxiosRequestConfig };
+  });
+
+  // Refresh after expiry adopts and rotates without re-auth
+  const clientInfo = { client_id: 'client-base-2' } as unknown as OAuthClientInformationFull;
+  const refreshedTokens = await authProvider.exchangeRefreshToken(clientInfo, expiredRefresh);
+  expect(refreshedTokens.access_token).toBeDefined();
+  expect(refreshedTokens.access_token).not.toBe(expiredAccess);
+  expect(refreshedTokens.refresh_token).not.toBe(expiredRefresh);
+
+  // New access token works immediately
+  const newAuthInfo = await authProvider.verifyAccessToken(refreshedTokens.access_token);
+  expect(newAuthInfo.token).toBe(refreshedTokens.access_token);
+
+  // Upstream grant was moved to _upstream and updated
+  const newAccessSnap = await db.collection(collection).doc(refreshedTokens.access_token).get();
+  const newAccessData = newAccessSnap.data() as Record<string, unknown>;
+  expect(newAccessData.refreshFamilyId).toBeDefined();
+  const expiredFamilyId = String(newAccessData.refreshFamilyId);
+
+  const expiredUpstreamSnap = await db.collection(upstreamCollection).doc(expiredFamilyId).get();
+  expect(expiredUpstreamSnap.exists).toBe(true);
+  const expiredUpstreamData = expiredUpstreamSnap.data() as { grant: { nsAccessToken: string; nsRefreshToken: string } };
+  expect(expiredUpstreamData.grant.nsAccessToken).toBe('new-ns-access-token-from-refresh');
+  expect(expiredUpstreamData.grant.nsRefreshToken).toBe('new-ns-refresh-token-from-refresh');
+
+  postSpy.mockRestore();
+}
 describe('OAuth Permanence Contract (Memory)', () => {
   it('passes the C10 permanence contract against Memory token ledger', async () => {
-    vi.useFakeTimers();
-    try {
-      const harness = createMemoryHarness();
-      await runPermanenceContract(harness);
-    } finally {
-      vi.useRealTimers();
-    }
+    const harness = createMemoryHarness();
+    await runPermanenceContract(harness);
   });
 });
 
 describe('OAuth Permanence Contract (Fake Firestore)', () => {
   it('passes the C10 permanence contract against Fake Firestore', async () => {
-    vi.useFakeTimers();
-    try {
-      const harness = createFakeFirestoreHarness();
-      await runPermanenceContract(harness);
-    } finally {
-      vi.useRealTimers();
-    }
+    const harness = createFakeFirestoreHarness();
+    await runPermanenceContract(harness);
+  });
+
+  it('proves verify while valid and refresh after expiry adopt base-format Firestore documents with NS grant moved to _upstream', async () => {
+    const fakeDb = new FakeFirestore();
+    await runLegacyAdoptionTest(fakeDb as unknown as Firestore);
   });
 });
 
 describe.skipIf(!emulatorRunning)('OAuth Permanence Contract (Firestore Emulator)', () => {
   it('passes the C10 permanence contract against Firestore Emulator', async () => {
-    vi.useFakeTimers();
-    try {
-      const harness = createEmulatorHarness();
-      await runPermanenceContract(harness);
-    } finally {
-      vi.useRealTimers();
-    }
+    const harness = createEmulatorHarness();
+    await runPermanenceContract(harness);
+  });
+
+  it('proves verify while valid and refresh after expiry adopt base-format Firestore documents with NS grant moved to _upstream on emulator', async () => {
+    const db = new Firestore({
+      projectId: process.env.GOOGLE_CLOUD_PROJECT || 'test-project',
+      ignoreUndefinedProperties: true,
+    });
+    await runLegacyAdoptionTest(db);
   });
 });

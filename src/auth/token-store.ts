@@ -5,6 +5,7 @@
  * Default path: ~/.netsapiens-mcp/http-tokens.json (permissions 0o600).
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -111,7 +112,7 @@ export class TokenStore extends MemoryTokenLedger<StoredToken> {
 
  /** Store a token (indexed by both access and refresh token). */
  set(token: StoredToken): void {
-  const familyId = token.refreshFamilyId;
+  const familyId = token.refreshFamilyId ?? randomUUID();
   const stored: StoredToken = token;
   const priv = this as unknown as {
    byAccess: Map<string, StoredToken>;
@@ -173,6 +174,22 @@ export class TokenStore extends MemoryTokenLedger<StoredToken> {
   }
   this.save();
   return updated;
+ }
+
+ async refreshNsToken(
+  accessToken: string,
+  doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
+ ): Promise<StoredToken> {
+  const token = this.get(accessToken);
+  if (!token) throw new Error('Token document not found');
+  const refreshed = await doRefresh(token);
+  const expiresAt = refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : undefined;
+  const updated = this.update(accessToken, {
+   nsAccessToken: refreshed.access_token,
+   nsRefreshToken: refreshed.refresh_token ?? token.nsRefreshToken,
+   nsExpiresAt: expiresAt,
+  });
+  return updated ?? token;
  }
 
  /** Delete a token by its access token. */

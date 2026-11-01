@@ -335,7 +335,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
 
       const res = await authorize(app, clientId, 'https://evil.example.com/callback').expect(400);
 
-      expect(res.body.error_description).toBe('Unregistered redirect_uri');
+      expect(res.text).toContain('sign-in refused');
     });
 
     it('still refuses a loopback redirect_uri on an unregistered path', async () => {
@@ -344,7 +344,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
 
       const res = await authorize(app, clientId, 'http://localhost:1410/steal').expect(400);
 
-      expect(res.body.error_description).toBe('Unregistered redirect_uri');
+      expect(res.text).toContain('sign-in refused');
     });
   });
 

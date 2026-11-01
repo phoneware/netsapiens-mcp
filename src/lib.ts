@@ -22,6 +22,9 @@ export {
 export { MemoryTokenLedger } from './auth/kit/ledger.js';
 export type { TokenLedger } from './auth/kit/ledger.js';
 export { FirestoreTokenLedger } from './auth/kit/firestore-ledger.js';
+export { adoptClientMiddleware } from './auth/kit/adopt-client.js';
+export { DEFAULT_REDIRECT_ALLOWLIST, isAllowedRedirectUri } from './auth/kit/redirect-policy.js';
+export type { BaseStoredToken } from './auth/kit/ledger.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';
