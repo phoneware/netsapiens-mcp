@@ -25,6 +25,7 @@ import { UpstreamTimeoutError } from './netsapiens-auth-provider.js';
 import {
   type CutoverFenceConfig,
   type LegacyOperationContext,
+  withLegacyOperation,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
 } from './kit/cutover-fence.js';
@@ -206,8 +207,8 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   }
 
   // Backwards compatibility methods
-  async get(accessToken: string): Promise<StoredToken | undefined> {
-    return this.getByAccessToken(accessToken);
+  async get(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
+    return this.getByAccessToken(accessToken, options);
   }
 
   async getByRefreshToken(refreshToken: string): Promise<StoredToken | undefined> {
@@ -236,8 +237,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return super.rotate(oldRefreshToken, replacement, expectedClientId, now, options);
   }
 
- override async getByAccessToken(accessToken: string): Promise<StoredToken | undefined> {
-    const token = await super.getByAccessToken(accessToken);
+ override async getByAccessToken(
+  accessToken: string,
+  options?: { operation?: LegacyOperationContext },
+ ): Promise<StoredToken | undefined> {
+    const token = await super.getByAccessToken(accessToken, options);
     if (!token) return undefined;
     if (token.ttlAt) {
       const converted = toDate(token.ttlAt);
@@ -572,6 +576,12 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
   options?: { operation?: LegacyOperationContext },
  ): Promise<OAuthClientInformationFull> {
+  if (this.fenceConfig?.enforce && !options?.operation) {
+   return await withLegacyOperation(
+    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'register_client' },
+    async (opCtx) => this.registerClient(client, { operation: opCtx }),
+   );
+  }
   const clientId = client.client_id ?? randomUUID();
   const authMethod = 'token_endpoint_auth_method' in client && typeof client.token_endpoint_auth_method === 'string'
    ? client.token_endpoint_auth_method
@@ -643,8 +653,14 @@ export class FirestoreAuthCodeStore {
    serverBaseUrl?: string;
    clientId?: string;
   },
-  options?: { operation?: LegacyOperationContext },
+  options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
  ): Promise<void> {
+  if (this.fenceConfig?.enforce && !options?.operation) {
+   return await withLegacyOperation(
+    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'auth_code' },
+    async (opCtx) => this.set(code, data, { operation: opCtx, completeOperation: true }),
+   );
+  }
   const expiresAt = data.expiresAt ?? Date.now() + 5 * 60 * 1000;
   const docData: AuthCodeData = {
    pending: data.pending,
@@ -665,6 +681,7 @@ export class FirestoreAuthCodeStore {
         db: this.db,
         namespace: fence.namespace,
         operation: options?.operation,
+        completeOperation: options?.completeOperation !== false,
       });
     }
     transaction.set(docRef, stripUndefined(docData));

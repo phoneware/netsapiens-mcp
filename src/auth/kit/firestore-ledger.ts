@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 2db3ffd279710b4d5dc471100fd673e58ac44d9d). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/firestore-ledger.ts at 991303831b36f7587f3c006454bcd2d56b1818a0). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -24,6 +24,7 @@ import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
   getCutoverFenceRecord,
+  readCutoverFenceInTransaction,
   type GuardMutationResult,
   type LegacyOperationContext,
 } from './cutover-fence.js';
@@ -195,26 +196,38 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   ): Promise<T | undefined> {
     try {
       if (this.fence?.enforce) {
-        const control = await getCutoverFenceRecord(this.db, this.fence.namespace);
-        if (!control) {
+        if (!options?.operation) {
           throw new CutoverFenceError(
-            `Missing cutover fence control record for namespace ${this.fence.namespace}`,
+            `Durable operation context is required for fence-enforced getByAccessToken in namespace ${this.fence.namespace}`,
           );
         }
-        if (control.state !== 'legacy_open') {
-          if (
-            control.state === 'closing' &&
-            options?.operation &&
-            options.operation.epoch === control.epoch
-          ) {
-            // Admitted operation permitted during closing
-          } else {
-            throw new CutoverRefusedError(
-              `Cutover state is ${control.state}; access token lookup refused for namespace ${this.fence.namespace}`,
-              { cutoverState: control.state, epoch: control.epoch },
-            );
+
+        return await this.db.runTransaction(async (transaction: Transaction) => {
+          const control = await readCutoverFenceInTransaction(transaction, this.db, this.fence!.namespace);
+          if (control.state !== 'legacy_open') {
+            if (
+              control.state === 'closing' &&
+              options.operation &&
+              options.operation.epoch === control.epoch
+            ) {
+              // Admitted operation permitted during closing
+            } else {
+              throw new CutoverRefusedError(
+                `Cutover state is ${control.state}; access token lookup refused for namespace ${this.fence!.namespace}`,
+                { cutoverState: control.state, epoch: control.epoch },
+              );
+            }
           }
-        }
+
+          const snap = await transaction.get(this.accessCol().doc(docId(accessToken)));
+          if (!snap.exists) return undefined;
+          const data = snap.data() as Record<string, unknown>;
+
+          if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
+            return await this.adoptLegacyEmbeddedDocInTransaction(transaction, data, { operation: options.operation });
+          }
+          return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
+        });
       }
 
       const snap = await this.accessCol().doc(docId(accessToken)).get();
@@ -222,12 +235,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const data = snap.data() as Record<string, unknown>;
 
       if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
-        if (this.fence?.enforce && !options?.operation) {
-          throw new CutoverFenceError(
-            `Durable operation context is required for legacy adoption during getByAccessToken in namespace ${this.fence.namespace}`,
-          );
-        }
-        return await this.adoptLegacyEmbeddedDoc(data, { operation: options?.operation });
+        return await this.adoptLegacyEmbeddedDoc(data);
       }
       return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
     } catch (err) {
@@ -278,13 +286,141 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             );
           }
         }
+
+        return await this.db.runTransaction(async (transaction: Transaction) => {
+          let guard: GuardMutationResult | undefined;
+          if (options?.operation) {
+            guard = await checkMutationGuardInTransaction(transaction, {
+              db: this.db,
+              namespace: this.fence!.namespace,
+              operation: options.operation,
+              completeOperation: false,
+              now: this.nowProvider,
+            });
+          }
+
+          const refreshRef = this.refreshCol().doc(docId(refreshToken));
+          const snap = await transaction.get(refreshRef);
+
+          if (!snap.exists) {
+            if (this.legacy?.embeddedRefreshQuery) {
+              const legacyMatch = await transaction.get(
+                this.accessCol()
+                  .where('refreshToken', '==', refreshToken)
+                  .limit(1),
+              );
+              if (!legacyMatch.empty) {
+                const rawDoc = legacyMatch.docs[0]!.data() as Record<string, unknown>;
+                if (!rawDoc.refreshFamilyId) {
+                  const adopted = await this.adoptLegacyEmbeddedDocInTransaction(
+                    transaction,
+                    rawDoc,
+                    { operation: options?.operation },
+                  );
+                  if (adopted) {
+                    if (expectedClientId && adopted.clientId !== expectedClientId) {
+                      return { status: 'missing' };
+                    }
+                    return {
+                      status: 'active',
+                      token: adopted,
+                      familyId: adopted.refreshFamilyId!,
+                    };
+                  }
+                }
+              }
+            }
+
+            const fingerprint = refreshFingerprint(refreshToken);
+            const retiredMatch = await transaction.get(
+              this.familyCol()
+                .where('retiredRefreshFingerprints', 'array-contains', fingerprint)
+                .limit(1),
+            );
+            if (!retiredMatch.empty) {
+              const familyDoc = retiredMatch.docs[0]!;
+              const family = familyDoc.data() as StoredRefreshFamily;
+              guard?.bufferCompletion(now);
+              this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
+              return { status: 'replay', familyId: familyDoc.id };
+            }
+            return { status: 'missing' };
+          }
+
+          const raw = snap.data() as StoredRefreshRecord<T> | LegacyRefreshPointer;
+
+          if (!('status' in raw)) {
+            const legacyAccessSnap = await transaction.get(
+              this.accessCol().doc(docId(raw.accessToken)),
+            );
+            if (!legacyAccessSnap.exists) return { status: 'missing' };
+            const rawAccess = legacyAccessSnap.data() as Record<string, unknown>;
+            const adopted = await this.adoptLegacyEmbeddedDocInTransaction(
+              transaction,
+              rawAccess,
+              { operation: options?.operation },
+            );
+            if (!adopted) return { status: 'missing' };
+            if (expectedClientId && adopted.clientId !== expectedClientId) {
+              return { status: 'missing' };
+            }
+            return { status: 'active', token: adopted, familyId: adopted.refreshFamilyId! };
+          }
+
+          const oldRecord = raw as StoredRefreshRecord<T>;
+          if (expectedClientId && oldRecord.token.clientId !== expectedClientId) {
+            return { status: 'missing' };
+          }
+
+          const familyRef = this.familyCol().doc(docId(oldRecord.familyId));
+          const familySnap = await transaction.get(familyRef);
+          const family = familySnap.exists
+            ? (familySnap.data() as StoredRefreshFamily)
+            : undefined;
+
+          if (oldRecord.status === 'consumed') {
+            const successorSnap = oldRecord.successorRefreshToken
+              ? await transaction.get(
+                  this.refreshCol().doc(docId(oldRecord.successorRefreshToken)),
+                )
+              : undefined;
+            const withinRetryWindow =
+              oldRecord.consumedAt !== undefined && now - oldRecord.consumedAt <= REFRESH_RETRY_WINDOW_MS;
+
+            if (
+              withinRetryWindow &&
+              family?.previousRefreshToken === refreshToken &&
+              successorSnap?.exists
+            ) {
+              const successorRecord = successorSnap.data() as StoredRefreshRecord<T>;
+              if (
+                successorRecord.status === 'active' &&
+                (!expectedClientId || successorRecord.token.clientId === expectedClientId)
+              ) {
+                return {
+                  status: 'retry',
+                  token: successorRecord.token,
+                  familyId: raw.familyId,
+                };
+              }
+            }
+
+            // Consumed replay: revoke family in the SAME transaction!
+            if (family) {
+              guard?.bufferCompletion(now);
+              this.deleteFamilyInTransaction(transaction, familyRef, family);
+            }
+            return { status: 'replay', familyId: raw.familyId };
+          }
+
+          return { status: 'active', token: raw.token, familyId: raw.familyId };
+        });
       }
 
       const refreshRef = this.refreshCol().doc(docId(refreshToken));
       const snap = await refreshRef.get();
 
       if (!snap.exists) {
-        // Check for legacy embedded doc if enabled
         if (this.legacy?.embeddedRefreshQuery) {
           const legacyMatch = await this.accessCol()
             .where('refreshToken', '==', refreshToken)
@@ -293,12 +429,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (!legacyMatch.empty) {
             const rawDoc = legacyMatch.docs[0]!.data() as Record<string, unknown>;
             if (!rawDoc.refreshFamilyId) {
-              if (this.fence?.enforce && !options?.operation) {
-                throw new CutoverFenceError(
-                  `Durable operation context is required for legacy adoption during lookupRefresh in namespace ${this.fence.namespace}`,
-                );
-              }
-              const adopted = await this.adoptLegacyEmbeddedDoc(rawDoc, { operation: options?.operation });
+              const adopted = await this.adoptLegacyEmbeddedDoc(rawDoc);
               if (adopted) {
                 if (expectedClientId && adopted.clientId !== expectedClientId) {
                   return { status: 'missing' };
@@ -323,16 +454,10 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const raw = snap.data() as StoredRefreshRecord<T> | LegacyRefreshPointer;
 
       if (!('status' in raw)) {
-        // Legacy pointer doc
         const legacyAccessSnap = await this.accessCol().doc(docId(raw.accessToken)).get();
         if (!legacyAccessSnap.exists) return { status: 'missing' };
         const rawAccess = legacyAccessSnap.data() as Record<string, unknown>;
-        if (this.fence?.enforce && !options?.operation) {
-          throw new CutoverFenceError(
-            `Durable operation context is required for legacy pointer adoption during lookupRefresh in namespace ${this.fence.namespace}`,
-          );
-        }
-        const adopted = await this.adoptLegacyEmbeddedDoc(rawAccess, { operation: options?.operation });
+        const adopted = await this.adoptLegacyEmbeddedDoc(rawAccess);
         if (!adopted) return { status: 'missing' };
         if (expectedClientId && adopted.clientId !== expectedClientId) {
           return { status: 'missing' };
@@ -374,7 +499,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           }
         }
 
-        await this.revokeFamily(raw.familyId);
+        await this.revokeFamily(raw.familyId, options);
         return { status: 'replay', familyId: raw.familyId };
       }
 
@@ -479,6 +604,19 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
 
         if (!oldSnap.exists) {
+          const fingerprint = refreshFingerprint(oldRefreshToken);
+          const retiredMatches = await transaction.get(
+            this.familyCol()
+              .where('retiredRefreshFingerprints', 'array-contains', fingerprint)
+              .limit(1),
+          );
+          if (!retiredMatches.empty) {
+            const familyDoc = retiredMatches.docs[0]!;
+            const family = familyDoc.data() as StoredRefreshFamily;
+            guard?.bufferCompletion(now);
+            this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
+            return { status: 'replay' } as const;
+          }
           return { status: 'missing' } as const;
         }
 
@@ -650,17 +788,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         return { status: 'claimed', token: stored } as const;
       });
 
-      if (result.status !== 'missing') {
-        return result;
-      }
-
-      const retiredMatch = await this.findFamilyByRetiredFingerprint(oldRefreshToken);
-      if (retiredMatch) {
-        await this.revokeFamily(retiredMatch, options);
-        return { status: 'replay' };
-      }
-
-      return { status: 'missing' };
+      return result;
     } catch (err) {
       this.wrapError(err);
     }

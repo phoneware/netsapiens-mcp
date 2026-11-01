@@ -18,6 +18,7 @@ import { requireBearer } from './auth/kit/bearer.js';
 import { UpstreamRevokedError, kitCodeOf, CutoverRefusedError, CutoverFenceError } from './auth/kit/errors.js';
 import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
+import { getCutoverFenceRecord, type CutoverFenceConfig } from './auth/kit/cutover-fence.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
@@ -104,7 +105,13 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
+export interface CreateAppOptions {
+ customAuthProvider?: NetSapiensAuthProvider;
+ fence?: CutoverFenceConfig;
+ validateStartup?: boolean;
+}
+
+export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
  const config = loadConfig();
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
@@ -120,11 +127,14 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
   );
  }
 
- // Issued bearer lifetime. MCP clients SHOULD refresh on 401 using the
- // refresh token we hand back at /token, but real-world client refresh
- // implementations vary, so a longer-lived bearer keeps far more sessions
- // alive without ever hitting the cliff. Default 7 days; operator-tunable
- // via MCP_TOKEN_LIFETIME_HOURS.
+ const customAuthProvider = options && 'handleLogin' in options ? options as NetSapiensAuthProvider : (options as CreateAppOptions | undefined)?.customAuthProvider;
+ const explicitFence = (options && !('handleLogin' in options)) ? (options as CreateAppOptions | undefined)?.fence : undefined;
+ const fenceEnforce = explicitFence?.enforce ?? (process.env.MCP_FENCE_ENFORCE === 'true' || process.env.MCP_CUTOVER_FENCE === 'true');
+ const fenceNamespace = (explicitFence?.namespace ?? process.env.MCP_FENCE_NAMESPACE ?? process.env.MCP_CUTOVER_FENCE_NAMESPACE ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp' : 'mcp')) as ('mcp' | 'pwmcp' | 'readonly_mcp');
+ const fenceConfig: CutoverFenceConfig | undefined = fenceEnforce
+   ? { namespace: fenceNamespace, enforce: true }
+   : undefined;
+
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  const authProvider = customAuthProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
@@ -132,9 +142,21 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
   nsClientSecret,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
+  fence: fenceConfig,
  });
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
  return { app, authProvider, baseUrl, mcpUrl };
+}
+
+export async function validateBridgeStartup(authProvider: NetSapiensAuthProvider): Promise<void> {
+ if (authProvider.fenceConfig?.enforce && authProvider.dbInstance) {
+  const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
+  if (!control) {
+   throw new CutoverFenceError(
+    `Bridge startup refused: cutover fence control record is missing for namespace ${authProvider.fenceNamespace}`,
+   );
+  }
+ }
 }
 
 /**
@@ -143,9 +165,10 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
  * Returns the listening `http.Server` so callers can shut it down (tests
  * especially, which otherwise leak a listener per case and collide on ports.
  */
-export async function startHttpServer(): Promise<HttpServer> {
- const { app, baseUrl, mcpUrl } = createApp();
+export async function startHttpServer(options?: CreateAppOptions): Promise<HttpServer> {
+ const { app, authProvider, baseUrl, mcpUrl } = createApp(options);
  const config = loadConfig();
+ await validateBridgeStartup(authProvider);
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const host = process.env.MCP_HOST || '0.0.0.0';
 
@@ -328,6 +351,35 @@ function wireApp(
    serverName: 'NetSapiens MCP',
   }),
  );
+ const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
+  return async (_req, res, next) => {
+   if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
+    return next();
+   }
+   try {
+    const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
+    if (control && control.state !== 'legacy_open') {
+     res.setHeader('Retry-After', '5');
+     return res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: `Cutover state is ${control.state}; ${endpointName} is temporarily unavailable`,
+     });
+    }
+   } catch {
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({
+     error: 'temporarily_unavailable',
+     error_description: 'Cutover control check temporarily unavailable',
+    });
+   }
+   next();
+  };
+ };
+
+ app.use('/token', cutoverAdmissionMiddleware('token exchange'));
+ app.use('/register', cutoverAdmissionMiddleware('client registration'));
+ app.use('/authorize', cutoverAdmissionMiddleware('authorization'));
+ app.use('/login', cutoverAdmissionMiddleware('login'));
  // OAuth endpoints: discovery, authorize, token, register, revoke
  app.use(mcpAuthRouter({
   provider: authProvider,

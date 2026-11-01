@@ -18,7 +18,34 @@ export {
   kitCodeOf,
   classifyUpstreamTokenResponse,
   toTokenEndpointError,
+  CutoverFenceError,
+  CutoverRefusedError,
 } from './auth/kit/errors.js';
+export {
+  withLegacyOperation,
+  checkMutationGuardInTransaction,
+  getCutoverFenceRecord,
+  getCutoverFenceDocRef,
+  getCutoverOperationDocRef,
+  initializeCutoverFence,
+  transitionCutoverFenceState,
+  markIrreversibleInTransaction,
+  isLegacyMutationPermittedInTransaction,
+  SUPPORTED_CUTOVER_NAMESPACES,
+  isSupportedCutoverNamespace,
+} from './auth/kit/cutover-fence.js';
+export type {
+  CutoverFenceConfig,
+  CutoverFenceControlRecord,
+  CutoverFenceState,
+  LegacyOperationContext,
+  LegacyOperationPhase,
+  LegacyOperationRecord,
+  SupportedCutoverNamespace,
+  WithLegacyOperationOptions,
+  GuardMutationOptions,
+  GuardMutationResult,
+} from './auth/kit/cutover-fence.js';
 export { MemoryTokenLedger } from './auth/kit/ledger.js';
 export type { TokenLedger } from './auth/kit/ledger.js';
 export { FirestoreTokenLedger } from './auth/kit/firestore-ledger.js';

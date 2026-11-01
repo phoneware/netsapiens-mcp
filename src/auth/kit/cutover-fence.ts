@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at 2db3ffd279710b4d5dc471100fd673e58ac44d9d). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at 991303831b36f7587f3c006454bcd2d56b1818a0). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -78,6 +78,7 @@ export interface LegacyOperationRecord {
   updatedAt: number;
   leaseExpiresAt?: number;
   ambiguousRemoteOutcome?: boolean;
+  familyId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -88,6 +89,7 @@ export interface LegacyOperationContext {
   readonly kind: string;
   isAmbiguousRemoteOutcome(): boolean;
   markAmbiguousRemoteOutcome(reason?: string): void;
+  clearAmbiguousRemoteOutcome(): void;
   isCompleted(): boolean;
   markCompleted(): void;
 }
@@ -502,13 +504,21 @@ export async function markIrreversibleInTransaction(
   return updated;
 }
 
+export interface LegacyOperationMetadata {
+  [key: string]: unknown;
+  revision?: string;
+  attempt?: number;
+  phase?: string;
+  reconciled?: boolean;
+}
+
 export interface WithLegacyOperationOptions {
   db: Firestore;
   namespace: SupportedCutoverNamespace;
   kind: string;
   operationId?: string;
   leaseMs?: number;
-  metadata?: Record<string, unknown>;
+  metadata?: LegacyOperationMetadata;
   now?: () => number;
 }
 
@@ -540,13 +550,34 @@ export async function withLegacyOperation<R>(
       );
     }
 
+    if (!options.kind || typeof options.kind !== 'string' || options.kind.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(options.kind)) {
+      throw new CutoverFenceError(
+        `Invalid operation kind: kind must be an alphanumeric identifier up to 64 chars, got '${options.kind}'`,
+      );
+    }
+    const forbiddenKindTerms = ['password', 'secret', 'credential'];
+    if (forbiddenKindTerms.some((t) => options.kind.toLowerCase().includes(t))) {
+      throw new CutoverFenceError(`Operation kind must not contain sensitive credential terms: '${options.kind}'`);
+    }
+
     if (options.metadata) {
-      const forbiddenKeys = ['token', 'accesstoken', 'refreshtoken', 'password', 'secret', 'code', 'authcode'];
-      for (const key of Object.keys(options.metadata)) {
-        if (forbiddenKeys.some((f) => key.toLowerCase().includes(f))) {
+      const allowedKeys = ['revision', 'attempt', 'phase', 'reconciled'];
+      for (const [key, value] of Object.entries(options.metadata)) {
+        if (!allowedKeys.includes(key)) {
           throw new CutoverFenceError(
-            `Operation metadata must not contain credential or secret fields: forbidden key '${key}'`,
+            `Operation metadata key '${key}' is not in the allowlist (${allowedKeys.join(', ')})`,
           );
+        }
+        if (typeof value === 'string') {
+          if (value.length > 64) {
+            throw new CutoverFenceError(`Operation metadata value for '${key}' exceeds 64 chars`);
+          }
+          const forbiddenTerms = ['bearer', 'secret', 'token', 'password', 'jwt', 'auth'];
+          if (forbiddenTerms.some((term) => value.toLowerCase().includes(term))) {
+            throw new CutoverFenceError(`Operation metadata value for '${key}' must not contain sensitive fragments`);
+          }
+        } else if (typeof value !== 'number' && typeof value !== 'boolean') {
+          throw new CutoverFenceError(`Operation metadata value for '${key}' must be primitive (string, number, boolean)`);
         }
       }
     }
@@ -586,6 +617,9 @@ export async function withLegacyOperation<R>(
     isAmbiguousRemoteOutcome: () => ambiguous,
     markAmbiguousRemoteOutcome: () => {
       ambiguous = true;
+    },
+    clearAmbiguousRemoteOutcome: () => {
+      ambiguous = false;
     },
     isCompleted: () => completed,
     markCompleted: () => {

@@ -36,6 +36,8 @@ import {
   TemporarilyUnavailableError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { docId } from '../auth/kit/firestore-ledger.js';
+import request from 'supertest';
+import { createApp, validateBridgeStartup } from '../http-server.js';
 
 const EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST;
 
@@ -501,7 +503,9 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       expect(rotResult.token.accessToken).toBe('acc_adopted_new');
       expect(rotResult.token.refreshFamilyId).toBeDefined();
 
-      const newAccess = await tokenStore.get('acc_adopted_new');
+      const newAccess = await withLegacyOperation({ db, namespace, kind: 'read' }, async (ctx) => {
+        return await tokenStore.get('acc_adopted_new', { operation: ctx });
+      });
       expect(newAccess).toBeDefined();
       expect(newAccess?.nsAccessToken).toBe('ns_adopted_new');
     }
@@ -861,5 +865,161 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     // CRITICAL: NO second fake NS grant call was made!
     expect(fakeNsCalls).toBe(1);
+  });
+  it('17. Production createApp HTTP router /token under closing/fenced returns HTTP 503 with Retry-After and performs zero credential consumption and zero upstream grants', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    let fakeNsCalls = 0;
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+    });
+
+    (authProvider as any).nsRefreshGrant = async () => {
+      fakeNsCalls++;
+      return { access_token: 'ns_token_2', refresh_token: 'ns_ref_2', expires_in: 3600 };
+    };
+
+    const code = 'code_http_router_test';
+    await authProvider.withOperation('auth_code', async (ctx) => {
+      await (authProvider as any).authCodeStore.set(
+        code,
+        {
+          pending: { clientId: 'client_http', codeChallenge: 'challenge', redirectUri: 'http://localhost/cb', createdAt: Date.now() },
+          nsTokens: { access_token: 'ns_acc', refresh_token: 'ns_ref', username: 'user_http' },
+          clientId: 'client_http',
+        },
+        { operation: ctx },
+      );
+    });
+
+    await (authProvider as any).clientsStore.registerClient({
+      client_id: 'client_http',
+      redirect_uris: ['http://localhost/cb'],
+      token_endpoint_auth_method: 'none',
+    });
+
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    const { app } = createApp(authProvider);
+
+    const tokenRes = await request(app)
+      .post('/token')
+      .send({
+        grant_type: 'authorization_code',
+        code,
+        client_id: 'client_http',
+        redirect_uri: 'http://localhost/cb',
+        code_verifier: 'challenge',
+      });
+
+    expect(tokenRes.status).toBe(503);
+    expect(tokenRes.headers['retry-after']).toBe('5');
+    expect(tokenRes.body.error).toBe('temporarily_unavailable');
+
+    const codeDoc = await db.collection('mcp_auth_codes').doc(code).get();
+    expect(codeDoc.exists).toBe(true);
+    expect(fakeNsCalls).toBe(0);
+  });
+
+  it('18. Production createApp HTTP router /register under closing/fenced returns HTTP 503 with Retry-After and blocks registration', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+    });
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    await transitionCutoverFenceState(db, namespace, {
+      fromState: 'legacy_open',
+      toState: 'closing',
+      expectedEpoch: 1,
+    });
+
+    const { app } = createApp(authProvider);
+
+    const regRes = await request(app)
+      .post('/register')
+      .send({
+        redirect_uris: ['http://localhost/cb'],
+        client_name: 'test_client',
+      });
+
+    expect(regRes.status).toBe(503);
+    expect(regRes.headers['retry-after']).toBe('5');
+    expect(regRes.body.error).toBe('temporarily_unavailable');
+  });
+
+  it('19. Production createApp HTTP router /token under legacy_open returns standard RFC 6749 HTTP 400 invalid_grant for invalid credentials', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+    });
+    process.env.MCP_TRANSPORT = 'http';
+    process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+    process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+    process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+    await (authProvider as any).clientsStore.registerClient({
+      client_id: 'any_client',
+      redirect_uris: ['http://localhost/cb'],
+      token_endpoint_auth_method: 'none',
+    });
+    const { app } = createApp(authProvider);
+    const tokenRes = await request(app)
+      .post('/token')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: 'non_existent_refresh_token',
+        client_id: 'any_client',
+      });
+
+    expect(tokenRes.status).toBe(400);
+    expect(tokenRes.body.error).toBe('invalid_grant');
+  });
+
+  it('20. Startup validation with MCP_FENCE_ENFORCE=true and missing control record fails startup', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+    });
+
+    await expect(validateBridgeStartup(authProvider)).rejects.toThrow(CutoverFenceError);
   });
 });
