@@ -9,7 +9,7 @@ import {
   getCutoverFenceRecord,
   transitionCutoverFenceState,
 } from '../auth/kit/cutover-fence.js';
-import { adoptFirestoreLegacyTokens } from '../store/firestore-v2-adoption.js';
+import { adoptFirestoreLegacyTokens, computeSourceInventoryDigest } from '../store/firestore-v2-adoption.js';
 
 class MockFirestore implements FirestoreLike {
   private collections = new Map<string, Map<string, Record<string, unknown>>>();
@@ -138,6 +138,7 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-test',
+      expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key),
     });
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);

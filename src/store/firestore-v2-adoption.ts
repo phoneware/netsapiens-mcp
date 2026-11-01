@@ -150,6 +150,60 @@ function computeTargetRecordFingerprint(type: string, id: string, data: Record<s
   return hmac.digest('hex');
 }
 
+export async function computeSourceInventoryDigest(
+  db: FirestoreLike,
+  namespace: string,
+  key: Uint8Array,
+): Promise<string> {
+  const legacyTokensCol = `${namespace}_tokens`;
+  const legacyRefreshCol = `${namespace}_tokens_refresh`;
+  const legacyFamiliesCol = `${namespace}_tokens_refresh_families`;
+  const legacyUpstreamCol = `${namespace}_tokens_upstream`;
+  const legacyAuthCodesCol = `${namespace}_auth_codes`;
+  const legacyResumeCol = `${namespace}_resume_tokens`;
+  const legacyClientsCol = `${namespace}_clients`;
+  const legacyOauthClientsCol = `${namespace}_oauth_clients`;
+
+  const [
+    familiesSnap,
+    tokensSnap,
+    refreshSnap,
+    upstreamSnap,
+    authCodesSnap,
+    resumeSnap,
+    oauthClientsSnap,
+    clientsSnap,
+  ] = await Promise.all([
+    db.collection(legacyFamiliesCol).get(),
+    db.collection(legacyTokensCol).get(),
+    db.collection(legacyRefreshCol).get(),
+    db.collection(legacyUpstreamCol).get(),
+    db.collection(legacyAuthCodesCol).get(),
+    db.collection(legacyResumeCol).get(),
+    db.collection(legacyOauthClientsCol).get(),
+    db.collection(legacyClientsCol).get(),
+  ]);
+
+  const clientDocs = new Map<string, Record<string, unknown>>();
+  for (const doc of clientsSnap.docs) {
+    clientDocs.set(doc.id, doc.data() || {});
+  }
+  for (const doc of oauthClientsSnap.docs) {
+    clientDocs.set(doc.id, doc.data() || {});
+  }
+
+  const sourceHmacKey = createHmac('sha256', key).update('nsmcp:inventory:source:v1').digest();
+  const sourceEntries: string[] = [
+    ...familiesSnap.docs.map((d: any) => computeSourceRecordFingerprint('family', d.id, d.data(), sourceHmacKey)),
+    ...tokensSnap.docs.map((d: any) => computeSourceRecordFingerprint('token', d.id, d.data(), sourceHmacKey)),
+    ...refreshSnap.docs.map((d: any) => computeSourceRecordFingerprint('refresh', d.id, d.data(), sourceHmacKey)),
+    ...upstreamSnap.docs.map((d: any) => computeSourceRecordFingerprint('upstream', d.id, d.data(), sourceHmacKey)),
+    ...authCodesSnap.docs.map((d: any) => computeSourceRecordFingerprint('authCode', d.id, d.data(), sourceHmacKey)),
+    ...resumeSnap.docs.map((d: any) => computeSourceRecordFingerprint('resume', d.id, d.data(), sourceHmacKey)),
+    ...Array.from(clientDocs.entries()).map(([id, data]) => computeSourceRecordFingerprint('client', id, data, sourceHmacKey)),
+  ].sort();
+  return createHmac('sha256', sourceHmacKey).update(sourceEntries.join('\n')).digest('hex');
+}
 export interface AdoptFirestoreLegacyTokensOptions {
   db: FirestoreLike;
   namespace: string;
@@ -235,6 +289,11 @@ export async function adoptFirestoreLegacyTokens(
     if (!options.packageIntegrity) {
       throw new CutoverFenceError(
         `packageIntegrity is required for controlled migration of namespace ${namespace}`,
+      );
+    }
+    if (!options.expectedSourceInventoryDigest) {
+      throw new CutoverFenceError(
+        `expectedSourceInventoryDigest is required for controlled migration of namespace ${namespace}`,
       );
     }
   }
@@ -378,6 +437,45 @@ export async function adoptFirestoreLegacyTokens(
   const claimedRefreshIds = new Map<string, string>(); // refreshId -> familyId
   const claimedRetiredFingerprints = new Map<string, string>(); // fingerprint -> familyId
 
+  // Compute keyed inventory digests over ALL physical collections before writes (C11)
+  const sourceHmacKey = createHmac('sha256', key).update('nsmcp:inventory:source:v1').digest();
+  const sourceEntries: string[] = [
+    ...familiesSnap.docs.map(d => computeSourceRecordFingerprint('family', d.id, d.data(), sourceHmacKey)),
+    ...tokensSnap.docs.map(d => computeSourceRecordFingerprint('token', d.id, d.data(), sourceHmacKey)),
+    ...refreshSnap.docs.map(d => computeSourceRecordFingerprint('refresh', d.id, d.data(), sourceHmacKey)),
+    ...upstreamSnap.docs.map(d => computeSourceRecordFingerprint('upstream', d.id, d.data(), sourceHmacKey)),
+    ...authCodesSnap.docs.map(d => computeSourceRecordFingerprint('authCode', d.id, d.data(), sourceHmacKey)),
+    ...resumeSnap.docs.map(d => computeSourceRecordFingerprint('resume', d.id, d.data(), sourceHmacKey)),
+    ...Array.from(clientDocs.entries()).map(([id, data]) => computeSourceRecordFingerprint('client', id, data, sourceHmacKey)),
+  ].sort();
+  const sourceInventoryDigest = createHmac('sha256', sourceHmacKey).update(sourceEntries.join('\n')).digest('hex');
+
+  if (options.expectedSourceInventoryDigest && options.expectedSourceInventoryDigest !== sourceInventoryDigest) {
+    throw new CutoverFenceError(
+      `Source inventory digest mismatch: expected ${options.expectedSourceInventoryDigest}, got ${sourceInventoryDigest}`,
+    );
+  }
+
+  // Before the first import, create a durable prepared manifest of the frozen candidate inventory (C11)
+  if (!dryRun) {
+    await db.collection(`${namespace}_meta`).doc(`migration_prepared_${currentEpoch}`).set(
+      stripUndefined({
+        schemaVersion: 1,
+        status: 'prepared',
+        runId,
+        epoch: currentEpoch,
+        namespace,
+        sourceInventoryDigest,
+        codeSha: options.codeSha,
+        codeArtifact: options.codeArtifact,
+        packageIntegrity: options.packageIntegrity,
+        physicalCounts,
+        candidateCommitments: sourceEntries,
+        createdAt: nowProvider(),
+      }),
+    );
+  }
+
   // 1. Adopt established PR56 refresh families
   for (const famDoc of familiesSnap.docs) {
     report.scanned++;
@@ -497,8 +595,8 @@ export async function adoptFirestoreLegacyTokens(
         const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
 
         const accessId = (liveFamData.currentAccessToken as string | undefined) ?? (embeddedToken.accessToken as string | undefined);
-        if (!accessId) {
-          throw new Error(`Cannot adopt PR56 family ${familyId}: access token identifier missing`);
+        if (!accessId || typeof accessId !== 'string' || accessId.trim().length === 0) {
+          throw new Error(`Cannot adopt PR56 family ${familyId}: access token identifier missing or empty`);
         }
         if (!currentRefreshToken && !embeddedToken.refreshToken) {
           throw new Error(`Cannot adopt PR56 family ${familyId}: refresh token identifier missing`);
@@ -541,13 +639,15 @@ export async function adoptFirestoreLegacyTokens(
           const tFamData = targetFamSnap.data() as Record<string, unknown>;
           const tRefData = targetRefSnap.data() as Record<string, unknown>;
           const tAccData = targetAccSnap.data() as Record<string, unknown>;
+          const tUpData = targetUpSnap.data() as Record<string, unknown>;
           if (
             tFamData?.id !== familyId ||
             tFamData?.activeRefreshId !== newRefreshId ||
             tFamData?.currentAccessTokenId !== newAccessId ||
             tRefData?.familyId !== familyId ||
             tRefData?.status !== 'active' ||
-            tAccData?.familyId !== familyId
+            tAccData?.familyId !== familyId ||
+            tUpData?.id !== familyId
           ) {
             throw new Error(`Target family content mismatch for ${familyId}`);
           }
@@ -556,6 +656,12 @@ export async function adoptFirestoreLegacyTokens(
             const targetPrevRefSnap = await tx.get(db.collection(v3Cols.refreshTokens).doc(prevRefreshId));
             if (!targetPrevRefSnap.exists || targetPrevRefSnap.data()?.status !== 'consumed') {
               throw new Error(`Target previous refresh pointer missing or invalid for ${familyId}`);
+            }
+          }
+          for (const fp of liveRetiredFingerprints) {
+            const targetRetSnap = await tx.get(db.collection(v3Cols.retiredRefreshTokens).doc(fp));
+            if (!targetRetSnap.exists || (targetRetSnap.data() as Record<string, unknown>)?.familyId !== familyId) {
+              throw new Error(`Target retired token pointer missing or invalid for ${familyId}`);
             }
           }
           return 'migrated';
@@ -693,12 +799,16 @@ export async function adoptFirestoreLegacyTokens(
           if (prevRefreshRow) {
             tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
           }
-          for (const fp of retiredFingerprints) {
+          for (const fp of liveRetiredFingerprints) {
             tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), {
               familyId,
               retiredAt: now,
             });
           }
+          tx.set(
+            db.collection(`${namespace}_meta`).doc(`migration_receipt_${currentEpoch}_fam_${familyId}`),
+            { completedAt: now, runId },
+          );
         }
         return 'migrated';
       });
@@ -1041,8 +1151,11 @@ export async function adoptFirestoreLegacyTokens(
           const outcome = await db.runTransaction(async (tx) => {
             if (isControlled && initialControl && !dryRun) {
               const ctrl = await readCutoverFenceInTransaction(tx, db, namespace);
-              if (ctrl.epoch !== currentEpoch || (ctrl.state !== 'migrating' && ctrl.state !== 'fenced')) {
-                throw new CutoverFenceError(`Cutover state changed concurrently during resume token migration`);
+              if (ctrl.epoch !== currentEpoch || ctrl.state !== 'migrating') {
+                throw new CutoverFenceError(`Cannot migrate resume token: state is ${ctrl.state}; expected migrating`);
+              }
+              if (ctrl.migrationRunId !== runId) {
+                throw new CutoverFenceError(`Cannot migrate resume token: migrationRunId mismatch (expected ${runId}, got ${ctrl.migrationRunId})`);
               }
             }
 
@@ -1051,11 +1164,13 @@ export async function adoptFirestoreLegacyTokens(
             if (!sourceResumeSnap.exists) return 'skipped';
             const rData = sourceResumeSnap.data() as Record<string, unknown>;
 
+            const resumeId = (rData.id as string) ?? rDoc.id;
+
             if (typeof rData.consumedAt !== 'number' || typeof rData.expiresAt !== 'number') {
               throw new Error(`Malformed resume token ${rDoc.id}: consumedAt or expiresAt is not a number`);
             }
 
-            const targetResumeSnap = await tx.get(db.collection(v3Cols.resumeTokens).doc(rDoc.id));
+            const targetResumeSnap = await tx.get(db.collection(v3Cols.resumeTokens).doc(resumeId));
             if (targetResumeSnap.exists) {
               const tData = targetResumeSnap.data() as Record<string, unknown>;
               if (tData.v === 2) {
@@ -1067,13 +1182,17 @@ export async function adoptFirestoreLegacyTokens(
               if (isControlled && initialControl) {
                 await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
               }
-              tx.set(db.collection(v3Cols.resumeTokens).doc(rDoc.id), {
-                id: rDoc.id,
+              tx.set(db.collection(v3Cols.resumeTokens).doc(resumeId), stripUndefined({
+                id: resumeId,
                 consumedAt: rData.consumedAt,
                 expiresAt: rData.expiresAt,
                 v: 2,
                 ttlAt: new Date(rData.expiresAt),
-              });
+              }));
+              tx.set(
+                db.collection(`${namespace}_meta`).doc(`migration_receipt_${currentEpoch}_resume_${resumeId}`),
+                { completedAt: nowProvider(), runId },
+              );
             }
             return 'migrated';
           });
@@ -1122,10 +1241,9 @@ export async function adoptFirestoreLegacyTokens(
             if (tData.client_id !== clientId || !Array.isArray(tData.redirect_uris)) {
               throw new Error(`Target client content mismatch for ${clientId}`);
             }
-            if (!dryRun && isControlled && initialControl) {
-              await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
+            if (tData.v === 2) {
+              return 'skipped';
             }
-            return 'migrated';
           }
 
           if (!dryRun) {
@@ -1135,7 +1253,12 @@ export async function adoptFirestoreLegacyTokens(
             tx.set(db.collection(v3Cols.oauthClients).doc(clientId), defined({
               ...clientData,
               client_id: clientId,
+              v: 2,
             }));
+            tx.set(
+              db.collection(`${namespace}_meta`).doc(`migration_receipt_${currentEpoch}_client_${clientId}`),
+              { completedAt: nowProvider(), runId },
+            );
           }
           return 'migrated';
         });
@@ -1152,21 +1275,8 @@ export async function adoptFirestoreLegacyTokens(
     }
   }
 
-  // 6. Compute keyed inventory digests over ALL physical collections (Finding 6)
-  const sourceHmacKey = createHmac('sha256', key).update('nsmcp:inventory:source:v1').digest();
+  // 6. Compute keyed target inventory digest over ALL physical collections
   const targetHmacKey = createHmac('sha256', key).update('nsmcp:inventory:target:v1').digest();
-
-  const sourceEntries: string[] = [
-    ...familiesSnap.docs.map(d => computeSourceRecordFingerprint('family', d.id, d.data(), sourceHmacKey)),
-    ...tokensSnap.docs.map(d => computeSourceRecordFingerprint('token', d.id, d.data(), sourceHmacKey)),
-    ...refreshSnap.docs.map(d => computeSourceRecordFingerprint('refresh', d.id, d.data(), sourceHmacKey)),
-    ...upstreamSnap.docs.map(d => computeSourceRecordFingerprint('upstream', d.id, d.data(), sourceHmacKey)),
-    ...authCodesSnap.docs.map(d => computeSourceRecordFingerprint('authCode', d.id, d.data(), sourceHmacKey)),
-    ...resumeSnap.docs.map(d => computeSourceRecordFingerprint('resume', d.id, d.data(), sourceHmacKey)),
-    ...Array.from(clientDocs.entries()).map(([id, data]) => computeSourceRecordFingerprint('client', id, data, sourceHmacKey)),
-  ].sort();
-  const sourceInventoryDigest = createHmac('sha256', sourceHmacKey).update(sourceEntries.join('\n')).digest('hex');
-
   const [tFam, tUp, tRef, tSess, tCodes, tRes, tRet, tClients] = await Promise.all([
     db.collection(v3Cols.refreshFamilies).get(),
     db.collection(v3Cols.upstreamGrants).get(),
@@ -1259,7 +1369,16 @@ export async function adoptFirestoreLegacyTokens(
       );
 
       // Write v2_adopted marker
-      const isActuallyEmpty = report.migrated === 0 && report.scanned === 0;
+      const totalPhysicalSourceCount =
+        physicalCounts.families +
+        physicalCounts.tokens +
+        physicalCounts.refresh +
+        physicalCounts.upstream +
+        physicalCounts.authCodes +
+        physicalCounts.resumeTokens +
+        physicalCounts.oauthClients +
+        physicalCounts.clients;
+      const isActuallyEmpty = totalPhysicalSourceCount === 0 && report.migrated === 0;
       tx.set(
         db.collection(`${namespace}_meta`).doc('v2_adopted'),
         stripUndefined({

@@ -224,7 +224,7 @@ export class FirestoreBackend implements StoreBackend {
       return adoptionPromise;
     };
 
-    const assertV3Active = async (tx?: any, options?: { forMutation?: boolean }) => {
+    const assertV3Active = async (tx?: any) => {
       if (!isSupportedCutoverNamespace(namespace)) return;
       const controlRef = getCutoverFenceDocRef(db, namespace);
       const snap = tx ? await tx.get(controlRef) : await controlRef.get();
@@ -240,12 +240,20 @@ export class FirestoreBackend implements StoreBackend {
           { cutoverState: control.state, epoch: control.epoch },
         );
       }
-      if (tx && options?.forMutation && !control.irreversible) {
-        tx.set(controlRef, { irreversible: true, updatedAt: Date.now() }, { merge: true });
-        control.irreversible = true;
-      }
     };
     const assertV3ActiveInTransaction = assertV3Active;
+
+    const latchIrreversibleInTransaction = async (tx: any) => {
+      if (!isSupportedCutoverNamespace(namespace)) return;
+      const controlRef = getCutoverFenceDocRef(db, namespace);
+      const snap = await tx.get(controlRef);
+      if (snap.exists) {
+        const control = parseCutoverFenceRecord(snap.data(), namespace);
+        if (!control.irreversible) {
+          tx.set(controlRef, { irreversible: true, updatedAt: Date.now() }, { merge: true });
+        }
+      }
+    };
 
     const backend: StoreBackend = {
       name: 'firestore',
@@ -259,14 +267,19 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putAccess(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(sessions.doc(row.id), accessData(row));
         });
       },
       async deleteAccess(id) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
-          tx.delete(sessions.doc(id));
+          await assertV3ActiveInTransaction(tx);
+          const snap = await tx.get(sessions.doc(id));
+          if (snap.exists) {
+            await latchIrreversibleInTransaction(tx);
+            tx.delete(sessions.doc(id));
+          }
         });
       },
 
@@ -278,19 +291,25 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putRefresh(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(refreshTokens.doc(row.id), refreshData(row));
         });
       },
       async deleteRefresh(id) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
-          tx.delete(refreshTokens.doc(id));
+          await assertV3ActiveInTransaction(tx);
+          const snap = await tx.get(refreshTokens.doc(id));
+          if (snap.exists) {
+            await latchIrreversibleInTransaction(tx);
+            tx.delete(refreshTokens.doc(id));
+          }
         });
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(sessions.doc(params.accessRow.id), accessData(params.accessRow));
           tx.set(refreshTokens.doc(params.refreshRow.id), refreshData(params.refreshRow));
           tx.set(refreshFamilies.doc(params.familyRow.id), familyData(params.familyRow));
@@ -306,7 +325,8 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putFamily(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(refreshFamilies.doc(row.id), familyData(row));
         });
       },
@@ -319,20 +339,22 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putUpstream(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(upstreamGrants.doc(row.id), upstreamData(row));
         });
       },
       async updateUpstream(id, mutate) {
         const ref = upstreamGrants.doc(id);
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
           const current = { ...snap.data(), id } as UpstreamGrantRow;
           const next = mutate(current);
-          if (next === null) { tx.delete(ref); return undefined; }
           if (next === undefined) return undefined;
+          await latchIrreversibleInTransaction(tx);
+          if (next === null) { tx.delete(ref); return undefined; }
           tx.set(ref, upstreamData(next));
           return next;
         });
@@ -372,6 +394,7 @@ export class FirestoreBackend implements StoreBackend {
               }
               // All reads done. Now writes.
               if (famSnap.exists) {
+                await latchIrreversibleInTransaction(tx);
                 const fam = { ...famSnap.data(), id: famDoc.id } as FamilyRow;
                 tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
                 if (fam.currentAccessTokenId) tx.delete(sessions.doc(fam.currentAccessTokenId));
@@ -409,12 +432,11 @@ export class FirestoreBackend implements StoreBackend {
             }
             // Late replay - read query before writing
             const refQuerySnap = await tx.get(refreshTokens.where('familyId', '==', fam.id));
-            // Now writes
+            await latchIrreversibleInTransaction(tx);
             tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: params.now, generation: fam.generation + 1, updatedAt: params.now }));
             if (fam.currentAccessTokenId) {
               tx.delete(sessions.doc(fam.currentAccessTokenId));
             }
-            tx.delete(upstreamGrants.doc(fam.id));
             for (const doc of refQuerySnap.docs) {
               const data = doc.data() as unknown as RefreshPointerRow;
               tx.set(refreshTokens.doc(doc.id), refreshData({ ...data, status: 'consumed', consumedAt: params.now, successorSealed: undefined }));
@@ -426,6 +448,7 @@ export class FirestoreBackend implements StoreBackend {
           const oldPastRef = await tx.get(refreshTokens.where('familyId', '==', fam.id));
 
           // All reads finished. Now perform all writes.
+          await latchIrreversibleInTransaction(tx);
           const nextGen = fam.generation + 1;
 
           // 1. Consume old refresh
@@ -527,6 +550,7 @@ export class FirestoreBackend implements StoreBackend {
           const refQuerySnap = await tx.get(refreshTokens.where('familyId', '==', familyId));
 
           // All reads complete. Now writes.
+          await latchIrreversibleInTransaction(tx);
           const now = Date.now();
           tx.set(famDoc, familyData({ ...fam, status: 'revoked', revokedAt: now, generation: fam.generation + 1, updatedAt: now }));
 
@@ -586,13 +610,14 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putSession(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(sessions.doc(row.id), defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) }));
         });
       },
       async updateSession(id, mutate) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const ref = sessions.doc(id);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
@@ -613,12 +638,13 @@ export class FirestoreBackend implements StoreBackend {
           };
 
           const next = mutate(current);
+          if (next === undefined) return undefined;
+          await latchIrreversibleInTransaction(tx);
           if (next === null) {
             tx.delete(ref);
             if (upRef) tx.delete(upRef);
             return undefined;
           }
-          if (next === undefined) return undefined;
 
           if (upRef && upSnap?.exists && (next.leaseOwner !== upData?.leaseOwner || next.leaseUntil !== upData?.leaseUntil || next.nsExpiresAt !== upData?.nsExpiresAt)) {
             tx.set(upRef, upstreamData({
@@ -642,14 +668,19 @@ export class FirestoreBackend implements StoreBackend {
       },
       async deleteSession(id) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
-          tx.delete(sessions.doc(id));
+          await assertV3ActiveInTransaction(tx);
+          const snap = await tx.get(sessions.doc(id));
+          if (snap.exists) {
+            await latchIrreversibleInTransaction(tx);
+            tx.delete(sessions.doc(id));
+          }
         });
       },
 
       async putAuthCode(row) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(codes.doc(row.id), codeData(row));
         });
       },
@@ -661,9 +692,10 @@ export class FirestoreBackend implements StoreBackend {
       async takeAuthCode(id) {
         const ref = codes.doc(id);
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (!snap.exists) return undefined;
+          await latchIrreversibleInTransaction(tx);
           const current = { ...snap.data(), id } as AuthCodeRow;
           tx.delete(ref);
           return current;
@@ -671,7 +703,7 @@ export class FirestoreBackend implements StoreBackend {
       },
       async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const codeRef = codes.doc(params.codeId);
           const codeSnap = await tx.get(codeRef);
           if (!codeSnap.exists) return undefined;
@@ -684,6 +716,7 @@ export class FirestoreBackend implements StoreBackend {
             return undefined;
           }
 
+          await latchIrreversibleInTransaction(tx);
           tx.delete(codeRef);
           tx.set(sessions.doc(params.issue.accessRow.id), accessData(params.issue.accessRow));
           tx.set(refreshTokens.doc(params.issue.refreshRow.id), refreshData(params.issue.refreshRow));
@@ -696,9 +729,10 @@ export class FirestoreBackend implements StoreBackend {
       async insertResumeIfAbsent(row, now) {
         const ref = resumes.doc(row.id);
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(ref);
           if (snap.exists && (snap.data() as unknown as ResumeRow).expiresAt > now) return false;
+          await latchIrreversibleInTransaction(tx);
           tx.set(ref, resumeData(row));
           return true;
         });
@@ -709,7 +743,7 @@ export class FirestoreBackend implements StoreBackend {
         for (let attempt = 0; attempt < 15; attempt++) {
           try {
             await db.runTransaction(async tx => {
-              await assertV3ActiveInTransaction(tx, { forMutation: true });
+              await assertV3ActiveInTransaction(tx);
               const snap = await tx.get(ref);
               const current = snap.exists ? (snap.data() as { count: number; lastUsed: number }) : { count: 0, lastUsed: now };
               tx.set(ref, { userHash, toolName, count: current.count + 1, lastUsed: now });
@@ -735,19 +769,28 @@ export class FirestoreBackend implements StoreBackend {
       },
       async putClient(client) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
+          await latchIrreversibleInTransaction(tx);
           tx.set(clients.doc(client.client_id), defined(client));
         });
       },
       async sweep(now) {
         return db.runTransaction(async tx => {
-          await assertV3ActiveInTransaction(tx, { forMutation: true });
+          await assertV3ActiveInTransaction(tx);
           const snap = await tx.get(refreshTokens.where('status', '==', 'consumed'));
           let count = 0;
+          const toUpdate: any[] = [];
           for (const doc of snap.docs) {
             const data = doc.data() as unknown as RefreshPointerRow;
             if (data && typeof data.consumedAt === 'number' && now - data.consumedAt > REFRESH_RETRY_WINDOW_MS && data.successorSealed) {
-              tx.set(refreshTokens.doc(doc.id), defined({ ...data, successorSealed: undefined }));
+              toUpdate.push(doc.id);
+            }
+          }
+          if (toUpdate.length > 0) {
+            await latchIrreversibleInTransaction(tx);
+            for (const id of toUpdate) {
+              const d = snap.docs.find((doc: any) => doc.id === id)!.data() as unknown as RefreshPointerRow;
+              tx.set(refreshTokens.doc(id), defined({ ...d, successorSealed: undefined }));
               count++;
             }
           }
@@ -770,6 +813,7 @@ export function createFirestoreStore(options: { db: FirestoreLike; namespace: st
 }
 export {
   adoptFirestoreLegacyTokens,
+  computeSourceInventoryDigest,
   ensureFirestoreAdopted,
   type FirestoreAdoptionReport,
   type MigrationManifest,
