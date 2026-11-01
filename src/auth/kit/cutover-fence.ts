@@ -784,6 +784,7 @@ export interface GuardMutationResult {
   control: CutoverFenceControlRecord;
   operation?: LegacyOperationRecord;
   bufferCompletion: (now?: number) => void;
+  commitCompletion?: () => void;
 }
 
 export async function checkMutationGuardInTransaction(
@@ -827,6 +828,21 @@ export async function checkMutationGuardInTransaction(
         `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
       );
     }
+    if (opRecord.id && opRecord.id !== options.operation.id) {
+      throw new CutoverFenceError(
+        `Operation record id mismatch during closing: expected ${options.operation.id}, got ${opRecord.id}`,
+      );
+    }
+    if (opRecord.namespace && opRecord.namespace !== options.namespace) {
+      throw new CutoverFenceError(
+        `Operation record namespace mismatch during closing: expected ${options.namespace}, got ${opRecord.namespace}`,
+      );
+    }
+    if (opRecord.kind && opRecord.kind !== options.operation.kind) {
+      throw new CutoverFenceError(
+        `Operation record kind mismatch during closing: expected ${options.operation.kind}, got ${opRecord.kind}`,
+      );
+    }
     if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
       throw new CutoverFenceError(
         `Operation ${options.operation.id} is in phase ${opRecord.phase}; mutation not permitted`,
@@ -856,6 +872,21 @@ export async function checkMutationGuardInTransaction(
           `Operation record epoch mismatch: expected ${control.epoch}, got ${opRecord.epoch}`,
         );
       }
+      if (opRecord.id && opRecord.id !== options.operation.id) {
+        throw new CutoverFenceError(
+          `Operation record id mismatch: expected ${options.operation.id}, got ${opRecord.id}`,
+        );
+      }
+      if (opRecord.namespace && opRecord.namespace !== options.namespace) {
+        throw new CutoverFenceError(
+          `Operation record namespace mismatch: expected ${options.namespace}, got ${opRecord.namespace}`,
+        );
+      }
+      if (opRecord.kind && opRecord.kind !== options.operation.kind) {
+        throw new CutoverFenceError(
+          `Operation record kind mismatch: expected ${options.operation.kind}, got ${opRecord.kind}`,
+        );
+      }
       if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
         throw new CutoverFenceError(
           `Operation ${options.operation.id} is already in phase ${opRecord.phase}; cannot be reused for mutation`,
@@ -865,6 +896,7 @@ export async function checkMutationGuardInTransaction(
 
   const shouldComplete = options.operation && options.completeOperation !== false;
   const opToComplete = options.operation;
+  let didBuffer = false;
 
   return {
     control,
@@ -896,7 +928,12 @@ export async function checkMutationGuardInTransaction(
         },
         { merge: true },
       );
-      opToComplete.markCompleted();
+      didBuffer = true;
+    },
+    commitCompletion: () => {
+      if (didBuffer && opToComplete) {
+        opToComplete.markCompleted();
+      }
     },
   };
 }

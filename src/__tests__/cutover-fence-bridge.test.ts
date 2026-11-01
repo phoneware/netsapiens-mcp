@@ -1608,23 +1608,28 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       serverBaseUrl: 'http://localhost',
     });
     const clientInfo = { client_id: 'concurrent_client' } as any;
-    const p1Verify = authProvider.verifyAccessToken(testAccessToken1);
+    const p1Exchange = authProvider.exchangeRefreshToken(clientInfo, testRefreshToken1);
 
     const upstreamDoc1 = db.collection('mcp_tokens_upstream').doc(docId(token1.refreshFamilyId!));
+    let leaseAcquired1 = false;
     for (let i = 0; i < 30; i++) {
       const snap = await upstreamDoc1.get();
-      if (snap.data()?.leaseUntil > virtualNow) break;
+      if ((snap.data()?.leaseUntil ?? 0) > virtualNow) {
+        leaseAcquired1 = true;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
+    expect(leaseAcquired1).toBe(true);
 
-    const p1Forced = authProvider.forceRefreshUpstream(testAccessToken1);
+    const p1Verify = authProvider.verifyAccessToken(testAccessToken1);
     await new Promise((r) => setTimeout(r, 60));
 
     releaseBarrier1();
 
-    const [resVerify1, resForced1] = await Promise.all([p1Verify, p1Forced]);
+    const [resExchange1, resVerify1] = await Promise.all([p1Exchange, p1Verify]);
+    expect(resExchange1.access_token).toBeDefined();
     expect(resVerify1).toBeDefined();
-    expect(resForced1).toBe('concurrent-ns-access-token-1');
     expect(grantCallCount).toBe(1);
 
     // Pairing 2: exchangeRefreshToken vs forceRefreshUpstream on same family
@@ -1663,12 +1668,16 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const p2Exchange = authProvider.exchangeRefreshToken(clientInfo, testRefreshToken2);
 
     const upstreamDoc2 = db.collection('mcp_tokens_upstream').doc(docId(token2.refreshFamilyId!));
+    let leaseAcquired2 = false;
     for (let i = 0; i < 30; i++) {
       const snap = await upstreamDoc2.get();
-      if (snap.data()?.leaseUntil > virtualNow) break;
+      if ((snap.data()?.leaseUntil ?? 0) > virtualNow) {
+        leaseAcquired2 = true;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
-
+    expect(leaseAcquired2).toBe(true);
     const p2Forced = authProvider.forceRefreshUpstream(testAccessToken2);
     await new Promise((r) => setTimeout(r, 60));
 
@@ -1715,12 +1724,16 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const p3Verify = authProvider.verifyAccessToken(testAccessToken3);
 
     const upstreamDoc3 = db.collection('mcp_tokens_upstream').doc(docId(token3.refreshFamilyId!));
+    let leaseAcquired3 = false;
     for (let i = 0; i < 30; i++) {
       const snap = await upstreamDoc3.get();
-      if (snap.data()?.leaseUntil > virtualNow) break;
+      if ((snap.data()?.leaseUntil ?? 0) > virtualNow) {
+        leaseAcquired3 = true;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
-
+    expect(leaseAcquired3).toBe(true);
     const p3Forced = authProvider.forceRefreshUpstream(testAccessToken3);
     await new Promise((r) => setTimeout(r, 60));
 
@@ -1858,6 +1871,23 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     const { app } = createApp(authProvider);
+    const initRes = await request(app)
+      .post('/mcp')
+      .set('Authorization', `Bearer ${testAccessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'test-client', version: '1.0.0' },
+        },
+      });
+    expect(initRes.status).toBe(200);
+    const liveSessionId = initRes.headers['mcp-session-id'] || sessionId;
+
     const server = app.listen(0);
     const port = (server.address() as any).port;
     const controller = new AbortController();
@@ -1866,13 +1896,14 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       headers: {
         Authorization: `Bearer ${testAccessToken}`,
         Accept: 'text/event-stream',
-        'mcp-session-id': sessionId,
+        'mcp-session-id': liveSessionId,
       },
       signal: controller.signal,
     });
 
     const sseResp = await fetchPromise;
-    expect([200, 404]).toContain(sseResp.status);
+    expect(sseResp.status).toBe(200);
+    expect(sseResp.headers.get('content-type')).toContain('text/event-stream');
 
     expect(observedActiveCountDuringVerify).toBe(1);
 

@@ -748,7 +748,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      const e = err as { message?: string };
      const msg = e?.message?.includes('401')
       ? 'Invalid username or password.'
-      : `Authentication failed: ${e?.message ?? String(err)}`;
+      : 'Authentication failed: Invalid credentials or server error.';
      sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState));
      return;
     }
@@ -803,7 +803,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   const resolvedPlatform = getPlatform(platform);
   if (!resolvedPlatform) {
-   logger.warn('Token login rejected: unknown or forbidden platform', { platform });
+   logger.warn('Token login rejected: unknown or forbidden platform');
    sendPage(res, 200, this.renderLoginPage('/login', 'Selected platform is not recognized or not allowed.', refreshedState, 'token'));
    return;
   }
@@ -814,12 +814,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     try {
      validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
     } catch (err: unknown) {
-     const errMsg = (err as Error).message || String(err);
+     const errMsg = (err as Error).message || '';
      const msg = errMsg.includes('401')
       ? 'Invalid NetSapiens token or API key.'
-      : `Authentication failed: ${errMsg}`;
+      : 'Authentication failed: Invalid token or connection error.';
      sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState, 'token'));
-     return;
     }
 
     const nsTokens: NsTokenResponse = {
@@ -997,7 +996,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (!displayName || displayName === username) displayName = detected.displayName;
     if (!email) email = detected.email;
    } catch (err) {
-    logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
+    logger.warn('Failed to detect user role, defaulting to user', { error: (err as Error).name || 'UnknownError' });
    }
   } else {
    if (username.includes('@')) {
@@ -1375,7 +1374,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        }
        throw new InvalidGrantError(err.message);
       }
-      logger.warn('Refresh authorization check failed with operational error', { error: String(err) });
+      logger.warn('Refresh authorization check failed with operational error', { error: (err as Error).name || 'UnknownError' });
       throw new TemporarilyUnavailableError('Refresh authorization check temporarily unavailable');
      }
     }
@@ -1531,10 +1530,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   if (stored.serverBaseUrl && this.serverBaseUrl) {
    if (stored.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
-    logger.warn('Token rejected: serverBaseUrl mismatch (cross-server token)', {
-     tokenServer: stored.serverBaseUrl,
-     expectedServer: this.serverBaseUrl,
-    });
+    logger.warn('Token rejected: serverBaseUrl mismatch (cross-server token)');
     throw new InvalidTokenError('Access token was issued for a different server');
    }
   }
@@ -1583,7 +1579,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
        logger.warn('Upstream NS refresh grant rejected');
-       await this.tokenStore.delete(token);
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
+       } else {
+        await this.tokenStore.delete(token);
+       }
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
       logger.warn('Cross-instance NS token refresh failed with non-fatal error');
@@ -1610,7 +1610,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
        logger.warn('Upstream NS refresh grant rejected');
-       await this.tokenStore.delete(token);
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
+       } else {
+        await this.tokenStore.delete(token);
+       }
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
       logger.warn('In-memory NS token refresh failed with non-fatal error');
@@ -1658,7 +1662,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (err instanceof InvalidTokenError) {
      throw err;
     }
-    throw new InvalidTokenError(err instanceof Error ? err.message : String(err));
+    throw new InvalidTokenError('Invalid token');
    }
   }
 
@@ -1672,7 +1676,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
    nsExpiresAt: refreshed.expires_in ? this.nowProvider() + refreshed.expires_in * 1000 : undefined,
   });
-  logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
+  logger.info('Refreshed upstream NS token');
  }
 
  // -----------------------------------------------------------------------
@@ -1941,7 +1945,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const displayName = [firstName, lastName].filter(Boolean).join(' ') || data?.name || data?.description || user;
    const email = (data?.email || data?.['email-address'] || '') as string;
 
-   logger.info('Detected NS user role', { scope, role, username: user });
+   logger.info('Detected NS user role', { scope, role });
    return { user, domain, scope, role, displayName, email };
   } catch (err: unknown) {
    const status = (err as { response?: { status?: number } })?.response?.status;
@@ -1965,7 +1969,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      // Ignore
     }
    }
-   logger.warn('NS role detection API call failed', { error: String(err) });
+   logger.warn('NS role detection API call failed', { error: (err as Error).name || 'UnknownError' });
    return {
     user: defaultUser,
     domain: defaultDomain,
@@ -2017,9 +2021,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const desc = (typeof data === 'object' && data && ((data as Record<string, unknown>).error_description || (data as Record<string, unknown>).error || (data as Record<string, unknown>).message)) || err.message;
     const classification = classifyUpstreamTokenResponse(status, data ?? desc);
     if (classification === 'definitive') {
-     throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status}): ${String(desc)}`);
+     throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status})`);
     }
-    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status}): ${String(desc)}`);
+    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status})`);
    }
    throw err;
   }

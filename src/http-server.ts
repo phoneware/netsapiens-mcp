@@ -346,7 +346,7 @@ function wireApp(
    res.setHeader('ETag', cachedIcon.etag);
    res.send(cachedIcon.bytes);
   } catch (err) {
-   logger.warn('Failed to fetch icon, serving 404', { iconUrl, error: String(err) });
+   logger.warn('Failed to fetch icon, serving 404');
    res.status(404).end();
   }
  });
@@ -391,6 +391,7 @@ function wireApp(
        };
       });
       res.once('finish', resolveFn);
+      res.once('close', resolveFn);
       if (req.method === 'GET') {
        const origWriteHead = res.writeHead.bind(res);
        res.writeHead = (...args: any[]) => {

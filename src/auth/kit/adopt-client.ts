@@ -102,19 +102,17 @@ export function adoptClientMiddleware(opts: AdoptClientOptions): RequestHandler 
           grant_types: ['authorization_code', 'refresh_token'],
           response_types: ['code'],
         } as never);
-        opts.log?.(`adopted client_id ${clientId} for ${redirectUri}`);
+        opts.log?.('adopted client for authorization flow');
         next();
         return;
       } catch (err) {
-        opts.log?.(`could not adopt ${clientId}: ${(err as Error).message}`);
+        opts.log?.(`could not adopt client: ${(err as Error).name || 'UnknownError'}`);
         next();
         return;
       }
     }
 
-    opts.log?.(
-      `refused /authorize for client_id ${clientId} with redirect_uri ${redirectUri ?? '(none)'}: outside redirect policy`,
-    );
+    opts.log?.('refused /authorize: outside redirect policy');
 
     const safeRedirect = escapeHtml(redirectUri ?? 'an unspecified address');
     const safeServer = escapeHtml(name);

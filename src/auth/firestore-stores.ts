@@ -437,7 +437,8 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
 
   const accessRef = this.accessDocRef(accessToken);
   const upstreamRef = this.upstreamDocRef(familyId);
-  return await this.rawDb.runTransaction(async (transaction) => {
+  let guardResult: GuardMutationResult | undefined;
+  const result = await this.rawDb.runTransaction(async (transaction) => {
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
@@ -448,6 +449,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         now: this.localNow,
         completeOperation: true,
       });
+      guardResult = guard;
     }
     const snap = await transaction.get(accessRef);
     if (!snap.exists) {
@@ -473,21 +475,31 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     };
     guard?.bufferCompletion(this.localNow());
     transaction.set(accessRef, cleanDoc(updated));
-    transaction.set(
-      upstreamRef,
-      {
-        leaseUntil: null,
-        leaseOwner: null,
-        ambiguousOutcome: null,
-        ambiguousReason: null,
-        ambiguousAt: null,
-        ambiguousOperationId: null,
-        updatedAt: this.localNow(),
-      },
-      { merge: true },
-    );
+    const upstreamSnap = await transaction.get(upstreamRef);
+    if (upstreamSnap.exists) {
+      const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant>;
+      const currentLeaseOwner = upstreamRecord.leaseOwner;
+      const expectedOwner = op?.id ?? (upstreamGrant as any)?.leaseOwner;
+      if (!currentLeaseOwner || currentLeaseOwner === expectedOwner || currentLeaseOwner === op?.id) {
+        transaction.set(
+          upstreamRef,
+          {
+            leaseUntil: null,
+            leaseOwner: null,
+            ambiguousOutcome: null,
+            ambiguousReason: null,
+            ambiguousAt: null,
+            ambiguousOperationId: null,
+            updatedAt: this.localNow(),
+          },
+          { merge: true },
+        );
+      }
+    }
     return updated;
   });
+  guardResult?.commitCompletion?.();
+  return result;
  }
 
  async delete(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
@@ -610,9 +622,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   } catch (err: unknown) {
    const e = err as { message?: string; code?: unknown; details?: unknown };
    logger.error('FirestoreClientsStore.registerClient failed', {
-    error: e?.message ?? String(err),
     code: e?.code,
-    details: e?.details,
    });
    throw err;
   }

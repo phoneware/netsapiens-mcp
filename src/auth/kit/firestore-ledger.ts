@@ -567,6 +567,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     try {
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
 
+      let guardResult: GuardMutationResult | undefined;
       const result = await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce) {
@@ -578,6 +579,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
+          guardResult = guard;
         }
 
         let oldSnap = await transaction.get(oldRef);
@@ -825,24 +827,44 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
           if (upstreamData) {
             const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId));
-            const upstreamPayload = stripUndefined({
-              ...upstreamData,
-              grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
-              leaseUntil: null,
-              leaseOwner: null,
-              ambiguousOutcome: null,
-              ambiguousReason: null,
-              ambiguousAt: null,
-              ambiguousOperationId: null,
-              updatedAt: now,
-            });
-            transaction.set(upstreamRef, upstreamPayload, { merge: true });
+            const upstreamSnap = await transaction.get(upstreamRef);
+            if (upstreamSnap.exists) {
+              const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<unknown>;
+              const currentLeaseOwner = upstreamRecord.leaseOwner;
+              const expectedOwner = op?.id;
+              const canClearLease = !currentLeaseOwner || currentLeaseOwner === expectedOwner || (upstreamRecord.leaseUntil ?? 0) <= now;
+              const upstreamPayload = stripUndefined({
+                ...upstreamData,
+                grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
+                leaseUntil: canClearLease ? null : upstreamRecord.leaseUntil,
+                leaseOwner: canClearLease ? null : upstreamRecord.leaseOwner,
+                ambiguousOutcome: canClearLease ? null : upstreamRecord.ambiguousOutcome,
+                ambiguousReason: canClearLease ? null : upstreamRecord.ambiguousReason,
+                ambiguousAt: canClearLease ? null : upstreamRecord.ambiguousAt,
+                ambiguousOperationId: canClearLease ? null : upstreamRecord.ambiguousOperationId,
+                updatedAt: now,
+              });
+              transaction.set(upstreamRef, upstreamPayload, { merge: true });
+            } else {
+              const upstreamPayload = stripUndefined({
+                ...upstreamData,
+                grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
+                leaseUntil: null,
+                leaseOwner: null,
+                ambiguousOutcome: null,
+                ambiguousReason: null,
+                ambiguousAt: null,
+                ambiguousOperationId: null,
+                updatedAt: now,
+              });
+              transaction.set(upstreamRef, upstreamPayload, { merge: true });
+            }
           }
         }
 
         return { status: 'claimed', token: stored } as const;
       });
-
+      guardResult?.commitCompletion?.();
       return result;
     } catch (err) {
       this.wrapError(err);
@@ -858,6 +880,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         );
       }
       const familyRef = this.familyCol().doc(docId(familyId));
+      let guardResult: GuardMutationResult | undefined;
       await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
@@ -867,6 +890,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             operation: op,
             now: this.nowProvider,
           });
+          guardResult = guard;
         }
         const familySnap = await transaction.get(familyRef);
         if (!familySnap.exists) {
@@ -877,6 +901,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         guard?.bufferCompletion(this.nowProvider());
         this.deleteFamilyInTransaction(transaction, familyRef, family);
       });
+      guardResult?.commitCompletion?.();
     } catch (err) {
       this.wrapError(err);
     }
@@ -893,6 +918,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const accessRef = this.accessCol().doc(docId(token));
       const refreshRef = this.refreshCol().doc(docId(token));
 
+      let guardResult: GuardMutationResult | undefined;
       await this.db.runTransaction(async (transaction: Transaction) => {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
@@ -902,6 +928,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             operation: op,
             now: this.nowProvider,
           });
+          guardResult = guard;
         }
 
         const accessSnap = await transaction.get(accessRef);
@@ -962,6 +989,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
         guard?.bufferCompletion(this.nowProvider());
       });
+      guardResult?.commitCompletion?.();
     } catch (err) {
       this.wrapError(err);
     }
@@ -987,6 +1015,9 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     }
     for (const linkedCol of this.linkedFamilyCollections) {
       transaction.delete(this.db.collection(linkedCol).doc(docId(family.id)));
+    }
+    if (this.legacy?.upstreamCollection) {
+      transaction.delete(this.db.collection(this.legacy.upstreamCollection).doc(docId(family.id)));
     }
     transaction.delete(familyRef);
   }
