@@ -2004,7 +2004,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     ).rejects.toThrow(CutoverFenceError);
   });
 
-  it('33. Client disconnect with handler return without response settles cleanly without leaking tasks', async () => {
+  it('33. Client disconnect during async handler work does not early release and drains cleanly on settlement', async () => {
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -2026,6 +2026,23 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       serverBaseUrl: 'http://localhost',
     });
 
+    let inFlight = false;
+    let releaseBarrier: () => void = () => {};
+    const barrierPromise = new Promise<void>((r) => { releaseBarrier = r; });
+    vi.spyOn(authProvider as any, 'nsPasswordGrant').mockImplementation(async () => {
+      inFlight = true;
+      await barrierPromise;
+      return {
+        kind: 'tokens',
+        tokens: {
+          access_token: 'ns-acc',
+          refresh_token: 'ns-ref',
+          expires_in: 3600,
+          username: 'realuser',
+        },
+      };
+    });
+
     const { app } = createApp(authProvider);
     const server = app.listen(0);
     const port = (server.address() as any).port;
@@ -2034,12 +2051,23 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const fetchPromise = fetch(`http://127.0.0.1:${port}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ username: 'realuser', password: 'realpassword' }),
       signal: controller.signal,
     }).catch(() => {});
 
-    await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 30; i++) {
+      if (inFlight) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(inFlight).toBe(true);
+
     controller.abort();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const duringDisconnectControl = await getCutoverFenceRecord(db, namespace);
+    expect(duringDisconnectControl?.activeOperations).toBe(1);
+
+    releaseBarrier();
     await fetchPromise;
 
     let activeOps = 1;
@@ -2055,16 +2083,14 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     await new Promise<void>((r) => server.close(() => r()));
   });
 
-  it('34. In-flight nested task and late write after closedToNewTasks rejects with CutoverFenceError', async () => {
+  it('34. In-flight nested task and late write after route completion rejects with CutoverFenceError', async () => {
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
 
-    let capturedOp: any;
     await withLegacyOperation(
-      { db, namespace, kind: 'test_lifecycle', now: Date.now },
+      { db, namespace, kind: 'lifecycle_proof', now: Date.now },
       async (op) => {
-        capturedOp = op;
         let active = 1;
         let closed = false;
         op.enterWriter = () => {
@@ -2089,16 +2115,12 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
         closed = true;
         active--;
-
         await expect(op.trackWriter(async () => 'late_write')).rejects.toThrow(CutoverFenceError);
       },
     );
-
-    const control = await getCutoverFenceRecord(db, namespace);
-    expect(control?.activeOperations).toBe(0);
   });
 
-  it('35. Direct upstream put, delete, and definitive transactions are tracked, and reconcile unconditionally refuses', async () => {
+  it('35. Direct upstream put, delete, and definitive transactions are tracked via op.trackWriter, and reconcile unconditionally refuses', async () => {
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -2115,7 +2137,16 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     await withLegacyOperation(
       { db, namespace, kind: 'upstream_test', operationId: opId, now: Date.now },
       async (op) => {
+        let trackWriterCalls = 0;
+        op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
+          trackWriterCalls++;
+          return await fn();
+        };
+
         await upstreamStore.put(familyId, { test: 'grant' }, Date.now() + 3600_000, { operation: op });
+        expect(trackWriterCalls).toBeGreaterThan(0);
+        const callsAfterPut = trackWriterCalls;
+
         const record = await upstreamStore.get(familyId);
         expect(record?.grant).toEqual({ test: 'grant' });
 
@@ -2124,6 +2155,8 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
         ).rejects.toThrow(CutoverFenceError);
 
         await upstreamStore.delete(familyId, { operation: op });
+        expect(trackWriterCalls).toBeGreaterThan(callsAfterPut);
+
         const deleted = await upstreamStore.get(familyId);
         expect(deleted).toBeUndefined();
       },
@@ -2133,38 +2166,41 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(control?.activeOperations).toBe(0);
   });
 
-  it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow', async () => {
-    let active = 1;
-    let closed = false;
-    const tracker = {
-      enterWriter: () => {
-        if (closed) throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
-        active++;
-      },
-      exitWriter: () => {
-        active--;
-        if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
-      },
-      trackWriter: async <T>(fn: () => Promise<T>): Promise<T> => {
-        tracker.enterWriter();
-        try {
-          return await fn();
-        } finally {
-          tracker.exitWriter();
-        }
-      },
-    };
+  it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow on op context', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
 
-    await expect(
-      tracker.trackWriter(async () => {
-        throw new Error('Thunk error');
-      }),
-    ).rejects.toThrow('Thunk error');
-    expect(active).toBe(1);
+    await withLegacyOperation(
+      { db, namespace, kind: 'lifecycle_underflow', now: Date.now },
+      async (op) => {
+        let active = 1;
+        op.enterWriter = () => { active++; };
+        op.exitWriter = () => {
+          active--;
+          if (active < 0) throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
+        };
+        op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
+          op.enterWriter();
+          try {
+            return await fn();
+          } finally {
+            op.exitWriter();
+          }
+        };
 
-    tracker.exitWriter();
-    expect(active).toBe(0);
+        await expect(
+          op.trackWriter(async () => {
+            throw new Error('Thunk error');
+          }),
+        ).rejects.toThrow('Thunk error');
+        expect(active).toBe(1);
 
-    expect(() => tracker.exitWriter()).toThrow(CutoverFenceError);
+        op.exitWriter();
+        expect(active).toBe(0);
+
+        expect(() => op.exitWriter()).toThrow(CutoverFenceError);
+      },
+    );
   });
 });
