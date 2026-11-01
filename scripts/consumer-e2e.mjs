@@ -131,6 +131,7 @@ async function startMcpServerProcess(tempDir, env) {
   const cp = spawn(runner.cmd, runner.args, {
     cwd: tempDir,
     env,
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logs = '';
@@ -141,15 +142,34 @@ async function startMcpServerProcess(tempDir, env) {
     getLogs: () => logs,
     async stop() {
       if (cp.exitCode === null) {
-        cp.kill('SIGTERM');
+        if (process.platform !== 'win32' && cp.pid) {
+          try { process.kill(-cp.pid, 'SIGTERM'); } catch {}
+        } else {
+          cp.kill('SIGTERM');
+        }
         for (let i = 0; i < 40; i++) {
           if (cp.exitCode !== null) return;
           await delay(50);
         }
-        cp.kill('SIGKILL');
+        if (process.platform !== 'win32' && cp.pid) {
+          try { process.kill(-cp.pid, 'SIGKILL'); } catch {}
+        } else {
+          cp.kill('SIGKILL');
+        }
       }
     },
   };
+}
+
+async function waitForHealthDown(port, maxAttempts = 30) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/health`);
+      await delay(100);
+    } catch {
+      return;
+    }
+  }
 }
 
 async function waitForHealth(port, maxAttempts = 50) {
@@ -544,6 +564,7 @@ async function main() {
 
         // Restart server process
         await srv1.stop();
+        await waitForHealthDown(serverPort);
 
         const srv2 = await startMcpServerProcess(tempDir, serverEnv);
         try {
@@ -671,6 +692,7 @@ async function main() {
         }
 
         await srv1.stop();
+        await waitForHealthDown(serverPort);
 
         // Restart server with memory store
         const srv2 = await startMcpServerProcess(tempDir, serverEnv);
@@ -768,7 +790,13 @@ async function main() {
 
       const srv = await startMcpServerProcess(tempDir, serverEnv);
       try {
-        const health = await waitForHealth(serverPort);
+        let health = await waitForHealth(serverPort);
+        for (let i = 0; i < 50; i++) {
+          const entry44 = health.netsapiens?.find?.((p) => p.apiUrl === fake44.origin);
+          if (entry44?.apiVersion) break;
+          await delay(100);
+          health = await waitForHealth(serverPort);
+        }
 
         // /health.netsapiens reports version info
         if (Array.isArray(health.netsapiens)) {
