@@ -81,7 +81,7 @@ export function adoptClientMiddleware(opts: AdoptClientOptions): RequestHandler 
         return;
       }
     } catch (err) {
-      opts.log?.(`client lookup failed: ${(err as Error).message}`);
+      opts.log?.(`client lookup failed: ${(err as Error).name || 'UnknownError'}`);
       next();
       return;
     }

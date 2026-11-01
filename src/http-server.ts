@@ -200,7 +200,7 @@ export async function startHttpServer(options?: CreateAppOptions): Promise<HttpS
    );
   }
   if (config.debug) {
-   logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
+   logger.debug('Debug mode enabled');
   }
  });
 
@@ -353,8 +353,15 @@ function wireApp(
 
  // Publishes the requested loopback redirect_uri for the clients store, which
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
- // scoped to /authorize so every other endpoint keeps exact redirect matching.
- const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
+/**
+ * SDK Version Gate:
+ * Verified for @modelcontextprotocol/sdk ^1.32.1 (pinned runtime 1.32.2).
+ * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
+ * async work before calling response.end().
+ */
+export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1', '1.32.2'];
+
+const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
   return async (req, res, next) => {
    if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
     return next();
@@ -429,9 +436,11 @@ function wireApp(
        // Transport disconnected
       });
       let handlerSettled = false;
+      let failSafeTimer: NodeJS.Timeout | undefined;
       const markHandlerSettled = () => {
        if (!handlerSettled) {
         handlerSettled = true;
+        clearTimeout(failSafeTimer);
         closedToNewTasks = true;
         activeTasks--;
         if (activeTasks < 0) {
@@ -440,6 +449,7 @@ function wireApp(
         checkQuiescent();
        }
       };
+      failSafeTimer = setTimeout(() => { markHandlerSettled(); }, 30_000);
       (req as any).signalHandlerComplete = markHandlerSettled;
       res.once('finish', markHandlerSettled);
       const origEnd = res.end.bind(res);
@@ -786,7 +796,7 @@ function createAuthenticatedMcpServer(
  registerTools(server, client, userRole, userIdentity);
 
  server.onerror = (error) => {
-  logger.error('[MCP Error]', { error: String(error) });
+  logger.error('[MCP Error]', { error: error instanceof Error ? error.name : 'UnknownError' });
  };
 
  return { server, client };
