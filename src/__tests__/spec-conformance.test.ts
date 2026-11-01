@@ -25,7 +25,7 @@ interface Spec {
   components?: { schemas?: Record<string, SpecSchema> };
 }
 
-const spec = JSON.parse(readFileSync('spec/netsapiens-api-v2.json', 'utf8')) as Spec;
+const spec = JSON.parse(readFileSync('spec/v2/45.0.json', 'utf8')) as Spec;
 
 function deref(schema: SpecSchema | undefined, depth = 0): SpecSchema | undefined {
   if (!schema || depth > 8) return schema;
