@@ -373,6 +373,9 @@ export async function adoptFirestoreLegacyTokens(options: {
           if (!tokData || !tokData.refreshToken) {
             return 'skipped';
           }
+          if (tokData.refreshFamilyId) {
+            return 'skipped';
+          }
 
           const clientId = tokData.clientId as string | undefined;
           if (!clientId) {

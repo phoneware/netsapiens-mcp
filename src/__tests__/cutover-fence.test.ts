@@ -224,4 +224,57 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       }),
     ).rejects.toThrow(/Invalid state transition/);
   });
+
+  it('adoptFirestoreLegacyTokens dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'fenced' });
+
+    const familyId = 'dry-fam-1';
+    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
+      id: familyId,
+      currentAccessToken: 'dry-acc',
+      currentRefreshToken: 'dry-ref',
+      retiredRefreshFingerprints: [],
+      updatedAt: Date.now(),
+    });
+    await db.collection(`${namespace}_tokens_refresh`).doc('dry-ref').set({
+      accessToken: 'dry-acc',
+      familyId,
+      status: 'active',
+      token: {
+        accessToken: 'dry-acc',
+        refreshToken: 'dry-ref',
+        clientId: 'dry-client',
+        expiresAt: Date.now() + 3600_000,
+        serverBaseUrl: 'http://localhost:3000',
+        nsAccessToken: 'ns-dry-tok',
+        nsRefreshToken: 'ns-dry-ref',
+        nsUsername: 'dry@domain.com',
+      },
+    });
+    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
+      grant: { access_token: 'ns-dry-tok', refresh_token: 'ns-dry-ref', username: 'dry@domain.com' },
+      expiresAt: Date.now() + 3600_000,
+      updatedAt: Date.now(),
+    });
+    await db.collection(`${namespace}_tokens`).doc('dry-acc').set({
+      accessToken: 'dry-acc',
+      refreshToken: 'dry-ref',
+      refreshFamilyId: familyId,
+      clientId: 'dry-client',
+    });
+
+    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, dryRun: true, expectedEpoch: 1 });
+    expect(report.errors).toBe(0);
+    expect(report.migrated).toBe(1);
+
+    // Assert that NO v3 documents or v2_adopted marker were written during dryRun
+    const v3Families = await db.collection(`${namespace}_refresh_families`).get();
+    expect(v3Families.empty).toBe(true);
+
+    const markerSnap = await db.collection(`${namespace}_meta`).doc('v2_adopted').get();
+    expect(markerSnap.exists).toBe(false);
+  });
 });
