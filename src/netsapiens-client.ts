@@ -159,10 +159,25 @@ export class NetSapiensClient {
         // not a dead token. Invalidating the bearer on it signs the user out of
         // every tool because one call asked for something above their tier.
         if (err.response?.status === 401 && !/invalid scope/i.test(nsMessage ?? '') && this.config.onUnauthorized) {
+          const reqConfig = err.config as (typeof err.config & { headers?: Record<string, string>; _retry?: boolean }) | undefined;
+          if (!reqConfig?._retry) {
+            if (reqConfig) {
+              reqConfig._retry = true;
+            }
           try {
             await this.config.onUnauthorized(error);
+              if (reqConfig) {
+                if (this.config.apiToken) {
+                  reqConfig.headers = {
+                    ...reqConfig.headers,
+                    Authorization: `Bearer ${this.config.apiToken}`,
+                  };
+                }
+                return await this.client.request(reqConfig as unknown as import('axios').AxiosRequestConfig);
+              }
           } catch {
             // Ignore onUnauthorized callback errors
+            }
           }
         }
         const metadata = err.config?.metadata;

@@ -14,7 +14,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
-import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { requireBearer } from './auth/kit/bearer.js';
+import { UpstreamRevokedError, kitCodeOf } from './auth/kit/errors.js';
+import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
@@ -101,7 +103,7 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export function createApp(): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
+export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
  const config = loadConfig();
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
@@ -123,14 +125,13 @@ export function createApp(): { app: express.Express; authProvider: NetSapiensAut
  // alive without ever hitting the cliff. Default 7 days; operator-tunable
  // via MCP_TOKEN_LIFETIME_HOURS.
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
- const authProvider = new NetSapiensAuthProvider({
+ const authProvider = customAuthProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
   nsClientId,
   nsClientSecret,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
  });
-
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
  return { app, authProvider, baseUrl, mcpUrl };
 }
@@ -319,7 +320,13 @@ function wireApp(
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
  // scoped to /authorize so every other endpoint keeps exact redirect matching.
  app.use('/authorize', allowLoopbackRedirectUri());
-
+ app.use(
+  '/authorize',
+  adoptClientMiddleware({
+   clientsStore: authProvider.clientsStore,
+   serverName: 'NetSapiens MCP',
+  }),
+ );
  // OAuth endpoints: discovery, authorize, token, register, revoke
  app.use(mcpAuthRouter({
   provider: authProvider,
@@ -375,9 +382,10 @@ function wireApp(
  // -----------------------------------------------------------------------
 
  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpUrl);
- const bearerAuth = requireBearerAuth({
+ const bearerAuth = requireBearer({
   verifier: authProvider,
   resourceMetadataUrl,
+  now: authProvider.nowProvider,
  });
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
@@ -530,7 +538,16 @@ function createAuthenticatedMcpServer(
    timeout: config.netsapiens.timeout,
    onUnauthorized: async () => {
     if (authProvider && bearerToken) {
+     try {
+      const newNsToken = await authProvider.forceRefreshUpstream(bearerToken);
+      if (newNsToken) {
+       client.setApiToken(newNsToken);
+      }
+     } catch (err) {
+      if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
      await authProvider.invalidateToken(bearerToken);
+      }
+     }
     }
    },
   }

@@ -230,7 +230,7 @@ describe('loadConfig()', () => {
     const config = loadConfig();
 
     expect(config.name).toBe('netsapiens-mcp');
-    expect(config.version).toBe('1.1.1');
+    expect(config.version).toBe('2.4.0');
     expect(config.netsapiens.timeout).toBe(30000);
     expect(config.netsapiens.rateLimit).toEqual({
       requests: 100,
@@ -314,7 +314,7 @@ describe('createMcpServer()', () => {
     createMcpServer(config);
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.4.0', title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),
@@ -373,7 +373,7 @@ describe('NetSapiensMCPServer', () => {
     createServer();
 
     expect(Server).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'netsapiens-mcp', version: '1.1.1', title: expect.any(String) }),
+      expect.objectContaining({ name: 'netsapiens-mcp', version: '2.4.0', title: expect.any(String) }),
       expect.objectContaining({
         capabilities: expect.objectContaining({ tools: expect.any(Object) }),
         instructions: expect.stringContaining('NetSapiens'),

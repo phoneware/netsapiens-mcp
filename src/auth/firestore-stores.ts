@@ -14,14 +14,28 @@ import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
+import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
+import { FirestoreUpstreamGrantStore } from './kit/upstream-grant.js';
+import { stripUndefined } from './kit/strip-undefined.js';
 import { logger } from '../utils/logger.js';
 
-function stripUndefined<T>(value: T): T {
+function toDate(val: unknown): Date | undefined {
+  if (!val) return undefined;
+  if (val instanceof Date) return val;
+  if (val && typeof val === 'object' && 'toDate' in val && typeof (val as { toDate: () => unknown }).toDate === 'function') {
+    const res = (val as { toDate: () => unknown }).toDate();
+    if (res instanceof Date) return res;
+  }
+  return undefined;
+}
+
+function cleanDoc<T>(value: T): T {
  if (value === null || value === undefined) return value;
  if (Array.isArray(value)) {
-  return value.map((v) => stripUndefined(v)) as unknown as T;
+    return value.map((v) => cleanDoc(v)) as unknown as T;
  }
  if (value instanceof Date || value instanceof Timestamp) {
   return value;
@@ -29,29 +43,17 @@ function stripUndefined<T>(value: T): T {
  if (typeof value === 'object') {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-   if (v === undefined) continue;
-   out[k] = stripUndefined(v);
+      if (v !== undefined) {
+        out[k] = cleanDoc(v);
+      }
   }
   return out as T;
  }
  return value;
 }
-function toDate(val: unknown): Date | undefined {
- if (val instanceof Date) return val;
- if (val && typeof val === 'object' && 'toDate' in val) {
-  const method = (val as { toDate: unknown }).toDate;
-  if (typeof method === 'function') {
-   const res = method.call(val);
-   if (res instanceof Date) return res;
-  }
- }
- return undefined;
-}
 
 function delay(ms: number): Promise<void> {
- return new Promise<void>((resolve) => {
-  setTimeout(resolve, ms);
- });
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
 export class RetryableRefreshError extends Error {
@@ -67,130 +69,196 @@ export class LeaseLostError extends Error {
  }
 }
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
+export interface NsUpstreamGrant {
+ nsAccessToken: string;
+ nsRefreshToken?: string;
+ nsExpiresAt?: number;
+ nsUsername?: string;
+ nsUserRole?: string;
+ nsApiUrl?: string;
+}
 
 // ---------------------------------------------------------------------------
 // FirestoreTokenStore
 // ---------------------------------------------------------------------------
 
-export class FirestoreTokenStore {
- private cache = new Map<string, StoredToken>();
- private refreshCache = new Map<string, string>(); // refreshToken -> accessToken
- private readonly db: Firestore;
- private readonly collection: string;
- private readonly refreshCollection: string;
-
- constructor(opts: { collection?: string; projectId?: string; db?: Firestore } = {}) {
+export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
+ private readonly upstreamStore: FirestoreUpstreamGrantStore<NsUpstreamGrant>;
+ private readonly localNow: () => number;
+ private readonly rawDb: Firestore;
+ private readonly tokensCollection: string;
+ private readonly refreshColName: string;
+ constructor(opts: { collection?: string; projectId?: string; db?: Firestore; now?: () => number } = {}) {
   const defaultCollection = process.env.MCP_READ_ONLY === 'true'
    ? 'readonly_mcp_tokens'
    : 'mcp_tokens';
-  this.collection = opts.collection ?? defaultCollection;
-  this.refreshCollection = `${this.collection}_refresh`;
-  this.db = opts.db ?? new Firestore({
+    const collection = opts.collection ?? defaultCollection;
+    const db = opts.db ?? new Firestore({
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
+
+    super({
+      db,
+      collection,
+      refreshCollection: `${collection}_refresh`,
+      familyCollection: `${collection}_refresh_families`,
+      linkedFamilyCollections: [`${collection}_upstream`],
+      accessDocExtras: (token) => {
+        const ttlAt = token.ttlAt ?? new Date(token.expiresAt + 30 * 24 * 60 * 60 * 1000);
+        return { ttlAt };
+      },
+      legacy: {
+        pointerDocs: true,
+        embeddedRefreshQuery: true,
+        toToken: (raw) => raw as unknown as StoredToken,
+        toUpstream: (raw) => {
+          if (raw.nsAccessToken) {
+            return {
+              grant: {
+                nsAccessToken: raw.nsAccessToken,
+                nsRefreshToken: raw.nsRefreshToken,
+                nsExpiresAt: raw.nsExpiresAt,
+                nsUsername: raw.nsUsername,
+                nsUserRole: raw.nsUserRole,
+                nsApiUrl: raw.nsApiUrl,
+              },
+              expiresAt: typeof raw.nsExpiresAt === 'number' ? raw.nsExpiresAt : undefined,
+            };
+          }
+          return undefined;
+        },
+        upstreamCollection: `${collection}_upstream`,
+      },
+      now: opts.now,
+    });
+
+    this.rawDb = db;
+    this.tokensCollection = collection;
+    this.refreshColName = `${collection}_refresh`;
+    this.upstreamStore = new FirestoreUpstreamGrantStore<NsUpstreamGrant>({
+      db,
+      collection: `${collection}_upstream`,
+      now: opts.now,
+    });
+    this.localNow = opts.now ?? Date.now;
   logger.info('Firestore token store initialized', {
-   collection: this.collection,
+      collection,
    projectId: opts.projectId,
   });
  }
 
- clearCache(): void {
-  this.cache.clear();
-  this.refreshCache.clear();
- }
-
+  // Backwards compatibility methods
  async get(accessToken: string): Promise<StoredToken | undefined> {
-  const hit = this.cache.get(accessToken);
-  if (hit) return hit;
-  const snap = await this.db.collection(this.collection).doc(accessToken).get();
-  if (!snap.exists) return undefined;
-  const data = snap.data() as StoredToken;
-  const convertedDate = toDate(data.ttlAt);
-  if (convertedDate) {
-   data.ttlAt = convertedDate;
-  }
-  this.cache.set(accessToken, data);
-  this.refreshCache.set(data.refreshToken, accessToken);
-  return data;
+    return this.getByAccessToken(accessToken);
  }
 
  async getByRefreshToken(refreshToken: string): Promise<StoredToken | undefined> {
-  const cachedAccess = this.refreshCache.get(refreshToken);
-  if (cachedAccess) {
-   const hit = this.cache.get(cachedAccess);
-   if (hit) return hit;
+    const res = await this.lookupRefresh(refreshToken);
+    if (res.status === 'active' || res.status === 'retry') {
+      return res.token;
   }
-  const ptr = await this.db.collection(this.refreshCollection).doc(refreshToken).get();
-  if (!ptr.exists) return undefined;
-  const { accessToken } = ptr.data() as { accessToken: string };
-  return this.get(accessToken);
+    return undefined;
  }
 
  async set(token: StoredToken): Promise<void> {
-  const batch = this.db.batch();
-  batch.set(this.db.collection(this.collection).doc(token.accessToken), stripUndefined(token));
-  batch.set(this.db.collection(this.refreshCollection).doc(token.refreshToken), {
-   accessToken: token.accessToken,
-  });
-  await batch.commit();
-  this.cache.set(token.accessToken, token);
-  this.refreshCache.set(token.refreshToken, token.accessToken);
+    await this.issue(token);
+ }
+
+ override async issue(token: StoredToken): Promise<StoredToken> {
+    const issued = await super.issue(token);
+    if (token.nsAccessToken && issued.refreshFamilyId) {
+      await this.upstreamStore.put(
+        issued.refreshFamilyId,
+        {
+          nsAccessToken: token.nsAccessToken,
+          nsRefreshToken: token.nsRefreshToken,
+          nsExpiresAt: token.nsExpiresAt,
+          nsUsername: token.nsUsername,
+          nsUserRole: token.nsUserRole,
+          nsApiUrl: token.nsApiUrl,
+        },
+        token.nsExpiresAt,
+      );
+    }
+    return issued;
+ }
+
+ override async rotate(
+    oldRefreshToken: string,
+    replacement: StoredToken,
+    expectedClientId: string,
+    now?: number,
+  ) {
+    const res = await super.rotate(oldRefreshToken, replacement, expectedClientId, now);
+    if (res.status === 'claimed' && res.token.refreshFamilyId && replacement.nsAccessToken) {
+      await this.upstreamStore.put(
+        res.token.refreshFamilyId,
+        {
+          nsAccessToken: replacement.nsAccessToken,
+          nsRefreshToken: replacement.nsRefreshToken,
+          nsExpiresAt: replacement.nsExpiresAt,
+          nsUsername: replacement.nsUsername,
+          nsUserRole: replacement.nsUserRole,
+          nsApiUrl: replacement.nsApiUrl,
+        },
+        replacement.nsExpiresAt,
+      );
+    }
+    return res;
+ }
+
+ override async getByAccessToken(accessToken: string): Promise<StoredToken | undefined> {
+    const token = await super.getByAccessToken(accessToken);
+    if (!token) return undefined;
+    if (token.ttlAt) {
+      const converted = toDate(token.ttlAt);
+      if (converted) token.ttlAt = converted;
+    }
+    if (token.refreshFamilyId) {
+      const up = await this.upstreamStore.get(token.refreshFamilyId);
+      if (up?.grant) {
+        return {
+          ...token,
+          nsAccessToken: up.grant.nsAccessToken ?? token.nsAccessToken,
+          nsRefreshToken: up.grant.nsRefreshToken ?? token.nsRefreshToken,
+          nsExpiresAt: up.expiresAt ?? up.grant.nsExpiresAt ?? token.nsExpiresAt,
+          nsUsername: up.grant.nsUsername ?? token.nsUsername,
+          nsUserRole: up.grant.nsUserRole ?? token.nsUserRole,
+          nsApiUrl: up.grant.nsApiUrl ?? token.nsApiUrl,
+        };
+      }
+    }
+    return token;
  }
 
  async update(accessToken: string, patch: Partial<StoredToken>): Promise<StoredToken | undefined> {
   const existing = await this.get(accessToken);
   if (!existing) return undefined;
   const updated: StoredToken = { ...existing, ...patch };
-
-  const batch = this.db.batch();
-  batch.set(this.db.collection(this.collection).doc(updated.accessToken), stripUndefined(updated));
+  await this.rawDb.collection(this.tokensCollection).doc(docId(accessToken)).set(stripUndefined(updated), { merge: true });
   if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
-   batch.delete(this.db.collection(this.refreshCollection).doc(existing.refreshToken));
-   this.refreshCache.delete(existing.refreshToken);
+    const familyId = updated.refreshFamilyId ?? existing.refreshFamilyId ?? randomUUID();
+    await this.rawDb.collection(this.refreshColName).doc(docId(existing.refreshToken)).delete().catch(() => {});
+    await this.rawDb.collection(this.refreshColName).doc(docId(patch.refreshToken)).set(stripUndefined({
+      status: 'active',
+      familyId,
+      token: updated,
+    }));
   }
-  batch.set(this.db.collection(this.refreshCollection).doc(updated.refreshToken), {
-   accessToken: updated.accessToken,
-  });
-  await batch.commit();
-
-  this.cache.set(updated.accessToken, updated);
-  this.refreshCache.set(updated.refreshToken, updated.accessToken);
   return updated;
  }
 
- async delete(accessToken: string): Promise<void> {
-  const existing = this.cache.get(accessToken) ?? (await this.get(accessToken));
-  if (!existing) return;
-  const batch = this.db.batch();
-  batch.delete(this.db.collection(this.collection).doc(accessToken));
-  batch.delete(this.db.collection(this.refreshCollection).doc(existing.refreshToken));
-  await batch.commit();
-  this.cache.delete(accessToken);
-  this.refreshCache.delete(existing.refreshToken);
- }
-
- async deleteByRefreshToken(refreshToken: string): Promise<void> {
-  const accessToken = this.refreshCache.get(refreshToken)
-   ?? ((await this.db.collection(this.refreshCollection).doc(refreshToken).get()).data() as { accessToken?: string } | undefined)?.accessToken;
-  if (!accessToken) return;
-  await this.delete(accessToken);
- }
-
- /**
-  * Cross-instance single-flight NS token refresh using a Firestore transaction.
-  *
-  * Multiple instances verifying the same expiring NS token coordinate on the token
-  * document. Exactly one instance performs the upstream refresh, while concurrent
-  * instances wait and read the refreshed token once committed.
-  */
  async refreshNsToken(
   accessToken: string,
   doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
   opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number },
  ): Promise<StoredToken> {
-  const docRef = this.db.collection(this.collection).doc(accessToken);
+    const docRef = this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
   const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
   const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
   const LEASE_DURATION_MS = opts?.leaseDurationMs ?? 15_000;
@@ -201,8 +269,7 @@ export class FirestoreTokenStore {
    let shouldRefresh = false;
    let tokenToRefresh: StoredToken | undefined;
    let currentLeaseOwner: string | undefined;
-
-   await this.db.runTransaction(async (transaction) => {
+      await this.rawDb.runTransaction(async (transaction) => {
     const snap = await transaction.get(docRef);
     if (!snap.exists) {
      throw new Error('Token document not found');
@@ -212,7 +279,7 @@ export class FirestoreTokenStore {
     if (convertedDate) {
      data.ttlAt = convertedDate;
     }
-    const now = Date.now();
+        const now = this.localNow();
     const isExpiring = data.nsExpiresAt && now > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
 
     if (!isExpiring) {
@@ -236,11 +303,7 @@ export class FirestoreTokenStore {
    });
 
    if (!shouldRefresh) {
-    if (tokenToRefresh && (!tokenToRefresh.nsExpiresAt || Date.now() <= tokenToRefresh.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
-     this.cache.set(accessToken, tokenToRefresh);
-     if (tokenToRefresh.refreshToken) {
-      this.refreshCache.set(tokenToRefresh.refreshToken, accessToken);
-     }
+        if (tokenToRefresh && (!tokenToRefresh.nsExpiresAt || this.localNow() <= tokenToRefresh.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
      return tokenToRefresh;
     }
     await delay(POLL_INTERVAL_MS);
@@ -250,23 +313,26 @@ export class FirestoreTokenStore {
    try {
     const refreshed = await doRefresh(tokenToRefresh!);
     const updatedNsExpiresAt = refreshed.expires_in
-     ? Date.now() + refreshed.expires_in * 1000
+          ? this.localNow() + refreshed.expires_in * 1000
      : undefined;
     const newRefreshToken = refreshed.refresh_token ?? tokenToRefresh!.nsRefreshToken;
-
     let resultToken: StoredToken | undefined;
-    await this.db.runTransaction(async (transaction) => {
+        await this.rawDb.runTransaction(async (transaction) => {
      const snap = await transaction.get(docRef);
      if (!snap.exists) {
       throw new Error('Token document was deleted/revoked during refresh');
      }
-     const current = snap.data() as StoredToken & { refreshLockOwner?: string };
+          const current = snap.data() as StoredToken & { refreshLockOwner?: string; refreshLockUntil?: number };
+          const now = this.localNow();
      if (current.refreshLockOwner !== currentLeaseOwner) {
       logger.warn('Refresh lease expired or owned by another instance, aborting late completion', {
        expectedOwner: currentLeaseOwner,
        actualOwner: current.refreshLockOwner,
       });
       throw new LeaseLostError('Refresh lease expired or owned by another instance');
+          }
+          if (current.refreshLockUntil && current.refreshLockUntil < now) {
+            throw new LeaseLostError('Refresh lease expired before refresh completed');
      }
      const updated: StoredToken = {
       ...current,
@@ -276,19 +342,30 @@ export class FirestoreTokenStore {
      };
      delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
      delete (updated as unknown as Record<string, unknown>).refreshLockOwner;
-
-     transaction.set(docRef, stripUndefined(updated));
+          transaction.set(docRef, cleanDoc(updated));
      resultToken = updated;
     });
 
-    this.cache.set(accessToken, resultToken!);
+        if (resultToken?.refreshFamilyId) {
+          await this.upstreamStore.put(
+            resultToken.refreshFamilyId,
+            {
+              nsAccessToken: refreshed.access_token,
+              nsRefreshToken: newRefreshToken,
+              nsExpiresAt: updatedNsExpiresAt,
+              nsUsername: resultToken.nsUsername,
+              nsUserRole: resultToken.nsUserRole,
+              nsApiUrl: resultToken.nsApiUrl,
+            },
+            updatedNsExpiresAt,
+          );
+        }
+
     return resultToken!;
    } catch (err) {
-    this.cache.delete(accessToken);
     if (currentLeaseOwner) {
-     await this.db.runTransaction(async (transaction) => {
+          await this.rawDb.runTransaction(async (transaction) => {
       const snap = await transaction.get(docRef);
-      if (!snap.exists) return;
       const current = snap.data() as StoredToken & { refreshLockOwner?: string };
       if (current.refreshLockOwner === currentLeaseOwner) {
        transaction.update(docRef, {
@@ -305,17 +382,28 @@ export class FirestoreTokenStore {
   const snap = await docRef.get();
   if (snap.exists) {
    const data = snap.data() as StoredToken;
-   const isExpiring = data.nsExpiresAt && Date.now() > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
+      const isExpiring = data.nsExpiresAt && this.localNow() > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
    if (!isExpiring) {
-    this.cache.set(accessToken, data);
     return data;
    }
   }
   throw new RetryableRefreshError('Timed out waiting for upstream token refresh');
  }
 
+ async delete(accessToken: string): Promise<void> {
+    await this.revokeByToken(accessToken);
+ }
+
+ async deleteByRefreshToken(refreshToken: string): Promise<void> {
+    await this.revokeByToken(refreshToken);
+ }
+
+  clearCache(): void {
+    // No-op: caches removed per C1
+ }
+
  get size(): number {
-  return this.cache.size;
+    return 0;
  }
 }
 
@@ -340,17 +428,22 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
   const hit = this.cache.get(clientId);
   if (hit) return hit;
+  try {
   const snap = await this.db.collection(this.collection).doc(clientId).get();
   if (!snap.exists) return undefined;
   const client = snap.data() as OAuthClientInformationFull;
   this.cache.set(clientId, client);
   return client;
+  } catch (err: unknown) {
+   if (err instanceof TemporarilyUnavailableError) throw err;
+   throw new TemporarilyUnavailableError('Client store temporarily unavailable');
+  }
  }
 
  async registerClient(
-  client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>,
+  client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
  ): Promise<OAuthClientInformationFull> {
-  const clientId = randomUUID();
+  const clientId = client.client_id ?? randomUUID();
   const authMethod = 'token_endpoint_auth_method' in client && typeof client.token_endpoint_auth_method === 'string'
    ? client.token_endpoint_auth_method
    : undefined;

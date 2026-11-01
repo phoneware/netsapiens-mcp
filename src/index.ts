@@ -12,8 +12,19 @@ import { NetSapiensClient } from './netsapiens-client.js';
 import { MCPServerConfig } from './types/config.js';
 import { SERVER_INSTRUCTIONS, serverCapabilities, serverImplementation } from './server-info.js';
 import { logger } from './utils/logger.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let packageVersion = '2.4.0';
+try {
+  const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8'));
+  if (pkg.version) packageVersion = pkg.version;
+} catch {
+  // default fallback
+}
 // Configuration - these would typically come from environment variables
 export const loadConfig = (): MCPServerConfig => {
   const apiUrl = process.env.NETSAPIENS_API_URL || 'https://edge.phoneware.cloud';
@@ -67,7 +78,7 @@ export const loadConfig = (): MCPServerConfig => {
 
   return {
     name: 'netsapiens-mcp',
-    version: '1.1.1',
+    version: packageVersion,
     netsapiens: netsapiensConfig,
     debug: process.env.DEBUG === 'true'
   };
@@ -193,3 +204,13 @@ if (isEntrypoint()) {
     process.exit(1);
   });
 }
+
+export { requireBearer } from './auth/kit/bearer.js';
+export {
+  StoreUnavailableError,
+  UpstreamUnavailableError,
+  UpstreamRevokedError,
+  kitCodeOf,
+  classifyUpstreamTokenResponse,
+  toTokenEndpointError,
+} from './auth/kit/errors.js';

@@ -62,12 +62,12 @@ describe('TokenStore', () => {
     expect(store.getByRefreshToken('nonexistent')).toBeUndefined();
   });
 
-  it('deletes tokens by access token', () => {
+  it('revokes tokens by access token (revokes family)', async () => {
     const store = new TokenStore(storePath);
     const token = makeToken();
 
     store.set(token);
-    store.delete(token.accessToken);
+    await store.revokeByToken(token.accessToken);
 
     expect(store.get(token.accessToken)).toBeUndefined();
     expect(store.getByRefreshToken(token.refreshToken)).toBeUndefined();
