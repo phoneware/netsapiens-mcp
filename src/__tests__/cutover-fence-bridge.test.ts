@@ -754,4 +754,112 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       expect(rotated.token.refreshFamilyId).toBeDefined();
     }
   });
+  it('15. Concurrent duplicate operationId: exactly one executes and second is refused', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    const sharedOpId = 'concurrent_op_duplicate_id';
+    let executions = 0;
+
+    const op1 = withLegacyOperation(
+      { db, namespace, kind: 'auth_code', operationId: sharedOpId },
+      async () => {
+        executions++;
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 50);
+        await promise;
+        return 'success_1';
+      },
+    );
+
+    const op2 = withLegacyOperation(
+      { db, namespace, kind: 'auth_code', operationId: sharedOpId },
+      async () => {
+        executions++;
+        return 'success_2';
+      },
+    );
+
+    const results = await Promise.allSettled([op1, op2]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    expect(executions).toBe(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(CutoverFenceError);
+  });
+
+  it('16. Timeout locks ambiguous outcome; advancing beyond lease makes zero second fake NS grant', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+
+    let nowTime = 1000_000;
+    const authProvider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com',
+      nsClientId: 'test_client_id',
+      nsClientSecret: 'test_client_secret',
+      firestore: db,
+      collections: { tokens: 'mcp_tokens' },
+      fence: { namespace, enforce: true },
+      now: () => nowTime,
+    });
+
+    let fakeNsCalls = 0;
+    (authProvider as any).nsRefreshGrant = async () => {
+      fakeNsCalls++;
+      if (fakeNsCalls === 1) {
+        throw new UpstreamTimeoutError('First upstream refresh timed out');
+      }
+      return { access_token: 'ns_token_2', refresh_token: 'ns_ref_2', expires_in: 3600 };
+    };
+
+    const tokenStore = (authProvider as any).tokenStore as FirestoreTokenStore;
+    await authProvider.withOperation('issue', async (ctx) => {
+      return await tokenStore.issue(
+        {
+          accessToken: 'acc_ambig_test',
+          refreshToken: 'ref_ambig_test',
+          clientId: 'client_ambig',
+          expiresAt: nowTime + 3600_000,
+          nsAccessToken: 'ns_ambig_init',
+          nsExpiresAt: nowTime - 1000, // Expired, needs refresh
+          nsRefreshToken: 'ns_ambig_ref',
+          nsUsername: 'ambig_user',
+        },
+        { operation: ctx },
+      );
+    });
+
+    // First attempt: transparent refresh triggers upstream refresh and times out
+    await expect(
+      authProvider.withOperation('upstream_refresh', async (opCtx) => {
+        return await tokenStore.refreshNsToken(
+          'acc_ambig_test',
+          (current) => (authProvider as any).nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
+          { operation: opCtx },
+        );
+      }),
+    ).rejects.toThrow();
+    expect(fakeNsCalls).toBe(1);
+
+    // Advance clock past the lease duration (30s)
+    nowTime += 60_000;
+
+    // Second claimant attempts refresh after lease expiry
+    await expect(
+      authProvider.withOperation('upstream_refresh', async (opCtx) => {
+        return await tokenStore.refreshNsToken(
+          'acc_ambig_test',
+          (current) => (authProvider as any).nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
+          { operation: opCtx },
+        );
+      }),
+    ).rejects.toThrow(UpstreamUnavailableError);
+
+    // CRITICAL: NO second fake NS grant call was made!
+    expect(fakeNsCalls).toBe(1);
+  });
 });

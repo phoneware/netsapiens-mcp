@@ -20,6 +20,8 @@ import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './type
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import { FirestoreUpstreamGrantStore } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
+import { UpstreamUnavailableError } from './kit/errors.js';
+import { UpstreamTimeoutError } from './netsapiens-auth-provider.js';
 import {
   type CutoverFenceConfig,
   type LegacyOperationContext,
@@ -354,8 +356,10 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
      data.ttlAt = convertedDate;
     }
         const now = this.localNow();
+    if (data.ambiguousRemoteOutcome) {
+     throw new UpstreamUnavailableError('Cannot refresh: prior remote grant outcome is ambiguous and pending reconciliation');
+    }
     const isExpiring = data.nsExpiresAt && now > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
-
     if (!isExpiring) {
      tokenToRefresh = data;
      shouldRefresh = false;
@@ -426,7 +430,9 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       nsExpiresAt: updatedNsExpiresAt,
      };
      delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
+     delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
      delete (updated as unknown as Record<string, unknown>).refreshLockOwner;
+     delete (updated as unknown as Record<string, unknown>).ambiguousRemoteOutcome;
      guard?.bufferCompletion(now);
      transaction.set(docRef, cleanDoc(updated));
      if (updated.refreshFamilyId) {
@@ -455,17 +461,45 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
 
     return resultToken!;
    } catch (err) {
-    if (currentLeaseOwner) {
-          await this.rawDb.runTransaction(async (transaction) => {
-      const snap = await transaction.get(docRef);
-      const current = snap.data() as StoredToken & { refreshLockOwner?: string };
-      if (current.refreshLockOwner === currentLeaseOwner) {
-       transaction.update(docRef, {
-        refreshLockUntil: null,
-        refreshLockOwner: null,
-       });
-      }
-     }).catch(() => { });
+    const isTimeout =
+      err instanceof UpstreamTimeoutError ||
+      (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
+      (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
+      (err instanceof Error && err.message.toLowerCase().includes('timeout'));
+
+    if (isTimeout) {
+      opts?.operation?.markAmbiguousRemoteOutcome(err instanceof Error ? err.message : String(err));
+      await this.rawDb.runTransaction(async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (snap.exists) {
+          const current = snap.data() as StoredToken;
+          transaction.set(docRef, { ambiguousRemoteOutcome: true }, { merge: true });
+          if (current.refreshFamilyId) {
+            transaction.set(
+              this.upstreamDocRef(current.refreshFamilyId),
+              {
+                ambiguousOutcome: true,
+                ambiguousReason: 'Timeout during refresh',
+                ambiguousAt: this.localNow(),
+              },
+              { merge: true },
+            );
+          }
+        }
+      }).catch(() => {});
+    } else if (currentLeaseOwner) {
+      await this.rawDb.runTransaction(async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (snap.exists) {
+          const current = snap.data() as StoredToken & { refreshLockOwner?: string };
+          if (current.refreshLockOwner === currentLeaseOwner) {
+            transaction.update(docRef, {
+              refreshLockUntil: null,
+              refreshLockOwner: null,
+            });
+          }
+        }
+      }).catch(() => {});
     }
     throw err;
    }

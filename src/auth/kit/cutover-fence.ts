@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at 2db3ffd279710b4d5dc471100fd673e58ac44d9d). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import type {
   CollectionReference,
@@ -535,19 +535,21 @@ export async function withLegacyOperation<R>(
     const existingOp = await transaction.get(opRef);
     if (existingOp.exists) {
       const existingRecord = existingOp.data() as LegacyOperationRecord;
-      if (existingRecord.phase === 'completed' || existingRecord.phase === 'failed') {
-        throw new CutoverFenceError(
-          `Operation ID ${opId} has already reached terminal phase ${existingRecord.phase}; cannot be re-admitted`,
-        );
-      }
-      if (existingRecord.epoch !== control.epoch) {
-        throw new CutoverFenceError(
-          `Operation ID ${opId} epoch mismatch with current fence epoch: expected ${control.epoch}, got ${existingRecord.epoch}`,
-        );
-      }
-      return existingRecord;
+      throw new CutoverFenceError(
+        `Operation ID ${opId} already exists in phase ${existingRecord.phase}; duplicate admission rejected`,
+      );
     }
 
+    if (options.metadata) {
+      const forbiddenKeys = ['token', 'accesstoken', 'refreshtoken', 'password', 'secret', 'code', 'authcode'];
+      for (const key of Object.keys(options.metadata)) {
+        if (forbiddenKeys.some((f) => key.toLowerCase().includes(f))) {
+          throw new CutoverFenceError(
+            `Operation metadata must not contain credential or secret fields: forbidden key '${key}'`,
+          );
+        }
+      }
+    }
     const currentTime = now();
     const createdRecord: LegacyOperationRecord = {
       schemaVersion: 1,

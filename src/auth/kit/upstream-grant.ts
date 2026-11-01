@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at ee6bf22d4efb1862befc2759e274a5a44a4fdaf8). Edit the canonical file, then re-copy.
+// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/upstream-grant.ts at 2db3ffd279710b4d5dc471100fd673e58ac44d9d). Edit the canonical file, then re-copy.
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Firestore } from '@google-cloud/firestore';
@@ -24,6 +24,9 @@ export interface StoredUpstreamRecord<G> {
   expiresAt?: number;
   leaseUntil?: number;
   leaseOwner?: string;
+  ambiguousOutcome?: boolean | null;
+  ambiguousReason?: string | null;
+  ambiguousAt?: number | null;
   updatedAt?: number;
 }
 
@@ -249,8 +252,14 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       }
 
       const current = snap.data() as StoredUpstreamRecord<G>;
-      const isExpiring = !current.expiresAt || current.expiresAt - skewMs <= now;
 
+      if (current.ambiguousOutcome) {
+        throw new UpstreamUnavailableError(
+          `Upstream grant for family ${familyId} has an unresolved ambiguous outcome: ${current.ambiguousReason ?? 'pending reconciliation'}`,
+        );
+      }
+
+      const isExpiring = !current.expiresAt || current.expiresAt - skewMs <= now;
       if (!force && !isExpiring) {
         return { status: 'fresh' as const, grant: current.grant };
       }
@@ -322,6 +331,10 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         options.operation.markAmbiguousRemoteOutcome(
           'Remote refresh failed or timed out: ' + (err instanceof Error ? err.message : String(err)),
         );
+        const reason =
+          'Remote refresh failed or timed out: ' +
+          (err instanceof Error ? err.message : String(err));
+        options.operation.markAmbiguousRemoteOutcome(reason);
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operation.id);
         await this.db.runTransaction(async (transaction) => {
           transaction.set(
@@ -330,6 +343,15 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
               phase: 'upstream_pending',
               ambiguousRemoteOutcome: true,
               updatedAt: this.nowProvider(),
+            },
+            { merge: true },
+          );
+          transaction.set(
+            docRef,
+            {
+              ambiguousOutcome: true,
+              ambiguousReason: reason,
+              ambiguousAt: this.nowProvider(),
             },
             { merge: true },
           );
@@ -409,6 +431,9 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             expiresAt: refreshed.expiresAt,
             leaseUntil: null,
             leaseOwner: null,
+            ambiguousOutcome: null,
+            ambiguousReason: null,
+            ambiguousAt: null,
             updatedAt: commitNow,
           }),
           { merge: true },
@@ -419,9 +444,10 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     } catch (err) {
       // Remote succeeded but local commit failed! Must mark ambiguous and keep closing blocked
       if (this.fence?.enforce && options?.operation) {
-        options.operation.markAmbiguousRemoteOutcome(
-          'Remote grant succeeded but local commit failed: ' + (err instanceof Error ? err.message : String(err)),
-        );
+        const reason =
+          'Remote grant succeeded but local commit failed: ' +
+          (err instanceof Error ? err.message : String(err));
+        options.operation.markAmbiguousRemoteOutcome(reason);
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, options.operation.id);
         await this.db.runTransaction(async (transaction) => {
           transaction.set(
@@ -433,9 +459,53 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             },
             { merge: true },
           );
+          transaction.set(
+            docRef,
+            {
+              ambiguousOutcome: true,
+              ambiguousReason: reason,
+              ambiguousAt: this.nowProvider(),
+            },
+            { merge: true },
+          );
         }).catch(() => {});
       }
       throw err;
     }
+  }
+
+  async reconcileAmbiguousGrant(
+    familyId: string,
+    grant: G,
+    expiresAt?: number,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<void> {
+    const docRef = this.db.collection(this.collection).doc(docId(familyId));
+    await this.db.runTransaction(async (transaction) => {
+      let guard: GuardMutationResult | undefined;
+      if (this.fence?.enforce) {
+        guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: this.fence.namespace,
+          operation: options?.operation,
+          now: this.nowProvider,
+        });
+      }
+      guard?.bufferCompletion(this.nowProvider());
+      transaction.set(
+        docRef,
+        stripUndefined({
+          grant,
+          expiresAt,
+          leaseUntil: null,
+          leaseOwner: null,
+          ambiguousOutcome: null,
+          ambiguousReason: null,
+          ambiguousAt: null,
+          updatedAt: this.nowProvider(),
+        }),
+        { merge: true },
+      );
+    });
   }
 }
