@@ -61,6 +61,14 @@ jobs:
         env:
           FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
         run: node scripts/scan-forbidden.mjs --pack "$TARBALL"
+      - name: Run consumer e2e
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
+          NSMCP_REQUIRE_FIRESTORE_EMULATOR: '1'
+        run: |
+          node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs install,config,sqlite,memory,version
+          node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major 8
       - name: Publish to npm
         run: |
           case "$VERSION" in

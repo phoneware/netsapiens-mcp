@@ -56,11 +56,9 @@ Per-user upstream NetSapiens tokens are stored alongside our MCP-issued tokens. 
 ## 💻 Running locally (stdio)
 
 ```bash
-npm install
-npm run build
-export NETSAPIENS_API_URL=https://edge.example.com
+export NETSAPIENS_API_URL=https://netsapiens.example.com
 export NETSAPIENS_API_TOKEN=<your-token>      # OR set OAuth username/password
-npm start                                      # MCP_TRANSPORT defaults to stdio
+npx --yes netsapiens-mcp@3                    # MCP_TRANSPORT defaults to stdio
 ```
 
 Add this entry to your local MCP client config (Claude Desktop, etc.):
@@ -69,13 +67,16 @@ Add this entry to your local MCP client config (Claude Desktop, etc.):
 {
   "mcpServers": {
     "netsapiens": {
-      "command": "node",
-      "args": ["/path/to/netsapiens-mcp/build/index.js"]
+      "command": "npx",
+      "args": ["--yes", "netsapiens-mcp@3"],
+      "env": {
+        "NETSAPIENS_API_URL": "https://netsapiens.example.com",
+        "NETSAPIENS_API_TOKEN": "<your-token>"
+      }
     }
   }
 }
 ```
-
 ## 🌐 Running as a hosted server (HTTP)
 
 ```bash
