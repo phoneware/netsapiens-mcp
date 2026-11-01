@@ -428,7 +428,6 @@ function wireApp(
       res.once('close', () => {
        // Transport disconnected
       });
-
       let handlerSettled = false;
       const markHandlerSettled = () => {
        if (!handlerSettled) {
@@ -441,7 +440,7 @@ function wireApp(
         checkQuiescent();
        }
       };
-
+      (req as any).signalHandlerComplete = markHandlerSettled;
       res.once('finish', markHandlerSettled);
       const origEnd = res.end.bind(res);
       res.end = (...args: any[]) => {
@@ -540,35 +539,43 @@ function wireApp(
 
  // Login form submission: the authorize() method shows the page, this handles POST
  app.post('/login', async (req, res) => {
-  const { token, platform, username, password } = req.body;
+  try {
+   const { token, platform, username, password } = req.body;
 
-  if (token) {
-   if (!platform) {
-    res.status(400).json({ error: 'Missing platform' });
+   if (token) {
+    if (!platform) {
+     res.status(400).json({ error: 'Missing platform' });
+     return;
+    }
+    await authProvider.handleTokenLogin(req, res, String(platform), String(token));
     return;
    }
-   await authProvider.handleTokenLogin(req, res, String(platform), String(token));
-   return;
-  }
 
-  if (!username || !password) {
-   res.status(400).json({ error: 'Missing username or password' });
-   return;
-  }
+   if (!username || !password) {
+    res.status(400).json({ error: 'Missing username or password' });
+    return;
+   }
 
-  await authProvider.handleLogin(req, res, String(username), String(password));
+   await authProvider.handleLogin(req, res, String(username), String(password));
+  } finally {
+   (req as any).signalHandlerComplete?.();
+  }
  });
 
  // MFA passcode submission (second step when NS requires MFA)
  app.post('/mfa', async (req, res) => {
-  const { passcode } = req.body;
+  try {
+   const { passcode } = req.body;
 
-  if (!passcode) {
-   res.status(400).json({ error: 'Missing passcode' });
-   return;
+   if (!passcode) {
+    res.status(400).json({ error: 'Missing passcode' });
+    return;
+   }
+
+   await authProvider.handleMfa(req, res, passcode);
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  await authProvider.handleMfa(req, res, passcode);
  });
 
  // -----------------------------------------------------------------------
@@ -594,62 +601,61 @@ function wireApp(
 
  // POST /mcp: JSON-RPC requests
  app.post('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  const body = (req as any).body;
+  try {
+   const sessionId = req.headers['mcp-session-id'] as string | undefined;
+   const body = (req as any).body;
 
-  // Stateless: build a throwaway server + transport for this one request and
-  // tear it down when the response closes. Every request carries its own
-  // bearer, so the NS client is rebuilt from that bearer each time and no
-  // cross-request state exists to go stale or to be pinned to an instance.
-  if (isStatelessMode()) {
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
-   void client;
-   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+   if (isStatelessMode()) {
+    const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+    void client;
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
-   res.on('close', () => {
-    void Promise.resolve(transport.close()).catch(() => { });
-    void Promise.resolve(server.close()).catch(() => { });
-   });
+    res.on('close', () => {
+     void Promise.resolve(transport.close()).catch(() => { });
+     void Promise.resolve(server.close()).catch(() => { });
+    });
 
-   await server.connect(transport);
-   await transport.handleRequest(req, res, body);
-   return;
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+    return;
+   }
+
+   if (isInitializeRequest(body)) {
+    const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+
+    const transport = new StreamableHTTPServerTransport({
+     sessionIdGenerator: () => randomUUID(),
+     onsessioninitialized: (sid: string) => {
+      sessions.set(sid, { transport, server, client });
+     },
+    });
+
+    transport.onclose = () => {
+     const sid = transport.sessionId;
+     if (sid) sessions.delete(sid);
+    };
+
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+    return;
+   }
+
+   if (!sessionId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Missing session ID' }));
+    return;
+   }
+   if (!sessions.has(sessionId)) {
+    respondSessionNotFound(res);
+    return;
+   }
+
+   const session = sessions.get(sessionId)!;
+   syncSessionNsToken(session, req);
+   await session.transport.handleRequest(req, res, body);
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  if (isInitializeRequest(body)) {
-   // Create a server + client using the authenticated user's NS token, role, and identity.
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
-
-   const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    onsessioninitialized: (sid: string) => {
-     sessions.set(sid, { transport, server, client });
-    },
-   });
-
-   transport.onclose = () => {
-    const sid = transport.sessionId;
-    if (sid) sessions.delete(sid);
-   };
-
-   await server.connect(transport);
-   await transport.handleRequest(req, res, body);
-   return;
-  }
-
-  if (!sessionId) {
-   res.writeHead(400, { 'Content-Type': 'application/json' });
-   res.end(JSON.stringify({ error: 'Missing session ID' }));
-   return;
-  }
-  if (!sessions.has(sessionId)) {
-   respondSessionNotFound(res);
-   return;
-  }
-
-  const session = sessions.get(sessionId)!;
-  syncSessionNsToken(session, req);
-  await session.transport.handleRequest(req, res, body);
  });
 
  // GET /mcp: SSE stream for server-initiated messages
@@ -678,29 +684,33 @@ function wireApp(
 
  // DELETE /mcp: session termination
  app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  try {
+   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  if (isStatelessMode()) {
-   respondMethodNotAllowed(res, 'This server runs stateless; there is no session to terminate');
-   return;
+   if (isStatelessMode()) {
+    respondMethodNotAllowed(res, 'This server runs stateless; there is no session to terminate');
+    return;
+   }
+
+   if (!sessionId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Missing session ID' }));
+    return;
+   }
+   if (!sessions.has(sessionId)) {
+    respondSessionNotFound(res);
+    return;
+   }
+
+   const session = sessions.get(sessionId)!;
+   await session.transport.close();
+   sessions.delete(sessionId);
+
+   res.writeHead(200, { 'Content-Type': 'application/json' });
+   res.end(JSON.stringify({ status: 'session terminated' }));
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  if (!sessionId) {
-   res.writeHead(400, { 'Content-Type': 'application/json' });
-   res.end(JSON.stringify({ error: 'Missing session ID' }));
-   return;
-  }
-  if (!sessions.has(sessionId)) {
-   respondSessionNotFound(res);
-   return;
-  }
-
-  const session = sessions.get(sessionId)!;
-  await session.transport.close();
-  sessions.delete(sessionId);
-
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'session terminated' }));
  });
 
  // Cutover fence and transient store error handler
