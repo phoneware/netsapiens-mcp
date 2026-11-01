@@ -1065,10 +1065,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       username: session.nsUsername,
       error: err instanceof Error ? err.message : String(err),
      });
-     await this.store.sessions.revokeFamily(familyId, {
-      expectedFamilyGeneration: generation,
-      expectedUpstreamGrantVersion: lookup.grantVersion,
-     });
      throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
     }
     logger.warn('Upstream NS refresh failed with transient error during refresh', {
