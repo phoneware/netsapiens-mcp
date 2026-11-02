@@ -1677,7 +1677,19 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
           const fps: string[] = [];
           for (const ret of rows.retiredRefresh) {
             const retDoc = targetDocMapById.get(`retiredRefreshTokens:${ret.fingerprint}`);
-            if (retDoc) { existingCount++; fps.push(ret.fingerprint); }
+            if (
+              retDoc &&
+              typeof retDoc === 'object' &&
+              retDoc.fingerprint === ret.fingerprint &&
+              retDoc.familyId === rows.refreshFamilies?.id &&
+              retDoc.v === 2 &&
+              typeof retDoc.consumedAt === 'number' &&
+              retDoc.consumedAt > 0 &&
+              retDoc.ttlAt
+            ) {
+              existingCount++;
+              fps.push(retDoc.fingerprint);
+            }
           }
           if (fps.length > 0) {
             targetMap.set('retiredRefresh', { ids: fps });
