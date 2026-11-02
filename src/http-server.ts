@@ -436,11 +436,9 @@ const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandle
        // Transport disconnected
       });
       let handlerSettled = false;
-      let failSafeTimer: NodeJS.Timeout | undefined;
       const markHandlerSettled = () => {
        if (!handlerSettled) {
         handlerSettled = true;
-        clearTimeout(failSafeTimer);
         closedToNewTasks = true;
         activeTasks--;
         if (activeTasks < 0) {
@@ -449,7 +447,6 @@ const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandle
         checkQuiescent();
        }
       };
-      failSafeTimer = setTimeout(() => { markHandlerSettled(); }, 30_000);
       (req as any).signalHandlerComplete = markHandlerSettled;
       res.once('finish', markHandlerSettled);
       const origEnd = res.end.bind(res);
