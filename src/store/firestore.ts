@@ -250,7 +250,7 @@ export class FirestoreBackend implements StoreBackend {
       if (snap.exists) {
         const control = parseCutoverFenceRecord(snap.data(), namespace);
         if (!control.irreversible) {
-          tx.set(controlRef, { irreversible: true, updatedAt: Date.now() }, { merge: true });
+          tx.set(controlRef, { irreversible: true, emptyNamespace: false, updatedAt: Date.now() }, { merge: true });
         }
       }
     };

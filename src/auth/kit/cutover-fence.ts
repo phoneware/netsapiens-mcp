@@ -1285,6 +1285,7 @@ export async function markIrreversibleInTransaction(
   const updated: CutoverFenceControlRecord = {
     ...current,
     irreversible: true,
+    emptyNamespace: false,
     updatedAt: currentTime,
   };
   const ref = getCutoverFenceDocRef(db, namespace);
