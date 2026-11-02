@@ -4698,7 +4698,6 @@ function extractCandidatesAndPlan(params) {
       if (rawRef && legacyDocId(rawRef) === d.id) {
         credToken = rawRef;
       } else {
-        reasons.orphanRefreshPointers++;
         continue;
       }
     }
@@ -4732,6 +4731,9 @@ function extractCandidatesAndPlan(params) {
   const claimedAccessIds = /* @__PURE__ */ new Set();
   const claimedRefreshIds = /* @__PURE__ */ new Set();
   const claimedRetiredFingerprints = /* @__PURE__ */ new Set();
+  const claimedRefreshDocIds = /* @__PURE__ */ new Set();
+  const claimedTokenDocIds = /* @__PURE__ */ new Set();
+  const claimedUpstreamDocIds = /* @__PURE__ */ new Set();
   for (const famDoc of familiesDocs) {
     const familyId = famDoc.id;
     const famData = famDoc.data() || {};
@@ -4976,6 +4978,10 @@ function extractCandidatesAndPlan(params) {
       logicalDigest
     };
     candidateCommitments.push(candCommitment);
+    claimedRefreshDocIds.add(curRefEntry.doc.id);
+    if (prevRefEntry) claimedRefreshDocIds.add(prevRefEntry.doc.id);
+    claimedTokenDocIds.add(accessEntry.doc.id);
+    claimedUpstreamDocIds.add(familyId);
     candidates.push({
       id: candidateId,
       kind: "pr56Families",
@@ -5111,6 +5117,8 @@ function extractCandidatesAndPlan(params) {
       logicalDigest
     };
     candidateCommitments.push(candCommitment);
+    claimedTokenDocIds.add(tokEntry.doc.id);
+    if (baseRefEntry) claimedRefreshDocIds.add(baseRefEntry.doc.id);
     candidates.push({
       id: candidateId,
       kind: "baseFormatTokens",
@@ -5179,7 +5187,7 @@ function extractCandidatesAndPlan(params) {
         clientId: logicalProjection.clientId,
         serverBaseUrl: logicalProjection.serverBaseUrl,
         extra: logicalProjection.extra,
-        used: Boolean(cData.used)
+        used: logicalProjection.used
       },
       logicalProjection.expiresAt,
       now
@@ -5395,19 +5403,17 @@ function extractCandidatesAndPlan(params) {
     });
   }
   for (const doc of upstreamDocs) {
-    if (!familiesById.has(doc.id)) {
+    if (!claimedUpstreamDocIds.has(doc.id)) {
       reasons.orphanUpstreamGrants++;
     }
   }
   for (const doc of refreshDocs) {
-    const credToken = doc.data()?.refreshToken ?? doc.data()?.token?.refreshToken ?? doc.id;
-    if (!claimedRefreshIds.has(credToken)) {
+    if (!claimedRefreshDocIds.has(doc.id)) {
       reasons.orphanRefreshPointers++;
     }
   }
   for (const doc of tokensDocs) {
-    const credToken = doc.data()?.accessToken ?? doc.data()?.token?.accessToken ?? doc.id;
-    if (!claimedAccessIds.has(credToken)) {
+    if (!claimedTokenDocIds.has(doc.id)) {
       reasons.orphanAccessTokens++;
     }
   }
@@ -5782,16 +5788,15 @@ async function inspectFirestoreLegacyMigration(options) {
       now: Date.now()
     });
     timer.assertUnderDeadline(16e3, "Preflight scan");
-    let prospectiveRetained = 0;
     const existingTargetIdSet = /* @__PURE__ */ new Set();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
         if (isTargetFormatRow(colKey, d.data(), d.id)) {
-          prospectiveRetained++;
           existingTargetIdSet.add(`${colKey}:${d.id}`);
         }
       }
     }
+    let prospectiveRetained = 0;
     for (const c of candidates) {
       let existingCount = 0;
       for (const t of c.targets) {
@@ -5799,7 +5804,9 @@ async function inspectFirestoreLegacyMigration(options) {
           existingCount++;
         }
       }
-      if (existingCount > 0 && existingCount < c.targets.length) {
+      if (existingCount === c.targets.length) {
+        prospectiveRetained++;
+      } else if (existingCount > 0) {
         reasons.partialTargets++;
       }
     }
