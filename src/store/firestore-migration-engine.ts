@@ -337,15 +337,16 @@ export function extractCandidatesAndPlan(params: {
   for (const d of upstreamDocs) upstreamById.set(d.id, d.data() || {});
 
   // Physical vs credential token resolution for access tokens and refresh pointers
+  const malformedDocIds = new Set<string>();
   const tokensByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
   const tokensByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
-
   for (const d of tokensDocs) {
     const data = d.data() || {};
     const credToken = data.accessToken ?? data.token?.accessToken;
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
       if (d.id !== expId) {
+        malformedDocIds.add(d.id);
         reasons.malformedRecords++;
         continue;
       }
@@ -385,8 +386,8 @@ export function extractCandidatesAndPlan(params: {
       }
     }
     if (typeof credToken === 'string' && credToken.length > 0) {
-      const expId = legacyDocId(credToken);
       if (d.id !== expId) {
+        malformedDocIds.add(d.id);
         reasons.malformedRecords++;
         continue;
       }
@@ -440,8 +441,8 @@ export function extractCandidatesAndPlan(params: {
       continue;
     }
     const curRefDoc = curRefEntry.data || {};
-    const curRefFamId = curRefDoc.familyId ?? curRefDoc.family_id;
     if (curRefFamId !== familyId || curRefDoc.status !== 'active') {
+      malformedDocIds.add(famDoc.id);
       reasons.malformedRecords++;
       continue;
     }
@@ -495,6 +496,7 @@ export function extractCandidatesAndPlan(params: {
     let retiredConflict = false;
     for (const fp of rawRetired) {
       if (typeof fp !== 'string' || fp.length === 0) {
+        malformedDocIds.add(famDoc.id);
         reasons.malformedRecords++;
         retiredConflict = true;
         break;
@@ -746,12 +748,16 @@ export function extractCandidatesAndPlan(params: {
       baseRefEntry = refreshByCredential.get(rawRef);
       if (!baseRefEntry) {
         const byPhys = refreshByPhysicalId.get(legacyDocId(rawRef));
-        if (byPhys && byPhys.credentialToken === rawRef) {
+        if (byPhys) {
+          if (byPhys.credentialToken !== rawRef) {
+            reasons.conflictingClaims++;
+            continue;
+          }
           baseRefEntry = byPhys;
         }
       }
       if (baseRefEntry) {
-        if (baseRefEntry.credentialToken !== rawRef) {
+        if (claimedRefreshIds.has(baseRefEntry.credentialToken)) {
           reasons.conflictingClaims++;
           continue;
         }
@@ -1192,17 +1198,17 @@ export function extractCandidatesAndPlan(params: {
 
   // Check unclaimed / orphan records for the reason census
   for (const doc of upstreamDocs) {
-    if (!claimedUpstreamDocIds.has(doc.id)) {
+    if (!claimedUpstreamDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
       reasons.orphanUpstreamGrants++;
     }
   }
   for (const doc of refreshDocs) {
-    if (!claimedRefreshDocIds.has(doc.id)) {
+    if (!claimedRefreshDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
       reasons.orphanRefreshPointers++;
     }
   }
   for (const doc of tokensDocs) {
-    if (!claimedTokenDocIds.has(doc.id)) {
+    if (!claimedTokenDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
       reasons.orphanAccessTokens++;
     }
   }
@@ -1637,30 +1643,60 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
     timer.assertUnderDeadline(16_000, 'Preflight scan');
 
-    const existingTargetIdSet = new Set<string>();
+    const targetDocMapById = new Map<string, any>();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
         if (isTargetFormatRow(colKey, d.data(), d.id)) {
-          existingTargetIdSet.add(`${colKey}:${d.id}`);
+          targetDocMapById.set(`${colKey}:${d.id}`, { ...(d.data() || {}), id: d.id });
         }
       }
     }
 
     let prospectiveRetained = 0;
+    const claimedTargetIds = new Set<string>();
+
     for (const c of candidates) {
       let existingCount = 0;
+      const existingCandidateTargetsMap = new Map();
+
       for (const t of c.targets) {
-        if (existingTargetIdSet.has(`${t.collection}:${t.rawId}`)) {
+        const key = `${t.collection}:${t.rawId}`;
+        if (targetDocMapById.has(key)) {
           existingCount++;
+          existingCandidateTargetsMap.set(t.collection, targetDocMapById.get(key));
         }
       }
-      if (existingCount === c.targets.length) {
-        prospectiveRetained++;
-      } else if (existingCount > 0) {
+
+      if (existingCount === 0) {
+        continue;
+      }
+
+      if (existingCount !== c.targets.length) {
+        reasons.partialTargets++;
+        continue;
+      }
+
+      try {
+        const decodedLogical = projectTargetLogical(c, existingCandidateTargetsMap, codec);
+        const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
+        if (derivedDigest === c.logicalDigest) {
+          prospectiveRetained++;
+          for (const t of c.targets) {
+            claimedTargetIds.add(`${t.collection}:${t.rawId}`);
+          }
+        } else {
+          reasons.partialTargets++;
+        }
+      } catch {
         reasons.partialTargets++;
       }
     }
 
+    for (const key of targetDocMapById.keys()) {
+      if (!claimedTargetIds.has(key)) {
+        reasons.partialTargets++;
+      }
+    }
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
     const prospectiveWritten = Object.values(expectedTargetCounts).reduce((a, b) => a + b, 0);
 
