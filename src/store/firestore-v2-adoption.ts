@@ -5,6 +5,22 @@ import type { AccessRow, FamilyRow, RefreshPointerRow, UpstreamGrantRow, AuthCod
 import type { PendingAuthorization, NsTokenResponse } from '../auth/types.js';
 import { ACCESS_RETENTION_MS, accessAad, familyAad, refreshAad, upstreamAad } from './store.js';
 import {
+  createGraphProjector,
+  GRAPH_PROJECTOR_ID,
+  GRAPH_PROJECTOR_VERSION,
+  type GraphProjectorAdapter,
+  type CandidateCommitment,
+  codeUnitCompare,
+} from './graph-projector.js';
+
+export {
+  createGraphProjector,
+  GRAPH_PROJECTOR_ID,
+  GRAPH_PROJECTOR_VERSION,
+  type GraphProjectorAdapter,
+  type CandidateCommitment,
+};
+import {
   C,
   D,
   H,
@@ -149,32 +165,10 @@ export interface AdoptFirestoreLegacyTokensOptions {
   codeArtifact?: string;
   packageIntegrity?: string;
   protocolDigest?: string;
+  projectorDigest?: string;
   expectedSourceInventoryDigest?: string;
   projector?: GraphProjectorAdapter;
   now?: () => number;
-}
-
-export interface CandidateCommitment {
-  id: string;
-  kind: string;
-  sources: Array<{ collection: string; id: string; recordDigest: string }>;
-  targets: Array<{ collection: string; id: string }>;
-  logicalDigest: string;
-}
-
-export interface GraphProjectorAdapter {
-  readonly id: 'netsapiens-mcp/v2-v3-projector';
-  readonly version: 1;
-  readonly codeArtifact?: string;
-  readonly protocolDigest?: string;
-  projectSourceLogical(
-    candidate: CandidateCommitment,
-    sources: Map<string, Record<string, unknown>>,
-  ): Record<string, unknown>;
-  projectTargetLogical(
-    candidate: CandidateCommitment,
-    targets: Map<string, Record<string, unknown>>,
-  ): Record<string, unknown>;
 }
 const COLLECTION_SUFFIX_MAP: Record<string, { source: string; target: string | null }> = {
   families: { source: 'tokens_refresh_families', target: 'refresh_families' },
@@ -202,9 +196,6 @@ function defined<T>(value: T): T {
   return value;
 }
 
-function codeUnitCompare(a: string, b: string): number {
-  return a < b ? -1 : (a > b ? 1 : 0);
-}
 
 function compareDescriptors(
   a: { collection: string; id: string },
@@ -288,20 +279,7 @@ export async function adoptFirestoreLegacyTokens(
     }
   }
 
-  let projectorDigest = options.projectorDigest;
-  if (!projectorDigest) {
-    try {
-      const fsModule = await import('node:fs');
-      const urlModule = await import('node:url');
-      const pathModule = await import('node:path');
-      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './firestore-v2-adoption.js');
-      if (fsModule.existsSync(modulePath)) {
-        projectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
-      }
-    } catch {
-      // fallback
-    }
-  }
+  let projectorDigest = options.projectorDigest ?? '762a08e8c71850699ee93bdd781aa297c6424661e6368da986c7a4eb2d68464e';
 
   const codeSha = options.codeSha ?? '3edf8a262e9d06f4849318b1e0d09f197738bff9';
   const codeArtifact = options.codeArtifact ?? `us-docker.pkg.dev/project/image@sha256:${'a'.repeat(64)}`;
@@ -1864,269 +1842,35 @@ export async function adoptFirestoreLegacyTokens(
     }
 
     const targetLogicalPairs: Array<[string, string]> = [];
+    const projector = options.projector ?? createGraphProjector(codec);
 
     for (const cand of candidateCommitments) {
-      if (cand.kind === 'pr56Families') {
-        const famTarget = cand.targets.find((t: any) => t.collection === 'families');
-        if (!famTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing families target descriptor`);
-        const famDoc = targetDocsByColAndTargetId.get(`families:${famTarget.id}`);
-        if (!famDoc) throw new CutoverFenceError(`Target family ${famTarget.id} missing from target documents`);
-        const famData = famDoc.data() || {};
-        const familyId = famDoc.id;
-        const generation = typeof famData.generation === 'number' ? famData.generation : 1;
-        const unsealedFam = famData.sealed
-          ? codec.open<any>(famData.sealed, familyAad({ id: familyId, generation }))
-          : null;
-        if (!unsealedFam) throw new CutoverFenceError(`Target family sealed payload could not be opened for ${familyId}`);
-
-        const upTarget = cand.targets.find((t: any) => t.collection === 'upstream');
-        if (!upTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing upstream target descriptor`);
-        const upDoc = targetDocsByColAndTargetId.get(`upstream:${upTarget.id}`);
-        if (!upDoc) throw new CutoverFenceError(`Target upstream ${upTarget.id} missing from target documents`);
-        const upData = upDoc.data() || {};
-        const grantVersion = typeof upData.grantVersion === 'number' ? upData.grantVersion : 1;
-        const unsealedUp = upData.sealed
-          ? codec.open<any>(upData.sealed, upstreamAad({ id: familyId, grantVersion }))
-          : null;
-        if (!unsealedUp) throw new CutoverFenceError(`Target upstream sealed payload could not be opened for ${familyId}`);
-
-        const sessTarget = cand.targets.find((t: any) => t.collection === 'tokens');
-        if (!sessTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing tokens target descriptor`);
-        const sessDoc = targetDocsByColAndTargetId.get(`tokens:${sessTarget.id}`);
-        if (!sessDoc) throw new CutoverFenceError(`Target session ${sessTarget.id} missing from target documents`);
-        const sessData = sessDoc.data() || {};
-        const unsealedSess = sessData.sealed
-          ? codec.open<any>(sessData.sealed, accessAad({ id: sessDoc.id, familyId }))
-          : null;
-        if (!unsealedSess) throw new CutoverFenceError(`Target session sealed payload could not be opened for ${sessDoc.id}`);
-
-        const activeRefTargetId = H(key, 'target-id', namespace, currentEpoch, ['refresh', famData.activeRefreshId]);
-        const activeRefDoc = targetDocsByColAndTargetId.get(`refresh:${activeRefTargetId}`);
-        if (!activeRefDoc) throw new CutoverFenceError(`Target active refresh token missing for family ${familyId}`);
-        const activeRefData = activeRefDoc.data() || {};
-        if (
-          activeRefData.familyId !== familyId ||
-          activeRefData.status !== 'active' ||
-          activeRefData.generation !== generation ||
-          activeRefData.v !== 2
-        ) {
-          throw new CutoverFenceError(`Target active refresh token invalid for family ${familyId}`);
+      const targetDocs = new Map<string, Record<string, unknown>>();
+      for (const t of cand.targets) {
+        const doc = targetDocsByColAndTargetId.get(`${t.collection}:${t.id}`);
+        if (!doc) {
+          throw new CutoverFenceError(`Target document missing for descriptor ${t.collection}/${t.id}`);
         }
-
-        const prevRefTarget = cand.targets.find((t: any) => t.collection === 'refresh' && t.id !== activeRefTargetId);
-        let previousRefresh: any = null;
-        if (prevRefTarget) {
-          const prevRefDoc = targetDocsByColAndTargetId.get(`refresh:${prevRefTarget.id}`);
-          if (!prevRefDoc) throw new CutoverFenceError(`Target consumed refresh token ${prevRefTarget.id} missing`);
-          const prevRefData = prevRefDoc.data() || {};
-          if (
-            prevRefData.familyId !== familyId ||
-            prevRefData.status !== 'consumed' ||
-            typeof prevRefData.consumedAt !== 'number' ||
-            prevRefData.v !== 2
-          ) {
-            throw new CutoverFenceError(`Target consumed refresh token invalid for family ${familyId}`);
+        const data = doc.data() || {};
+        if (t.collection === 'refresh') {
+          if (data.status === 'active') {
+            targetDocs.set('activeRefresh', data);
+          } else if (data.status === 'consumed') {
+            targetDocs.set('prevRefresh', data);
           }
-          const unsealedSuccessor = codec.open<{ accessToken: string; refreshToken: string }>(
-            prevRefData.successorSealed,
-            `successor:${prevRefDoc.id}`,
-          );
-          if (
-            !unsealedSuccessor ||
-            unsealedSuccessor.accessToken !== famData.currentAccessTokenId ||
-            unsealedSuccessor.refreshToken !== famData.activeRefreshId
-          ) {
-            throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${prevRefDoc.id}`);
-          }
-          previousRefresh = {
-            id: prevRefDoc.id,
-            consumedAt: prevRefData.consumedAt,
-            generation: prevRefData.generation,
-            successor: {
-              accessToken: famData.currentAccessTokenId,
-              refreshToken: famData.activeRefreshId,
-            },
-          };
+        } else if (t.collection === 'retiredRefreshTokens') {
+          const retObj = targetDocs.get('retiredRefresh') as { ids: string[] } | undefined;
+          if (retObj) retObj.ids.push(doc.id);
+          else targetDocs.set('retiredRefresh', { ids: [doc.id] });
+        } else {
+          targetDocs.set(t.collection, data);
         }
-
-        const retiredTargets = cand.targets.filter((t: any) => t.collection === 'retiredRefreshTokens');
-        const retiredRefreshFingerprints = retiredTargets.map((t: any) => {
-          const retDoc = targetDocsByColAndTargetId.get(`retiredRefreshTokens:${t.id}`);
-          if (!retDoc) throw new CutoverFenceError(`Target retired refresh token ${t.id} missing`);
-          if (retDoc.data()?.familyId !== familyId) {
-            throw new CutoverFenceError(`Target retired refresh token ${t.id} bound to wrong familyId`);
-          }
-          return retDoc.id;
-        }).sort(codeUnitCompare);
-
-        const reconstructedFamProjection = {
-          familyId,
-          generation,
-          status: famData.status,
-          clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? '') as string,
-          serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null) as string | null,
-          extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}) as Record<string, string>,
-          activeRefreshId: famData.activeRefreshId,
-          currentAccessTokenId: famData.currentAccessTokenId,
-          previousRefresh,
-          retiredRefreshFingerprints,
-          upstream: {
-            grantVersion,
-            nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
-            nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
-            nsUsername: (unsealedUp.nsUsername ?? '') as string,
-            nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
-            nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
-            nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
-          },
-        };
-
-        const digest = H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', reconstructedFamProjection]);
-        targetLogicalPairs.push([cand.id, digest]);
-      } else if (cand.kind === 'baseFormatTokens') {
-        const famTarget = cand.targets.find((t: any) => t.collection === 'families');
-        if (!famTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing families target descriptor`);
-        const famDoc = targetDocsByColAndTargetId.get(`families:${famTarget.id}`);
-        if (!famDoc) throw new CutoverFenceError(`Target base family ${famTarget.id} missing`);
-        const famData = famDoc.data() || {};
-        const familyId = famDoc.id;
-        const unsealedFam = famData.sealed
-          ? codec.open<any>(famData.sealed, familyAad({ id: familyId, generation: 1 }))
-          : null;
-        if (!unsealedFam) throw new CutoverFenceError(`Target base family decrypt failed for ${familyId}`);
-
-        const upTarget = cand.targets.find((t: any) => t.collection === 'upstream');
-        if (!upTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing upstream target descriptor`);
-        const upDoc = targetDocsByColAndTargetId.get(`upstream:${upTarget.id}`);
-        if (!upDoc) throw new CutoverFenceError(`Target base upstream ${upTarget.id} missing`);
-        const upData = upDoc.data() || {};
-        const unsealedUp = upData.sealed
-          ? codec.open<any>(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }))
-          : null;
-        if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
-        const activeRefTargetId = H(key, 'target-id', namespace, currentEpoch, ['refresh', famData.activeRefreshId]);
-        const activeRefDoc = targetDocsByColAndTargetId.get(`refresh:${activeRefTargetId}`);
-        if (!activeRefDoc) throw new CutoverFenceError(`Target active refresh token missing for base family ${familyId}`);
-        const activeRefData = activeRefDoc.data() || {};
-        if (
-          activeRefData.familyId !== familyId ||
-          activeRefData.status !== 'active' ||
-          activeRefData.generation !== 1 ||
-          activeRefData.v !== 2
-        ) {
-          throw new CutoverFenceError(`Target active refresh token invalid for base family ${familyId}`);
-        }
-
-        const sessTarget = cand.targets.find((t: any) => t.collection === 'tokens');
-        if (!sessTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing tokens target descriptor`);
-        const sessDoc = targetDocsByColAndTargetId.get(`tokens:${sessTarget.id}`);
-        if (!sessDoc) throw new CutoverFenceError(`Target base session ${sessTarget.id} missing`);
-        const sessData = sessDoc.data() || {};
-        if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number') {
-          throw new CutoverFenceError(`Target base session invalid for ${sessDoc.id}`);
-        }
-        const unsealedSess = sessData.sealed
-          ? codec.open<any>(sessData.sealed, accessAad({ id: sessDoc.id, familyId }))
-          : null;
-        if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessDoc.id}`);
-        const reconstructedBaseProjection = {
-          familyId,
-          generation: 1,
-          status: 'active',
-          clientId: (unsealedFam.clientId ?? '') as string,
-          serverBaseUrl: (unsealedFam.serverBaseUrl ?? null) as string | null,
-          extra: (unsealedFam.extra ?? {}) as Record<string, string>,
-          activeRefreshId: famData.activeRefreshId,
-          currentAccessTokenId: famData.currentAccessTokenId,
-          upstream: {
-            grantVersion: 1,
-            nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
-            nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
-            nsUsername: (unsealedUp.nsUsername ?? '') as string,
-            nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
-            nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
-            nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
-          },
-        };
-
-        const digest = H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', reconstructedBaseProjection]);
-        targetLogicalPairs.push([cand.id, digest]);
-      } else if (cand.kind === 'authCodes') {
-        const codeTarget = cand.targets.find((t: any) => t.collection === 'authCodes');
-        if (!codeTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing authCodes target descriptor`);
-        const codeDoc = targetDocsByColAndTargetId.get(`authCodes:${codeTarget.id}`);
-        if (!codeDoc) throw new CutoverFenceError(`Target auth code ${codeTarget.id} missing`);
-        const codeData = codeDoc.data() || {};
-        const unsealed = codeData.sealed
-          ? codec.open<AuthCodeData>(codeData.sealed, `code:${codeDoc.id}`)
-          : null;
-        if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${codeDoc.id}`);
-
-        const reconstructedCodeProjection = {
-          codeId: codeDoc.id,
-          clientId: unsealed.clientId,
-          codeChallenge: unsealed.pending.codeChallenge,
-          redirectUri: unsealed.pending.redirectUri,
-          createdAt: unsealed.pending.createdAt,
-          expiresAt: codeData.expiresAt,
-          state: unsealed.pending.state ?? null,
-          scopes: Array.isArray(unsealed.pending.scopes) ? [...unsealed.pending.scopes].sort(codeUnitCompare) : [],
-          nsAccessToken: unsealed.nsTokens.access_token,
-          nsRefreshToken: unsealed.nsTokens.refresh_token ?? null,
-          nsUsername: unsealed.nsTokens.username ?? null,
-          nsUserRole: unsealed.nsTokens.nsUserRole ?? null,
-          nsApiUrl: unsealed.nsTokens.nsApiUrl ?? null,
-          serverBaseUrl: unsealed.serverBaseUrl ?? null,
-          extra: unsealed.extra ?? {},
-        };
-
-        const digest = H(key, 'logical-record', namespace, currentEpoch, ['authCodes', reconstructedCodeProjection]);
-        targetLogicalPairs.push([cand.id, digest]);
-      } else if (cand.kind === 'resumeTokens') {
-        const resTarget = cand.targets.find((t: any) => t.collection === 'resumeTokens');
-        if (!resTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing resumeTokens target descriptor`);
-        const resDoc = targetDocsByColAndTargetId.get(`resumeTokens:${resTarget.id}`);
-        if (!resDoc) throw new CutoverFenceError(`Target resume token ${resTarget.id} missing`);
-        const resData = resDoc.data() || {};
-        if (resData._mcp_format !== 'v3_target' || resData.v !== 2) {
-          throw new CutoverFenceError(`Target resume token ${resTarget.id} missing _mcp_format v3_target`);
-        }
-        const reconstructedResumeProjection = {
-          resumeId: resDoc.id,
-          consumedAt: resData.consumedAt,
-          expiresAt: resData.expiresAt,
-        };
-
-        const digest = H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', reconstructedResumeProjection]);
-        targetLogicalPairs.push([cand.id, digest]);
-      } else if (cand.kind === 'clients') {
-        const clientTarget = cand.targets.find((t: any) => t.collection === 'oauthClients');
-        if (!clientTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing oauthClients target descriptor`);
-        const clientDoc = targetDocsByColAndTargetId.get(`oauthClients:${clientTarget.id}`);
-        if (!clientDoc) throw new CutoverFenceError(`Target oauth client ${clientTarget.id} missing`);
-        const clientData = clientDoc.data() || {};
-        if (clientData._mcp_format !== 'v3_target' || clientData.v !== 2) {
-          throw new CutoverFenceError(`Target oauth client ${clientTarget.id} missing _mcp_format v3_target`);
-        }
-        const reconstructedClientProjection = {
-          clientId: clientDoc.id,
-          clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
-          clientSecret: typeof clientData.client_secret === 'string' ? clientData.client_secret : null,
-          redirectUris: Array.isArray(clientData.redirect_uris) ? [...clientData.redirect_uris].sort(codeUnitCompare) : [],
-          tokenEndpointAuthMethod: clientData.token_endpoint_auth_method,
-          grantTypes: Array.isArray(clientData.grant_types) ? [...clientData.grant_types].sort(codeUnitCompare) : [],
-          responseTypes: Array.isArray(clientData.response_types) ? [...clientData.response_types].sort(codeUnitCompare) : [],
-          clientUri: (clientData.client_uri ?? null) as string | null,
-          logoUri: (clientData.logo_uri ?? null) as string | null,
-          scope: (clientData.scope ?? null) as string | null,
-          clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
-        };
-
-        const digest = H(key, 'logical-record', namespace, currentEpoch, ['clients', reconstructedClientProjection]);
-        targetLogicalPairs.push([cand.id, digest]);
       }
-    }
 
+      const proj = projector.projectTargetLogical(cand, targetDocs);
+      const digest = H(key, 'logical-record', namespace, currentEpoch, [cand.kind, proj]);
+      targetLogicalPairs.push([cand.id, digest]);
+    }
     targetLogicalPairs.sort(comparePairs);
     targetLogicalDigest = targetLogicalPairs.length === 0
       ? H(key, 'logical-inventory', namespace, currentEpoch, [])
