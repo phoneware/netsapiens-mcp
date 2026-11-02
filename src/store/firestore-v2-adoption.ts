@@ -150,9 +150,32 @@ export interface AdoptFirestoreLegacyTokensOptions {
   packageIntegrity?: string;
   protocolDigest?: string;
   expectedSourceInventoryDigest?: string;
+  projector?: GraphProjectorAdapter;
   now?: () => number;
 }
 
+export interface CandidateCommitment {
+  id: string;
+  kind: string;
+  sources: Array<{ collection: string; id: string; recordDigest: string }>;
+  targets: Array<{ collection: string; id: string }>;
+  logicalDigest: string;
+}
+
+export interface GraphProjectorAdapter {
+  readonly id: 'netsapiens-mcp/v2-v3-projector';
+  readonly version: 1;
+  readonly codeArtifact?: string;
+  readonly protocolDigest?: string;
+  projectSourceLogical(
+    candidate: CandidateCommitment,
+    sources: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown>;
+  projectTargetLogical(
+    candidate: CandidateCommitment,
+    targets: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown>;
+}
 const COLLECTION_SUFFIX_MAP: Record<string, { source: string; target: string | null }> = {
   families: { source: 'tokens_refresh_families', target: 'refresh_families' },
   tokens: { source: 'tokens', target: 'sessions' },
@@ -608,6 +631,22 @@ export async function adoptFirestoreLegacyTokens(
     const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
     const accData = tokensByAccessId.get(accessId) || {};
 
+    let previousRefresh: any = null;
+    if (famData.previousRefreshToken) {
+      const prevId = famData.previousRefreshToken as string;
+      const prevDoc = refreshPointersById.get(prevId) || {};
+      const prevRefreshId = codec.id('refresh', prevId);
+      previousRefresh = {
+        id: prevRefreshId,
+        consumedAt: prevDoc.consumedAt,
+        generation: Math.max(1, ((typeof famData.generation === 'number' ? famData.generation : 1) - 1)),
+        successor: {
+          accessToken: newAccessId,
+          refreshToken: newRefreshId,
+        },
+      };
+    }
+
     const logicalProjection = {
       familyId,
       generation: typeof famData.generation === 'number' ? famData.generation : 1,
@@ -617,7 +656,7 @@ export async function adoptFirestoreLegacyTokens(
       extra: ((curRefDoc.token as any)?.extra ?? accData.extra ?? {}) as Record<string, string>,
       activeRefreshId: newRefreshId,
       currentAccessTokenId: newAccessId,
-      previousRefresh: famData.previousRefreshToken ? { id: codec.id('refresh', famData.previousRefreshToken as string) } : null,
+      previousRefresh,
       retiredRefreshFingerprints: [...retiredFingerprints].sort(codeUnitCompare),
       upstream: {
         grantVersion: typeof upData.grantVersion === 'number' ? upData.grantVersion : 1,
@@ -956,7 +995,20 @@ export async function adoptFirestoreLegacyTokens(
           throw new Error(`Partial target detected for base token ${accessToken}`);
         }
         if (allExist) {
-          return 'skipped';
+          const tFam = targetFamSnap.data();
+          const tUp = targetUpSnap.data();
+          const tRef = targetRefSnap.data();
+          const tAcc = targetAccSnap.data();
+          return {
+            disposition: 'skipped' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['families', familyId])]: tFam,
+              [H(key, 'target-id', namespace, currentEpoch, ['upstream', familyId])]: tUp,
+              [H(key, 'target-id', namespace, currentEpoch, ['refresh', refreshId])]: tRef,
+              [H(key, 'target-id', namespace, currentEpoch, ['tokens', accessId])]: tAcc,
+            },
+            sourcePostimages: {},
+          };
         }
 
         const legacyTokSnap = await tx.get(db.collection(legacyTokensCol).doc(accessToken));
@@ -971,7 +1023,7 @@ export async function adoptFirestoreLegacyTokens(
           if (isControlled && initialControl) {
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
-          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({
+          const famDocData = defined({
             id: familyId,
             generation: 1,
             status: 'active',
@@ -985,8 +1037,10 @@ export async function adoptFirestoreLegacyTokens(
               retiredRefreshIds: [],
             }, familyAad({ id: familyId, generation: 1 })),
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({
+          });
+          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), famDocData);
+
+          const upDocData = defined({
             id: familyId,
             grantVersion: 1,
             nsExpiresAt: logicalProjection.upstream.nsExpiresAt,
@@ -999,15 +1053,19 @@ export async function adoptFirestoreLegacyTokens(
               nsApiUrl: logicalProjection.upstream.nsApiUrl,
             }, upstreamAad({ id: familyId, grantVersion: 1 })),
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.refreshTokens).doc(refreshId), defined({
+          });
+          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), upDocData);
+
+          const refDocData = defined({
             id: refreshId,
             familyId,
             status: 'active',
             generation: 1,
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.sessions).doc(accessId), defined({
+          });
+          tx.set(db.collection(v3Cols.refreshTokens).doc(refreshId), refDocData);
+
+          const sessDocData = defined({
             id: accessId,
             familyId,
             expiresAt,
@@ -1020,9 +1078,25 @@ export async function adoptFirestoreLegacyTokens(
             }, accessAad({ id: accessId, familyId })),
             v: 2,
             ttlAt: new Date(retainUntil),
-          }));
+          });
+          tx.set(db.collection(v3Cols.sessions).doc(accessId), sessDocData);
+
+          return {
+            disposition: 'written' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['families', familyId])]: famDocData,
+              [H(key, 'target-id', namespace, currentEpoch, ['upstream', familyId])]: upDocData,
+              [H(key, 'target-id', namespace, currentEpoch, ['refresh', refreshId])]: refDocData,
+              [H(key, 'target-id', namespace, currentEpoch, ['tokens', accessId])]: sessDocData,
+            },
+            sourcePostimages: {},
+          };
         }
-        return 'migrated';
+        return {
+          disposition: 'skipped' as const,
+          targetPostimages: {},
+          sourcePostimages: {},
+        };
       },
     });
   }
@@ -1119,7 +1193,13 @@ export async function adoptFirestoreLegacyTokens(
           if (tData?.id !== hmacId || tData?.expiresAt !== expiresAt || tData?.v !== 2) {
             throw new Error(`Target auth code content mismatch for ${rawCode}`);
           }
-          return 'skipped';
+          return {
+            disposition: 'skipped' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['authCodes', hmacId])]: tData,
+            },
+            sourcePostimages: {},
+          };
         }
 
         const sourceCodeSnap = await tx.get(db.collection(legacyAuthCodesCol).doc(rawCode));
@@ -1152,16 +1232,31 @@ export async function adoptFirestoreLegacyTokens(
           if (isControlled && initialControl) {
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
-          tx.set(db.collection(v3Cols.authCodes).doc(hmacId), {
+          const codeDocData = defined({
             id: hmacId,
             expiresAt,
             sealed: codec.seal(payload, `code:${hmacId}`),
             v: 2,
             ttlAt: new Date(expiresAt),
           });
+          tx.set(db.collection(v3Cols.authCodes).doc(hmacId), codeDocData);
           tx.delete(db.collection(legacyAuthCodesCol).doc(rawCode));
+
+          return {
+            disposition: 'written' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['authCodes', hmacId])]: codeDocData,
+            },
+            sourcePostimages: {
+              [H(key, 'source-id', namespace, currentEpoch, ['authCodes', rawCode])]: null,
+            },
+          };
         }
-        return 'migrated';
+        return {
+          disposition: 'skipped' as const,
+          targetPostimages: {},
+          sourcePostimages: {},
+        };
       },
     });
   }
@@ -1216,8 +1311,22 @@ export async function adoptFirestoreLegacyTokens(
         const targetResumeSnap = await tx.get(db.collection(v3Cols.resumeTokens).doc(resumeId));
         if (targetResumeSnap.exists) {
           const tData = targetResumeSnap.data();
-          if (tData?.v === 2 && tData?.id === resumeId && tData?.consumedAt === rData.consumedAt && tData?.expiresAt === rData.expiresAt) {
-            return 'skipped';
+          if (
+            tData?._mcp_format === 'v3_target' &&
+            tData?.v === 2 &&
+            tData?.id === resumeId &&
+            tData?.consumedAt === rData.consumedAt &&
+            tData?.expiresAt === rData.expiresAt
+          ) {
+            return {
+              disposition: 'skipped' as const,
+              targetPostimages: {
+                [H(key, 'target-id', namespace, currentEpoch, ['resumeTokens', resumeId])]: tData,
+              },
+              sourcePostimages: {
+                [H(key, 'source-id', namespace, currentEpoch, ['resumeTokens', rDoc.id])]: tData,
+              },
+            };
           }
         }
 
@@ -1230,15 +1339,32 @@ export async function adoptFirestoreLegacyTokens(
           if (isControlled && initialControl) {
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
-          tx.set(db.collection(v3Cols.resumeTokens).doc(resumeId), {
+          const updatedResumeData = defined({
+            ...rData,
             id: resumeId,
             consumedAt: rData.consumedAt,
             expiresAt: rData.expiresAt,
             v: 2,
             ttlAt: new Date(rData.expiresAt as number),
+            _mcp_format: 'v3_target',
           });
+          tx.set(db.collection(v3Cols.resumeTokens).doc(resumeId), updatedResumeData);
+
+          return {
+            disposition: 'written' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['resumeTokens', resumeId])]: updatedResumeData,
+            },
+            sourcePostimages: {
+              [H(key, 'source-id', namespace, currentEpoch, ['resumeTokens', rDoc.id])]: updatedResumeData,
+            },
+          };
         }
-        return 'migrated';
+        return {
+          disposition: 'skipped' as const,
+          targetPostimages: {},
+          sourcePostimages: {},
+        };
       },
     });
   }
@@ -1305,11 +1431,23 @@ export async function adoptFirestoreLegacyTokens(
       targets: candTargets,
       logicalDigest,
       execute: async (tx: any) => {
+        const clientTargetId = H(key, 'target-id', namespace, currentEpoch, ['oauthClients', clientId]);
         const targetClientSnap = await tx.get(db.collection(v3Cols.oauthClients).doc(clientId));
         if (targetClientSnap.exists) {
           const tData = targetClientSnap.data();
-          if (tData?.v === 2 && tData?.client_id === clientId && C(tData?.redirect_uris || []) === C(clientData.redirect_uris || [])) {
-            return 'skipped';
+          if (
+            tData?._mcp_format === 'v3_target' &&
+            tData?.v === 2 &&
+            tData?.client_id === clientId &&
+            C(tData?.redirect_uris || []) === C(clientData.redirect_uris || [])
+          ) {
+            return {
+              disposition: 'skipped' as const,
+              targetPostimages: {
+                [clientTargetId]: tData,
+              },
+              sourcePostimages: {},
+            };
           }
         }
 
@@ -1324,13 +1462,35 @@ export async function adoptFirestoreLegacyTokens(
           if (isControlled && initialControl) {
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
-          tx.set(db.collection(v3Cols.oauthClients).doc(clientId), defined({
+          const clientDocData = defined({
             ...clientData,
             client_id: clientId,
             v: 2,
-          }));
+            _mcp_format: 'v3_target',
+          });
+          tx.set(db.collection(v3Cols.oauthClients).doc(clientId), clientDocData);
+
+          const sourcePostimages: Record<string, unknown | null> = {};
+          if (srcOauthSnap.exists) {
+            sourcePostimages[H(key, 'source-id', namespace, currentEpoch, ['oauthClients', clientId])] = clientDocData;
+          }
+          if (srcLegacySnap.exists) {
+            sourcePostimages[H(key, 'source-id', namespace, currentEpoch, ['clients', clientId])] = srcLegacySnap.data();
+          }
+
+          return {
+            disposition: 'written' as const,
+            targetPostimages: {
+              [clientTargetId]: clientDocData,
+            },
+            sourcePostimages,
+          };
         }
-        return 'migrated';
+        return {
+          disposition: 'skipped' as const,
+          targetPostimages: {},
+          sourcePostimages: {},
+        };
       },
     });
   }
@@ -1432,18 +1592,11 @@ export async function adoptFirestoreLegacyTokens(
           ) {
             throw new CutoverFenceError(`Invalid or corrupt receipt for candidate ${cand.id}`);
           }
-          if (Array.isArray(rData.targetAfter)) {
-            for (const t of rData.targetAfter) {
-              const targetColName = v3Cols[t.collection as keyof typeof v3Cols] || `${namespace}_${t.collection}`;
-              const tSnap = await tx.get(db.collection(targetColName).doc(t.id));
-              if (!tSnap.exists) {
-                throw new CutoverFenceError(`Target document ${t.collection}/${t.id} missing for committed receipt ${cand.id}`);
-              }
-            }
-          }
           const rDig = D('receipt', namespace, currentEpoch, rData);
-          receipts.push({ candidateId: cand.id, receiptDigest: rDig });
-          return (rData.disposition === 'retained' ? 'skipped' : 'migrated') as 'migrated' | 'skipped';
+          return {
+            disposition: rData.disposition === 'retained' ? ('skipped' as const) : ('migrated' as const),
+            receiptEntry: { candidateId: cand.id, receiptDigest: rDig },
+          };
         }
 
         if (isControlled && initialControl) {
@@ -1473,9 +1626,10 @@ export async function adoptFirestoreLegacyTokens(
 
         const targetAfter = cand.targets.map(t => {
           const post = res.targetPostimages?.[t.id];
-          const postDigest = post !== undefined
-            ? H(key, 'target-record', namespace, currentEpoch, [t.collection, t.id, post])
-            : t.recordDigest;
+          if (post === undefined) {
+            throw new CutoverFenceError(`Missing target postimage for descriptor ${t.collection}/${t.id}`);
+          }
+          const postDigest = H(key, 'target-record', namespace, currentEpoch, [t.collection, t.id, post]);
           return { collection: t.collection, id: t.id, recordDigest: postDigest };
         });
 
@@ -1501,9 +1655,15 @@ export async function adoptFirestoreLegacyTokens(
 
         tx.set(receiptRef, stripUndefined(receiptDoc));
         const receiptDigest = D('receipt', namespace, currentEpoch, receiptDoc);
-        receipts.push({ candidateId: cand.id, receiptDigest });
-        return (disposition === 'retained' ? 'skipped' : 'migrated') as 'migrated' | 'skipped';
+        return {
+          disposition: disposition === 'retained' ? ('skipped' as const) : ('migrated' as const),
+          receiptEntry: { candidateId: cand.id, receiptDigest },
+        };
       });
+
+      receipts.push(outcome.receiptEntry);
+      if (outcome.disposition === 'migrated') report.migrated++;
+      else report.skipped++;
     } catch (err: any) {
       if (err instanceof CutoverFenceError) {
         throw err;
@@ -1566,6 +1726,23 @@ export async function adoptFirestoreLegacyTokens(
   targetDescriptors.sort(compareDescriptors);
   const targetInventoryDigest = H(key, 'target-inventory', namespace, currentEpoch, targetDescriptors);
 
+  if (!dryRun && report.errors === 0) {
+    for (const colKey of TARGET_COUNT_KEYS) {
+      if (targetCounts[colKey] !== expectedTargetCounts[colKey]) {
+        throw new CutoverFenceError(
+          `Target count mismatch for ${colKey}: expected ${expectedTargetCounts[colKey]}, got ${targetCounts[colKey]}`,
+        );
+      }
+    }
+    const claimedSourceIds = new Set(candidateCommitments.flatMap(c => c.sources.map(s => s.id)));
+    const unclaimedSources = sourceDescriptors.filter(s => !claimedSourceIds.has(s.id));
+    if (unclaimedSources.length !== report.errors) {
+      throw new CutoverFenceError(
+        `Source conservation error: ${unclaimedSources.length} unclaimed source records found in sourceInventoryDigest but expected ${report.errors} classified errors`,
+      );
+    }
+  }
+
   const isActuallyEmpty =
     totalPhysicalRecords === 0 &&
     report.migrated === 0 &&
@@ -1623,18 +1800,61 @@ export async function adoptFirestoreLegacyTokens(
         if (!unsealedSess) throw new CutoverFenceError(`Target session sealed payload could not be opened for ${sessDoc.id}`);
 
         const activeRefTargetId = H(key, 'target-id', namespace, currentEpoch, ['refresh', famData.activeRefreshId]);
+        const activeRefDoc = targetDocsByColAndTargetId.get(`refresh:${activeRefTargetId}`);
+        if (!activeRefDoc) throw new CutoverFenceError(`Target active refresh token missing for family ${familyId}`);
+        const activeRefData = activeRefDoc.data() || {};
+        if (
+          activeRefData.familyId !== familyId ||
+          activeRefData.status !== 'active' ||
+          activeRefData.generation !== generation ||
+          activeRefData.v !== 2
+        ) {
+          throw new CutoverFenceError(`Target active refresh token invalid for family ${familyId}`);
+        }
+
         const prevRefTarget = cand.targets.find((t: any) => t.collection === 'refresh' && t.id !== activeRefTargetId);
-        let previousRefresh: { id: string } | null = null;
+        let previousRefresh: any = null;
         if (prevRefTarget) {
           const prevRefDoc = targetDocsByColAndTargetId.get(`refresh:${prevRefTarget.id}`);
           if (!prevRefDoc) throw new CutoverFenceError(`Target consumed refresh token ${prevRefTarget.id} missing`);
-          previousRefresh = { id: prevRefDoc.id };
+          const prevRefData = prevRefDoc.data() || {};
+          if (
+            prevRefData.familyId !== familyId ||
+            prevRefData.status !== 'consumed' ||
+            typeof prevRefData.consumedAt !== 'number' ||
+            prevRefData.v !== 2
+          ) {
+            throw new CutoverFenceError(`Target consumed refresh token invalid for family ${familyId}`);
+          }
+          const unsealedSuccessor = codec.open<{ accessToken: string; refreshToken: string }>(
+            prevRefData.successorSealed,
+            `successor:${prevRefDoc.id}`,
+          );
+          if (
+            !unsealedSuccessor ||
+            unsealedSuccessor.accessToken !== famData.currentAccessTokenId ||
+            unsealedSuccessor.refreshToken !== famData.activeRefreshId
+          ) {
+            throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${prevRefDoc.id}`);
+          }
+          previousRefresh = {
+            id: prevRefDoc.id,
+            consumedAt: prevRefData.consumedAt,
+            generation: prevRefData.generation,
+            successor: {
+              accessToken: famData.currentAccessTokenId,
+              refreshToken: famData.activeRefreshId,
+            },
+          };
         }
 
         const retiredTargets = cand.targets.filter((t: any) => t.collection === 'retiredRefreshTokens');
         const retiredRefreshFingerprints = retiredTargets.map((t: any) => {
           const retDoc = targetDocsByColAndTargetId.get(`retiredRefreshTokens:${t.id}`);
           if (!retDoc) throw new CutoverFenceError(`Target retired refresh token ${t.id} missing`);
+          if (retDoc.data()?.familyId !== familyId) {
+            throw new CutoverFenceError(`Target retired refresh token ${t.id} bound to wrong familyId`);
+          }
           return retDoc.id;
         }).sort(codeUnitCompare);
 
@@ -1753,6 +1973,9 @@ export async function adoptFirestoreLegacyTokens(
         const resDoc = targetDocsByColAndTargetId.get(`resumeTokens:${resTarget.id}`);
         if (!resDoc) throw new CutoverFenceError(`Target resume token ${resTarget.id} missing`);
         const resData = resDoc.data() || {};
+        if (resData._mcp_format !== 'v3_target' || resData.v !== 2) {
+          throw new CutoverFenceError(`Target resume token ${resTarget.id} missing _mcp_format v3_target`);
+        }
         const reconstructedResumeProjection = {
           resumeId: resDoc.id,
           consumedAt: resData.consumedAt,
@@ -1767,11 +1990,20 @@ export async function adoptFirestoreLegacyTokens(
         const clientDoc = targetDocsByColAndTargetId.get(`oauthClients:${clientTarget.id}`);
         if (!clientDoc) throw new CutoverFenceError(`Target oauth client ${clientTarget.id} missing`);
         const clientData = clientDoc.data() || {};
+        if (clientData._mcp_format !== 'v3_target' || clientData.v !== 2) {
+          throw new CutoverFenceError(`Target oauth client ${clientTarget.id} missing _mcp_format v3_target`);
+        }
         const reconstructedClientProjection = {
           clientId: clientDoc.id,
           clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
+          clientSecret: typeof clientData.client_secret === 'string' ? clientData.client_secret : null,
           redirectUris: Array.isArray(clientData.redirect_uris) ? [...clientData.redirect_uris].sort(codeUnitCompare) : [],
           tokenEndpointAuthMethod: clientData.token_endpoint_auth_method,
+          grantTypes: Array.isArray(clientData.grant_types) ? [...clientData.grant_types].sort(codeUnitCompare) : [],
+          responseTypes: Array.isArray(clientData.response_types) ? [...clientData.response_types].sort(codeUnitCompare) : [],
+          clientUri: (clientData.client_uri ?? null) as string | null,
+          logoUri: (clientData.logo_uri ?? null) as string | null,
+          scope: (clientData.scope ?? null) as string | null,
           clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
         };
 
