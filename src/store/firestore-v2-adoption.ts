@@ -9,7 +9,6 @@ import {
   D,
   H,
   F,
-  normalizeValue,
   CutoverFenceError,
   CutoverRefusedError,
   isCutoverFenceError,
@@ -180,6 +179,23 @@ function defined<T>(value: T): T {
   return value;
 }
 
+function codeUnitCompare(a: string, b: string): number {
+  return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+function compareDescriptors(
+  a: { collection: string; id: string },
+  b: { collection: string; id: string },
+): number {
+  const c = codeUnitCompare(a.collection, b.collection);
+  if (c !== 0) return c;
+  return codeUnitCompare(a.id, b.id);
+}
+
+function comparePairs(a: [string, string], b: [string, string]): number {
+  return codeUnitCompare(a[0], b[0]);
+}
+
 export async function computeSourceInventoryDigest(
   db: FirestoreLike,
   namespace: string,
@@ -193,12 +209,12 @@ export async function computeSourceInventoryDigest(
     const snap = await db.collection(colName).get();
     for (const doc of snap.docs) {
       const sourceId = H(key, 'source-id', namespace, epoch, [colKey, doc.id]);
-      const sourceRecord = H(key, 'source-record', namespace, epoch, [colKey, sourceId, normalizeValue(doc.data() || {})]);
+      const sourceRecord = H(key, 'source-record', namespace, epoch, [colKey, sourceId, doc.data() || {}]);
       sourceDescriptors.push({ collection: colKey, id: sourceId, recordDigest: sourceRecord });
     }
   }
 
-  sourceDescriptors.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+  sourceDescriptors.sort(compareDescriptors);
   return H(key, 'source-inventory', namespace, epoch, sourceDescriptors);
 }
 
@@ -426,11 +442,11 @@ export async function adoptFirestoreLegacyTokens(
   for (const colKey of PHYSICAL_COUNT_KEYS) {
     for (const doc of colSnaps[colKey].docs) {
       const sourceId = H(key, 'source-id', namespace, currentEpoch, [colKey, doc.id]);
-      const sourceRecord = H(key, 'source-record', namespace, currentEpoch, [colKey, sourceId, normalizeValue(doc.data() || {})]);
+      const sourceRecord = H(key, 'source-record', namespace, currentEpoch, [colKey, sourceId, doc.data() || {}]);
       sourceDescriptors.push({ collection: colKey, id: sourceId, recordDigest: sourceRecord });
     }
   }
-  sourceDescriptors.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+  sourceDescriptors.sort(compareDescriptors);
   const sourceInventoryDigest = H(key, 'source-inventory', namespace, currentEpoch, sourceDescriptors);
 
   // Candidate generation
@@ -441,9 +457,12 @@ export async function adoptFirestoreLegacyTokens(
     targets: Array<{ collection: string; id: string }>;
     logicalDigest: string;
     candidateDigest?: string;
-    execute: (tx: any) => Promise<'migrated' | 'skipped'>;
+    execute: (tx: any) => Promise<{
+      disposition: 'written' | 'skipped';
+      targetPostimages: Record<string, unknown>;
+      sourcePostimages: Record<string, unknown | null>;
+    }>;
   }
-
   const candidateCommitments: Array<{
     id: string;
     kind: string;
@@ -536,22 +555,22 @@ export async function adoptFirestoreLegacyTokens(
       {
         collection: 'families',
         id: H(key, 'source-id', namespace, currentEpoch, ['families', familyId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['families', H(key, 'source-id', namespace, currentEpoch, ['families', familyId]), normalizeValue(famData)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['families', H(key, 'source-id', namespace, currentEpoch, ['families', familyId]), famData]),
       },
       {
         collection: 'refresh',
         id: H(key, 'source-id', namespace, currentEpoch, ['refresh', currentRefId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', currentRefId]), normalizeValue(curRefDoc)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', currentRefId]), curRefDoc]),
       },
       {
         collection: 'upstream',
         id: H(key, 'source-id', namespace, currentEpoch, ['upstream', familyId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['upstream', H(key, 'source-id', namespace, currentEpoch, ['upstream', familyId]), normalizeValue(upstreamById.get(familyId)!)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['upstream', H(key, 'source-id', namespace, currentEpoch, ['upstream', familyId]), upstreamById.get(familyId)!]),
       },
       {
         collection: 'tokens',
         id: H(key, 'source-id', namespace, currentEpoch, ['tokens', accessId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['tokens', H(key, 'source-id', namespace, currentEpoch, ['tokens', accessId]), normalizeValue(tokensByAccessId.get(accessId) || {})]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['tokens', H(key, 'source-id', namespace, currentEpoch, ['tokens', accessId]), tokensByAccessId.get(accessId) || {}]),
       },
     ];
 
@@ -561,12 +580,11 @@ export async function adoptFirestoreLegacyTokens(
       candSources.push({
         collection: 'refresh',
         id: H(key, 'source-id', namespace, currentEpoch, ['refresh', prevId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', prevId]), normalizeValue(prevDoc)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', prevId]), prevDoc]),
       });
     }
 
-    candSources.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
-
+    candSources.sort(compareDescriptors);
     // Expected targets
     const candTargets: Array<{ collection: string; id: string }> = [
       { collection: 'families', id: H(key, 'target-id', namespace, currentEpoch, ['families', familyId]) },
@@ -581,9 +599,9 @@ export async function adoptFirestoreLegacyTokens(
     for (const fp of retiredFingerprints) {
       candTargets.push({ collection: 'retiredRefreshTokens', id: H(key, 'target-id', namespace, currentEpoch, ['retiredRefreshTokens', fp]) });
     }
-    candTargets.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+    candTargets.sort(compareDescriptors);
 
-    const sortedSourceIds = candSources.map(s => s.id).sort();
+    const sortedSourceIds = candSources.map(s => s.id).sort(codeUnitCompare);
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['pr56Families', sortedSourceIds]);
 
     const upData = upstreamById.get(familyId)!;
@@ -599,8 +617,8 @@ export async function adoptFirestoreLegacyTokens(
       extra: ((curRefDoc.token as any)?.extra ?? accData.extra ?? {}) as Record<string, string>,
       activeRefreshId: newRefreshId,
       currentAccessTokenId: newAccessId,
-      previousRefresh: famData.previousRefreshToken ? { rawRefreshToken: famData.previousRefreshToken as string } : null,
-      retiredRefreshFingerprints: [...retiredFingerprints].sort(),
+      previousRefresh: famData.previousRefreshToken ? { id: codec.id('refresh', famData.previousRefreshToken as string) } : null,
+      retiredRefreshFingerprints: [...retiredFingerprints].sort(codeUnitCompare),
       upstream: {
         grantVersion: typeof upData.grantVersion === 'number' ? upData.grantVersion : 1,
         nsAccessToken: (grant.nsAccessToken ?? grant.access_token ?? accData.nsAccessToken) as string,
@@ -612,7 +630,7 @@ export async function adoptFirestoreLegacyTokens(
       },
     };
 
-    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', normalizeValue(logicalProjection)]);
+    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', logicalProjection]);
 
     expectedTargetCounts.families++;
     expectedTargetCounts.tokens++;
@@ -667,7 +685,16 @@ export async function adoptFirestoreLegacyTokens(
           ) {
             throw new Error(`Target family content mismatch for ${familyId}`);
           }
-          return 'skipped';
+          return {
+            disposition: 'skipped' as const,
+            targetPostimages: {
+              [H(key, 'target-id', namespace, currentEpoch, ['families', familyId])]: tFamData,
+              [H(key, 'target-id', namespace, currentEpoch, ['upstream', familyId])]: tUpData,
+              [H(key, 'target-id', namespace, currentEpoch, ['refresh', newRefreshId])]: tRefData,
+              [H(key, 'target-id', namespace, currentEpoch, ['tokens', newAccessId])]: tAccData,
+            },
+            sourcePostimages: {},
+          };
         }
 
         const famSnap = await tx.get(db.collection(legacyFamiliesCol).doc(familyId));
@@ -718,7 +745,7 @@ export async function adoptFirestoreLegacyTokens(
           if (isControlled && initialControl) {
             await markIrreversibleInTransaction(tx, db, namespace, currentEpoch, runId, nowProvider);
           }
-          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), defined({
+          const famDocData = defined({
             id: familyId,
             generation,
             status: liveFamData.status === 'revoked' ? 'revoked' : 'active',
@@ -732,8 +759,10 @@ export async function adoptFirestoreLegacyTokens(
               retiredRefreshIds: retiredFingerprints,
             }, familyAad({ id: familyId, generation })),
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), defined({
+          });
+          tx.set(db.collection(v3Cols.refreshFamilies).doc(familyId), famDocData);
+
+          const upDocData = defined({
             id: familyId,
             grantVersion,
             nsExpiresAt: logicalProjection.upstream.nsExpiresAt,
@@ -746,15 +775,19 @@ export async function adoptFirestoreLegacyTokens(
               nsApiUrl: logicalProjection.upstream.nsApiUrl,
             }, upstreamAad({ id: familyId, grantVersion })),
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), defined({
+          });
+          tx.set(db.collection(v3Cols.upstreamGrants).doc(familyId), upDocData);
+
+          const refDocData = defined({
             id: newRefreshId,
             familyId,
             status: 'active',
             generation,
             v: 2,
-          }));
-          tx.set(db.collection(v3Cols.sessions).doc(newAccessId), defined({
+          });
+          tx.set(db.collection(v3Cols.refreshTokens).doc(newRefreshId), refDocData);
+
+          const sessDocData = defined({
             id: newAccessId,
             familyId,
             expiresAt,
@@ -767,15 +800,38 @@ export async function adoptFirestoreLegacyTokens(
             }, accessAad({ id: newAccessId, familyId })),
             v: 2,
             ttlAt: new Date(retainUntil),
-          }));
+          });
+          tx.set(db.collection(v3Cols.sessions).doc(newAccessId), sessDocData);
+
+          const targetPostimages: Record<string, unknown> = {
+            [H(key, 'target-id', namespace, currentEpoch, ['families', familyId])]: famDocData,
+            [H(key, 'target-id', namespace, currentEpoch, ['upstream', familyId])]: upDocData,
+            [H(key, 'target-id', namespace, currentEpoch, ['refresh', newRefreshId])]: refDocData,
+            [H(key, 'target-id', namespace, currentEpoch, ['tokens', newAccessId])]: sessDocData,
+          };
+
           if (prevRefreshRow) {
-            tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), defined({ ...prevRefreshRow, v: 2 }));
+            const prevRefDocData = defined({ ...prevRefreshRow, v: 2 });
+            tx.set(db.collection(v3Cols.refreshTokens).doc(prevRefreshRow.id), prevRefDocData);
+            targetPostimages[H(key, 'target-id', namespace, currentEpoch, ['refresh', prevRefreshRow.id])] = prevRefDocData;
           }
           for (const fp of retiredFingerprints) {
-            tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), { familyId, retiredAt: now });
+            const retDocData = { familyId, retiredAt: now };
+            tx.set(db.collection(v3Cols.retiredRefreshTokens).doc(fp), retDocData);
+            targetPostimages[H(key, 'target-id', namespace, currentEpoch, ['retiredRefreshTokens', fp])] = retDocData;
           }
+
+          return {
+            disposition: 'written' as const,
+            targetPostimages,
+            sourcePostimages: {},
+          };
         }
-        return 'migrated';
+        return {
+          disposition: 'skipped' as const,
+          targetPostimages: {},
+          sourcePostimages: {},
+        };
       },
     });
   }
@@ -826,15 +882,15 @@ export async function adoptFirestoreLegacyTokens(
       {
         collection: 'tokens',
         id: H(key, 'source-id', namespace, currentEpoch, ['tokens', accessToken]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['tokens', H(key, 'source-id', namespace, currentEpoch, ['tokens', accessToken]), normalizeValue(tokData)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['tokens', H(key, 'source-id', namespace, currentEpoch, ['tokens', accessToken]), tokData]),
       },
       {
         collection: 'refresh',
         id: H(key, 'source-id', namespace, currentEpoch, ['refresh', refreshToken]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', refreshToken]), normalizeValue(refDoc)]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['refresh', H(key, 'source-id', namespace, currentEpoch, ['refresh', refreshToken]), refDoc]),
       },
     ];
-    candSources.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+    candSources.sort(compareDescriptors);
 
     const candTargets = [
       { collection: 'families', id: H(key, 'target-id', namespace, currentEpoch, ['families', familyId]) },
@@ -842,10 +898,9 @@ export async function adoptFirestoreLegacyTokens(
       { collection: 'refresh', id: H(key, 'target-id', namespace, currentEpoch, ['refresh', refreshId]) },
       { collection: 'upstream', id: H(key, 'target-id', namespace, currentEpoch, ['upstream', familyId]) },
     ];
-    candTargets.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+    candTargets.sort(compareDescriptors);
 
-    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['baseFormatTokens', candSources.map(s => s.id).sort()]);
-
+    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['baseFormatTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const logicalProjection = {
       familyId,
       generation: 1,
@@ -866,7 +921,7 @@ export async function adoptFirestoreLegacyTokens(
       },
     };
 
-    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', normalizeValue(logicalProjection)]);
+    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', logicalProjection]);
 
     expectedTargetCounts.families++;
     expectedTargetCounts.tokens++;
@@ -1011,14 +1066,14 @@ export async function adoptFirestoreLegacyTokens(
     const candSources = [{
       collection: 'authCodes',
       id: H(key, 'source-id', namespace, currentEpoch, ['authCodes', rawCode]),
-      recordDigest: H(key, 'source-record', namespace, currentEpoch, ['authCodes', H(key, 'source-id', namespace, currentEpoch, ['authCodes', rawCode]), normalizeValue(codeData)]),
+      recordDigest: H(key, 'source-record', namespace, currentEpoch, ['authCodes', H(key, 'source-id', namespace, currentEpoch, ['authCodes', rawCode]), codeData]),
     }];
     const candTargets = [{
       collection: 'authCodes',
       id: H(key, 'target-id', namespace, currentEpoch, ['authCodes', hmacId]),
     }];
 
-    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['authCodes', candSources.map(s => s.id)]);
+    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['authCodes', candSources.map(s => s.id).sort(codeUnitCompare)]);
 
     const logicalProjection = {
       codeId: hmacId,
@@ -1028,7 +1083,7 @@ export async function adoptFirestoreLegacyTokens(
       createdAt,
       expiresAt,
       state: typeof rawPending.state === 'string' ? rawPending.state : null,
-      scopes: Array.isArray(rawPending.scopes) ? [...rawPending.scopes].sort() : [],
+      scopes: Array.isArray(rawPending.scopes) ? [...rawPending.scopes].sort(codeUnitCompare) : [],
       nsAccessToken,
       nsRefreshToken: (rawNsTokens?.refresh_token ?? rawNsTokens?.nsRefreshToken ?? codeData.nsRefreshToken ?? null) as string | null,
       nsUsername: (rawNsTokens?.username ?? rawNsTokens?.nsUsername ?? codeData.nsUsername ?? null) as string | null,
@@ -1038,7 +1093,7 @@ export async function adoptFirestoreLegacyTokens(
       extra: (codeData.extra ?? {}) as Record<string, string>,
     };
 
-    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['authCodes', normalizeValue(logicalProjection)]);
+    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['authCodes', logicalProjection]);
 
     expectedTargetCounts.authCodes++;
     classifications.authCodes++;
@@ -1125,20 +1180,20 @@ export async function adoptFirestoreLegacyTokens(
     const candSources = [{
       collection: 'resumeTokens',
       id: H(key, 'source-id', namespace, currentEpoch, ['resumeTokens', rDoc.id]),
-      recordDigest: H(key, 'source-record', namespace, currentEpoch, ['resumeTokens', H(key, 'source-id', namespace, currentEpoch, ['resumeTokens', rDoc.id]), normalizeValue(rData)]),
+      recordDigest: H(key, 'source-record', namespace, currentEpoch, ['resumeTokens', H(key, 'source-id', namespace, currentEpoch, ['resumeTokens', rDoc.id]), rData]),
     }];
     const candTargets = [{
       collection: 'resumeTokens',
       id: H(key, 'target-id', namespace, currentEpoch, ['resumeTokens', resumeId]),
     }];
 
-    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['resumeTokens', candSources.map(s => s.id)]);
+    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['resumeTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const logicalProjection = {
       resumeId,
       consumedAt: rData.consumedAt,
       expiresAt: rData.expiresAt,
     };
-    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', normalizeValue(logicalProjection)]);
+    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', logicalProjection]);
 
     expectedTargetCounts.resumeTokens++;
     classifications.resumeTokens++;
@@ -1205,32 +1260,32 @@ export async function adoptFirestoreLegacyTokens(
       candSources.push({
         collection: 'clients',
         id: H(key, 'source-id', namespace, currentEpoch, ['clients', clientId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['clients', H(key, 'source-id', namespace, currentEpoch, ['clients', clientId]), normalizeValue(clientsSnap.docs.find(d => d.id === clientId)!.data() || {})]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['clients', H(key, 'source-id', namespace, currentEpoch, ['clients', clientId]), clientsSnap.docs.find(d => d.id === clientId)!.data() || {}]),
       });
     }
     if (oauthClientsSnap.docs.some(d => d.id === clientId)) {
       candSources.push({
         collection: 'oauthClients',
         id: H(key, 'source-id', namespace, currentEpoch, ['oauthClients', clientId]),
-        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['oauthClients', H(key, 'source-id', namespace, currentEpoch, ['oauthClients', clientId]), normalizeValue(oauthClientsSnap.docs.find(d => d.id === clientId)!.data() || {})]),
+        recordDigest: H(key, 'source-record', namespace, currentEpoch, ['oauthClients', H(key, 'source-id', namespace, currentEpoch, ['oauthClients', clientId]), oauthClientsSnap.docs.find(d => d.id === clientId)!.data() || {}]),
       });
     }
-    candSources.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+    candSources.sort(compareDescriptors);
 
     const candTargets = [{
       collection: 'oauthClients',
       id: H(key, 'target-id', namespace, currentEpoch, ['oauthClients', clientId]),
     }];
 
-    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['clients', candSources.map(s => s.id).sort()]);
+    const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['clients', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const logicalProjection = {
       clientId,
       clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
-      redirectUris: [...clientData.redirect_uris].sort(),
+      redirectUris: [...clientData.redirect_uris].sort(codeUnitCompare),
       tokenEndpointAuthMethod: clientData.token_endpoint_auth_method as string,
       clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
     };
-    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['clients', normalizeValue(logicalProjection)]);
+    const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['clients', logicalProjection]);
 
     expectedTargetCounts.oauthClients++;
     classifications.clients++;
@@ -1281,10 +1336,10 @@ export async function adoptFirestoreLegacyTokens(
   }
 
   // Commitments sort order
-  candidateCommitments.sort((a, b) => a.id.localeCompare(b.id));
-  candidates.sort((a, b) => a.id.localeCompare(b.id));
+  candidateCommitments.sort((a, b) => codeUnitCompare(a.id, b.id));
+  candidates.sort((a, b) => codeUnitCompare(a.id, b.id));
 
-  const sortedCandidateLogicalPairs = candidateCommitments.map(c => [c.id, c.logicalDigest]).sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedCandidateLogicalPairs = candidateCommitments.map(c => [c.id, c.logicalDigest] as [string, string]).sort(comparePairs);
   const sourceLogicalDigest = H(key, 'logical-inventory', namespace, currentEpoch, sortedCandidateLogicalPairs);
 
   const preparedManifest = {
@@ -1354,9 +1409,41 @@ export async function adoptFirestoreLegacyTokens(
 
     try {
       const outcome = await db.runTransaction(async (tx: any) => {
+        const candDigest = D('candidate', namespace, currentEpoch, {
+          id: cand.id,
+          kind: cand.kind,
+          sources: cand.sources,
+          targets: cand.targets,
+          logicalDigest: cand.logicalDigest,
+        });
+
         const receiptSnap = await tx.get(receiptRef);
         if (receiptSnap.exists) {
-          return (receiptSnap.data()?.disposition === 'retained' ? 'skipped' : 'migrated') as 'migrated' | 'skipped';
+          const rData = receiptSnap.data();
+          if (
+            rData?.schemaVersion !== 2 ||
+            rData?.namespace !== namespace ||
+            rData?.epoch !== currentEpoch ||
+            rData?.migrationRunId !== runId ||
+            rData?.candidateId !== cand.id ||
+            rData?.preparedDigest !== preparedDigest ||
+            rData?.candidateDigest !== candDigest ||
+            rData?.logicalDigest !== cand.logicalDigest
+          ) {
+            throw new CutoverFenceError(`Invalid or corrupt receipt for candidate ${cand.id}`);
+          }
+          if (Array.isArray(rData.targetAfter)) {
+            for (const t of rData.targetAfter) {
+              const targetColName = v3Cols[t.collection as keyof typeof v3Cols] || `${namespace}_${t.collection}`;
+              const tSnap = await tx.get(db.collection(targetColName).doc(t.id));
+              if (!tSnap.exists) {
+                throw new CutoverFenceError(`Target document ${t.collection}/${t.id} missing for committed receipt ${cand.id}`);
+              }
+            }
+          }
+          const rDig = D('receipt', namespace, currentEpoch, rData);
+          receipts.push({ candidateId: cand.id, receiptDigest: rDig });
+          return (rData.disposition === 'retained' ? 'skipped' : 'migrated') as 'migrated' | 'skipped';
         }
 
         if (isControlled && initialControl) {
@@ -1367,12 +1454,29 @@ export async function adoptFirestoreLegacyTokens(
         }
 
         const res = await cand.execute(tx);
-        const candDigest = D('candidate', namespace, currentEpoch, {
-          id: cand.id,
-          kind: cand.kind,
-          sources: cand.sources,
-          targets: cand.targets,
-          logicalDigest: cand.logicalDigest,
+        const disposition = res.disposition === 'skipped' ? 'retained' : 'written';
+
+        const sourceAfter = cand.sources.map(s => {
+          const post = res.sourcePostimages?.[s.id];
+          if (post === null) {
+            return { collection: s.collection, id: s.id, recordDigest: null };
+          }
+          if (post !== undefined) {
+            return {
+              collection: s.collection,
+              id: s.id,
+              recordDigest: H(key, 'source-record', namespace, currentEpoch, [s.collection, s.id, post]),
+            };
+          }
+          return { collection: s.collection, id: s.id, recordDigest: s.recordDigest };
+        });
+
+        const targetAfter = cand.targets.map(t => {
+          const post = res.targetPostimages?.[t.id];
+          const postDigest = post !== undefined
+            ? H(key, 'target-record', namespace, currentEpoch, [t.collection, t.id, post])
+            : t.recordDigest;
+          return { collection: t.collection, id: t.id, recordDigest: postDigest };
         });
 
         const receiptDoc = {
@@ -1388,23 +1492,18 @@ export async function adoptFirestoreLegacyTokens(
           preparedDigest,
           candidateId: cand.id,
           candidateDigest: candDigest,
-          disposition: res === 'skipped' ? 'retained' : 'written',
-          sourceAfter: cand.sources.map(s => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
-          targetAfter: cand.targets.map(t => ({ collection: t.collection, id: t.id, recordDigest: t.id })),
+          disposition,
+          sourceAfter,
+          targetAfter,
           logicalDigest: cand.logicalDigest,
           completedAt: nowProvider(),
         };
 
         tx.set(receiptRef, stripUndefined(receiptDoc));
-        return res;
+        const receiptDigest = D('receipt', namespace, currentEpoch, receiptDoc);
+        receipts.push({ candidateId: cand.id, receiptDigest });
+        return (disposition === 'retained' ? 'skipped' : 'migrated') as 'migrated' | 'skipped';
       });
-
-      if (outcome === 'migrated') report.migrated++;
-      else report.skipped++;
-
-      const finalReceiptSnap = await receiptRef.get();
-      const rDig = D('receipt', namespace, currentEpoch, finalReceiptSnap.data());
-      receipts.push({ candidateId: cand.id, receiptDigest: rDig });
     } catch (err: any) {
       if (err instanceof CutoverFenceError) {
         throw err;
@@ -1420,8 +1519,8 @@ export async function adoptFirestoreLegacyTokens(
   }
 
   // Finalization
-  receipts.sort((a, b) => a.candidateId.localeCompare(b.candidateId));
-  const sortedReceiptPairs = receipts.map(r => [r.candidateId, r.receiptDigest]);
+  receipts.sort((a, b) => codeUnitCompare(a.candidateId, b.candidateId));
+  const sortedReceiptPairs = receipts.map(r => [r.candidateId, r.receiptDigest] as [string, string]).sort(comparePairs);
   const receiptSetDigest = D('receipt-set', namespace, currentEpoch, sortedReceiptPairs);
 
   const [tFam, tUp, tRef, tSess, tCodes, tRes, tRet, tClients] = await Promise.all([
@@ -1460,11 +1559,11 @@ export async function adoptFirestoreLegacyTokens(
   for (const colKey of TARGET_COUNT_KEYS) {
     for (const doc of targetColSnaps[colKey].docs) {
       const targetId = H(key, 'target-id', namespace, currentEpoch, [colKey, doc.id]);
-      const targetRecord = H(key, 'target-record', namespace, currentEpoch, [colKey, targetId, normalizeValue(doc.data() || {})]);
+      const targetRecord = H(key, 'target-record', namespace, currentEpoch, [colKey, targetId, doc.data() || {}]);
       targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: targetRecord });
     }
   }
-  targetDescriptors.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+  targetDescriptors.sort(compareDescriptors);
   const targetInventoryDigest = H(key, 'target-inventory', namespace, currentEpoch, targetDescriptors);
 
   const isActuallyEmpty =
@@ -1478,141 +1577,213 @@ export async function adoptFirestoreLegacyTokens(
   } else if (dryRun) {
     targetLogicalDigest = sourceLogicalDigest;
   } else {
-    const targetLogicalDigests: string[] = [];
+    const targetDocsByColAndTargetId = new Map<string, any>();
+    for (const colKey of TARGET_COUNT_KEYS) {
+      for (const doc of targetColSnaps[colKey].docs) {
+        const tId = H(key, 'target-id', namespace, currentEpoch, [colKey, doc.id]);
+        targetDocsByColAndTargetId.set(`${colKey}:${tId}`, doc);
+      }
+    }
 
-    // 1. Families
-    for (const famDoc of tFam.docs) {
-      const famData = famDoc.data() || {};
-      const familyId = famDoc.id;
-      const generation = typeof famData.generation === 'number' ? famData.generation : 1;
-      const unsealedFam = famData.sealed ? (codec.unseal(famData.sealed, familyAad({ id: familyId, generation })) as any) : {};
-      const upDoc = tUp.docs.find(d => d.id === familyId);
-      const upData = upDoc ? (upDoc.data() || {}) : {};
-      const grantVersion = typeof upData.grantVersion === 'number' ? upData.grantVersion : 1;
-      const unsealedUp = upData.sealed ? (codec.unseal(upData.sealed, upstreamAad({ id: familyId, grantVersion })) as any) : {};
-      const sessDoc = tSess.docs.find(d => d.id === famData.currentAccessTokenId);
-      const sessData = sessDoc ? (sessDoc.data() || {}) : {};
-      const unsealedSess = sessData.sealed ? (codec.unseal(sessData.sealed, accessAad({ id: famData.currentAccessTokenId, familyId })) as any) : {};
+    const targetLogicalPairs: Array<[string, string]> = [];
 
-      const prevRefDoc = tRef.docs.find(d => (d.data()?.familyId === familyId && d.data()?.status === 'consumed'));
-      let previousRefresh: { rawRefreshToken: string | null } | null = null;
-      if (prevRefDoc) {
-        const prevRefData = prevRefDoc.data() || {};
-        const unsealedSuccessor = prevRefData.successorSealed
-          ? (codec.unseal(prevRefData.successorSealed, `successor:${prevRefDoc.id}`) as any)
+    for (const cand of candidateCommitments) {
+      if (cand.kind === 'pr56Families') {
+        const famTarget = cand.targets.find((t: any) => t.collection === 'families');
+        if (!famTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing families target descriptor`);
+        const famDoc = targetDocsByColAndTargetId.get(`families:${famTarget.id}`);
+        if (!famDoc) throw new CutoverFenceError(`Target family ${famTarget.id} missing from target documents`);
+        const famData = famDoc.data() || {};
+        const familyId = famDoc.id;
+        const generation = typeof famData.generation === 'number' ? famData.generation : 1;
+        const unsealedFam = famData.sealed
+          ? codec.open<any>(famData.sealed, familyAad({ id: familyId, generation }))
           : null;
-        previousRefresh = {
-          rawRefreshToken: unsealedSuccessor?.refreshToken ?? null,
+        if (!unsealedFam) throw new CutoverFenceError(`Target family sealed payload could not be opened for ${familyId}`);
+
+        const upTarget = cand.targets.find((t: any) => t.collection === 'upstream');
+        if (!upTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing upstream target descriptor`);
+        const upDoc = targetDocsByColAndTargetId.get(`upstream:${upTarget.id}`);
+        if (!upDoc) throw new CutoverFenceError(`Target upstream ${upTarget.id} missing from target documents`);
+        const upData = upDoc.data() || {};
+        const grantVersion = typeof upData.grantVersion === 'number' ? upData.grantVersion : 1;
+        const unsealedUp = upData.sealed
+          ? codec.open<any>(upData.sealed, upstreamAad({ id: familyId, grantVersion }))
+          : null;
+        if (!unsealedUp) throw new CutoverFenceError(`Target upstream sealed payload could not be opened for ${familyId}`);
+
+        const sessTarget = cand.targets.find((t: any) => t.collection === 'tokens');
+        if (!sessTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing tokens target descriptor`);
+        const sessDoc = targetDocsByColAndTargetId.get(`tokens:${sessTarget.id}`);
+        if (!sessDoc) throw new CutoverFenceError(`Target session ${sessTarget.id} missing from target documents`);
+        const sessData = sessDoc.data() || {};
+        const unsealedSess = sessData.sealed
+          ? codec.open<any>(sessData.sealed, accessAad({ id: sessDoc.id, familyId }))
+          : null;
+        if (!unsealedSess) throw new CutoverFenceError(`Target session sealed payload could not be opened for ${sessDoc.id}`);
+
+        const activeRefTargetId = H(key, 'target-id', namespace, currentEpoch, ['refresh', famData.activeRefreshId]);
+        const prevRefTarget = cand.targets.find((t: any) => t.collection === 'refresh' && t.id !== activeRefTargetId);
+        let previousRefresh: { id: string } | null = null;
+        if (prevRefTarget) {
+          const prevRefDoc = targetDocsByColAndTargetId.get(`refresh:${prevRefTarget.id}`);
+          if (!prevRefDoc) throw new CutoverFenceError(`Target consumed refresh token ${prevRefTarget.id} missing`);
+          previousRefresh = { id: prevRefDoc.id };
+        }
+
+        const retiredTargets = cand.targets.filter((t: any) => t.collection === 'retiredRefreshTokens');
+        const retiredRefreshFingerprints = retiredTargets.map((t: any) => {
+          const retDoc = targetDocsByColAndTargetId.get(`retiredRefreshTokens:${t.id}`);
+          if (!retDoc) throw new CutoverFenceError(`Target retired refresh token ${t.id} missing`);
+          return retDoc.id;
+        }).sort(codeUnitCompare);
+
+        const reconstructedFamProjection = {
+          familyId,
+          generation,
+          status: famData.status,
+          clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? '') as string,
+          serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null) as string | null,
+          extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}) as Record<string, string>,
+          activeRefreshId: famData.activeRefreshId,
+          currentAccessTokenId: famData.currentAccessTokenId,
+          previousRefresh,
+          retiredRefreshFingerprints,
+          upstream: {
+            grantVersion,
+            nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
+            nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
+            nsUsername: (unsealedUp.nsUsername ?? '') as string,
+            nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
+            nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
+            nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
+          },
         };
-      }
 
-      const retiredFps = tRet.docs.filter(d => d.data()?.familyId === familyId).map(d => d.id).sort();
+        const digest = H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', reconstructedFamProjection]);
+        targetLogicalPairs.push([cand.id, digest]);
+      } else if (cand.kind === 'baseFormatTokens') {
+        const famTarget = cand.targets.find((t: any) => t.collection === 'families');
+        if (!famTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing families target descriptor`);
+        const famDoc = targetDocsByColAndTargetId.get(`families:${famTarget.id}`);
+        if (!famDoc) throw new CutoverFenceError(`Target base family ${famTarget.id} missing`);
+        const famData = famDoc.data() || {};
+        const familyId = famDoc.id;
+        const unsealedFam = famData.sealed
+          ? codec.open<any>(famData.sealed, familyAad({ id: familyId, generation: 1 }))
+          : null;
+        if (!unsealedFam) throw new CutoverFenceError(`Target base family decrypt failed for ${familyId}`);
 
-      const reconstructedFamProjection = {
-        familyId,
-        generation,
-        status: famData.status === 'revoked' ? 'revoked' : 'active',
-        clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? '') as string,
-        serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null) as string | null,
-        extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}) as Record<string, string>,
-        activeRefreshId: famData.activeRefreshId,
-        currentAccessTokenId: famData.currentAccessTokenId,
-        previousRefresh,
-        retiredRefreshFingerprints: retiredFps,
-        upstream: {
-          grantVersion,
-          nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
-          nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
-          nsUsername: (unsealedUp.nsUsername ?? '') as string,
-          nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
-          nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
-          nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
-        },
-      };
-      targetLogicalDigests.push(
-        H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', normalizeValue(reconstructedFamProjection)]),
-      );
-    }
+        const upTarget = cand.targets.find((t: any) => t.collection === 'upstream');
+        if (!upTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing upstream target descriptor`);
+        const upDoc = targetDocsByColAndTargetId.get(`upstream:${upTarget.id}`);
+        if (!upDoc) throw new CutoverFenceError(`Target base upstream ${upTarget.id} missing`);
+        const upData = upDoc.data() || {};
+        const unsealedUp = upData.sealed
+          ? codec.open<any>(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }))
+          : null;
+        if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
 
-    // 2. Base format tokens
-    for (const sessDoc of tSess.docs) {
-      const sessData = sessDoc.data() || {};
-      if (!sessData.familyId) {
-        const unsealed = sessData.sealed ? (codec.unseal(sessData.sealed, `session:${sessDoc.id}`) as any) : {};
+        const sessTarget = cand.targets.find((t: any) => t.collection === 'tokens');
+        if (!sessTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing tokens target descriptor`);
+        const sessDoc = targetDocsByColAndTargetId.get(`tokens:${sessTarget.id}`);
+        if (!sessDoc) throw new CutoverFenceError(`Target base session ${sessTarget.id} missing`);
+        const sessData = sessDoc.data() || {};
+        const unsealedSess = sessData.sealed
+          ? codec.open<any>(sessData.sealed, accessAad({ id: sessDoc.id, familyId }))
+          : null;
+        if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessDoc.id}`);
+
         const reconstructedBaseProjection = {
-          accessTokenId: sessDoc.id,
-          clientId: (unsealed.clientId ?? '') as string,
-          serverBaseUrl: (unsealed.serverBaseUrl ?? null) as string | null,
-          extra: (unsealed.extra ?? {}) as Record<string, string>,
-          expiresAt: sessData.expiresAt,
-          nsAccessToken: (unsealed.baseGrant?.nsAccessToken ?? unsealed.nsAccessToken ?? '') as string,
-          nsRefreshToken: (unsealed.baseGrant?.nsRefreshToken ?? unsealed.nsRefreshToken ?? null) as string | null,
-          nsUsername: (unsealed.baseGrant?.nsUsername ?? unsealed.nsUsername ?? '') as string,
-          nsUserRole: (unsealed.baseGrant?.nsUserRole ?? unsealed.nsUserRole ?? null) as string | null,
-          nsApiUrl: (unsealed.baseGrant?.nsApiUrl ?? unsealed.nsApiUrl ?? null) as string | null,
+          familyId,
+          generation: 1,
+          status: 'active',
+          clientId: (unsealedFam.clientId ?? '') as string,
+          serverBaseUrl: (unsealedFam.serverBaseUrl ?? null) as string | null,
+          extra: (unsealedFam.extra ?? {}) as Record<string, string>,
+          activeRefreshId: famData.activeRefreshId,
+          currentAccessTokenId: famData.currentAccessTokenId,
+          upstream: {
+            grantVersion: 1,
+            nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
+            nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
+            nsUsername: (unsealedUp.nsUsername ?? '') as string,
+            nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
+            nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
+            nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
+          },
         };
-        targetLogicalDigests.push(
-          H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', normalizeValue(reconstructedBaseProjection)]),
-        );
+
+        const digest = H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', reconstructedBaseProjection]);
+        targetLogicalPairs.push([cand.id, digest]);
+      } else if (cand.kind === 'authCodes') {
+        const codeTarget = cand.targets.find((t: any) => t.collection === 'authCodes');
+        if (!codeTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing authCodes target descriptor`);
+        const codeDoc = targetDocsByColAndTargetId.get(`authCodes:${codeTarget.id}`);
+        if (!codeDoc) throw new CutoverFenceError(`Target auth code ${codeTarget.id} missing`);
+        const codeData = codeDoc.data() || {};
+        const unsealed = codeData.sealed
+          ? codec.open<AuthCodeData>(codeData.sealed, `code:${codeDoc.id}`)
+          : null;
+        if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${codeDoc.id}`);
+
+        const reconstructedCodeProjection = {
+          codeId: codeDoc.id,
+          clientId: unsealed.clientId,
+          codeChallenge: unsealed.pending.codeChallenge,
+          redirectUri: unsealed.pending.redirectUri,
+          createdAt: unsealed.pending.createdAt,
+          expiresAt: codeData.expiresAt,
+          state: unsealed.pending.state ?? null,
+          scopes: Array.isArray(unsealed.pending.scopes) ? [...unsealed.pending.scopes].sort(codeUnitCompare) : [],
+          nsAccessToken: unsealed.nsTokens.access_token,
+          nsRefreshToken: unsealed.nsTokens.refresh_token ?? null,
+          nsUsername: unsealed.nsTokens.username ?? null,
+          nsUserRole: unsealed.nsTokens.nsUserRole ?? null,
+          nsApiUrl: unsealed.nsTokens.nsApiUrl ?? null,
+          serverBaseUrl: unsealed.serverBaseUrl ?? null,
+          extra: unsealed.extra ?? {},
+        };
+
+        const digest = H(key, 'logical-record', namespace, currentEpoch, ['authCodes', reconstructedCodeProjection]);
+        targetLogicalPairs.push([cand.id, digest]);
+      } else if (cand.kind === 'resumeTokens') {
+        const resTarget = cand.targets.find((t: any) => t.collection === 'resumeTokens');
+        if (!resTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing resumeTokens target descriptor`);
+        const resDoc = targetDocsByColAndTargetId.get(`resumeTokens:${resTarget.id}`);
+        if (!resDoc) throw new CutoverFenceError(`Target resume token ${resTarget.id} missing`);
+        const resData = resDoc.data() || {};
+        const reconstructedResumeProjection = {
+          resumeId: resDoc.id,
+          consumedAt: resData.consumedAt,
+          expiresAt: resData.expiresAt,
+        };
+
+        const digest = H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', reconstructedResumeProjection]);
+        targetLogicalPairs.push([cand.id, digest]);
+      } else if (cand.kind === 'clients') {
+        const clientTarget = cand.targets.find((t: any) => t.collection === 'oauthClients');
+        if (!clientTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing oauthClients target descriptor`);
+        const clientDoc = targetDocsByColAndTargetId.get(`oauthClients:${clientTarget.id}`);
+        if (!clientDoc) throw new CutoverFenceError(`Target oauth client ${clientTarget.id} missing`);
+        const clientData = clientDoc.data() || {};
+        const reconstructedClientProjection = {
+          clientId: clientDoc.id,
+          clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
+          redirectUris: Array.isArray(clientData.redirect_uris) ? [...clientData.redirect_uris].sort(codeUnitCompare) : [],
+          tokenEndpointAuthMethod: clientData.token_endpoint_auth_method,
+          clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
+        };
+
+        const digest = H(key, 'logical-record', namespace, currentEpoch, ['clients', reconstructedClientProjection]);
+        targetLogicalPairs.push([cand.id, digest]);
       }
     }
 
-    // 3. Auth codes
-    for (const codeDoc of tCodes.docs) {
-      const codeData = codeDoc.data() || {};
-      const unsealed = codeData.sealed ? (codec.unseal(codeData.sealed, `code:${codeDoc.id}`) as any) : {};
-      const reconstructedCodeProjection = {
-        codeId: codeDoc.id,
-        clientId: (unsealed.clientId ?? unsealed.pending?.clientId ?? '') as string,
-        codeChallenge: (unsealed.pending?.codeChallenge ?? '') as string,
-        redirectUri: (unsealed.pending?.redirectUri ?? '') as string,
-        createdAt: typeof unsealed.pending?.createdAt === 'number' ? unsealed.pending.createdAt : 0,
-        expiresAt: typeof codeData.expiresAt === 'number' ? codeData.expiresAt : 0,
-        nsAccessToken: (unsealed.nsTokens?.access_token ?? unsealed.nsTokens?.nsAccessToken ?? '') as string,
-        nsRefreshToken: (unsealed.nsTokens?.refresh_token ?? unsealed.nsTokens?.nsRefreshToken ?? null) as string | null,
-        nsUsername: (unsealed.nsTokens?.username ?? unsealed.nsTokens?.nsUsername ?? '') as string,
-      };
-      targetLogicalDigests.push(
-        H(key, 'logical-record', namespace, currentEpoch, ['authCodes', normalizeValue(reconstructedCodeProjection)]),
-      );
-    }
-
-    // 4. Resume tokens
-    for (const resDoc of tRes.docs) {
-      const resData = resDoc.data() || {};
-      const reconstructedResumeProjection = {
-        id: resDoc.id,
-        consumedAt: resData.consumedAt,
-        expiresAt: resData.expiresAt,
-      };
-      targetLogicalDigests.push(
-        H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', normalizeValue(reconstructedResumeProjection)]),
-      );
-    }
-
-    // 5. OAuth clients
-    for (const clientDoc of tClients.docs) {
-      const clientData = clientDoc.data() || {};
-      const reconstructedClientProjection = {
-        clientId: clientDoc.id,
-        client_name: (clientData.client_name ?? clientData.name ?? null) as string | null,
-        redirect_uris: [...(clientData.redirect_uris || [])].sort(),
-        token_endpoint_auth_method: (clientData.token_endpoint_auth_method ?? 'none') as string,
-        grant_types: [...(clientData.grant_types || [])].sort(),
-        response_types: [...(clientData.response_types || [])].sort(),
-        client_uri: (clientData.client_uri ?? null) as string | null,
-        logo_uri: (clientData.logo_uri ?? null) as string | null,
-        scope: (clientData.scope ?? null) as string | null,
-      };
-      targetLogicalDigests.push(
-        H(key, 'logical-record', namespace, currentEpoch, ['clients', normalizeValue(reconstructedClientProjection)]),
-      );
-    }
-
-    targetLogicalDigests.sort();
-    targetLogicalDigest = targetLogicalDigests.length === 0
+    targetLogicalPairs.sort(comparePairs);
+    targetLogicalDigest = targetLogicalPairs.length === 0
       ? H(key, 'logical-inventory', namespace, currentEpoch, [])
-      : H(key, 'logical-inventory', namespace, currentEpoch, targetLogicalDigests);
+      : H(key, 'logical-inventory', namespace, currentEpoch, targetLogicalPairs);
 
     if (report.errors === 0 && targetLogicalDigest !== sourceLogicalDigest) {
       throw new CutoverFenceError(
@@ -1667,6 +1838,16 @@ export async function adoptFirestoreLegacyTokens(
   };
   if (!dryRun && report.errors === 0) {
     await db.runTransaction(async (tx: any) => {
+      let controlRecord: any;
+      if (isControlled && initialControl) {
+        controlRecord = await readCutoverFenceInTransaction(tx, db, namespace);
+        if (controlRecord.epoch !== currentEpoch || controlRecord.state !== 'migrating' || controlRecord.migrationRunId !== runId) {
+          throw new CutoverFenceError(
+            `Cannot finalize cutover fence for namespace ${namespace}: control record state is ${controlRecord.state}, epoch is ${controlRecord.epoch}`,
+          );
+        }
+      }
+
       tx.set(
         db.collection(`${namespace}_meta`).doc(`migration_manifest_${currentEpoch}`),
         stripUndefined(finalManifest),
@@ -1675,19 +1856,19 @@ export async function adoptFirestoreLegacyTokens(
         db.collection(`${namespace}_meta`).doc('v2_adopted'),
         stripUndefined(ownershipMarker),
       );
-    });
 
-    if (isControlled && initialControl) {
-      await transitionCutoverFenceState(db, namespace, {
-        fromState: 'migrating',
-        toState: 'v3_ready',
-        expectedEpoch: currentEpoch,
-        migrationRunId: runId,
-        migrationManifestDigest,
-        emptyNamespace: isActuallyEmpty ? true : undefined,
-        now: nowProvider,
-      });
-    }
+      if (isControlled && initialControl) {
+        const updatedControl = {
+          ...controlRecord,
+          state: 'v3_ready',
+          migrationRunId: runId,
+          migrationManifestDigest,
+          emptyNamespace: isActuallyEmpty ? true : undefined,
+          updatedAt: nowProvider(),
+        };
+        tx.set(getCutoverFenceDocRef(db, namespace), stripUndefined(updatedControl));
+      }
+    });
   }
   return report;
 }
