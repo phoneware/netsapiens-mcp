@@ -25,6 +25,7 @@
   "exclude": [
     "node_modules",
     "build",
-    "**/*.test.ts"
+    "**/*.test.ts",
+    "src/**/__tests__/**"
   ]
 }

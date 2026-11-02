@@ -5,13 +5,57 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_callqueues: ToolDefinition = {
   schema: {
     name: 'read_callqueues',
-    description: 'Read Call Queues in Domain — [GET /domains/{domain}/callqueues]',
+    description: 'List call queues — Lists the call queues in a domain with their full settings, live counts, and routing: agent totals, calls waiting, the queue\\\'s phone number, and its forwards.  Office Manager, Call Center Supervisor, Office Manager Read-Only, and Route Manager see every queue in their own domain, Reseller every queue in its territory\\\'s domains, and Super User and Super User Read Only any domain\\\'s. Call Center Agent sees every queue in its domain. Site Manager sees only the queues at its own site; naming another `site` returns `403`. Basic User, Advanced User, and Simple User get `403`: `GET /domains/{domain}/callqueues/list` returns the queues you are an agent on.  Call parks share the queue table but are left out unless you send `include-parks=yes`. Manage parks under `/domains/{domain}/parks`. Rows are sorted by `description` unless you send `sort`, and paged with `start` and `limit`, which defaults to `100`. `fields` limits the stored queue fields returned; the queue name is always included.  `callqueue-hold-audio-type` is only on `GET /domains/{domain}/callqueues/{callqueue}`. For names only, call `GET /domains/{domain}/callqueues/list`. For a total, call `GET /domains/{domain}/callqueues/count`. — [GET /domains/{domain}/callqueues]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "include-parks": {
+                      "type": "string",
+                      "description": "`yes` also returns call parks, which have `callqueue-dispatch-type` `Call Park` or `-`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only queues at this site, taken from the queue's own system user. A Site Manager gets its own site; naming another returns `403`."
+                },
+                "agent": {
+                      "type": "string",
+                      "description": "Returns only queues this user or device is an agent on, such as `1001`. Ring group queues are left out. Call Center Agent may name only itself; another agent returns `403`."
+                },
+                "callqueue-calculate-statistics": {
+                      "type": "string",
+                      "description": "Returns only queues with statistics on (`yes`) or off (`no`). With `yes`, rows also carry `activecall_count` and `gau_queue_max_wait` from the last 30 seconds of queue statistics. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "One sort term: `callqueue`, `description`, or `domain`, optionally followed by `asc` or `desc` (`asc` when left out; any case). `callqueue` sorts extensions numerically. Defaults to `description asc`. Anything else returns `400`. Default: \"description asc\"",
+                      "default": "description asc"
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most queues to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "fields": {
+                      "type": "string",
+                      "description": "Comma-separated fields to return. These stored fields are returned only when named: `callqueue`, `description`, `domain`, `callqueue-max-wait-timeout-minutes`, `callqueue-max-current-wait-to-accept-new-callers-seconds`, `callqueue-max-current-callers-to-accept-new-callers`, `callqueue-require-available-agents-to-accept-new-callers`, `callqueue-max-callback-queueing-hours`, and `queue_option`. `queue_option` returns `callqueue-debug`, `callqueue-local-only`, `callqueue-force-full-intro-playback`, and `callqueue-source-match`. `callqueue` is always returned. Counts, dispatch settings, SMS phrases, the system user's fields, and routing are added to every row whatever you send. Naming one of them is accepted and changes nothing: `callqueue-dispatch-type`, `callqueue-agent-dispatch-timeout-seconds`, `callqueue-calculate-statistics`, `callqueue-sim-ring-1st-round`, `callqueue-sim-ring-increment`, `callqueue-agent-auto-logout-after-missed`, `callqueue-sms-enable`, `callqueue-sms-phrase-initiate-chat`, `callqueue-sms-phrase-initiate-success`, `callqueue-sms-phrase-initiation-fail`, `callqueue-sms-phrase-terminate-chat`, `callqueue-sms-phrase-terminate-success`, `callqueue-sms-phrase-no-agents-available`, `site`, `voicemail-enabled`, `callqueue-ring-timeout-seconds`, `phone-number`, `forward-on-busy`, `forward-when-unregistered`, `forward-no-answer`, `active-queued-calls-total-current`, `callqueue-count-agents-total`, `callqueue-count-agents-available`, `agent_loggedin_count`, and `recording-configuration`. Any other name returns `400`. That includes the four `queue_option` flags by name (send `queue_option`), `department`, `activecall_count`, and `gau_queue_max_wait`."
                 }
           },
           "required": [
@@ -19,16 +63,28 @@ export const read_callqueues: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-parks', 'site', 'agent', 'callqueue-calculate-statistics', 'sort', 'start', 'limit', 'fields'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/callqueues',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,34 +99,25 @@ export const read_callqueues: ToolDefinition = {
 export const create_callqueue: ToolDefinition = {
   schema: {
     name: 'create_callqueue',
-    description: 'Create Call Queue in Domain — [POST /domains/{domain}/callqueues]',
+    description: 'Create call queue — Creates a call queue and everything it needs to take calls: the queue, its dispatch settings, a system user for the extension, an answering rule that sends calls into the queue, a `queue_<callqueue>` dial rule, and, when you send one, the queue\\\'s phone number and forwards.  Requires Office Manager, Call Center Supervisor, Route Manager, Reseller, or Super User. Site Manager can create a queue at its own site: a create without `site` is assigned to the Site Manager\\\'s own site, and another site returns `403`. Other scopes get `403`, including Office Manager Read-Only and Super User Read Only.  `callqueue` and `description` are required. `callqueue` takes letters, digits, `.`, `-`, and `_`, and `list`, `count`, and `all` are reserved; anything else returns `400`. `callqueue-dispatch-type` defaults to Call Park when left out, so send it for a queue that dispatches to agents. `202` means the change was published over the service bus (SBUS), not yet applied. Send `synchronous=yes` to wait up to 2 seconds and get the created queue back with `200`. A queue that already exists returns `409`. A `phone-number` that is not in the domain\\\'s number inventory, or belongs to another domain, returns `422` before anything is created. A value too long for its field returns `400`.  Add agents with `POST /domains/{domain}/callqueues/{callqueue}/agents`. — [POST /domains/{domain}/callqueues]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "This is the main call queue extension which is the identifier for this call quieue."
+                      "description": "Extension of the new queue. Letters, digits, `.`, `-`, and `_` only, so the queue can be addressed by path. `all`, `list`, and `count` are reserved"
                 },
                 "description": {
                       "type": "string",
-                      "description": "This is a simple description of the callqueue which can be used to better explain the use or purpose of this call queue."
+                      "description": "Name of the queue. Also names the queue's system user: the first word is its first name, the rest its last name (`Call Queue` when there is one word)"
                 },
                 "callqueue-dispatch-type": {
                       "type": "string",
-                      "description": "This is the main dispatch type for hunting agents. The options are described below.  #Round-robin #Tiered Round-robin #Ring All #Linear Cascade #Linear Hunt #Call Park. Allowed values: \"Round-robin\", \"Tiered Round-robin\", \"Ring All\", \"Linear Cascade\", \"Linear Hunt\", \"Call Park\"",
+                      "description": "How calls are offered to agents. See `CallQueue`. Left out on create, the queue is a call park with no dispatch settings. Allowed values: \"Round-robin\", \"Tiered Round-robin\", \"Ring All\", \"Linear Cascade\", \"Linear Hunt\", \"Call Park\"",
                       "enum": [
                             "Round-robin",
                             "Tiered Round-robin",
@@ -80,41 +127,33 @@ export const create_callqueue: ToolDefinition = {
                             "Call Park"
                       ]
                 },
-                "callqueue-calculate-statistics": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "active-queued-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the current calls waiting in the call queue waiting to be dispatched."
-                },
                 "callqueue-agent-dispatch-timeout-seconds": {
                       "type": "number",
-                      "description": "This is the timeout in seconds the call queue will attempt an agent before timing out and retrying additional resources."
+                      "description": "Seconds an agent is rung before the queue moves on"
                 },
-                "callqueue-count-agents-available": {
-                      "type": "number",
-                      "description": "This is the current number of agents logged in and available for work."
-                },
-                "callqueue-count-agents-total": {
-                      "type": "number",
-                      "description": "This is the current number of agents configured for this callqueue."
-                },
-                "callqueue-debug": {
+                "callqueue-calculate-statistics": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` keeps queue statistics. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
                 },
-                "callqueue-force-full-intro-playback": {
+                "callqueue-max-wait-timeout-minutes": {
+                      "type": "number",
+                      "description": "Minutes a caller can wait before the no-answer forward. `0` is unlimited"
+                },
+                "callqueue-max-current-wait-to-accept-new-callers-seconds": {
+                      "type": "number",
+                      "description": "Expected wait above which new callers follow the busy forward. `0` is unlimited"
+                },
+                "callqueue-max-current-callers-to-accept-new-callers": {
+                      "type": "number",
+                      "description": "Callers allowed to wait before new callers follow the busy forward. `0` is unlimited"
+                },
+                "callqueue-require-available-agents-to-accept-new-callers": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` sends new callers to the busy forward when no agent is logged in. Defaults to `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -122,96 +161,143 @@ export const create_callqueue: ToolDefinition = {
                 },
                 "callqueue-max-callback-queueing-hours": {
                       "type": "number",
-                      "description": "This setting will allow callback's in the callqueue allowing callers to press a buton and opt for a callback instead of waiting. 0 the default is off, any other positive number will enable callback and allow callback up to that many hours after the callback is requested. Default: 0",
-                      "default": 0
+                      "description": "Hours a caller-requested callback stays queued. `0` turns callbacks off"
                 },
-                "callqueue-max-current-callers-to-accept-new-callers": {
-                      "type": "number",
-                      "description": "This setting is the maximum number of callers allowed in the queue before forward busy answer rules will be followed. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-max-current-wait-to-accept-new-callers-seconds": {
-                      "type": "number",
-                      "description": "This setting is the maximum expected wait time  allowed in the queue before forward busy answer rules will be followed. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-max-wait-timeout-minutes": {
-                      "type": "number",
-                      "description": "This is the max wait time in minutes that it would allow a call to wait before being forced out of the queue. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-require-available-agents-to-accept-new-callers": {
+                "callqueue-debug": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` turns on debug logging for the queue. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
+                },
+                "callqueue-local-only": {
+                      "type": "string",
+                      "description": "`yes` dispatches only to agents registered on the same core server as the call. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "callqueue-force-full-intro-playback": {
+                      "type": "string",
+                      "description": "`yes` plays the whole intro message before a caller is offered to an agent. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "callqueue-source-match": {
                       "type": "string",
-                      "description": "This is a optional setting that will control the source match for the forward dispatch leg of calls allowing if needed different matches to connecting devices when calls come through the queue."
-                },
-                "callqueue-sms-enable": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "callqueue-sms-phrase-initiate-chat": {
-                      "type": "string",
-                      "description": "This is the keyword that will be the trigger for a new SMS queueing session"
-                },
-                "callqueue-sms-phrase-initiate-success": {
-                      "type": "string",
-                      "description": "The message to auto reply to a inbound SMS message once the trigger keyword is detected"
-                },
-                "callqueue-sms-phrase-initiation-fail ": {
-                      "type": "string",
-                      "description": "The message that will be auto replied when a message wihtout the keywork is detected."
-                },
-                "callqueue-sms-phrase-no-agents-available": {
-                      "type": "string",
-                      "description": "The message that will be auto replied when there are no agents available and the system is unable to setup a sms chat session at this time."
-                },
-                "callqueue-sms-phrase-terminate-chat": {
-                      "type": "string",
-                      "description": "This is the keyword that will be the trigger to end a active SMS session."
-                },
-                "callqueue-sms-phrase-terminate-success": {
-                      "type": "string",
-                      "description": "The message that will be played after a successfully termination of a session via a keyword."
+                      "description": "Caller ID sent to the agent on the dispatched leg, such as `<Queue>`. `\"\"` uses the default"
                 },
                 "callqueue-agent-auto-logout-after-missed": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` logs out an agent who misses a dispatched call. Defaults to `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "callqueue-sim-ring-1st-round": {
                       "type": "number",
-                      "description": "When using a callqueue-dispatch-type value that allows for mutlple agents to be run on at a time this setting controls the amount of agents that are dispatched in the first round. Default: 0",
-                      "default": 0
+                      "description": "Agents rung together in the first round"
                 },
                 "callqueue-sim-ring-increment": {
                       "type": "number",
-                      "description": "When using a callqueue-dispatch-type value that allows for mutlple agents to be run on at a time this setting controls the amount of agents that will be added to the group activly ringing at each agent timeout level. Default: 1",
-                      "default": 1
+                      "description": "Agents added to each later round"
+                },
+                "callqueue-sms-enable": {
+                      "type": "string",
+                      "description": "`yes` lets the queue take SMS conversations. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "callqueue-sms-phrase-initiate-chat": {
+                      "type": "string",
+                      "description": "Keyword that starts a conversation. `STOP`, `END`, `QUIT`, `CANCEL`, `UNSUBSCRIBE`, `START`, `UNSTOP`, `HELP`, and `INFO` are refused, in any case"
+                },
+                "callqueue-sms-phrase-initiate-success": {
+                      "type": "string",
+                      "description": "Reply sent when a conversation starts"
+                },
+                "callqueue-sms-phrase-initiation-fail": {
+                      "type": "string",
+                      "description": "Reply sent when a text arrives without the start keyword"
+                },
+                "callqueue-sms-phrase-no-agents-available": {
+                      "type": "string",
+                      "description": "Reply sent when no agent can take a conversation"
+                },
+                "callqueue-sms-phrase-terminate-chat": {
+                      "type": "string",
+                      "description": "Keyword that ends a conversation. The reserved words listed for the start keyword are refused"
+                },
+                "callqueue-sms-phrase-terminate-success": {
+                      "type": "string",
+                      "description": "Reply sent when a conversation ends by keyword"
                 },
                 "recording-configuration": {
                       "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
+                      "description": "Call recording for the queue. Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\"",
                       "enum": [
                             "yes",
                             "yes-with-transcription",
                             "yes-with-transcription-and-sentiment",
+                            "no"
+                      ]
+                },
+                "voicemail-enabled": {
+                      "type": "string",
+                      "description": "`yes` gives the queue's extension voicemail. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Department of the queue's system user. `\"\"` clears it"
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Site of the queue's system user. For a Site Manager, left out means its own site and any other site returns `403`"
+                },
+                "phone-number": {
+                      "type": "string",
+                      "description": "Phone number to route to the queue. It must be in the domain's number inventory; anything but digits and `+` is stripped. Clearing it is not supported here"
+                },
+                "callqueue-hold-audio-type": {
+                      "type": "string",
+                      "description": "`ringback` plays ringing while callers wait; `moh`, the default, plays the queue's music on hold. Allowed values: \"moh\", \"ringback\"",
+                      "enum": [
+                            "moh",
+                            "ringback"
+                      ]
+                },
+                "forward-on-busy": {
+                      "type": "string",
+                      "description": "Where new callers go when the queue is full, or needs an agent and has none: an extension, `vmail_<extension>` for voicemail, or a number. `\"\"` turns it off"
+                },
+                "forward-when-unregistered": {
+                      "type": "string",
+                      "description": "Where callers go when no agent device is registered. `\"\"` turns it off"
+                },
+                "forward-no-answer": {
+                      "type": "string",
+                      "description": "Where callers go when the wait limit runs out, such as `vmail_4000`. `\"\"` turns it off"
+                },
+                "callqueue-ring-timeout-seconds": {
+                      "type": "string",
+                      "description": "Seconds the queue rings agents before the no-answer forward"
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
                             "no"
                       ],
                       "default": "no"
@@ -219,10 +305,16 @@ export const create_callqueue: ToolDefinition = {
           },
           "required": [
                 "domain",
-                "synchronous",
-                "callqueue"
+                "callqueue",
+                "description"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/callqueues',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -230,7 +322,7 @@ export const create_callqueue: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'callqueue', 'domain', 'description', 'callqueue-dispatch-type', 'callqueue-calculate-statistics', 'active-queued-calls-total-current', 'callqueue-agent-dispatch-timeout-seconds', 'callqueue-count-agents-available', 'callqueue-count-agents-total', 'callqueue-debug', 'callqueue-force-full-intro-playback', 'callqueue-max-callback-queueing-hours', 'callqueue-max-current-callers-to-accept-new-callers', 'callqueue-max-current-wait-to-accept-new-callers-seconds', 'callqueue-max-wait-timeout-minutes', 'callqueue-require-available-agents-to-accept-new-callers', 'callqueue-source-match', 'callqueue-sms-enable', 'callqueue-sms-phrase-initiate-chat', 'callqueue-sms-phrase-initiate-success', 'callqueue-sms-phrase-initiation-fail ', 'callqueue-sms-phrase-no-agents-available', 'callqueue-sms-phrase-terminate-chat', 'callqueue-sms-phrase-terminate-success', 'callqueue-agent-auto-logout-after-missed', 'callqueue-sim-ring-1st-round', 'callqueue-sim-ring-increment', 'recording-configuration'];
+    const bodyParamNames = ['callqueue', 'description', 'callqueue-dispatch-type', 'callqueue-agent-dispatch-timeout-seconds', 'callqueue-calculate-statistics', 'callqueue-max-wait-timeout-minutes', 'callqueue-max-current-wait-to-accept-new-callers-seconds', 'callqueue-max-current-callers-to-accept-new-callers', 'callqueue-require-available-agents-to-accept-new-callers', 'callqueue-max-callback-queueing-hours', 'callqueue-debug', 'callqueue-local-only', 'callqueue-force-full-intro-playback', 'callqueue-source-match', 'callqueue-agent-auto-logout-after-missed', 'callqueue-sim-ring-1st-round', 'callqueue-sim-ring-increment', 'callqueue-sms-enable', 'callqueue-sms-phrase-initiate-chat', 'callqueue-sms-phrase-initiate-success', 'callqueue-sms-phrase-initiation-fail', 'callqueue-sms-phrase-no-agents-available', 'callqueue-sms-phrase-terminate-chat', 'callqueue-sms-phrase-terminate-success', 'recording-configuration', 'voicemail-enabled', 'department', 'site', 'phone-number', 'callqueue-hold-audio-type', 'forward-on-busy', 'forward-when-unregistered', 'forward-no-answer', 'callqueue-ring-timeout-seconds', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -254,17 +346,17 @@ export const create_callqueue: ToolDefinition = {
 export const read_callqueue: ToolDefinition = {
   schema: {
     name: 'read_callqueue',
-    description: 'Read Specific Call Queue — [GET /domains/{domain}/callqueues/{callqueue}]',
+    description: 'Read call queue — Returns one call queue with every setting, its live counts, its phone number and forwards, its recording option, and `callqueue-hold-audio-type`, which only this read returns.  Office Manager, Call Center Supervisor, Office Manager Read-Only, Route Manager, and Call Center Agent can read any queue in their own domain. Site Manager can read queues at its own site. Reseller can read queues in its territory, and Super User and Super User Read Only any queue. Basic User, Advanced User, and Simple User get `403`.  A queue that does not exist returns `404`. `department`, `site`, `voicemail-enabled`, and `callqueue-ring-timeout-seconds` come from the queue\\\'s system user and are left out until that user exists, which can take a moment after a create. — [GET /domains/{domain}/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 }
           },
           "required": [
@@ -272,6 +364,12 @@ export const read_callqueue: ToolDefinition = {
                 "callqueue"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
@@ -297,25 +395,25 @@ export const read_callqueue: ToolDefinition = {
 export const update_callqueue: ToolDefinition = {
   schema: {
     name: 'update_callqueue',
-    description: 'Update Call Queue in Domain — [PUT /domains/{domain}/callqueues/{callqueue}]',
+    description: 'Update call queue — Changes a call queue\\\'s settings, and the parts of its system user, answering rule, and phone number that belong to the queue. Send only the fields you change.  Requires Office Manager, Call Center Supervisor, Route Manager, Reseller, or Super User. Site Manager can update queues at its own site and cannot move one to another site. Other scopes get `403`, including Office Manager Read-Only and Super User Read Only.  `202` means the change was published over the service bus (SBUS), not yet applied. `description` also renames the queue\\\'s system user. `department`, `site`, `voicemail-enabled`, and `callqueue-ring-timeout-seconds` are written to that user. An empty forward (`""`) turns that forward off. A new `phone-number` is moved to this queue; clearing a number is not supported here. Flags you leave out (`callqueue-debug`, `callqueue-local-only`, `callqueue-force-full-intro-playback`, `callqueue-source-match`) keep their value. A value too long for its field returns `400`, and a `phone-number` from another domain `422`. A queue that does not exist returns `404`. — [PUT /domains/{domain}/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This is a simple description of the callqueue which can be used to better explain the use or purpose of this call queue."
+                      "description": "Name of the queue. Also names the queue's system user: the first word is its first name, the rest its last name (`Call Queue` when there is one word)"
                 },
                 "callqueue-dispatch-type": {
                       "type": "string",
-                      "description": "This is the main dispatch type for hunting agents. The options are described below.  #Round-robin #Tiered Round-robin #Ring All #Linear Cascade #Linear Hunt #Call Park. Allowed values: \"Round-robin\", \"Tiered Round-robin\", \"Ring All\", \"Linear Cascade\", \"Linear Hunt\", \"Call Park\"",
+                      "description": "How calls are offered to agents. See `CallQueue`. Allowed values: \"Round-robin\", \"Tiered Round-robin\", \"Ring All\", \"Linear Cascade\", \"Linear Hunt\", \"Call Park\"",
                       "enum": [
                             "Round-robin",
                             "Tiered Round-robin",
@@ -325,41 +423,33 @@ export const update_callqueue: ToolDefinition = {
                             "Call Park"
                       ]
                 },
-                "callqueue-calculate-statistics": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "active-queued-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the current calls waiting in the call queue waiting to be dispatched."
-                },
                 "callqueue-agent-dispatch-timeout-seconds": {
                       "type": "number",
-                      "description": "This is the timeout in seconds the call queue will attempt an agent before timing out and retrying additional resources."
+                      "description": "Seconds an agent is rung before the queue moves on"
                 },
-                "callqueue-count-agents-available": {
-                      "type": "number",
-                      "description": "This is the current number of agents logged in and available for work."
-                },
-                "callqueue-count-agents-total": {
-                      "type": "number",
-                      "description": "This is the current number of agents configured for this callqueue."
-                },
-                "callqueue-debug": {
+                "callqueue-calculate-statistics": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` keeps queue statistics. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
                 },
-                "callqueue-force-full-intro-playback": {
+                "callqueue-max-wait-timeout-minutes": {
+                      "type": "number",
+                      "description": "Minutes a caller can wait before the no-answer forward. `0` is unlimited"
+                },
+                "callqueue-max-current-wait-to-accept-new-callers-seconds": {
+                      "type": "number",
+                      "description": "Expected wait above which new callers follow the busy forward. `0` is unlimited"
+                },
+                "callqueue-max-current-callers-to-accept-new-callers": {
+                      "type": "number",
+                      "description": "Callers allowed to wait before new callers follow the busy forward. `0` is unlimited"
+                },
+                "callqueue-require-available-agents-to-accept-new-callers": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` sends new callers to the busy forward when no agent is logged in. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -367,99 +457,137 @@ export const update_callqueue: ToolDefinition = {
                 },
                 "callqueue-max-callback-queueing-hours": {
                       "type": "number",
-                      "description": "This setting will allow callback's in the callqueue allowing callers to press a buton and opt for a callback instead of waiting. 0 the default is off, any other positive number will enable callback and allow callback up to that many hours after the callback is requested. Default: 0",
-                      "default": 0
+                      "description": "Hours a caller-requested callback stays queued. `0` turns callbacks off"
                 },
-                "callqueue-max-current-callers-to-accept-new-callers": {
-                      "type": "number",
-                      "description": "This setting is the maximum number of callers allowed in the queue before forward busy answer rules will be followed. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-max-current-wait-to-accept-new-callers-seconds": {
-                      "type": "number",
-                      "description": "This setting is the maximum expected wait time  allowed in the queue before forward busy answer rules will be followed. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-max-wait-timeout-minutes": {
-                      "type": "number",
-                      "description": "This is the max wait time in minutes that it would allow a call to wait before being forced out of the queue. 0 is unlimited. Default: 0",
-                      "default": 0
-                },
-                "callqueue-require-available-agents-to-accept-new-callers": {
+                "callqueue-debug": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` turns on debug logging for the queue. Left out, the stored value is kept. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
+                },
+                "callqueue-local-only": {
+                      "type": "string",
+                      "description": "`yes` dispatches only to agents registered on the same core server as the call. Left out, the stored value is kept. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "callqueue-force-full-intro-playback": {
+                      "type": "string",
+                      "description": "`yes` plays the whole intro message before a caller is offered to an agent. Left out, the stored value is kept. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "callqueue-source-match": {
                       "type": "string",
-                      "description": "This is a optional setting that will control the source match for the forward dispatch leg of calls allowing if needed different matches to connecting devices when calls come through the queue."
-                },
-                "callqueue-sms-enable": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "callqueue-sms-phrase-initiate-chat": {
-                      "type": "string",
-                      "description": "This is the keyword that will be the trigger for a new SMS queueing session"
-                },
-                "callqueue-sms-phrase-initiate-success": {
-                      "type": "string",
-                      "description": "The message to auto reply to a inbound SMS message once the trigger keyword is detected"
-                },
-                "callqueue-sms-phrase-initiation-fail ": {
-                      "type": "string",
-                      "description": "The message that will be auto replied when a message wihtout the keywork is detected."
-                },
-                "callqueue-sms-phrase-no-agents-available": {
-                      "type": "string",
-                      "description": "The message that will be auto replied when there are no agents available and the system is unable to setup a sms chat session at this time."
-                },
-                "callqueue-sms-phrase-terminate-chat": {
-                      "type": "string",
-                      "description": "This is the keyword that will be the trigger to end a active SMS session."
-                },
-                "callqueue-sms-phrase-terminate-success": {
-                      "type": "string",
-                      "description": "The message that will be played after a successfully termination of a session via a keyword."
+                      "description": "Caller ID sent to the agent on the dispatched leg, such as `<Queue>`. `\"\"` uses the default. Left out, the stored value is kept"
                 },
                 "callqueue-agent-auto-logout-after-missed": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` logs out an agent who misses a dispatched call. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "callqueue-sim-ring-1st-round": {
                       "type": "number",
-                      "description": "When using a callqueue-dispatch-type value that allows for mutlple agents to be run on at a time this setting controls the amount of agents that are dispatched in the first round. Default: 0",
-                      "default": 0
+                      "description": "Agents rung together in the first round"
                 },
                 "callqueue-sim-ring-increment": {
                       "type": "number",
-                      "description": "When using a callqueue-dispatch-type value that allows for mutlple agents to be run on at a time this setting controls the amount of agents that will be added to the group activly ringing at each agent timeout level. Default: 1",
-                      "default": 1
+                      "description": "Agents added to each later round"
+                },
+                "callqueue-sms-enable": {
+                      "type": "string",
+                      "description": "`yes` lets the queue take SMS conversations. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "callqueue-sms-phrase-initiate-chat": {
+                      "type": "string",
+                      "description": "Keyword that starts a conversation. `STOP`, `END`, `QUIT`, `CANCEL`, `UNSUBSCRIBE`, `START`, `UNSTOP`, `HELP`, and `INFO` are refused, in any case"
+                },
+                "callqueue-sms-phrase-initiate-success": {
+                      "type": "string",
+                      "description": "Reply sent when a conversation starts"
+                },
+                "callqueue-sms-phrase-initiation-fail": {
+                      "type": "string",
+                      "description": "Reply sent when a text arrives without the start keyword"
+                },
+                "callqueue-sms-phrase-no-agents-available": {
+                      "type": "string",
+                      "description": "Reply sent when no agent can take a conversation"
+                },
+                "callqueue-sms-phrase-terminate-chat": {
+                      "type": "string",
+                      "description": "Keyword that ends a conversation. The reserved words listed for the start keyword are refused"
+                },
+                "callqueue-sms-phrase-terminate-success": {
+                      "type": "string",
+                      "description": "Reply sent when a conversation ends by keyword"
                 },
                 "recording-configuration": {
                       "type": "string",
-                      "description": "Option whether to record calls or not. Available options are \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", or \"no\". Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\". Default: \"no\"",
+                      "description": "Call recording for the queue. Allowed values: \"yes\", \"yes-with-transcription\", \"yes-with-transcription-and-sentiment\", \"no\"",
                       "enum": [
                             "yes",
                             "yes-with-transcription",
                             "yes-with-transcription-and-sentiment",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
+                },
+                "voicemail-enabled": {
+                      "type": "string",
+                      "description": "`yes` gives the queue's extension voicemail. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Department of the queue's system user. `\"\"` clears it"
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Site of the queue's system user. `\"\"` clears it. A Site Manager can send only its own site"
+                },
+                "phone-number": {
+                      "type": "string",
+                      "description": "Phone number to route to the queue. It must be in the domain's number inventory; anything but digits and `+` is stripped. Clearing it is not supported here"
+                },
+                "callqueue-hold-audio-type": {
+                      "type": "string",
+                      "description": "`ringback` plays ringing while callers wait; `moh`, the default, plays the queue's music on hold. Allowed values: \"moh\", \"ringback\"",
+                      "enum": [
+                            "moh",
+                            "ringback"
+                      ]
+                },
+                "forward-on-busy": {
+                      "type": "string",
+                      "description": "Where new callers go when the queue is full, or needs an agent and has none: an extension, `vmail_<extension>` for voicemail, or a number. `\"\"` turns it off"
+                },
+                "forward-when-unregistered": {
+                      "type": "string",
+                      "description": "Where callers go when no agent device is registered. `\"\"` turns it off"
+                },
+                "forward-no-answer": {
+                      "type": "string",
+                      "description": "Where callers go when the wait limit runs out, such as `vmail_4000`. `\"\"` turns it off"
+                },
+                "callqueue-ring-timeout-seconds": {
+                      "type": "string",
+                      "description": "Seconds the queue rings agents before the no-answer forward"
                 }
           },
           "required": [
@@ -468,13 +596,19 @@ export const update_callqueue: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/callqueues/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'callqueue-dispatch-type', 'callqueue-calculate-statistics', 'active-queued-calls-total-current', 'callqueue-agent-dispatch-timeout-seconds', 'callqueue-count-agents-available', 'callqueue-count-agents-total', 'callqueue-debug', 'callqueue-force-full-intro-playback', 'callqueue-max-callback-queueing-hours', 'callqueue-max-current-callers-to-accept-new-callers', 'callqueue-max-current-wait-to-accept-new-callers-seconds', 'callqueue-max-wait-timeout-minutes', 'callqueue-require-available-agents-to-accept-new-callers', 'callqueue-source-match', 'callqueue-sms-enable', 'callqueue-sms-phrase-initiate-chat', 'callqueue-sms-phrase-initiate-success', 'callqueue-sms-phrase-initiation-fail ', 'callqueue-sms-phrase-no-agents-available', 'callqueue-sms-phrase-terminate-chat', 'callqueue-sms-phrase-terminate-success', 'callqueue-agent-auto-logout-after-missed', 'callqueue-sim-ring-1st-round', 'callqueue-sim-ring-increment', 'recording-configuration'];
+    const bodyParamNames = ['description', 'callqueue-dispatch-type', 'callqueue-agent-dispatch-timeout-seconds', 'callqueue-calculate-statistics', 'callqueue-max-wait-timeout-minutes', 'callqueue-max-current-wait-to-accept-new-callers-seconds', 'callqueue-max-current-callers-to-accept-new-callers', 'callqueue-require-available-agents-to-accept-new-callers', 'callqueue-max-callback-queueing-hours', 'callqueue-debug', 'callqueue-local-only', 'callqueue-force-full-intro-playback', 'callqueue-source-match', 'callqueue-agent-auto-logout-after-missed', 'callqueue-sim-ring-1st-round', 'callqueue-sim-ring-increment', 'callqueue-sms-enable', 'callqueue-sms-phrase-initiate-chat', 'callqueue-sms-phrase-initiate-success', 'callqueue-sms-phrase-initiation-fail', 'callqueue-sms-phrase-no-agents-available', 'callqueue-sms-phrase-terminate-chat', 'callqueue-sms-phrase-terminate-success', 'recording-configuration', 'voicemail-enabled', 'department', 'site', 'phone-number', 'callqueue-hold-audio-type', 'forward-on-busy', 'forward-when-unregistered', 'forward-no-answer', 'callqueue-ring-timeout-seconds'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -498,17 +632,17 @@ export const update_callqueue: ToolDefinition = {
 export const delete_callqueue: ToolDefinition = {
   schema: {
     name: 'delete_callqueue',
-    description: 'Delete Call Queue — [DELETE /domains/{domain}/callqueues/{callqueue}]',
+    description: 'Delete call queue — Deletes a call queue and what was created with it: the queue\\\'s dial rule and its system user, which releases the queue\\\'s answering rules and returns its phone number to inventory.  Requires Office Manager, Call Center Supervisor, Route Manager, Reseller, or Super User. Site Manager can delete queues at its own site. Other scopes get `403`, including Office Manager Read-Only and Super User Read Only.  `202` means the delete was published over the service bus (SBUS), not yet applied. A user that already owned the extension before the queue is never deleted. A queue that does not exist returns `404`. — [DELETE /domains/{domain}/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 }
           },
           "required": [
@@ -516,6 +650,12 @@ export const delete_callqueue: ToolDefinition = {
                 "callqueue"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/callqueues/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
@@ -541,13 +681,32 @@ export const delete_callqueue: ToolDefinition = {
 export const list_callqueues: ToolDefinition = {
   schema: {
     name: 'list_callqueues',
-    description: 'Read Basic info on Call Queues in Domain — [GET /domains/{domain}/callqueues/list]',
+    description: 'List call queue summaries — Lists the call queues in a domain as `callqueue`, `description`, `domain`, and `callqueue-dispatch-type` only, for pickers and menus.  Needs the `list` privilege on call queues, not `read`. Basic User, Advanced User, Simple User, and Call Center Agent get only the queues they are an agent on, by their own user or any of their devices; with no queues they get an empty array. Site Manager gets the queues at its own site. Office Manager, Call Center Supervisor, Office Manager Read-Only, Route Manager, Reseller, Super User, and Super User Read Only get every queue in the domain.  Call parks are left out unless you send `include-parks=yes`. `sort`, `start`, and `limit` work as on `GET /domains/{domain}/callqueues`. — [GET /domains/{domain}/callqueues/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "include-parks": {
+                      "type": "string",
+                      "description": "`yes` also returns call parks. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most queues to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -555,16 +714,137 @@ export const list_callqueues: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-parks', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/callqueues/list',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_call_queues: ToolDefinition = {
+  schema: {
+    name: 'count_call_queues',
+    description: 'Count call queues across domains — Counts call queues across every domain you can see, without naming a domain.  Super User and Super User Read Only count the whole platform, or one territory with `territory`. Reseller always counts its own territory; naming another territory returns `403`. Every other scope gets `400`: count one domain with `GET /domains/{domain}/callqueues/count`.  A queue counts toward a territory while the domain that owns it is in that territory. Call parks are left out unless you send `include-parks=yes`. Only this `/count` form is served: `GET /callqueues` returns `404`. — [GET /callqueues/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "territory": {
+                      "type": "string",
+                      "description": "Counts one territory. Super User only; a Reseller is always counted in its own territory and may send only that one. `*` means every territory."
+                },
+                "include-parks": {
+                      "type": "string",
+                      "description": "`yes` also counts call parks. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /callqueues/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['territory', 'include-parks'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/callqueues/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_domain_callqueues: ToolDefinition = {
+  schema: {
+    name: 'count_domain_callqueues',
+    description: 'Count call queues in domain — Counts the call queues in a domain.  Needs the `list` privilege on call queues. Office Manager, Call Center Supervisor, Office Manager Read-Only, Route Manager, Reseller, Super User, and Super User Read Only count every queue in the domain. Basic User, Advanced User, Simple User, and Call Center Agent count the queues they are an agent on, and Site Manager the queues at its own site, so the total agrees with `GET /domains/{domain}/callqueues/list`.  Call parks are left out unless you send `include-parks=yes`. `/count` appended to a queue\\\'s path, `GET /domains/{domain}/callqueues/{callqueue}/count`, answers `1` for a queue that exists and `0` otherwise. — [GET /domains/{domain}/callqueues/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "include-parks": {
+                      "type": "string",
+                      "description": "`yes` also counts call parks. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-parks'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/callqueues/count',
+      pathParams,
+      queryParams,
     });
 
     return {

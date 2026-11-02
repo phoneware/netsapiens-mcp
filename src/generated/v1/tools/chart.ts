@@ -30,8 +30,13 @@ export const v1_chart_count: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -84,8 +89,13 @@ export const v1_chart_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -112,8 +122,13 @@ export const v1_chart_delete: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -143,8 +158,13 @@ export const v1_chart_list: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=list",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "list", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "list", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -183,8 +203,13 @@ export const v1_chart_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -236,8 +261,13 @@ export const v1_chart_update: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=chart&action=update",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("chart", "update", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("chart", "update", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

@@ -5,17 +5,27 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_msg_user: ToolDefinition = {
   schema: {
     name: 'read_msg_user',
-    description: 'Read Hold Messages for User — [GET /domains/{domain}/users/{user}/msg]',
+    description: 'List user hold messages — Lists the hold messages of a user, in index order. They are stored beside the user\\\'s music on hold (MoH) files.  Basic User, Advanced User, Simple User, and Call Center Agent can read their own hold messages. Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can read any user\\\'s hold messages in the domain, as can Office Manager Read-Only and Super User Read Only.  Returns up to 100 messages by default; page with `limit` and `start`. Count them with `GET /domains/{domain}/users/{user}/msg/count`. `file-access-url` is a signed link that plays the file with no token, for 24 hours by default; see `GET /domains/{domain}/users/{user}/msg/{index}/play`. — [GET /domains/{domain}/users/{user}/msg]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User (extension) whose hold messages you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -24,16 +34,28 @@ export const read_msg_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/msg',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/msg',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,45 +70,30 @@ export const read_msg_user: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_msg: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_msg',
-    description: 'Create a new Hold Messge for User from Upload (Multipart/Mixed Post) — [POST /domains/{domain}/users/{user}/msg]',
+    description: 'Create user hold message — Adds a hold message for a user, from an uploaded file, a base64 file, or text to speech. It takes the next free index unless you send `index`; an `index` that is already used is overwritten.  Basic User, Advanced User, Simple User, and Call Center Agent can change their own hold messages. Site Manager can change the hold messages of users at its own site. Office Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can change any user\\\'s. The read-only scopes get `403`.  The file is written on the server that handles the request, before the response, and copied to the other servers over the service bus (SBUS) file journal. The call answers `202` by default. Send `synchronous=yes` to get `200` with the stored file instead. With `synchronous=yes` the call waits up to 2 seconds for the file to appear. Every upload is converted to 8 kHz, 8-bit, mono mu-law WAV. Audio that cannot be converted returns `400` and nothing is stored.  **Upload a file.** Send `multipart/form-data` with the audio in the `file` part (`File` also works). The part\\\'s `Content-Type` picks the decoder: `audio/mpeg` or `audio/mp3` is decoded as MP3, `audio/ogg`, `audio/webm`, `video/ogg`, `video/webm` and `application/ogg` as Ogg or WebM, and anything else is read as WAV. The request can be up to 64 MB.  **Base64 file.** Send JSON with the audio as base64 in `file-base64`, with no line breaks, and its format in `file-encoding`: `audio/wav` (the default), `audio/mpeg`, `audio/ogg`, or `audio/webm`. Base64 that does not decode, or another encoding, returns `400`.  **Text to speech.** Send JSON with the words to speak in `file-script-text` and no file. The voice defaults to the domain\\\'s text-to-speech voice (`en-US-Wavenet-C` in `en-US` when none is set); name another with `text-to-speech-voice-id` and `text-to-speech-language`. A voice id that the language does not offer falls back to the language\\\'s first voice. Text to speech must be enabled for the user (`PORTAL_VOICE_TEXT_TO_SPEECH`), or the call returns `400`; `text-to-speech-language` must be a BCP 47 tag, or `400`; a voice-service failure returns `503`. Usage is billed to the owner in the path: that user, or the domain itself for a domain-owned path. List voices with `GET /domains/{domain}/users/{user}/voices/{language}`.  With a file, `file-script-text` is stored as a description of the audio.  An owner that does not exist returns `404`, and an owner at its storage limit returns `507`. Change a message with `PUT` on `/domains/{domain}/users/{user}/msg/{index}`, and change the order with `PUT` on `/domains/{domain}/users/{user}/msg/reorder`. — [POST /domains/{domain}/users/{user}/msg]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "script": {
-                      "type": "string",
-                      "description": "This is a simple explanation of what the audio is and can include what is said in the audio file for explanation."
-                },
-                "File": {
-                      "type": "string",
-                      "description": "This is a \"File\" type parameter that needs to include the audio file in question using a file post method."
-                },
-                "index": {
-                      "type": "number",
-                      "description": "The index of the file, Example \"2\" for greeting 2."
-                },
-                "convert": {
-                      "type": "string",
-                      "description": "Setting yes will allow the API to attempt to convert the file from accepted formats into the correct format for media playback"
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response."
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "synchronous"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/msg',
+    method: 'POST',
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -94,16 +101,118 @@ export const post_domains_by_domain_users_by_user_msg: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['script', 'File', 'index', 'convert', 'synchronous'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/msg',
       pathParams,
-      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_msg_user_file_upload: ToolDefinition = {
+  schema: {
+    name: 'update_msg_user_file_upload',
+    description: 'Update user hold message — Replaces the audio of the hold message at `index` with an uploaded file or a base64 file, or changes only its description. The index does not change.  Basic User, Advanced User, Simple User, and Call Center Agent can change their own hold messages. Site Manager can change the hold messages of users at its own site. Office Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can change any user\\\'s. The read-only scopes get `403`.  The file is written on the server that handles the request, before the response, and copied to the other servers over the service bus (SBUS) file journal. The call answers `202` by default. Send `synchronous=yes` to get `200` with the stored file instead. Every upload is converted to 8 kHz, 8-bit, mono mu-law WAV. Audio that cannot be converted returns `400` and nothing is stored.  **Upload a file.** Send `multipart/form-data` with the audio in the `file` part (`File` also works). The part\\\'s `Content-Type` picks the decoder: `audio/mpeg` or `audio/mp3` is decoded as MP3, `audio/ogg`, `audio/webm`, `video/ogg`, `video/webm` and `application/ogg` as Ogg or WebM, and anything else is read as WAV.  **Base64 file.** Send JSON with the audio as base64 in `file-base64`, with no line breaks, and its format in `file-encoding`: `audio/wav` (the default), `audio/mpeg`, `audio/ogg`, or `audio/webm`. Base64 that does not decode, or another encoding, returns `400`.  With a file, `file-script-text` replaces the description; leave it out to keep the stored one.  **Description only.** Send JSON with `file-script-text` and no file. Only the description changes: the audio stays as it is and nothing is spoken, so text-to-speech fields are ignored. A request with neither audio nor `file-script-text` changes nothing and still answers `202`. To replace the audio with text to speech, `POST` to the same index on `/domains/{domain}/users/{user}/msg` instead; a `POST` with an index that is in use overwrites it.  An index with no message returns `404`. Add one with `POST` on `/domains/{domain}/users/{user}/msg`. — [PUT /domains/{domain}/users/{user}/msg/{index}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "index": {
+                      "type": "string",
+                      "description": "Index of the hold message, as `ordinal-order` shows it in a list, such as `1`. Digits only. The file is `msg-01.wav`; a leading zero in the path (`01`) does not match it and returns `404`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "index"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/msg/{}',
+    method: 'PUT',
+    multipartOnly: true,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'index'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_msg_user: ToolDefinition = {
+  schema: {
+    name: 'delete_msg_user',
+    description: 'Delete user hold message — Deletes the hold message at `index` and its metadata. The other messages keep their indexes, so the order has a gap until you reorder or add one there.  Basic User, Advanced User, Simple User, and Call Center Agent can change their own hold messages. Site Manager can change the hold messages of users at its own site. Office Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can change any user\\\'s. The read-only scopes get `403`.  The file is removed on the server that handles the request, before the response, and the removal is copied to the other servers over the service bus (SBUS) file journal. The call answers `202` by default. An index with no message returns `404`. Close the gap with `PUT` on `/domains/{domain}/users/{user}/msg/reorder`. — [DELETE /domains/{domain}/users/{user}/msg/{index}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "index": {
+                      "type": "string",
+                      "description": "Index of the hold message, as `ordinal-order` shows it in a list, such as `1`. Digits only. The file is `msg-01.wav`; a leading zero in the path (`01`) does not match it and returns `404`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "index"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/msg/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'index'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}',
+      pathParams,
     });
 
     return {
@@ -118,17 +227,17 @@ export const post_domains_by_domain_users_by_user_msg: ToolDefinition = {
 export const count_msg_user: ToolDefinition = {
   schema: {
     name: 'count_msg_user',
-    description: 'Count Hold Messages for User — [GET /domains/{domain}/users/{user}/msg/count]',
+    description: 'Count user hold messages — Counts the hold messages of a user and reports their total size.  Basic User, Advanced User, Simple User, and Call Center Agent can read their own hold messages. Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can read any user\\\'s hold messages in the domain, as can Office Manager Read-Only and Super User Read Only.  `size` is the total size in bytes of the counted hold message files; the music on hold (MoH) files beside them are not included. Only `GET` is allowed; another method returns `405`. — [GET /domains/{domain}/users/{user}/msg/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User (extension) whose hold messages you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
                 }
           },
           "required": [
@@ -136,6 +245,12 @@ export const count_msg_user: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/msg/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -158,49 +273,38 @@ export const count_msg_user: ToolDefinition = {
   },
 };
 
-export const update_msg_user_file_upload: ToolDefinition = {
+export const read_msg_file_user: ToolDefinition = {
   schema: {
-    name: 'update_msg_user_file_upload',
-    description: 'Update Hold Messge for User from Upload (Multipart/Mixed Post) — [PUT /domains/{domain}/users/{user}/msg/{index}]',
+    name: 'read_msg_file_user',
+    description: 'Read user hold message — Reads one of a user\\\'s hold messages by its index.  Basic User, Advanced User, Simple User, and Call Center Agent can read their own hold messages. Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can read any user\\\'s hold messages in the domain, as can Office Manager Read-Only and Super User Read Only.  Returns a single object, not an array. An index with no message returns `404`. List every message with `GET /domains/{domain}/users/{user}/msg`. `file-access-url` is a signed link that plays the file with no token, for 24 hours by default; see `GET /domains/{domain}/users/{user}/msg/{index}/play`. — [GET /domains/{domain}/users/{user}/msg/{index}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User (extension) whose hold messages you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
                 },
                 "index": {
                       "type": "string",
-                      "description": "index"
-                },
-                "script": {
-                      "type": "string",
-                      "description": "This is a simple explanation of what the audio is and can include what is said in the audio file for explanation."
-                },
-                "File": {
-                      "type": "string",
-                      "description": "This is a \"File\" type parameter that needs to include the audio file in question using a file post method."
-                },
-                "convert": {
-                      "type": "string",
-                      "description": "Setting yes will allow the API to attempt to convert the file from accepted formats into the correct format for media playback"
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response."
+                      "description": "Index of the hold message, as `ordinal-order` shows it in a list, such as `1`. Digits only. The file is `msg-01.wav`; a leading zero in the path (`01`) does not match it and returns `404`."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "index",
-                "synchronous"
+                "index"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/msg/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'index'];
@@ -208,14 +312,68 @@ export const update_msg_user_file_upload: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['script', 'File', 'convert', 'synchronous'];
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const reorder_hold_messages_user: ToolDefinition = {
+  schema: {
+    name: 'reorder_hold_messages_user',
+    description: 'Reorder user hold messages — Changes the order of the hold messages by renumbering them.  Basic User, Advanced User, Simple User, and Call Center Agent can change their own hold messages. Site Manager can change the hold messages of users at its own site. Office Manager, Call Center Supervisor, Route Manager, Reseller, and Super User can change any user\\\'s. The read-only scopes get `403`.  List the current indexes in `ordinal-order` in the order you want. The listed messages are renumbered into the same set of indexes, sorted: `[3, 1, 2]` moves the message at `3` to `1`, `1` to `2`, and `2` to `3`. Messages you leave out keep their index. Every listed index must be a distinct whole number with a message: a repeated or non-numeric index returns `400`, and an index with no message returns `404`; either way nothing moves. The files are renamed on the server that handles the request before the response, and copied to the other servers over the SBUS file journal. The call answers `202` by default, which here means applied on this server.  Reordering does not close a gap left by a delete: `[1, 3]` keeps `1` and `3`. — [PUT /domains/{domain}/users/{user}/msg/reorder]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User (extension) whose hold messages you work with, such as `1001`. `~` means yourself. A user with no record returns `400` `Invalid User` on a read and `404` `User not found` on a write."
+                },
+                "ordinal-order": {
+                      "type": "array",
+                      "description": "Current indexes, in the order you want them. The listed messages take the same indexes, sorted."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "ordinal-order"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/msg/reorder',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['ordinal-order'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
     }
     const response = await client.request({
       method: 'PUT',
-      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}',
+      pathTemplate: '/domains/{domain}/users/{user}/msg/reorder',
       pathParams,
       body,
     });
@@ -229,24 +387,48 @@ export const update_msg_user_file_upload: ToolDefinition = {
   },
 };
 
-export const delete_msg_user: ToolDefinition = {
+export const play_msg_file_user: ToolDefinition = {
   schema: {
-    name: 'delete_msg_user',
-    description: 'Delete Hold Messge for User  — [DELETE /domains/{domain}/users/{user}/msg/{index}]',
+    name: 'play_msg_file_user',
+    description: 'Play user hold message — Streams one of a user\\\'s hold messages, so a browser or an `<audio>` element can play it.  Call it one of two ways:  - **With a session.** Send a bearer token, or let the browser send its session cookie. The access is the same as for reading the file. Basic User, Advanced User, Simple User, and Call Center Agent can play only their own files. Site Manager, Call Center Supervisor, Office Manager, Office Manager Read-Only, and Route Manager can play any user\\\'s files in their domain. Reseller and Route Manager Reseller can play files in the domains of their territory, and Super User and Super User Read Only in every domain. Any other file answers `403`. - **With a signed link.** Every read of the file returns `file-access-url`, which is this path with `expires` and `signature` added. Anyone holding the link can play that one file, with no token, until it expires (24 hours by default). Treat the link like the file itself.  Without `download`, the file is sent inline and a single range request (`Range: bytes=...`) is answered with `206`, so a player can seek. A range that starts past the end of the file answers `416`. The response is never cached by a shared cache. — [GET /domains/{domain}/users/{user}/msg/{index}/play]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "The user (extension) whose hold messages you play, such as `1001`. Use `~` for yourself. A user that does not exist answers `404`."
                 },
                 "index": {
                       "type": "string",
-                      "description": "index"
+                      "description": "The index of the hold message, as `ordinal-order` shows it in a list, such as `1`. Digits only. The file is `msg-01.wav`. With a token, leading zeros are ignored, so `01` names the same file. A signed link must use the index exactly as `file-access-url` gives it, or it answers `403`."
+                },
+                "expires": {
+                      "type": "string",
+                      "description": "The expiry of a signed link, in Unix seconds. Copy it from `file-access-url`; never set it yourself. Leave it out when you call with a token or a session cookie."
+                },
+                "signature": {
+                      "type": "string",
+                      "description": "The signature of a signed link, from `file-access-url`. With it the call needs no token, and it plays only the file the path names until `expires`. An expired link answers `403` with `Link has expired`; a changed path or expiry answers `403` with `Invalid signature`. Leave it out when you call with a token or a session cookie."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "`yes` sends the file as a download (`Content-Disposition: attachment`) and turns off range requests. Left out or blank, the file is sent inline so a browser or an `<audio>` element plays it. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "convert": {
+                      "type": "string",
+                      "description": "Transcodes the audio before it is sent: `aac` (`audio/aac`) or `ogg` (`audio/ogg`). Left out, the stored WAV file is sent (`audio/wav`). Allowed values: \"aac\", \"ogg\"",
+                      "enum": [
+                            "aac",
+                            "ogg"
+                      ]
                 }
           },
           "required": [
@@ -256,16 +438,28 @@ export const delete_msg_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/msg/{}/play',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'index'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['expires', 'signature', 'download', 'convert'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
-      method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}',
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/msg/{index}/play',
       pathParams,
+      queryParams,
     });
 
     return {

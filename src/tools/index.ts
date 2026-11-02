@@ -4,7 +4,7 @@
  * and the dispatch hookup for the MCP Server.
  *
  * The generated layer is produced by `npm run generate` from
- * spec/netsapiens-api-v2.json. Do not edit src/generated/ by hand.
+ * spec/v2/45.0.json. Do not edit src/generated/ by hand.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -20,7 +20,24 @@ import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { isStatelessMode } from '../server-info.js';
-import { MULTIPART_ONLY_TOOLS, multipartAlternative } from './multipart.js';
+import type { AvailabilityContext, AvailabilityMeta } from '../netsapiens/availability.js';
+import { createGuardedClient } from '../netsapiens/guarded-client.js';
+
+function multipartAlternative(toolName: string): string {
+ if (/greeting/.test(toolName)) {
+  return 'Use the greeting tool that takes `script` (text-to-speech) or `base64_file` (audio inlined as base64) instead.';
+ }
+ if (/moh/.test(toolName)) {
+  return 'Use the music-on-hold tool that takes `script` (text-to-speech) or `base64_file` (audio inlined as base64) instead.';
+ }
+ if (/msg/.test(toolName)) {
+  return 'Use `set_hold_message`, which takes the audio as base64 and sends the multipart upload for you.';
+ }
+ if (/image/.test(toolName)) {
+  return 'Use the image tool that takes the file inline as base64 instead.';
+ }
+ return 'Use the JSON variant of this operation, which takes the file inline rather than as an upload.';
+}
 import { CURATED_CATALOG, cdrScope } from './curated/catalog.js';
 import type { CuratedTool } from './curated/types.js';
 import { buildMetaTools } from './curated/meta.js';
@@ -84,7 +101,27 @@ function withDerivedHints(name: string, base: { readOnlyHint: boolean; destructi
  };
 }
 
-function classifyTool(name: string): ToolHints {
+function classifyTool(name: string, def?: ToolDefinition): ToolHints {
+ if (!def) {
+  const mapping = buildNameMapping();
+  const regKey = mapping.exposedToRegistry.get(name) ?? name;
+  def = toolRegistry.get(regKey);
+ }
+ if (def?.operation?.family === 'v2') {
+  const method = String(def.operation.method).toUpperCase();
+  if (method === 'GET') {
+   return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
+  }
+  if (method === 'DELETE') {
+   return withDerivedHints(name, { readOnlyHint: false, destructiveHint: true });
+  }
+  if (method === 'POST') {
+   return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  }
+  if (method === 'PUT' || method === 'PATCH') {
+   return { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+  }
+ }
  if (READ_PREFIXES.some((p) => name.startsWith(p))) {
   return withDerivedHints(name, { readOnlyHint: true, destructiveHint: false });
  }
@@ -128,6 +165,10 @@ export interface ExposedTool {
  description: string;
  inputSchema: object;
  annotations: ToolHints;
+ _meta?: {
+  'netsapiens-mcp/availability'?: AvailabilityMeta;
+  [key: string]: unknown;
+ };
 }
 
 // ---------------------------------------------------------------------------
@@ -427,13 +468,23 @@ export function isToolReadOnly(name: string): boolean {
  return hints.readOnlyHint && !hints.destructiveHint;
 }
 
-function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean {
+function isGeneratedToolVisible(
+ toolName: string,
+ userRole?: UserRole,
+ availabilityContext?: AvailabilityContext,
+): boolean {
  if (isToolDisabled(toolName)) return false;
+ const mapping = buildNameMapping();
+ const registryKey = mapping.exposedToRegistry.get(toolName) ?? toolName;
+ const def = toolRegistry.get(registryKey);
  // Needs a file upload we cannot send; a JSON sibling covers the same job.
- if (MULTIPART_ONLY_TOOLS.has(toolName)) return false;
+ if (def?.operation?.multipartOnly) return false;
  if (!roleAllows(userRole, toolName)) return false;
- if (disableDestructiveEnabled() && classifyTool(toolName).destructiveHint) return false;
+ if (disableDestructiveEnabled() && classifyTool(toolName, def).destructiveHint) return false;
  if (isReadOnlyMode() && !isToolReadOnly(toolName)) return false;
+ if (availabilityContext && def?.operation) {
+  if (!availabilityContext.isAvailable(def.operation.key)) return false;
+ }
  return true;
 }
 
@@ -445,19 +496,24 @@ function isGeneratedToolVisible(toolName: string, userRole?: UserRole): boolean 
  * `userIdentity` is the NetSapiens username from the bearer token; promotion
  * is keyed on it so each NS user's catalog reflects their own muscle memory.
  */
-async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): Promise<ExposedTool[]> {
+async function curatedExposedTools(
+ userRole?: UserRole,
+ userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
+): Promise<ExposedTool[]> {
  const meta = buildMetaTools(
   toolRegistry,
   async (name, args, client) => {
    // Reuse handleToolCall so every filter (disable, action, role, name
    // mapping, destructive) applies to call_api invocations too.
-   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity);
+   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity, availabilityContext);
   },
   // search_api visibility: hide anything the operator has disabled, anything
   // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
-  // anything destructive. Stops the model from finding a tool that call_api
-  // would then reject.
-  (toolName) => isGeneratedToolVisible(toolName, userRole),
+  // destructive tools don't leak into search results that call_api would
+  // just reject anyway.
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  availabilityContext,
  );
  const all = [...CURATED_CATALOG, ...meta];
  const tools: ExposedTool[] = [];
@@ -465,6 +521,10 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
  for (const t of all) {
   if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
   if (isToolDisabled(t.schema.name)) continue;
+  if (availabilityContext && t.operations && t.operations.length > 0) {
+   const allAvail = t.operations.every((op) => availabilityContext.isAvailable(op));
+   if (!allAvail) continue;
+  }
   // Respect explicit composite metadata in addition to the prefix-based
   // inference, then honor the semantic MCP_DISABLE_DESTRUCTIVE toggle.
   const inferred = classifyTool(t.schema.name);
@@ -473,12 +533,14 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
   if (disableDestructiveEnabled() && destructive) continue;
   if (isReadOnlyMode() && !isToolReadOnly(t.schema.name)) continue;
   seen.add(t.schema.name);
+  const metaAvail = availabilityContext ? availabilityContext.getToolAvailability(t) : undefined;
   tools.push({
    name: t.schema.name,
    title: t.title ?? toolTitle(t.schema.name),
    description: t.schema.description,
    inputSchema: t.schema.inputSchema,
    annotations: withDerivedHints(t.schema.name, { readOnlyHint: readOnly, destructiveHint: destructive }),
+   ...(metaAvail ? { _meta: { 'netsapiens-mcp/availability': metaAvail } } : {}),
   });
  }
 
@@ -486,22 +548,24 @@ async function curatedExposedTools(userRole?: UserRole, userIdentity?: string): 
  // through call_api, subject to the same filters. Promoted tools appear under
  // their shortened exposed names.
  if (userIdentity) {
-  const promoted = await getPromotedToolNames(userIdentity);
+  const promoted = await getPromotedToolNames(userIdentity, availabilityContext);
   const mapping = buildNameMapping();
   for (const registryKey of promoted) {
-   if (!isGeneratedToolVisible(registryKey, userRole)) continue;
+   if (!isGeneratedToolVisible(registryKey, userRole, availabilityContext)) continue;
    const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
    if (seen.has(exposed)) continue;
    const def = toolRegistry.get(registryKey);
    if (!def) continue;
-   const annotations = classifyTool(registryKey);
+   const annotations = classifyTool(registryKey, def);
    seen.add(exposed);
+   const metaAvail = availabilityContext ? availabilityContext.getToolAvailability(def) : undefined;
    tools.push({
     name: exposed,
     title: toolTitle(exposed),
     description: `[promoted] ${def.schema.description}`,
     inputSchema: def.schema.inputSchema,
     annotations,
+    ...(metaAvail ? { _meta: { 'netsapiens-mcp/availability': metaAvail } } : {}),
    });
   }
  }
@@ -550,15 +614,21 @@ export function validateToolArguments(
 }
 
 /** Lookup a curated or meta tool by exposed name (per-call construction to bind userRole). */
-function findCuratedTool(name: string, userRole?: UserRole, userIdentity?: string) {
+function findCuratedTool(
+ name: string,
+ userRole?: UserRole,
+ userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
+) {
  const meta = buildMetaTools(
   toolRegistry,
   async (innerName, innerArgs, client) =>
-   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity),
+   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity, availabilityContext),
   // Same predicate the ListTools path uses. This was a second, hand-copied
   // version of the rule, and it had already drifted: search_api kept
   // offering tools the dispatcher would reject.
-  (toolName) => isGeneratedToolVisible(toolName, userRole),
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  availabilityContext,
  );
  return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
 }
@@ -576,26 +646,26 @@ function findCuratedTool(name: string, userRole?: UserRole, userIdentity?: strin
 export async function getAllToolDefinitions(
  userRole?: UserRole,
  userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
 ): Promise<ExposedTool[]> {
  if (getToolMode() === 'curated') {
-  return curatedExposedTools(userRole, userIdentity);
+  return curatedExposedTools(userRole, userIdentity, availabilityContext);
  }
 
  const mapping = buildNameMapping();
  const tools: ExposedTool[] = [];
  for (const [registryKey, def] of toolRegistry) {
   const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
-  if (isToolDisabled(exposed) || isToolDisabled(registryKey)) continue;
-  if (!roleAllows(userRole, registryKey)) continue;
-  const annotations = classifyTool(registryKey);
-  if (disableDestructiveEnabled() && annotations.destructiveHint) continue;
-  if (isReadOnlyMode() && !isToolReadOnly(registryKey)) continue;
+  if (!isGeneratedToolVisible(exposed, userRole, availabilityContext)) continue;
+  const annotations = classifyTool(registryKey, def);
+  const metaAvail = availabilityContext ? availabilityContext.getToolAvailability(def) : undefined;
   tools.push({
    name: exposed,
    title: toolTitle(exposed),
    description: def.schema.description,
    inputSchema: def.schema.inputSchema,
    annotations,
+   ...(metaAvail ? { _meta: { 'netsapiens-mcp/availability': metaAvail } } : {}),
   });
  }
  return tools;
@@ -699,7 +769,9 @@ export async function handleToolCall(
  args: Record<string, unknown>,
  userRole?: UserRole,
  userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
 ): Promise<unknown> {
+ const guardedClient = availabilityContext ? createGuardedClient(client, availabilityContext) : client;
  const startTime = Date.now();
  const argNames = Object.keys(args ?? {});
 
@@ -747,7 +819,7 @@ export async function handleToolCall(
   // generated registry without infinite recursion through the curated layer.
   let curated: CuratedTool | undefined;
   if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
-   curated = findCuratedTool(toolName, userRole, userIdentity);
+   curated = findCuratedTool(toolName, userRole, userIdentity, availabilityContext);
   }
 
   const mapping = buildNameMapping();
@@ -767,7 +839,7 @@ export async function handleToolCall(
      `Tool '${toolName}' requires a higher access tier than your account has`,
     );
    }
-   result = await curated.handler(args ?? {}, client as unknown as GenericApiClient, userRole);
+   result = await curated.handler(args ?? {}, guardedClient as unknown as GenericApiClient, userRole);
   } else {
    if (!roleAllows(userRole, registryKey)) {
     throw new McpError(
@@ -775,7 +847,7 @@ export async function handleToolCall(
      `Tool '${toolName}' requires a higher access tier than your account has`,
     );
    }
-   if (MULTIPART_ONLY_TOOLS.has(registryKey)) {
+   if (def?.operation?.multipartOnly) {
     throw new McpError(
      ErrorCode.InvalidParams,
      `Tool '${toolName}' needs a multipart file upload, which this server cannot send. ` +
@@ -786,7 +858,7 @@ export async function handleToolCall(
    if (!def) {
     result = null;
    } else {
-    result = await def.handler(applySynchronousDefault(def, args ?? {}), client as unknown as GenericApiClient);
+    result = await def.handler(applySynchronousDefault(def, args ?? {}), guardedClient as unknown as GenericApiClient);
    }
   }
 
@@ -971,7 +1043,9 @@ export function registerAllTools(
  client: NetSapiensClient,
  userRole?: UserRole,
  userIdentity?: string,
+ availabilityContext?: AvailabilityContext,
 ): void {
+ const guardedClient = availabilityContext ? createGuardedClient(client, availabilityContext) : client;
  /**
   * Per-session snapshot of the user's promoted-tool set, captured the first
   * time we look at it and re-snapped whenever something changes. Lets us
@@ -997,7 +1071,7 @@ export function registerAllTools(
   // the client just sees it at its next tools/list instead of being nudged.
   if (isStatelessMode()) return;
   try {
-   const current = new Set(await getPromotedToolNames(userIdentity));
+   const current = new Set(await getPromotedToolNames(userIdentity, availabilityContext));
    if (promotedSnapshot === null) {
     promotedSnapshot = current;
     return;
@@ -1012,11 +1086,11 @@ export function registerAllTools(
  }
 
  server.setRequestHandler(ListToolsRequestSchema, async (request) => {
-  const all = await getAllToolDefinitions(userRole, userIdentity);
+  const all = await getAllToolDefinitions(userRole, userIdentity, availabilityContext);
   // Seed the snapshot from whatever the AI client just observed so that
   // subsequent CallTool reconciliations diff against the right baseline.
   if (userIdentity) {
-   promotedSnapshot = new Set(await getPromotedToolNames(userIdentity));
+   promotedSnapshot = new Set(await getPromotedToolNames(userIdentity, availabilityContext));
   }
   return paginateTools(all, request.params?.cursor);
  });
@@ -1039,7 +1113,7 @@ export function registerAllTools(
     // user accepted, so dispatch normally.
    }
 
-   const result = await handleToolCall(client, name, callArgs, userRole, userIdentity);
+   const result = await handleToolCall(guardedClient, name, callArgs, userRole, userIdentity, availabilityContext);
 
    // Per-user tool promotion: record call_api invocations, then
    // reconcile the promoted set so EITHER a new promotion OR a decay

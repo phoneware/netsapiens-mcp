@@ -26,8 +26,13 @@ export const v1_meeting_count: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -80,8 +85,13 @@ export const v1_meeting_create: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -113,8 +123,13 @@ export const v1_meeting_delete: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=delete",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "delete", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "delete", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -144,8 +159,13 @@ export const v1_meeting_read: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -177,8 +197,13 @@ export const v1_meeting_request: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=create",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "create", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "create", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -209,8 +234,13 @@ export const v1_meeting_update: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=update",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "update", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "update", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -237,8 +267,13 @@ export const v1_meeting_deleteevents: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=deleteEvents",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "deleteEvents", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "deleteEvents", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -265,8 +300,13 @@ export const v1_meeting_logevent: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=logEvent",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "logEvent", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "logEvent", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -308,8 +348,13 @@ export const v1_meeting_readevents: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=meeting&action=readEvents",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("meeting", "readEvents", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("meeting", "readEvents", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

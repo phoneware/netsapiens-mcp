@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "apiVersion", "probedAt", "source", "probe", "rule", "control", "results"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "apiVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(?:\\.[0-9]+)?$" },
+    "probedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "source": { "enum": ["maintainer", "community"] },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "keyCount", "keySetSha256"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-(?:alpha|beta|rc|next)\\.[0-9]+)?$" },
+        "keyCount": { "type": "integer", "minimum": 1 },
+        "keySetSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "rule": { "const": "unauthenticated GET; 404 with 'No Route Found' = absent; any other status = present" },
+    "control": {
+      "type": "object", "additionalProperties": false, "required": ["status", "noRouteFound"],
+      "properties": { "status": { "const": 404 }, "noRouteFound": { "const": true } }
+    },
+    "results": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false, "required": ["status", "result"],
+        "properties": { "status": { "type": "integer", "minimum": 100, "maximum": 599 }, "result": { "enum": ["present", "absent"] } }
+      }
+    }
+  }
+}

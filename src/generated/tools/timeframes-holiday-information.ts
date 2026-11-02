@@ -2,72 +2,33 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-export const get_holidays_countries: ToolDefinition = {
-  schema: {
-    name: 'get_holidays_countries',
-    description: 'Read List of Supported Countries — Retrieve a list of supported country codes to be used when reading holiday information. — [GET /holidays/countries]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/holidays/countries',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_holidays_regions: ToolDefinition = {
-  schema: {
-    name: 'get_holidays_regions',
-    description: 'Read List of Supported Regions — Retrieve a list of supported region codes by country, to be used when reading holiday information. — [GET /holidays/regions]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/holidays/regions',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_holidays_by_country_by_year: ToolDefinition = {
   schema: {
     name: 'get_holidays_by_country_by_year',
-    description: 'Read Holiday Information by Country — In order to create holidays in a Holiday timeframe or a Custom timeframe, it is necessary to supply a series of parameters for each holiday that can be obtained via this endpoint. — [GET /holidays/{country}/{year}]',
+    description: 'List holidays by country — Returns the holidays of a country in one year, to fill the holidays of a holiday or custom time frame. Any authenticated token can call it: holiday data is not scoped to a domain, and no scope privilege is checked.  Each holiday gives the values a holiday time frame entry needs: `uuid` becomes `timeframe-holiday-uuid`, `name` `timeframe-holiday-name`, `date` `timeframe-holiday-begin-date`, `country` `country-abbreviation`, and `locations` `holiday-api-location-hint`. `date` is an integer `YYYYMMDD`. `states` is `All`, or a list of the region codes the holiday applies in.  Holidays come from the platform\\\'s holiday lookup service, a hosted Calendarific proxy the API calls over HTTPS with a 3-second connect and 8-second total limit. Answers are cached for 24 hours per country, region, year, and language; failures are not cached. If the service fails, times out, or answers anything but a holiday list, the call returns `503`; retry later. — [GET /holidays/{country}/{year}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "country": {
                       "type": "string",
-                      "description": "The country from which to read holidays - format: ISO-3166 A-2"
+                      "description": "ISO 3166-1 alpha-2 country code from `GET /holidays/countries`, such as `US`. Matched without regard to case. Anything but 2 letters returns `400`; a 2-letter code the lookup does not know returns `503`."
                 },
                 "year": {
                       "type": "string",
-                      "description": "The year in which to read holidays - format: YYYY"
+                      "description": "Year to list, as 4 digits from `2000` to `2099`, such as `2026`. Anything else returns `400`."
                 },
                 "language": {
                       "type": "string",
-                      "description": "Language formatted according to ISO 639-1"
+                      "description": "Language for `name` and `description`: `en`, `fr`, `es`, `de`, `it`, `pt`, or `nl`, matched without regard to case. Any other value returns `400`. The lookup chooses when you leave it out. Allowed values: \"en\", \"fr\", \"es\", \"de\", \"it\", \"pt\", \"nl\"",
+                      "enum": [
+                            "en",
+                            "fr",
+                            "es",
+                            "de",
+                            "it",
+                            "pt",
+                            "nl"
+                      ]
                 }
           },
           "required": [
@@ -75,6 +36,12 @@ export const get_holidays_by_country_by_year: ToolDefinition = {
                 "year"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /holidays/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['country', 'year'];
@@ -103,28 +70,97 @@ export const get_holidays_by_country_by_year: ToolDefinition = {
   },
 };
 
+export const get_holidays_countries: ToolDefinition = {
+  schema: {
+    name: 'get_holidays_countries',
+    description: 'List holiday countries — Returns the countries the holiday lookup covers, with their ISO 3166-1 alpha-2 code in `iso-3166`. Use that code as `{country}` in `GET /holidays/{country}/{year}`. Any authenticated token can call it: holiday data is not scoped to a domain, and no scope privilege is checked.  Holidays come from the platform\\\'s holiday lookup service, a hosted Calendarific proxy the API calls over HTTPS with a 3-second connect and 8-second total limit. Answers are cached for 24 hours per country, region, year, and language; failures are not cached. If the service fails, times out, or answers anything but a holiday list, the call returns `503`; retry later. The fields are passed through from the service as it sends them. — [GET /holidays/countries]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /holidays/countries',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/holidays/countries',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_holidays_regions: ToolDefinition = {
+  schema: {
+    name: 'get_holidays_regions',
+    description: 'List holiday regions — Returns the regions you can pass as `{region}` in `GET /holidays/{country}/{region}/{year}`, as an object keyed by country code, each mapping an ISO 3166-2 region code to its name. The list is built into the API and covers the United States, Canada, Mexico, the United Kingdom, and Australia; it does not call the holiday lookup service. Any authenticated token can call it: holiday data is not scoped to a domain, and no scope privilege is checked. — [GET /holidays/regions]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /holidays/regions',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/holidays/regions',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const get_holidays_by_country_by_region_by_year: ToolDefinition = {
   schema: {
     name: 'get_holidays_by_country_by_region_by_year',
-    description: 'Read Holiday Information by Country and Region — [GET /holidays/{country}/{region}/{year}]',
+    description: 'List holidays by country and region — Returns the holidays of a country that apply in one region, in one year: the nationwide ones and those whose `states` include the region. Any authenticated token can call it: holiday data is not scoped to a domain, and no scope privilege is checked.  Each holiday gives the values a holiday time frame entry needs: `uuid` becomes `timeframe-holiday-uuid`, `name` `timeframe-holiday-name`, `date` `timeframe-holiday-begin-date`, `country` `country-abbreviation`, and `locations` `holiday-api-location-hint`. `date` is an integer `YYYYMMDD`. `states` is `All`, or a list of the region codes the holiday applies in.  Holidays come from the platform\\\'s holiday lookup service, a hosted Calendarific proxy the API calls over HTTPS with a 3-second connect and 8-second total limit. Answers are cached for 24 hours per country, region, year, and language; failures are not cached. If the service fails, times out, or answers anything but a holiday list, the call returns `503`; retry later. — [GET /holidays/{country}/{region}/{year}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "country": {
                       "type": "string",
-                      "description": "The country from which to read holidays - format: ISO-3166 A-2 e.g.: US, MX"
+                      "description": "ISO 3166-1 alpha-2 country code from `GET /holidays/countries`, such as `US`. Matched without regard to case. Anything but 2 letters returns `400`; a 2-letter code the lookup does not know returns `503`."
                 },
                 "region": {
                       "type": "string",
-                      "description": "The region within the ```country``` from which to read holidays - format: ISO 3166-2 e.g.: US-NY, MX-ZAC"
+                      "description": "Region code from `GET /holidays/regions` for this country, such as `US-NY` (the bare `NY` is also accepted), or `All` for every holiday of the country. Matched without regard to case. A region not on that list for the country returns `400`. The answer keeps nationwide holidays and the holidays whose `states` include the region."
                 },
                 "year": {
                       "type": "string",
-                      "description": "The year in which to read holidays"
+                      "description": "Year to list, as 4 digits from `2000` to `2099`, such as `2026`. Anything else returns `400`."
                 },
                 "language": {
                       "type": "string",
-                      "description": "Language formatted according to ISO 639-1"
+                      "description": "Language for `name` and `description`: `en`, `fr`, `es`, `de`, `it`, `pt`, or `nl`, matched without regard to case. Any other value returns `400`. The lookup chooses when you leave it out. Allowed values: \"en\", \"fr\", \"es\", \"de\", \"it\", \"pt\", \"nl\"",
+                      "enum": [
+                            "en",
+                            "fr",
+                            "es",
+                            "de",
+                            "it",
+                            "pt",
+                            "nl"
+                      ]
                 }
           },
           "required": [
@@ -133,6 +169,12 @@ export const get_holidays_by_country_by_region_by_year: ToolDefinition = {
                 "year"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /holidays/{}/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['country', 'region', 'year'];

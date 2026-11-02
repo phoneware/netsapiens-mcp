@@ -2,16 +2,113 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-export const get_sms_numbers_for_domain: ToolDefinition = {
+export const get_all_smsnumbers_system: ToolDefinition = {
   schema: {
-    name: 'get_sms_numbers_for_domain',
-    description: 'Get SMS Numbers for Domain — [GET /domains/{domain}/smsnumbers]',
+    name: 'get_all_smsnumbers_system',
+    description: 'List SMS numbers — Lists SMS numbers across domains.  Requires Super User scope to list every domain, or Reseller scope with `reseller` set to your own territory. Other scopes set `domain` to their own domain and get what `GET /domains/{domain}/smsnumbers` returns, with the same limits.  With `reseller`, the response is a list of the numbers alone, as strings, for every domain in the territory, up to 20,000. `domain`, `dest`, and `number` still narrow it, and `site` is ignored. Without `reseller`, each number is a full record. Filter with `domain`, `dest`, `number`, `number_LIKE`, or `site`, and page with `start` and `limit`. — [GET /smsnumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Return only this domain's numbers, such as `example.com`. `~` means your own domain. Required for scopes below Reseller."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory whose numbers to list. `~` means your own territory. A Reseller sets it to its own territory. The response is then a list of the numbers alone, up to 20,000. Ignored for scopes below Reseller."
+                },
+                "dest": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is this user extension or call queue. Basic User, Advanced User, Simple User, and Call Center Agent may name only themselves."
+                },
+                "number": {
+                      "type": "string",
+                      "description": "Return only this number, matched exactly."
+                },
+                "number_LIKE": {
+                      "type": "string",
+                      "description": "Return only numbers that contain this text, such as an area code."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is a user in this site. Numbers assigned to a call queue or held as available are left out. A Site Manager always gets its own site, whatever this is set to."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most records to return. Omit it to return every match. Default: 100",
+                      "default": 100
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /smsnumbers',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['domain', 'reseller', 'dest', 'number', 'number_LIKE', 'site', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/smsnumbers',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_sms_numbers_for_domain: ToolDefinition = {
+  schema: {
+    name: 'get_sms_numbers_for_domain',
+    description: 'List domain SMS numbers — Lists the SMS numbers in the domain in the path, with the user or call queue each one delivers messages to.  Requires Office Manager, Site Manager, Call Center Supervisor, Reseller, or Super User scope to list the whole domain. A Site Manager gets only the numbers routed to users in its own site. Basic User, Advanced User, Simple User, and Call Center Agent must filter by `dest` set to themselves, or by `number`, and then see only numbers routed to them.  With no filters, every number in the domain is returned. Filter with `dest`, `number`, `number_LIKE`, or `site`, and page with `start` and `limit`. `mms-capable` and `group-mms-capable` appear only on numbers whose carrier supports them.  To count the same numbers, use `GET /domains/{domain}/smsnumbers/count`. To read one number, use `GET /domains/{domain}/smsnumbers/{smsnumber}`. To list one user\\\'s numbers, use `GET /domains/{domain}/users/{user}/smsnumbers`. — [GET /domains/{domain}/smsnumbers]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dest": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is this user extension or call queue. Basic User, Advanced User, Simple User, and Call Center Agent may name only themselves."
+                },
+                "number": {
+                      "type": "string",
+                      "description": "Return only this number, matched exactly."
+                },
+                "number_LIKE": {
+                      "type": "string",
+                      "description": "Return only numbers that contain this text, such as an area code."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is a user in this site. Numbers assigned to a call queue or held as available are left out. A Site Manager always gets its own site, whatever this is set to."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most records to return. Omit it to return every match. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -19,16 +116,28 @@ export const get_sms_numbers_for_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/smsnumbers',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['dest', 'number', 'number_LIKE', 'site', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/smsnumbers',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,29 +152,38 @@ export const get_sms_numbers_for_domain: ToolDefinition = {
 export const create_smsnumber: ToolDefinition = {
   schema: {
     name: 'create_smsnumber',
-    description: 'Create SMS Number — [POST /domains/{domain}/smsnumbers]',
+    description: 'Create SMS number — Adds an SMS number to the domain in the path and assigns it to a user, a call queue, or the domain\\\'s pool of available numbers.  Requires Office Manager, Call Center Supervisor, Route Manager, Reseller, or Super User scope.  Set `application` to `user` or `callqueue` and `dest` to the extension or call queue that receives messages, or set `application` to `available` to hold the number unassigned. `available` always clears `dest`. `carrier`, when sent, must name an SMS carrier configured on the platform, listed by `GET /smscarriers`. When the number goes to a user, that user\\\'s messaging profile gains it.  A number belongs to one domain. A number already held by another domain returns `409`: delete it from that domain first.  A `202` means the number is accepted and applied shortly after. Read it back with `GET /domains/{domain}/smsnumbers/{smsnumber}`. — [POST /domains/{domain}/smsnumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "number": {
                       "type": "string",
-                      "description": "number"
+                      "description": "SMS number: digits with the country code and no `+`, such as `15555550100`. A number belongs to one domain only. Use digits only, or the number cannot be changed or deleted by its path later."
                 },
                 "application": {
                       "type": "string",
-                      "description": "This is the application of the number. Can be for a user, callqueue, or available"
+                      "description": "What the number delivers to: `user` for a user's extension, `callqueue` for a call queue, or `available` for the domain's pool of unassigned numbers. Allowed values: \"user\", \"callqueue\", \"available\"",
+                      "enum": [
+                            "user",
+                            "callqueue",
+                            "available"
+                      ]
                 },
                 "dest": {
                       "type": "string",
-                      "description": "This is the destination for the SMS number if assigned. Can be a user or a call queue"
+                      "description": "Extension or call queue that receives messages to this number. Required in practice for `user` and `callqueue`. Cleared when `application` is `available`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "Accepts carrier definition at number creation. Be mindful of formatting here."
+                      "description": "SMS carrier that sends and receives messages for this number, such as `bandwidth`. It must be a carrier configured on the platform, listed by `GET /smscarriers`. Matched without regard to case and stored as the configured name."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Free-text note, for example why the number was released."
                 }
           },
           "required": [
@@ -75,13 +193,19 @@ export const create_smsnumber: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/smsnumbers',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['number', 'application', 'dest', 'carrier'];
+    const bodyParamNames = ['number', 'application', 'dest', 'carrier', 'notes'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -102,56 +226,41 @@ export const create_smsnumber: ToolDefinition = {
   },
 };
 
-export const get_all_smsnumbers_system: ToolDefinition = {
-  schema: {
-    name: 'get_all_smsnumbers_system',
-    description: 'Get All SMS Numbers for System — [GET /smsnumbers]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/smsnumbers',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const update_smsnumber: ToolDefinition = {
   schema: {
     name: 'update_smsnumber',
-    description: 'Update SMS Number — [PUT /domains/{domain}/smsnumbers/{smsnumber}]',
+    description: 'Update SMS number — Changes the assignment, carrier, or note of an SMS number in the domain in the path.  Requires Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, or Super User scope. A Site Manager changes only numbers routed to users in its own site, and can assign them only to users in its site.  Send `application` on every update, even when you change only `carrier` or `notes`. Fields you leave out keep their values. Setting `application` to `available` releases the number to the pool and clears `dest`. Reassigning a number moves it from the old user\\\'s messaging profile to the new one\\\'s.  A number that is not in this domain returns `404`. A `202` means the change is accepted and applied shortly after. Read it back with `GET /domains/{domain}/smsnumbers/{smsnumber}`. — [PUT /domains/{domain}/smsnumbers/{smsnumber}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "smsnumber": {
                       "type": "string",
-                      "description": "smsnumber"
+                      "description": "SMS number, as stored: digits with the country code and no `+`, such as `15555550100`."
                 },
                 "application": {
                       "type": "string",
-                      "description": "This is the application of the number. Can be for a user, callqueue, or available"
+                      "description": "What the number delivers to: `user` for a user's extension, `callqueue` for a call queue, or `available` for the domain's pool of unassigned numbers. Required on every update. Allowed values: \"user\", \"callqueue\", \"available\"",
+                      "enum": [
+                            "user",
+                            "callqueue",
+                            "available"
+                      ]
                 },
                 "dest": {
                       "type": "string",
-                      "description": "This is the destination for the SMS number if assigned. Can be a user or a call queue"
+                      "description": "New extension or call queue for the number. Omit it to keep the current one. Cleared when `application` is `available`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "Accepts updating of carrier field, useful during porting of numbers. Mind the formatting."
+                      "description": "SMS carrier that sends and receives messages for this number, such as `bandwidth`. It must be a carrier configured on the platform, listed by `GET /smscarriers`. Matched without regard to case and stored as the configured name."
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Free-text note, for example why the number was released."
                 }
           },
           "required": [
@@ -161,13 +270,19 @@ export const update_smsnumber: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/smsnumbers/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'smsnumber'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['application', 'dest', 'carrier'];
+    const bodyParamNames = ['application', 'dest', 'carrier', 'notes'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -191,17 +306,17 @@ export const update_smsnumber: ToolDefinition = {
 export const delete_smsnumber: ToolDefinition = {
   schema: {
     name: 'delete_smsnumber',
-    description: 'Delete an SMS Number — [DELETE /domains/{domain}/smsnumbers/{smsnumber}]',
+    description: 'Delete SMS number — Removes an SMS number from the domain in the path. The user it was assigned to stops receiving messages on it, and the number leaves that user\\\'s messaging profile.  Requires Reseller or Super User scope. To take a number out of service without deleting it, set `application` to `available` with `PUT /domains/{domain}/smsnumbers/{smsnumber}`.  A number that is not in this domain returns `404`. A `202` means the deletion is accepted and applied shortly after. Once deleted, the number can be added to another domain. — [DELETE /domains/{domain}/smsnumbers/{smsnumber}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "smsnumber": {
                       "type": "string",
-                      "description": "smsnumber"
+                      "description": "SMS number, as stored: digits with the country code and no `+`, such as `15555550100`."
                 }
           },
           "required": [
@@ -209,6 +324,12 @@ export const delete_smsnumber: ToolDefinition = {
                 "smsnumber"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/smsnumbers/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'smsnumber'];
@@ -234,17 +355,35 @@ export const delete_smsnumber: ToolDefinition = {
 export const get_sms_numbers_for_user: ToolDefinition = {
   schema: {
     name: 'get_sms_numbers_for_user',
-    description: 'Get SMS Numbers for User — [GET /domains/{domain}/users/{user}/smsnumbers]',
+    description: 'List user SMS numbers — Lists the SMS numbers whose destination is the user in the path. `GET /domains/~/users/~/smsnumbers` lists your own.  Requires a token for that user, or Office Manager, Site Manager, Call Center Supervisor, Reseller, or Super User scope for the domain. Basic User, Advanced User, Simple User, and Call Center Agent may name only themselves. A Site Manager sees the user\\\'s numbers only when the user is in its own site, and an empty result otherwise.  A user with no numbers returns an empty array. Filter with `number` or `number_LIKE`, and page with `start` and `limit`. To count the same numbers, use `GET /domains/{domain}/users/{user}/smsnumbers/count`. — [GET /domains/{domain}/users/{user}/smsnumbers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose SMS numbers you work with, as an extension such as `1001`. `~` means your own user. It is matched against each number's `dest`."
+                },
+                "number": {
+                      "type": "string",
+                      "description": "Return only this number, matched exactly."
+                },
+                "number_LIKE": {
+                      "type": "string",
+                      "description": "Return only numbers that contain this text, such as an area code."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most records to return. Omit it to return every match. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -253,16 +392,28 @@ export const get_sms_numbers_for_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/smsnumbers',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['number', 'number_LIKE', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/smsnumbers',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -277,17 +428,25 @@ export const get_sms_numbers_for_user: ToolDefinition = {
 export const count_sms_numbers: ToolDefinition = {
   schema: {
     name: 'count_sms_numbers',
-    description: 'Count SMS Numbers for User — [GET /domains/{domain}/users/{user}/smsnumbers/count]',
+    description: 'Count user SMS numbers — Counts the SMS numbers whose destination is the user in the path. `GET /domains/~/users/~/smsnumbers/count` counts your own.  Requires a token for that user, or Office Manager, Site Manager, Call Center Supervisor, Reseller, or Super User scope for the domain. Basic User, Advanced User, Simple User, and Call Center Agent may name only themselves. A Site Manager sees the user\\\'s numbers only when the user is in its own site, and an empty result otherwise.  It takes the same `number` and `number_LIKE` filters as `GET /domains/{domain}/users/{user}/smsnumbers`, so the count matches that list. — [GET /domains/{domain}/users/{user}/smsnumbers/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose SMS numbers you work with, as an extension such as `1001`. `~` means your own user. It is matched against each number's `dest`."
+                },
+                "number": {
+                      "type": "string",
+                      "description": "Return only this number, matched exactly."
+                },
+                "number_LIKE": {
+                      "type": "string",
+                      "description": "Return only numbers that contain this text, such as an area code."
                 }
           },
           "required": [
@@ -296,15 +455,142 @@ export const count_sms_numbers: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/smsnumbers/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['number', 'number_LIKE'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/smsnumbers/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_domain_sms_numbers: ToolDefinition = {
+  schema: {
+    name: 'count_domain_sms_numbers',
+    description: 'Count domain SMS numbers — Counts the SMS numbers in the domain in the path.  Requires the same scope as `GET /domains/{domain}/smsnumbers`: Office Manager, Site Manager, Call Center Supervisor, Reseller, or Super User to count the whole domain. A Site Manager counts only the numbers routed to users in its own site. Basic User, Advanced User, Simple User, and Call Center Agent must filter by `dest` set to themselves, or by `number`.  It takes the same `dest`, `number`, `number_LIKE`, and `site` filters as the list, so the count matches that list without paging. — [GET /domains/{domain}/smsnumbers/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dest": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is this user extension or call queue. Basic User, Advanced User, Simple User, and Call Center Agent may name only themselves."
+                },
+                "number": {
+                      "type": "string",
+                      "description": "Return only this number, matched exactly."
+                },
+                "number_LIKE": {
+                      "type": "string",
+                      "description": "Return only numbers that contain this text, such as an area code."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only numbers whose destination is a user in this site. Numbers assigned to a call queue or held as available are left out. A Site Manager always gets its own site, whatever this is set to."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/smsnumbers/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dest', 'number', 'number_LIKE', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/smsnumbers/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_sms_number: ToolDefinition = {
+  schema: {
+    name: 'read_sms_number',
+    description: 'Read SMS number — Returns one SMS number in the domain in the path, with its assignment and carrier.  Requires a token for the domain in the path, or Reseller or Super User scope. Basic User, Advanced User, Simple User, and Call Center Agent see only numbers routed to themselves. A Site Manager sees only numbers routed to users in its own site.  The response is an array that holds the number, or an empty array when the number is not in this domain or is not one you can see. Use it to confirm a create, update, or delete, which are applied shortly after they are accepted. — [GET /domains/{domain}/smsnumbers/{smsnumber}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "smsnumber": {
+                      "type": "string",
+                      "description": "SMS number, as stored: digits with the country code and no `+`, such as `15555550100`."
+                }
+          },
+          "required": [
+                "domain",
+                "smsnumber"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/smsnumbers/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'smsnumber'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/smsnumbers/{smsnumber}',
       pathParams,
     });
 

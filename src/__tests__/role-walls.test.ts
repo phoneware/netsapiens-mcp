@@ -10,6 +10,9 @@ import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import type { GenericApiClient } from '../generated/types.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface RecordedRequest {
  method: string;
@@ -33,7 +36,7 @@ function recordingClient(
 
 /**
  * Endpoints that require Reseller or Super User / System Admin scope.
- * Derived from spec/netsapiens-api-v2.json.
+ * Derived from spec/v2/45.0.json.
  * Any request issued to these paths by a caller with a role below reseller
  * (domain_admin or user) is a role-wall defect.
  */

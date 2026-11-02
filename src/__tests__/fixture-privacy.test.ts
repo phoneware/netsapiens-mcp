@@ -95,8 +95,8 @@ describe('live fixtures are value-free shapes', () => {
   expect(findPrivacyViolations({ '1001': 's' })).toContain(
    'object key "1001" at root does not match NetSapiens field or k<n> pattern'
   );
-  expect(findPrivacyViolations({ 'user@phoneware.us': 's' })).toContain(
-   'object key "user@phoneware.us" at root does not match NetSapiens field or k<n> pattern'
+  expect(findPrivacyViolations({ 'user@example.com': 's' })).toContain(
+   'object key "user@example.com" at root does not match NetSapiens field or k<n> pattern'
   );
   expect(findPrivacyViolations({ 'Invalid Key Name': 's' })).toContain(
    'object key "Invalid Key Name" at root does not match NetSapiens field or k<n> pattern'

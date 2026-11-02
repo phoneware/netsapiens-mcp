@@ -5,21 +5,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_recordings_by_callid: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_recordings_by_callid',
-    description: 'Get Specific Recording by Callid for User — A user who is a party to a call may request the recording data for that call. — [GET /domains/{domain}/users/{user}/recordings/{callid}]',
+    description: 'Read recording of user call — Returns the recording of a call that the user in the path was part of, with a signed `file-access-url` that plays it. Scopes: Basic User and Call Center Agent on their own user; Office Manager and Site Manager on their domain; Reseller on their territory; Super User.  The response is one recording, not an array. When a call has several recordings, the first one made for this user, one of the user\\\'s devices, or a domain-wide rule (`*@domain`) is returned. Narrow it with `call-recording-match-pattern`.  A Super User Read Only token is refused unless it is a party to the call.  To list every recording of a call in a domain, use `GET /domains/{domain}/recordings/{callid}`. To play the audio, open `file-access-url`. — [GET /domains/{domain}/users/{user}/recordings/{callid}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "callid": {
                       "type": "string",
-                      "description": "callid"
+                      "description": "The SIP call ID of either leg of the call, as `orig-callid` or `term-callid` on its CDR. Letters, digits, `@`, `*`, `.`, `-`, `_`, and `'`."
+                },
+                "call-recording-match-pattern": {
+                      "type": "string",
+                      "description": "Return only the recording made for this case, exact match: `user@domain`, or `*@domain` for a domain-wide rule. Also accepted as `case_id`."
                 }
           },
           "required": [
@@ -29,16 +33,28 @@ export const get_domains_by_domain_users_by_user_recordings_by_callid: ToolDefin
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/recordings/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['call-recording-match-pattern'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/recordings/{callid}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -53,17 +69,21 @@ export const get_domains_by_domain_users_by_user_recordings_by_callid: ToolDefin
 export const get_domains_by_domain_recordings_by_callid: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_recordings_by_callid',
-    description: 'Get Specific Recording by Callid for Domain — A user with sufficient scope may request recording data for calls to which they were not a party - but which are within their purview - using the domain and callid. — [GET /domains/{domain}/recordings/{callid}]',
+    description: 'List recordings of call in domain — Returns every recording of a call in the domain, each with a signed `file-access-url` that plays it, whether or not you were a party to the call. Scopes: Office Manager and Site Manager on their domain, Reseller on their territory, and Super User. A Basic User reads their own calls with `GET /domains/{domain}/users/{user}/recordings/{callid}`.  A call can have several recordings, one per case it matched, such as the user\\\'s own rule and a domain-wide rule. Only recordings whose case belongs to the domain, or to a SIP trunk in it, are returned. Narrow them with `call-recording-match-pattern`.  A Super User Read Only token is refused unless it is a party to the call. — [GET /domains/{domain}/recordings/{callid}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callid": {
                       "type": "string",
-                      "description": "callid"
+                      "description": "The SIP call ID of either leg of the call, as `orig-callid` or `term-callid` on its CDR. Letters, digits, `@`, `*`, `.`, `-`, `_`, and `'`."
+                },
+                "call-recording-match-pattern": {
+                      "type": "string",
+                      "description": "Return only the recording made for this case, exact match: `user@domain`, or `*@domain` for a domain-wide rule. Also accepted as `case_id`."
                 }
           },
           "required": [
@@ -72,16 +92,126 @@ export const get_domains_by_domain_recordings_by_callid: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/recordings/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['call-recording-match-pattern'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/recordings/{callid}',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const play_recording: ToolDefinition = {
+  schema: {
+    name: 'play_recording',
+    description: 'Play recording — Streams the audio of a call recording. Open the `file-access-url` that a recording read returns; do not build the link yourself. The response is binary audio, `audio/wav` by default, or `audio/aac` or `audio/ogg` with `convert`. There is no example body.  No access token is needed. The link is its own credential: anyone who has it can play the recording until it expires, 180 minutes after it was created by default. Every link expires. Read the recording again for a new link.  Byte ranges are honored with `206 Partial Content`, so a media player can seek, unless `download` is set. Each play is recorded in the access log once, on the request for the start of the file.  A link whose signature does not match, that has expired, whose `time` is more than 5 minutes in the future, or whose `uid` names no active login, returns `403` with no body. A recording whose file is no longer on the Recording server or in remote storage returns `404` with no body. — [GET /recordings/play]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "accel": {
+                      "type": "string",
+                      "description": "The Recording server element that holds the file. Copy it from `file-access-url`."
+                },
+                "casid": {
+                      "type": "string",
+                      "description": "The case the recording was made for, such as `1001@example.com`. Copy it from `file-access-url`."
+                },
+                "cccid": {
+                      "type": "string",
+                      "description": "The ID of the recording. Copy it from `file-access-url`."
+                },
+                "calid": {
+                      "type": "string",
+                      "description": "The SIP call ID of the recorded leg, URL-encoded. Copy it from `file-access-url`."
+                },
+                "uid": {
+                      "type": "string",
+                      "description": "The hostname of the server that created the link. Copy it from `file-access-url`. It does not name the person who reads the recording."
+                },
+                "time": {
+                      "type": "string",
+                      "description": "When the link was created, in UTC, as `YYYYMMDDHHMMSS`. Copy it from `file-access-url`. The link expires 180 minutes later by default. A time more than 5 minutes in the future fails with `403`."
+                },
+                "auth": {
+                      "type": "string",
+                      "description": "The signature over the other link parameters, as 32 lowercase hexadecimal characters. Copy it from `file-access-url`. Changing any signed parameter makes it fail with `403`."
+                },
+                "convert": {
+                      "type": "string",
+                      "description": "Transcodes the audio before sending it. `aac` answers `audio/aac` and `ogg` answers `audio/ogg`. `wav16`, `signed`, `signed_ffmpeg`, and `gsm` answer a converted WAV file as `audio/wav`. Any other value, `mp3` included, returns the original WAV file. If a conversion fails, the original file is sent. Allowed values: \"aac\", \"ogg\", \"wav16\", \"signed\", \"signed_ffmpeg\", \"gsm\"",
+                      "enum": [
+                            "aac",
+                            "ogg",
+                            "wav16",
+                            "signed",
+                            "signed_ffmpeg",
+                            "gsm"
+                      ]
+                },
+                "stereo": {
+                      "type": "string",
+                      "description": "`true` builds a two-channel file, one channel per side of the call, when the stored file is mono. `force` rebuilds it even when the stored file is already stereo. Works only while the raw call audio is still on the Recording server. A rebuilt file is sent whole, with no byte ranges. Allowed values: \"true\", \"force\"",
+                      "enum": [
+                            "true",
+                            "force"
+                      ]
+                },
+                "download": {
+                      "type": "string",
+                      "description": "Present with any value, even blank, the whole file is sent in one `200` response with no byte ranges. A value other than `false` also records the request as a download rather than a play. The file is always sent as an attachment."
+                }
+          },
+          "required": [
+                "accel",
+                "casid",
+                "cccid",
+                "calid",
+                "uid",
+                "time",
+                "auth"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /recordings/play',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['accel', 'casid', 'cccid', 'calid', 'uid', 'time', 'auth', 'convert', 'stereo', 'download'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/recordings/play',
+      queryParams,
     });
 
     return {

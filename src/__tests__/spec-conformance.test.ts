@@ -8,6 +8,10 @@ import { readFileSync } from 'node:fs';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import type { GenericApiClient } from '../generated/types.js';
+import { toolRegistry } from '../generated/registry.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface SpecSchema {
   $ref?: string;
@@ -25,7 +29,7 @@ interface Spec {
   components?: { schemas?: Record<string, SpecSchema> };
 }
 
-const spec = JSON.parse(readFileSync('spec/netsapiens-api-v2.json', 'utf8')) as Spec;
+const spec = JSON.parse(readFileSync('spec/v2/45.0.json', 'utf8')) as Spec;
 
 function deref(schema: SpecSchema | undefined, depth = 0): SpecSchema | undefined {
   if (!schema || depth > 8) return schema;
@@ -185,23 +189,27 @@ describe('curated writes use methods the spec declares', () => {
 describe('multipart-only operations are marked unreachable', () => {
   /** Operations whose only request body is multipart/form-data. */
   function multipartOnlyPaths(): string[] {
-    const out: string[] = [];
-    for (const [p, item] of Object.entries(spec.paths)) {
-      for (const [m, op] of Object.entries(item)) {
-        const content = op.requestBody?.content;
-        if (!content) continue;
-        const keys = Object.keys(content);
-        if (keys.length === 1 && keys[0] === 'multipart/form-data') out.push(`${m.toUpperCase()} ${p}`);
+    const out = new Set<string>();
+    for (const b of ['44.3', '44.4', '45.0', '46.0']) {
+      const s = JSON.parse(readFileSync(`spec/v2/${b}.json`, 'utf8')) as Spec;
+      for (const [p, item] of Object.entries(s.paths)) {
+        for (const [m, op] of Object.entries(item)) {
+          const content = op.requestBody?.content;
+          if (!content) continue;
+          const keys = Object.keys(content);
+          if (keys.length === 1 && keys[0] === 'multipart/form-data') out.add(`${m.toUpperCase()} ${p}`);
+        }
       }
     }
-    return out.sort();
+    return [...out].sort();
   }
 
-  it('the hard-coded list still matches the spec', async () => {
-    const { MULTIPART_ONLY_OPERATIONS } = await import('../tools/multipart.js');
-    // Derived from the spec so the constant cannot drift silently when the
-    // vendored spec is updated.
-    expect([...MULTIPART_ONLY_OPERATIONS].sort()).toEqual(multipartOnlyPaths());
+  it('the tools marked multipartOnly match the spec', () => {
+    const multipartTools = [...toolRegistry.values()].filter((t) => t.operation?.multipartOnly);
+    expect(multipartTools.length).toBe(multipartOnlyPaths().length);
+    for (const tool of multipartTools) {
+      expect(tool.operation?.multipartOnly).toBe(true);
+    }
   });
 
   /** True when some variant of the same path offers a JSON body for this method. */

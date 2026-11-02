@@ -14,13 +14,15 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
-import { requireBearer } from './auth/kit/bearer.js';
-import { UpstreamRevokedError, kitCodeOf } from './auth/kit/errors.js';
-import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
 import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
+import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
+import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import {
@@ -29,11 +31,17 @@ import {
  serverCapabilities,
  serverImplementation,
 } from './server-info.js';
+import { createStoreFromEnv } from './config/store.js';
+import { setUsageStore } from './tools/promotion/usage-store.js';
+import type { McpStore } from './store/types.js';
 import { logger } from './utils/logger.js';
 import type { UserRole } from './auth/roles.js';
-import type { NetSapiensConfig } from './types/config.js';
+import type { NetSapiensConfig, MCPServerConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { getVersionInfo, getCachedVersionInfo, warmVersionCache, getVersionTtlSeconds, type VersionInfo } from './netsapiens/version.js';
+import { createAvailabilityContext, type AvailabilityContext } from './netsapiens/availability.js';
+import { createGuardedClient } from './netsapiens/guarded-client.js';
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -47,6 +55,9 @@ interface McpSession {
  transport: StreamableHTTPServerTransport;
  server: Server;
  client: NetSapiensClient;
+ availabilityContext?: AvailabilityContext;
+ nsApiUrl?: string;
+ lastVersionInfo?: VersionInfo;
 }
 
 /**
@@ -103,8 +114,20 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
+export async function createApp(options?: {
+ store?: McpStore;
+ authProvider?: NetSapiensAuthProvider;
+ hooks?: import('./auth/types.js').AuthHooks;
+}): Promise<{
+ app: express.Express;
+ authProvider: NetSapiensAuthProvider;
+ baseUrl: URL;
+ mcpUrl: URL;
+ store: McpStore;
+ platforms: readonly NetSapiensPlatform[];
+}> {
  const config = loadConfig();
+ const platforms = parsePlatforms(process.env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
@@ -119,21 +142,28 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
   );
  }
 
- // Issued bearer lifetime. MCP clients SHOULD refresh on 401 using the
- // refresh token we hand back at /token, but real-world client refresh
- // implementations vary, so a longer-lived bearer keeps far more sessions
- // alive without ever hitting the cliff. Default 7 days; operator-tunable
- // via MCP_TOKEN_LIFETIME_HOURS.
+ let store: McpStore;
+ if (options?.store) {
+  store = options.store;
+ } else {
+  const storeResult = await createStoreFromEnv();
+  store = storeResult.store;
+ }
+ setUsageStore(store.usage);
+
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
- const authProvider = customAuthProvider ?? new NetSapiensAuthProvider({
+ const authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
+  platforms,
   nsClientId,
   nsClientSecret,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
+  store,
+  hooks: options?.hooks,
  });
- const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
- return { app, authProvider, baseUrl, mcpUrl };
+ const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms);
+ return { app, authProvider, baseUrl, mcpUrl, store, platforms };
 }
 
 /**
@@ -143,10 +173,21 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
  * especially, which otherwise leak a listener per case and collide on ports.
  */
 export async function startHttpServer(): Promise<HttpServer> {
- const { app, baseUrl, mcpUrl } = createApp();
+ const { app, baseUrl, mcpUrl, store, platforms } = await createApp();
  const config = loadConfig();
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const host = process.env.MCP_HOST || '0.0.0.0';
+
+ const onShutdown = async () => {
+  try {
+   await store.close();
+  } catch (err) {
+   logger.error('Error closing store on shutdown', { error: String(err) });
+  }
+  process.exit(0);
+ };
+ process.once('SIGINT', onShutdown);
+ process.once('SIGTERM', onShutdown);
 
  const httpServer = app.listen(port, host, () => {
   logger.info('NetSapiens MCP HTTP server started', {
@@ -167,6 +208,15 @@ export async function startHttpServer(): Promise<HttpServer> {
   if (config.debug) {
    logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
   }
+  const origins = [...new Set(platforms.map((p) => new URL(p.apiUrl).origin))];
+  void warmVersionCache(origins).catch((err) => {
+   logger.warn('Failed to warm version cache on startup', { error: String(err) });
+  });
+ });
+
+ httpServer.on('close', () => {
+  process.removeListener('SIGINT', onShutdown);
+  process.removeListener('SIGTERM', onShutdown);
  });
 
  return httpServer;
@@ -184,10 +234,12 @@ function parseLifetimeHoursToSeconds(raw: string | undefined, defaultHours: numb
 }
 
 function wireApp(
- config: ReturnType<typeof loadConfig>,
+ config: MCPServerConfig,
  authProvider: NetSapiensAuthProvider,
  baseUrl: URL,
  mcpUrl: URL,
+ store: McpStore,
+ platforms: readonly NetSapiensPlatform[],
 ): { app: express.Express; sessions: Map<string, McpSession> } {
 
  // -----------------------------------------------------------------------
@@ -258,6 +310,15 @@ function wireApp(
  app.use('/login', loginLimiter);
  app.use('/token', tokenLimiter);
  app.use('/register', tokenLimiter);
+ app.use('/mcp', (req, _res, next) => {
+  const accept = req.headers['accept'];
+  if (!accept) {
+   req.headers['accept'] = 'application/json, text/event-stream';
+  } else if (!accept.includes('text/event-stream')) {
+   req.headers['accept'] = `${accept}, text/event-stream`;
+  }
+  next();
+ });
  app.use('/mcp', mcpLimiter);
 
  // -----------------------------------------------------------------------
@@ -268,14 +329,54 @@ function wireApp(
  const sessions = new Map<string, McpSession>();
 
  app.get('/health', (_req, res) => {
+  try {
+   const netsapiensList = platforms.map((p) => {
+   const origin = new URL(p.apiUrl).origin;
+   const cached = getCachedVersionInfo(origin);
+   return {
+    platform: p.id,
+    label: p.label,
+    apiUrl: p.apiUrl,
+    apiVersion: cached?.apiVersion ?? null,
+    version: cached?.apiVersion ?? null,
+    docsBranch: cached?.docsBranch ?? null,
+    branch: cached?.docsBranch ?? null,
+    match: cached?.match ?? null,
+    status: cached?.status ?? 'unknown',
+    checkedAt: cached?.checkedAt ?? null,
+    v1: cached?.v1 ?? 'unavailable',
+    observation: cached?.observation ?? null,
+   };
+  });
+  const indexMap: Record<string, (typeof netsapiensList)[number]> = {};
+  for (const item of netsapiensList) {
+   indexMap[item.apiUrl] = item;
+   try {
+    indexMap[new URL(item.apiUrl).origin] = item;
+   } catch {
+    // ignore unparseable URL
+   }
+  }
+  const indexedNetsapiens = Object.assign(netsapiensList, indexMap);
+
   res.json({
    status: 'ok',
    uptime: Math.floor(process.uptime()),
    mode: isStatelessMode() ? 'stateless' : 'session',
    activeSessions: sessions.size,
-   nsApiUrl: config.netsapiens.apiUrl,
    version: config.version,
-  });
+   store: {
+    backend: store.backend,
+    namespace: store.namespace,
+    persistent: store.capabilities.persistent,
+    multiInstance: store.capabilities.multiInstance,
+   },
+   netsapiens: indexedNetsapiens,
+   });
+  } catch (err) {
+   console.error('ERROR IN /health:', err);
+   res.status(500).json({ error: String(err) });
+  }
  });
 
  // Favicon: fetch MCP_ICON_URL once and cache in memory; serve bytes directly.
@@ -320,13 +421,7 @@ function wireApp(
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
  // scoped to /authorize so every other endpoint keeps exact redirect matching.
  app.use('/authorize', allowLoopbackRedirectUri());
- app.use(
-  '/authorize',
-  adoptClientMiddleware({
-   clientsStore: authProvider.clientsStore,
-   serverName: 'NetSapiens MCP',
-  }),
- );
+
  // OAuth endpoints: discovery, authorize, token, register, revoke
  app.use(mcpAuthRouter({
   provider: authProvider,
@@ -382,11 +477,35 @@ function wireApp(
  // -----------------------------------------------------------------------
 
  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpUrl);
- const bearerAuth = requireBearer({
+ const bearerAuth = requireBearerAuth({
   verifier: authProvider,
   resourceMetadataUrl,
-  now: authProvider.nowProvider,
  });
+ const mcpAuthMiddleware: express.RequestHandler = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (typeof authProvider?.verifyAccessToken === 'function' && authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+   const token = authHeader.slice(7).trim();
+   try {
+    const authInfo = await authProvider.verifyAccessToken(token);
+    (req as AuthenticatedRequest).auth = authInfo;
+    return next();
+   } catch (err: unknown) {
+    if (err instanceof InvalidTokenError) {
+     return bearerAuth(req, res, next);
+    }
+    logger.warn('MCP bearer verification failed with operational/store error', {
+     error: err instanceof Error ? err.message : String(err),
+    });
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({
+     error: 'temporarily_unavailable',
+     error_description: 'Service temporarily unavailable, please retry',
+    });
+    return;
+   }
+  }
+  return bearerAuth(req, res, next);
+ };
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
   const negotiated = negotiateProtocolVersion(req);
@@ -398,7 +517,7 @@ function wireApp(
 
 
  // POST /mcp: JSON-RPC requests
- app.post('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.post('/mcp', mcpAuthMiddleware, async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   const body = (req as any).body;
 
@@ -407,7 +526,7 @@ function wireApp(
   // bearer, so the NS client is rebuilt from that bearer each time and no
   // cross-request state exists to go stale or to be pinned to an instance.
   if (isStatelessMode()) {
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+   const { server, client } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
    void client;
    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
@@ -423,12 +542,15 @@ function wireApp(
 
   if (isInitializeRequest(body)) {
    // Create a server + client using the authenticated user's NS token, role, and identity.
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+   const { server, client, availabilityContext, versionInfo } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
+   const extra = req.auth?.extra as Record<string, unknown> | undefined;
+   const nsApiUrl = (extra?.nsApiUrl as string | undefined) || config.netsapiens.apiUrl;
 
    const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sid: string) => {
-     sessions.set(sid, { transport, server, client });
+     sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo });
+     ensureSessionWatcher(sessions);
     },
    });
 
@@ -454,6 +576,24 @@ function wireApp(
 
   const session = sessions.get(sessionId)!;
   syncSessionNsToken(session, req);
+  if (session.nsApiUrl && session.lastVersionInfo) {
+   try {
+    const origin = new URL(session.nsApiUrl).origin;
+    const current = await getVersionInfo(origin);
+    if (
+     current.apiVersion !== session.lastVersionInfo.apiVersion ||
+     current.docsBranch !== session.lastVersionInfo.docsBranch ||
+     !setsEqual(current.v1Keys, session.lastVersionInfo.v1Keys)
+    ) {
+     session.lastVersionInfo = current;
+     if (session.availabilityContext) {
+      session.availabilityContext.versionInfo = current;
+     }
+     await session.server.sendToolListChanged();
+    }
+   } catch {
+   }
+  }
   await session.transport.handleRequest(req, res, body);
  });
 
@@ -515,7 +655,48 @@ function wireApp(
 // Helper: create a Server + Client bound to a specific user's NS token
 // ---------------------------------------------------------------------------
 
-function createAuthenticatedMcpServer(
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+ if (a.size !== b.size) return false;
+ for (const v of a) if (!b.has(v)) return false;
+ return true;
+}
+
+let sessionWatcherTimer: NodeJS.Timeout | null = null;
+function ensureSessionWatcher(sessions: Map<string, McpSession>) {
+ if (sessionWatcherTimer) return;
+ sessionWatcherTimer = setInterval(async () => {
+  if (sessions.size === 0) {
+   if (sessionWatcherTimer) {
+    clearInterval(sessionWatcherTimer);
+    sessionWatcherTimer = null;
+   }
+   return;
+  }
+  for (const session of sessions.values()) {
+   if (!session.nsApiUrl || !session.lastVersionInfo) continue;
+   try {
+    const origin = new URL(session.nsApiUrl).origin;
+    const current = await getVersionInfo(origin);
+    if (
+     current.apiVersion !== session.lastVersionInfo.apiVersion ||
+     current.docsBranch !== session.lastVersionInfo.docsBranch ||
+     !setsEqual(current.v1Keys, session.lastVersionInfo.v1Keys)
+    ) {
+     session.lastVersionInfo = current;
+     if (session.availabilityContext) {
+      session.availabilityContext.versionInfo = current;
+     }
+     await session.server.sendToolListChanged();
+    }
+   } catch {
+    // ignore background polling errors
+   }
+  }
+ }, Math.min(1000, getVersionTtlSeconds() * 1000));
+ sessionWatcherTimer.unref();
+}
+
+async function createAuthenticatedMcpServer(
  config: ReturnType<typeof loadConfig>,
  nsAccessToken?: string,
  userRole?: UserRole,
@@ -529,46 +710,41 @@ function createAuthenticatedMcpServer(
   { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS },
  );
 
+ const targetApiUrl = nsApiUrl || config.netsapiens.apiUrl;
+ const origin = new URL(targetApiUrl).origin;
+ const versionInfo = await getVersionInfo(origin);
+ const availabilityContext = createAvailabilityContext(versionInfo);
+
  // Build a client config. If we have a per-user NS access token from the
  // OAuth flow, use that. Otherwise fall back to the operator-level config.
  const clientConfig: NetSapiensConfig = nsAccessToken
   ? {
-   apiUrl: nsApiUrl || config.netsapiens.apiUrl,
+   apiUrl: targetApiUrl,
    apiToken: nsAccessToken,
    timeout: config.netsapiens.timeout,
    onUnauthorized: async () => {
     if (authProvider && bearerToken) {
-     try {
-      const newNsToken = await authProvider.forceRefreshUpstream(bearerToken);
-      if (newNsToken) {
-       client.setApiToken(newNsToken);
-      }
-     } catch (err) {
-      if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-     await authProvider.invalidateToken(bearerToken);
-      }
+     const refreshed = await authProvider.forceRefreshUpstream(bearerToken);
+     if (refreshed?.nsAccessToken) {
+      client.setApiToken(refreshed.nsAccessToken);
      }
     }
    },
   }
-  : config.netsapiens;
+  : { ...config.netsapiens, apiUrl: targetApiUrl };
 
  const client = new NetSapiensClient(clientConfig);
- registerTools(server, client, userRole, userIdentity);
+ const guardedClient = createGuardedClient(client, availabilityContext);
+ registerTools(server, guardedClient, userRole, userIdentity, availabilityContext);
 
  server.onerror = (error) => {
   logger.error('[MCP Error]', { error: String(error) });
  };
 
- return { server, client };
+ return { server, client: guardedClient, availabilityContext, versionInfo };
 }
 
-/**
- * Same as `createAuthenticatedMcpServer`, but pulls the NS token, role, and
- * identity straight off the verified bearer. Both the stateless and the
- * session path build their server this way, so they cannot drift.
- */
-function createAuthenticatedMcpServerForRequest(
+async function createAuthenticatedMcpServerForRequest(
  config: ReturnType<typeof loadConfig>,
  req: AuthenticatedRequest,
  authProvider?: NetSapiensAuthProvider,

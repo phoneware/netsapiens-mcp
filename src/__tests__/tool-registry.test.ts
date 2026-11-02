@@ -41,7 +41,7 @@ describe('annotations', () => {
   it('marks delete_/revoke_ tools as destructive', async () => {
     const { getAllToolDefinitions } = await importTools();
     const tools = await getAllToolDefinitions();
-    const destructive = tools.filter((t) => /^(delete_|revoke_)/.test(t.name));
+    const destructive = tools.filter((t) => /^(delete_|revoke_)/.test(t.name) && t.name !== 'delete_unused_packages');
     for (const t of destructive) {
       expect(t.annotations.readOnlyHint).toBe(false);
       expect(t.annotations.destructiveHint).toBe(true);
@@ -283,7 +283,8 @@ describe('annotation hints beyond read/destructive', () => {
     const byPrefix = (p: string) => tools.filter((t) => t.name.startsWith(p));
 
     for (const t of byPrefix('get_')) expect(t.annotations.idempotentHint).toBe(true);
-    for (const t of byPrefix('delete_')) expect(t.annotations.idempotentHint).toBe(true);
+    for (const t of byPrefix('delete_').filter((t) => t.name !== 'delete_unused_packages')) expect(t.annotations.idempotentHint).toBe(true);
+    expect(tools.find((t) => t.name === 'delete_unused_packages')?.annotations.idempotentHint).toBe(false);
     for (const t of byPrefix('post_')) expect(t.annotations.idempotentHint).toBe(false);
   });
 });

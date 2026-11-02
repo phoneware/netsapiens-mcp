@@ -96,8 +96,8 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/router.js', () => ({
   getOAuthProtectedResourceMetadataUrl: vi.fn(() => 'http://localhost:3000/.well-known/oauth-protected-resource/mcp'),
 }));
 
-vi.mock('../auth/kit/bearer.js', () => ({
-  requireBearer: vi.fn(() => {
+vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => ({
+  requireBearerAuth: vi.fn(() => {
     // Return middleware that always passes with mock auth info
     return (req: any, _res: any, next: any) => {
       req.auth = {
@@ -116,6 +116,12 @@ vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
     this.clientsStore = { getClient: vi.fn() };
     this.handleLogin = vi.fn();
+    this.verifyAccessToken = vi.fn().mockResolvedValue({
+      token: 'test-bearer-token',
+      clientId: 'test-client',
+      scopes: [],
+      extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
+    });
   }),
 }));
 
@@ -135,6 +141,7 @@ const ENV_KEYS = [
   'NETSAPIENS_OAUTH_PASSWORD',
   'DEBUG',
   'MCP_TRANSPORT',
+  'MCP_SESSION_SECRET',
   'MCP_PORT',
   'MCP_HOST',
   'MCP_BASE_URL',
@@ -207,6 +214,8 @@ describe('startHttpServer()', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;
@@ -244,7 +253,8 @@ describe('startHttpServer()', () => {
     expect(body.status).toBe('ok');
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('activeSessions');
-    expect(body).toHaveProperty('nsApiUrl');
+    expect(body).not.toHaveProperty('nsApiUrl');
+    expect(body).toHaveProperty('netsapiens');
     expect(body).toHaveProperty('version');
     expect(body.mode).toBe('session');
 
@@ -370,6 +380,8 @@ describe('stateless MCP transport', () => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
 
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;

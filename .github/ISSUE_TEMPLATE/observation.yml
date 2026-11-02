@@ -1,0 +1,34 @@
+name: NetSapiens Version Observation
+description: Submit a new or updated observation for a NetSapiens release
+title: "[Observation]: "
+labels: ["observation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contributing a version observation!
+        Please ensure you have run `npm run specs:probe -- --api-url <url>` and inspected the generated JSON file before submitting.
+  - type: input
+    id: api_version
+    attributes:
+      label: NetSapiens API Version
+      description: The reported release from GET /ns-api/v2/version (e.g. 44.4.10)
+      placeholder: "44.4.10"
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I operate this host or have permission to probe it.
+          required: true
+        - label: The attached file is unmodified output from specs:probe.
+          required: true
+        - label: The output contains no private hostnames, IP addresses, usernames, or tokens.
+          required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Additional Notes
+      description: Any platform details or context relevant to this observation.

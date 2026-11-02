@@ -4,28 +4,40 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  ci:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Token guard
+        run: |
+          if git grep -nE 'NPM_TOK[E]N|NODE_AUTH_TOK[E]N' -- .github; then exit 1; fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - name: Start Firestore emulator
         run: |
           docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
             gcloud emulators firestore start --host-port=0.0.0.0:8080
-          for i in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
           docker logs fs-emu; exit 1
       - run: npm test
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
+          NSMCP_REQUIRE_FIRESTORE_EMULATOR: 1
       - run: npm run build
+      - run: git diff --exit-code
       - name: Scan tracked content
         env:
           FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
@@ -36,3 +48,105 @@ jobs:
             exit 0
           fi
           node scripts/scan-forbidden.mjs --tree
+      - name: Availability diff
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep -q '^spec/v2/observations/'; then if [ -f scripts/availability-diff.ts ]; then npx tsx scripts/availability-diff.ts "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"; fi; fi
+
+  consumer:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack package
+        run: |
+          npm pack
+          TARBALL="$(find . -maxdepth 1 -name 'netsapiens-mcp-*.tgz' -print | head -n 1)"
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+      - name: Run consumer e2e
+        run: node scripts/consumer-e2e.mjs --tarball "$TARBALL"
+
+  consumer-firestore:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        firestore: [7, 8, 9]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for _ in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          docker logs fs-emu; exit 1
+      - name: Pack package
+        run: |
+          npm pack
+          TARBALL="$(find . -maxdepth 1 -name 'netsapiens-mcp-*.tgz' -print | head -n 1)"
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+      - name: Run consumer firestore e2e
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
+          NSMCP_REQUIRE_FIRESTORE_EMULATOR: '1'
+        run: node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major ${{ matrix.firestore }}
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run docker e2e
+        run: node scripts/docker-e2e.mjs
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run src/store/__tests__/sqlite.test.ts src/__tests__/config-store.test.ts --testTimeout=120000 --hookTimeout=120000
+
+  ci:
+    needs: [test, consumer, consumer-firestore, docker, windows]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Aggregate job results
+        run: |
+          failures=""
+          if [ "${{ needs.test.result }}" != "success" ]; then failures="$failures test"; fi
+          if [ "${{ needs.consumer.result }}" != "success" ]; then failures="$failures consumer"; fi
+          if [ "${{ needs.consumer-firestore.result }}" != "success" ]; then failures="$failures consumer-firestore"; fi
+          if [ "${{ needs.docker.result }}" != "success" ]; then failures="$failures docker"; fi
+          if [ "${{ needs.windows.result }}" != "success" ]; then failures="$failures windows"; fi
+          if [ -n "$failures" ]; then
+            echo "Jobs failed:$failures"
+            exit 1
+          fi
+          echo "All CI jobs succeeded."

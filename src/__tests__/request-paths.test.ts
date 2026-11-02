@@ -3,12 +3,15 @@ import { readFileSync } from 'node:fs';
 import { CURATED_CATALOG, nsDateWindow, parseNsBound, toNsDateTime } from '../tools/curated/catalog.js';
 import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import type { GenericApiClient } from '../generated/types.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface Spec {
  paths: Record<string, Record<string, unknown>>;
 }
 
-const spec = JSON.parse(readFileSync('spec/netsapiens-api-v2.json', 'utf8')) as Spec;
+const spec = JSON.parse(readFileSync('spec/v2/45.0.json', 'utf8')) as Spec;
 
 /**
  * Literal sub-resource or action keywords in the NetSapiens v2 API.

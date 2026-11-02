@@ -2,34 +2,77 @@
 export { NetSapiensClient } from './netsapiens-client.js';
 export { CURATED_CATALOG } from './tools/curated/catalog.js';
 export { withStructuredContent } from './tools/index.js';
-export { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
-export { FirestoreTokenStore, FirestoreClientsStore, FirestoreAuthCodeStore } from './auth/firestore-stores.js';
+export {
+  NetSapiensAuthProvider,
+  signValue,
+  inspectSigned,
+  sealValue,
+  openSealed,
+  UpstreamGrantRejectedError,
+  UpstreamTimeoutError,
+  UpstreamUnavailableError,
+} from './auth/netsapiens-auth-provider.js';
+export { parsePlatforms } from './auth/platforms.js';
+export type { NetSapiensPlatform } from './auth/platforms.js';
 export { LoopbackTolerantClientsStore } from './auth/loopback-redirect.js';
 export { negotiateProtocolVersion } from './http/protocol-version.js';
 export { nsScopeToTier, ROLE_HIERARCHY } from './auth/roles.js';
 export { NS_RESOURCE_FIELDS } from './governance/ns-fields.generated.js';
 export { scrubSecrets } from './governance/scrub.js';
 export { resolveQueueAgent, resolveSelfIdentity } from './tools/curated/queue-agent.js';
-export { requireBearer } from './auth/kit/bearer.js';
+
+// Storage
+export { createStore } from './store/store.js';
+export { createSqliteStore } from './store/sqlite.js';
+export { createFirestoreStore, createFirestoreBackend, firestoreCollections, FirestoreClientsStore } from './store/firestore.js';
+export { createMemoryStore } from './store/memory.js';
 export {
-  StoreUnavailableError,
-  UpstreamUnavailableError,
-  UpstreamRevokedError,
-  kitCodeOf,
-  classifyUpstreamTokenResponse,
-  toTokenEndpointError,
-} from './auth/kit/errors.js';
-export { MemoryTokenLedger } from './auth/kit/ledger.js';
-export type { TokenLedger } from './auth/kit/ledger.js';
-export { FirestoreTokenLedger } from './auth/kit/firestore-ledger.js';
-export { adoptClientMiddleware } from './auth/kit/adopt-client.js';
-export { DEFAULT_REDIRECT_ALLOWLIST, isAllowedRedirectUri } from './auth/kit/redirect-policy.js';
-export type { BaseStoredToken } from './auth/kit/ledger.js';
+  adoptFirestoreLegacyTokens,
+  computeSourceInventoryDigest,
+  ensureFirestoreAdopted,
+  type FirestoreAdoptionReport,
+  type MigrationManifest,
+  type CutoverFenceControlRecord,
+  type CutoverFenceState,
+  getCutoverFenceRecord,
+  initializeCutoverFence,
+  transitionCutoverFenceState,
+  markIrreversibleInTransaction,
+  withLegacyOperation,
+  releaseLegacyOperation,
+  markOperationAmbiguous,
+  checkMutationGuardInTransaction,
+  isLegacyMutationPermittedInTransaction,
+  CutoverFenceError,
+  CutoverRefusedError,
+} from './store/firestore-v2-adoption.js';
+export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError, StoreUnavailableError } from './store/codec.js';
 
 // Types
 export type { GenericApiClient } from './generated/types.js';
 export type { CuratedTool, CuratedResult } from './tools/curated/types.js';
 export type { UserRole } from './auth/roles.js';
-export type { StoredToken, NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot } from './auth/types.js';
+export type { NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot } from './auth/types.js';
+export type {
+  StoredToken,
+  StoredSession,
+  OAuthTokenPair,
+  RefreshLookupResult,
+  RefreshRotationResult,
+  RevokeCondition,
+  UpstreamTokens,
+  AuthCodeData,
+  UsageRecord,
+  StoreCapabilities,
+  SessionStore,
+  AuthCodeStore,
+  ResumeTokenStore,
+  UsageStore,
+  McpStore,
+  StoreBackend,
+  SessionRow,
+  AuthCodeRow,
+  ResumeRow,
+} from './store/types.js';
 export type { ContentKind, FieldClass, FieldRule, OutputDeclaration, ToolTargets, NsResourceName } from './governance/types.js';
 export type { SelfIdentity, QueueAgentResolution } from './tools/curated/queue-agent.js';

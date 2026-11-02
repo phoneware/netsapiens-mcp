@@ -1,5 +1,5 @@
 /**
- * Tests for NetSapiens MCP Read-Only Mode & Cross-Server Isolation (phoneware/monorepo#1129).
+ * Tests for NetSapiens MCP Read-Only Mode & Cross-Server Isolation.
  *
  * Covers:
  *  - Tool listing in read-only mode contains NO mutating tools
@@ -13,16 +13,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Server as HttpServer } from 'node:http';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
 import { isReadOnlyMode, isToolReadOnly, getAllToolDefinitions, handleToolCall } from '../tools/index.js';
 import type { NetSapiensClient } from '../netsapiens-client.js';
+import { CURATED_CATALOG } from '../tools/curated/catalog.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 const openServers: HttpServer[] = [];
 
 async function importApp(envOverrides: Record<string, string> = {}) {
  vi.resetModules();
  process.env.MCP_TRANSPORT = 'http';
- process.env.MCP_BASE_URL = envOverrides.MCP_BASE_URL || 'https://mcp-readonly.edge.phoneware.cloud';
- process.env.NETSAPIENS_API_URL = 'https://edge.phoneware.cloud';
+ process.env.MCP_BASE_URL = envOverrides.MCP_BASE_URL || 'https://second.example.com';
+ process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
@@ -30,11 +36,11 @@ async function importApp(envOverrides: Record<string, string> = {}) {
  for (const [k, v] of Object.entries(envOverrides)) {
   process.env[k] = v;
  }
- delete process.env.MCP_PERSISTENCE;
+ process.env.MCP_PERSISTENCE = envOverrides.MCP_PERSISTENCE || 'memory';
 
  // Dynamic import required because env vars must be applied before loadConfig initializes.
  const mod = await import('../http-server.js');
- const created = mod.createApp();
+ const created = await mod.createApp();
  const server = created.app.listen(0);
  openServers.push(server);
  return { ...created, app: server as unknown as typeof created.app };
@@ -233,21 +239,22 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
 
  describe('OAuth State Isolation (cross-server token rejection)', () => {
   it('rejects a token issued for the standard server when presented to the read-only server', async () => {
-   const standardBaseUrl = 'https://mcp.edge.phoneware.cloud';
-   const readOnlyBaseUrl = 'https://mcp-readonly.edge.phoneware.cloud';
+   const standardBaseUrl = 'https://netsapiens.example.com';
+   const readOnlyBaseUrl = 'https://second.example.com';
 
    // 1. Create standard auth provider and mint a token with its baseUrl
+   const standardStore = createMemoryStore({ namespace: 'mcp', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
    const standardProvider = new NetSapiensAuthProvider({
-    nsApiUrl: 'https://edge.phoneware.cloud',
+    platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
+    nsApiUrl: 'https://netsapiens.example.com',
     nsClientId: 'cid',
     nsClientSecret: 'csec',
     serverBaseUrl: standardBaseUrl,
+    store: standardStore,
    });
 
    const standardBearer = 'bearer-from-standard-server-12345';
-   await (standardProvider as any).tokenStore.set({
-    accessToken: standardBearer,
-    refreshToken: 'refresh-standard',
+   await standardProvider.store.sessions.create({ accessToken: standardBearer, refreshToken: 'refresh-standard' }, {
     clientId: 'client-std',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-std',
@@ -256,16 +263,14 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
     serverBaseUrl: standardBaseUrl,
    });
 
-   // 2. Start read-only HTTP server (MCP_BASE_URL=https://mcp-readonly.edge.phoneware.cloud)
+   // 2. Start read-only HTTP server (MCP_BASE_URL=https://second.example.com)
    const { app, authProvider: readOnlyProvider } = await importApp({
     MCP_BASE_URL: readOnlyBaseUrl,
     MCP_READ_ONLY: 'true',
    });
 
    // Populate token into readOnlyProvider's store to simulate shared backend storage
-   await (readOnlyProvider as any).tokenStore.set({
-    accessToken: standardBearer,
-    refreshToken: 'refresh-standard',
+   await readOnlyProvider.store.sessions.create({ accessToken: standardBearer, refreshToken: 'refresh-standard' }, {
     clientId: 'client-std',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-std',
@@ -291,7 +296,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
   });
 
   it('accepts a token issued for the read-only server on the read-only server', async () => {
-   const readOnlyBaseUrl = 'https://mcp-readonly.edge.phoneware.cloud';
+   const readOnlyBaseUrl = 'https://second.example.com';
 
    const { app, authProvider } = await importApp({
     MCP_BASE_URL: readOnlyBaseUrl,
@@ -299,9 +304,7 @@ describe('Read-Only Mode & Cross-Server Isolation', () => {
    });
 
    const validBearer = 'bearer-from-readonly-server-54321';
-   await (authProvider as any).tokenStore.set({
-    accessToken: validBearer,
-    refreshToken: 'refresh-ro',
+   await authProvider.store.sessions.create({ accessToken: validBearer, refreshToken: 'refresh-ro' }, {
     clientId: 'client-ro',
     expiresAt: Date.now() + 3600_000,
     nsAccessToken: 'ns-token-ro',

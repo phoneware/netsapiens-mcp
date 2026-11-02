@@ -5,55 +5,83 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_auditlog: ToolDefinition = {
   schema: {
     name: 'get_auditlog',
-    description: 'Read Audit Log — [GET /auditlog]',
+    description: 'List audit log entries — Lists configuration changes made on the platform, newest first: who made each change, from where, and to which domain, user, and object. With no dates it covers the last 7 days, and it returns up to 100 entries unless you set `limit`.  Requires Reseller, Super User, or Super User Read Only scope. A Reseller sees only entries for domains in its own territory, in the change log and the access log alike, and naming any other domain in `target-domain` returns `403`.  Every filter is an exact match. Dates in the request are converted to UTC from any offset; dates in the response are in UTC. Credentials in `auditlog-details` are shown as `********`.  `event-category` chooses other kinds of entries: `session` returns sign-ins and sign-outs instead of changes, `change,session` returns both, and `access`, `disclosure`, or `all` return entries from the access log, described under `GET /accesslog`.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /auditlog]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the time window, in RFC 3339, such as `2026-09-01T00:00:00+00:00`. An offset or a `[Zone]` suffix is converted to UTC, and `YYYY-MM-DD HH:MM:SS` is read as UTC. Defaults to 7 days ago."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the time window, in the same forms as `datetime-start`. Defaults to now."
                 },
                 "by-ip": {
                       "type": "string",
-                      "description": "by-ip"
+                      "description": "Only changes made from this IP address."
                 },
                 "action-type": {
                       "type": "string",
-                      "description": "action-type"
+                      "description": "Only entries of this kind, such as `create`, `update`, or `delete`, or `login` or `logout` with `event-category=session`."
                 },
                 "target-domain": {
                       "type": "string",
-                      "description": "target-domain"
+                      "description": "Only entries for this domain. To match any of several domains, repeat it with brackets: `target-domain[]=example.com&target-domain[]=example.net`. A Reseller may name only domains in its own territory."
                 },
                 "target-object": {
                       "type": "string",
-                      "description": "target-object"
+                      "description": "Only changes to this kind of object, by the name the entries show, such as `Subscriber` or `Call Queue`."
                 },
                 "target-host": {
                       "type": "string",
-                      "description": "target-host"
+                      "description": "Only changes recorded by this server."
                 },
                 "target-user": {
                       "type": "string",
-                      "description": "target-user"
+                      "description": "Only changes to this user, by extension, such as `1002`."
                 },
                 "by-client": {
                       "type": "string",
-                      "description": "by-client"
+                      "description": "Only changes made through this client, such as `api` or `api-` followed by an OAuth client ID."
                 },
                 "by-domain": {
                       "type": "string",
-                      "description": "by-domain"
+                      "description": "Only changes made by users of this domain."
+                },
+                "by-user": {
+                      "type": "string",
+                      "description": "Only changes made by this user, by extension, such as `1001`."
+                },
+                "auditlog-details": {
+                      "type": "string",
+                      "description": "Only changes whose recorded details contain this text. Applies only when `datetime-start` is also set."
+                },
+                "event-category": {
+                      "type": "string",
+                      "description": "Kinds of entries to return, as a comma-separated list of `change`, `session`, `access`, and `disclosure`, or `all`. Leave it out for configuration changes alone. `session` alone returns sign-ins and sign-outs. An unrecognized value is ignored."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /auditlog',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['datetime-start', 'datetime-end', 'by-ip', 'action-type', 'target-domain', 'target-object', 'target-host', 'target-user', 'by-client', 'by-domain'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'by-ip', 'action-type', 'target-domain', 'target-object', 'target-host', 'target-user', 'by-client', 'by-domain', 'by-user', 'auditlog-details', 'event-category', 'limit', 'start'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];

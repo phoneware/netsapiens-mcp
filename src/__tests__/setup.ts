@@ -13,20 +13,13 @@
 
 import http from 'node:http';
 import https from 'node:https';
-import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 http.globalAgent = new http.Agent({ keepAlive: false });
 https.globalAgent = new https.Agent({ keepAlive: false });
 
 /**
- * Point the file-backed token store at a private temp file, per worker.
- *
- * Two reasons. First, any test that builds a real auth provider otherwise
- * loads and rewrites the developer's own ~/.netsapiens-mcp/http-tokens.json,
- * which by now had grown to 142KB of real tokens. Second, vitest runs test
- * files in parallel workers, so a shared path means several workers reading
- * and rewriting the same file inside request handlers.
+ * Configure memory store and test session secret for all test suites.
  */
-process.env.MCP_TOKEN_STORE_PATH = join(tmpdir(), `ns-mcp-test-tokens-${process.pid}-${randomUUID()}.json`);
+process.env.MCP_PERSISTENCE = 'memory';
+process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+delete process.env.MCP_TOKEN_STORE_PATH;

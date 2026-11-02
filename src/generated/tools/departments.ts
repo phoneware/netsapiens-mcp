@@ -5,13 +5,27 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_departments_list: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_departments_list',
-    description: 'List Departments in a Domain — [GET /domains/{domain}/departments/list]',
+    description: 'List departments (list suffix) — Returns the same department objects as `GET /domains/{domain}/departments`, for clients of the older list path.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. Other scopes, and a Reseller outside its territory, get `403`.  Unlike the collection read, this has no default limit: every department is returned unless you send `limit`. `start` and `department` work the same way. — [GET /domains/{domain}/departments/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most departments to return. Without it, or with `0`, every department is returned. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Only the department with this exact name."
                 }
           },
           "required": [
@@ -19,15 +33,194 @@ export const get_domains_by_domain_departments_list: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'start', 'department'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/departments/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_departments: ToolDefinition = {
+  schema: {
+    name: 'count_departments',
+    description: 'Count departments — Returns the number of departments in the domain as `total`. It counts the same set the list returns: declared departments and every name users are filed under.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. Other scopes, and a Reseller outside its territory, get `403`.  Send `department` to check one name: `total` is then `1` if the department exists and `0` if not. — [GET /domains/{domain}/departments/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Count only the department with this exact name, so `total` is `0` or `1`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['department'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/departments/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_departments: ToolDefinition = {
+  schema: {
+    name: 'read_departments',
+    description: 'List departments — Returns the domain\\\'s departments with a member count for each, sorted by name, 100 by default. A department is a label users are filed under through their own `department` field.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. Other scopes, and a Reseller outside its territory, get `403`.  The list joins two sources: the departments declared in the domain, and every name users are actually filed under. A department appears as soon as one user carries it, and `count-users-total` is `0` for a declared department with no users.  Page with `start` and `limit`, and filter on one name with `department`. Use `GET /domains/{domain}/departments/count` for a total.  Departments are read-only here. File a user under one by setting the user\\\'s `department` field with the user endpoints. — [GET /domains/{domain}/departments]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most departments to return. Defaults to `100`. `0` returns every department. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Only the department with this exact name. The result is an array of 0 or 1 departments."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'department'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/departments',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_department: ToolDefinition = {
+  schema: {
+    name: 'read_department',
+    description: 'Read department — Returns one department with its member count.  Requires Office Manager, Site Manager, or Basic User in the domain, Reseller for a domain in your territory, or Super User or Super User Read Only. Other scopes, and a Reseller outside its territory, get `403`.  The name is matched exactly, including case. A name of digits only, such as `100`, works like any other. A name that is neither declared in the domain nor carried by any user returns `404`. — [GET /domains/{domain}/departments/{department}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "Department name, exactly as a user's `department` field carries it. Letters, digits, spaces, and `.`, `-`, `_`, `'`, `*`. The match is exact and case-sensitive. A department whose name has any other character, such as `&` or `/`, is listed but cannot be read by path."
+                }
+          },
+          "required": [
+                "domain",
+                "department"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'department'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/departments/{department}',
       pathParams,
     });
 

@@ -7,6 +7,11 @@ import { toolRegistry } from '../generated/registry.js';
 import { logger } from '../utils/logger.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import { createMemoryStore } from '../store/memory.js';
+import { deriveStoreKey } from '../store/codec.js';
+import { recordCuratedHandlers } from './curated-operation-recorder.js';
+
+recordCuratedHandlers(CURATED_CATALOG);
 
 interface TextBlock {
   type: 'text';
@@ -190,7 +195,10 @@ describe('Tool call arguments and scope resolution', () => {
 
     for (const [name, def] of toolRegistry) {
       const fnStr = def.handler.toString();
-      const props = Object.keys(def.schema.inputSchema?.properties || {});
+      const schemaObj = def.schema.inputSchema;
+      const props = (schemaObj && typeof schemaObj === 'object' && 'properties' in schemaObj && schemaObj.properties && typeof schemaObj.properties === 'object')
+        ? Object.keys(schemaObj.properties)
+        : [];
       const matchPath = fnStr.match(/pathParamNames = \[([^\]]*)\]/);
       const matchQuery = fnStr.match(/queryParamNames = \[([^\]]*)\]/);
       const matchBody = fnStr.match(/bodyParamNames = \[([^\]]*)\]/);
@@ -328,6 +336,61 @@ describe('Tool call arguments and scope resolution', () => {
     await expect(fail('Invalid Token')).rejects.toBeDefined();
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
+  it('tool-call 401 invokes onUnauthorized, updates apiToken, and retries request successfully once', async () => {
+    let callCount = 0;
+    const client = new NetSapiensClient({
+      apiUrl: 'https://example.com',
+      apiToken: 'stale-token',
+      onUnauthorized: async () => {
+        client.setApiToken('refreshed-token');
+      },
+    });
+
+    const internals = client as unknown as { client: import('axios').AxiosInstance };
+    vi.spyOn(internals.client, 'request').mockImplementation(async (config: any) => {
+      callCount++;
+      if (callCount === 1) {
+        expect(config.headers?.Authorization).toBe('Bearer stale-token');
+        const err: any = new Error('Request failed with status code 401');
+        err.response = { status: 401, data: { message: 'Invalid token' } };
+        err.config = config;
+        const { rejected } = (internals.client.interceptors.response as any).handlers[0];
+        return rejected(err);
+      }
+      expect(config.headers?.Authorization).toBe('Bearer refreshed-token');
+      expect(config._retry).toBe(true);
+      return { status: 200, data: { success: true } } as any;
+    });
+
+    const res = await internals.client.request({ method: 'get', url: '/domains', headers: { Authorization: 'Bearer stale-token' } });
+    expect(res.data).toEqual({ success: true });
+    expect(callCount).toBe(2);
+  });
+
+  it('tool-call 401 does not retry twice if retry also returns 401', async () => {
+    let callCount = 0;
+    const onUnauthorized = vi.fn(async () => {});
+    const client = new NetSapiensClient({
+      apiUrl: 'https://example.com',
+      apiToken: 'stale-token',
+      onUnauthorized,
+    });
+
+    const internals = client as unknown as { client: import('axios').AxiosInstance };
+    vi.spyOn(internals.client, 'request').mockImplementation(async (config: any) => {
+      callCount++;
+      const err: any = new Error('Request failed with status code 401');
+      err.response = { status: 401, data: { message: 'Invalid token' } };
+      err.config = config;
+      const { rejected } = (internals.client.interceptors.response as any).handlers[0];
+      return rejected(err);
+    });
+
+    await expect(internals.client.request({ method: 'get', url: '/domains', headers: { Authorization: 'Bearer stale-token' } }))
+      .rejects.toThrow('Request failed with status code 401');
+    expect(callCount).toBe(2);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
 
   it('adds username to Detected NS user role log line', async () => {
     const infoSpy = vi.spyOn(logger, 'info');
@@ -336,10 +399,13 @@ describe('Tool call arguments and scope resolution', () => {
       data: { 'user-scope': 'Domain Admin', user: 'pat' },
     });
 
+    const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey('a'.repeat(32)) });
     const provider = new NetSapiensAuthProvider({
+      platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://example.com' }],
       nsApiUrl: 'https://example.com',
       nsClientId: 'test',
       nsClientSecret: 'test',
+      store,
     });
 
     try {

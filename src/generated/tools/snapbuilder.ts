@@ -5,16 +5,55 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_deviceprofiles: ToolDefinition = {
   schema: {
     name: 'get_deviceprofiles',
-    description: 'Read Device Profiles — [GET /deviceprofiles]',
+    description: 'List device profiles — A device profile describes one phone or sidecar model for the phone template builder: its picture, where each button sits on it, how many button pages it has, and which sidecars it takes. Device profiles are shared by every domain. Each row includes its buttons and an `image` object. The picture itself is served by `GET /deviceprofiles/image/{brand}/{model}`, which needs no token.  Filter with `device-models-brand`, `device-models-model`, and `device-models-type`. Each is an exact match. Page with `start` and `limit`: `limit` defaults to `100`. `GET /deviceprofiles/count` returns the total.  Any scope that can read phone configurations can read device profiles. — [GET /deviceprofiles]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "Returns only this brand. Exact match."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "Returns only this model. Exact match."
+                },
+                "device_type": {
+                      "type": "string",
+                      "description": "Returns only phones (`phone`) or only sidecars (`sidecar`). Allowed values: \"phone\", \"sidecar\"",
+                      "enum": [
+                            "phone",
+                            "sidecar"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /deviceprofiles',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['brand', 'model', 'device_type', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/deviceprofiles',
+      queryParams,
     });
 
     return {
@@ -29,11 +68,17 @@ export const get_deviceprofiles: ToolDefinition = {
 export const get_deviceprofiles_count: ToolDefinition = {
   schema: {
     name: 'get_deviceprofiles_count',
-    description: 'Count Device Profiles — [GET /deviceprofiles/count]',
+    description: 'Count device profiles — Returns the number of device profiles on the platform. It always counts every profile: filters do not apply.  Any scope that can read device profiles can count them. — [GET /deviceprofiles/count]',
     inputSchema: {
           "type": "object",
           "properties": {}
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /deviceprofiles/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const response = await client.request({
@@ -53,34 +98,40 @@ export const get_deviceprofiles_count: ToolDefinition = {
 export const get_deviceprofiles_by_make_by_model: ToolDefinition = {
   schema: {
     name: 'get_deviceprofiles_by_make_by_model',
-    description: 'Get specific Device Profile for Model of Phone — [GET /deviceprofiles/{make}/{model}]',
+    description: 'Read device profile — Returns the device profile for one brand and model, with its buttons and `image` object. It adds `devicemodel`: the matching device model, with the button types and features the model supports. Use those values for `phoneconfiguration-button-type` and `phoneconfiguration-button-feature` in phone templates and phone configurations.  Returns `404` when no profile exists for this brand and model. Any scope that can read phone configurations can read device profiles. — [GET /deviceprofiles/{brand}/{model}]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "make": {
+                "brand": {
                       "type": "string",
-                      "description": "make"
+                      "description": "The device brand (`device-models-brand`), such as `Grandstream`."
                 },
                 "model": {
                       "type": "string",
-                      "description": "model"
+                      "description": "The device model (`device-models-model`), such as `WP826`. Encode a space as `%20`."
                 }
           },
           "required": [
-                "make",
+                "brand",
                 "model"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /deviceprofiles/{}/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['make', 'model'];
+    const pathParamNames = ['brand', 'model'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/deviceprofiles/{make}/{model}',
+      pathTemplate: '/deviceprofiles/{brand}/{model}',
       pathParams,
     });
 
@@ -96,13 +147,21 @@ export const get_deviceprofiles_by_make_by_model: ToolDefinition = {
 export const get_domains_by_domain_phoneconfiguration_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phoneconfiguration_count',
-    description: 'Count Phone Configurations in a Domain — [GET /domains/{domain}/phoneconfiguration/count]',
+    description: 'Count phone configurations — Returns the number of phones in the domain that have their own phone configuration. Templates are not counted: `GET /domains/{domain}/phonetemplates/count` counts those. Returns `404` when the domain does not exist.  Requires Office Manager, Reseller, Super User, or Super User Read Only scope. Other scopes get `403`. — [GET /domains/{domain}/phoneconfiguration/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "phoneconfiguration-brand": {
+                      "type": "string",
+                      "description": "Counts only this brand. Exact match."
+                },
+                "phoneconfiguration-model": {
+                      "type": "string",
+                      "description": "Counts only this model. Exact match."
                 }
           },
           "required": [
@@ -110,16 +169,28 @@ export const get_domains_by_domain_phoneconfiguration_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phoneconfiguration/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['phoneconfiguration-brand', 'phoneconfiguration-model'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phoneconfiguration/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -134,17 +205,17 @@ export const get_domains_by_domain_phoneconfiguration_count: ToolDefinition = {
 export const get_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phoneconfiguration_by_mac',
-    description: 'Get Phone Configuration for specific Mac — [GET /domains/{domain}/phoneconfiguration/{mac}]',
+    description: 'Read phone configuration — Returns the button layout of one phone, by MAC address, with its buttons, directory settings, sidecars, and extra settings. Buttons are in `phoneconfiguration-button-order` order. A `queue_status` button returns an empty target, and a `timeframe_status` button returns the time frame name.  Returns `404` when the domain has no configuration for this MAC address.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. Office Manager Read-Only can read. Below Reseller scope, the domain of your token is read, whatever domain the path names. — [GET /domains/{domain}/phoneconfiguration/{mac}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "mac": {
                       "type": "string",
-                      "description": "mac"
+                      "description": "The phone's MAC address: 12 hexadecimal digits with no separators."
                 }
           },
           "required": [
@@ -152,6 +223,12 @@ export const get_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
                 "mac"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phoneconfiguration/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'mac'];
@@ -177,60 +254,58 @@ export const get_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
 export const put_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_phoneconfiguration_by_mac',
-    description: 'Update Phone Configuration for Specific Mac Address — [PUT /domains/{domain}/phoneconfiguration/{mac}]',
+    description: 'Update phone configuration — Changes the button layout of one phone. The path names the phone by MAC address. Fields you leave out keep their values, except the buttons.  `phoneconfiguration-buttons` replaces the whole button list. Send every button on each update: an update without `phoneconfiguration-buttons` deletes every button. Every button you send is saved, and the buttons belong to this configuration in this domain only. The button types and features a model supports come from `GET /deviceprofiles/{brand}/{model}`, in `devicemodel`.  Two button features also write a dial rule. It goes in the dial plan of the user on the first `line` button, or in the domain\\\'s dial plan when there is no `line` button. A `queue_status` button toggles the user\\\'s call queue availability: its target is ignored, and reads return it empty. A `timeframe_status` button toggles a time frame: its target is the time frame name, and `Default` means the default time frame. Add `targetUser` to the button\\\'s `phoneconfiguration-extra` to toggle another user\\\'s time frame. The dial rules appear with the dial plan\\\'s other dial rules.  `phoneconfiguration-domain` in the body is ignored: the domain comes from the path. Returns `404` when the domain has no configuration for this MAC address. A `202` means the change is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [PUT /domains/{domain}/phoneconfiguration/{mac}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "mac": {
                       "type": "string",
-                      "description": "mac"
+                      "description": "The phone's MAC address: 12 hexadecimal digits with no separators."
                 },
                 "phoneconfiguration-description": {
                       "type": "string",
-                      "description": "This is a plain description of the configuration"
+                      "description": "A description of the layout. Up to 255 characters."
                 },
                 "phoneconfiguration-brand": {
                       "type": "string",
-                      "description": "The brand for which this phone configuration will be build for."
+                      "description": "The phone brand, as `device-models-brand` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-model": {
                       "type": "string",
-                      "description": "The model specific to brand  for which this phone configuration will be build for."
-                },
-                "phoneconfiguration-domain": {
-                      "type": "string",
-                      "description": "The domain owning this phone configuration"
+                      "description": "The phone model, as `device-models-model` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-sidecars": {
-                      "type": "string",
-                      "description": "List of \"sidecars\" for the phone if in use. Use multiple if multiple side car's in use."
+                      "type": "array",
+                      "description": "The sidecars attached to the phone, in order. Allowed models are in the phone's device profile, in `profile-sidecar-support`."
                 },
                 "phoneconfiguration-extra": {
                       "type": "object",
-                      "description": "This is an \"extra\" object that will be used for easy expansion when needed later. Available optional declerations will be defined below."
+                      "description": "Extra settings for the layout, as a JSON object. Stored as sent. `{}` when there are none."
                 },
                 "phoneconfiguration-directory": {
                       "type": "object",
-                      "description": "phoneconfiguration-directory"
+                      "description": "How the phone's directory is built: which contacts it lists, their order, and who is left out. Stored as sent."
                 },
                 "phoneconfiguration-buttons": {
                       "type": "array",
-                      "description": "phoneconfiguration-buttons"
+                      "description": "The buttons, in any order. Every button you send is saved, and the buttons belong to this configuration in this domain only. On an update, the list replaces every button: an update without it deletes every button."
                 }
           },
           "required": [
                 "domain",
-                "mac",
-                "phoneconfiguration-description",
-                "phoneconfiguration-brand",
-                "phoneconfiguration-model",
-                "phoneconfiguration-domain"
+                "mac"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/phoneconfiguration/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'mac'];
@@ -238,7 +313,7 @@ export const put_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['phoneconfiguration-description', 'phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-domain', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
+    const bodyParamNames = ['phoneconfiguration-description', 'phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -262,17 +337,17 @@ export const put_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
 export const delete_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_phoneconfiguration_by_mac',
-    description: 'Delete Phone Configuration for Specific Mac Address — [DELETE /domains/{domain}/phoneconfiguration/{mac}]',
+    description: 'Delete phone configuration — Deletes the button layout of one phone, and its buttons. The phone itself is not deleted. Returns `404` when the domain has no configuration for this MAC address. A `202` means the delete is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [DELETE /domains/{domain}/phoneconfiguration/{mac}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "mac": {
                       "type": "string",
-                      "description": "mac"
+                      "description": "The phone's MAC address: 12 hexadecimal digits with no separators."
                 }
           },
           "required": [
@@ -280,6 +355,12 @@ export const delete_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition 
                 "mac"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/phoneconfiguration/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'mac'];
@@ -305,59 +386,58 @@ export const delete_domains_by_domain_phoneconfiguration_by_mac: ToolDefinition 
 export const post_domains_by_domain_phoneconfiguration: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_phoneconfiguration',
-    description: 'Create Phone Configuration for Specific Mac Address — [POST /domains/{domain}/phoneconfiguration]',
+    description: 'Create phone configuration — Creates the button layout for one phone, identified by its MAC address, in the domain. It has the same fields as a phone template, and is often a copy of one.  `phoneconfiguration-mac-address` is required: 12 hexadecimal digits with no separators, such as `00005E005301`. A phone that already has a configuration in the domain returns `409`.  Every button you send is saved, and the buttons belong to this configuration in this domain only. The button types and features a model supports come from `GET /deviceprofiles/{brand}/{model}`, in `devicemodel`.  Two button features also write a dial rule. It goes in the dial plan of the user on the first `line` button, or in the domain\\\'s dial plan when there is no `line` button. A `queue_status` button toggles the user\\\'s call queue availability: its target is ignored, and reads return it empty. A `timeframe_status` button toggles a time frame: its target is the time frame name, and `Default` means the default time frame. Add `targetUser` to the button\\\'s `phoneconfiguration-extra` to toggle another user\\\'s time frame. The dial rules appear with the dial plan\\\'s other dial rules.  `phoneconfiguration-domain` in the body is ignored: the domain comes from the path. A `202` means the change is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [POST /domains/{domain}/phoneconfiguration]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phoneconfiguration-mac-address": {
                       "type": "string",
-                      "description": "When phone configuration is applied to a specific phone (not template) this will be a valid mac"
+                      "description": "The phone's MAC address: 12 hexadecimal digits with no separators."
                 },
                 "phoneconfiguration-description": {
                       "type": "string",
-                      "description": "This is a plain description of the configuration"
+                      "description": "A description of the layout. Up to 255 characters."
                 },
                 "phoneconfiguration-brand": {
                       "type": "string",
-                      "description": "The brand for which this phone configuration will be build for."
+                      "description": "The phone brand, as `device-models-brand` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-model": {
                       "type": "string",
-                      "description": "The model specific to brand  for which this phone configuration will be build for."
-                },
-                "phoneconfiguration-domain": {
-                      "type": "string",
-                      "description": "The domain owning this phone configuration"
+                      "description": "The phone model, as `device-models-model` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-sidecars": {
-                      "type": "string",
-                      "description": "List of \"sidecars\" for the phone if in use. Use multiple if multiple side car's in use."
+                      "type": "array",
+                      "description": "The sidecars attached to the phone, in order. Allowed models are in the phone's device profile, in `profile-sidecar-support`."
                 },
                 "phoneconfiguration-extra": {
                       "type": "object",
-                      "description": "This is an \"extra\" object that will be used for easy expansion when needed later. Available optional declerations will be defined below."
+                      "description": "Extra settings for the layout, as a JSON object. Stored as sent. `{}` when there are none."
                 },
                 "phoneconfiguration-directory": {
                       "type": "object",
-                      "description": "phoneconfiguration-directory"
+                      "description": "How the phone's directory is built: which contacts it lists, their order, and who is left out. Stored as sent."
                 },
                 "phoneconfiguration-buttons": {
                       "type": "array",
-                      "description": "phoneconfiguration-buttons"
+                      "description": "The buttons, in any order. Every button you send is saved, and the buttons belong to this configuration in this domain only. On an update, the list replaces every button: an update without it deletes every button."
                 }
           },
           "required": [
                 "domain",
-                "phoneconfiguration-description",
-                "phoneconfiguration-brand",
-                "phoneconfiguration-model",
-                "phoneconfiguration-domain"
+                "phoneconfiguration-mac-address"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/phoneconfiguration',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -365,7 +445,7 @@ export const post_domains_by_domain_phoneconfiguration: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['phoneconfiguration-mac-address', 'phoneconfiguration-description', 'phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-domain', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
+    const bodyParamNames = ['phoneconfiguration-mac-address', 'phoneconfiguration-description', 'phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -375,6 +455,247 @@ export const post_domains_by_domain_phoneconfiguration: ToolDefinition = {
       pathTemplate: '/domains/{domain}/phoneconfiguration',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_device_profile: ToolDefinition = {
+  schema: {
+    name: 'create_device_profile',
+    description: 'Create device profile — Creates a device profile for a brand and model. A device profile describes one phone or sidecar model for the phone template builder: its picture, where each button sits on it, how many button pages it has, and which sidecars it takes. Device profiles are shared by every domain.  `device-models-brand` and `device-models-model` are required. Use only letters, digits, `-`, and `_` in the brand, and add spaces for the model, because the paths that read, change, and delete a profile accept nothing else.  If a profile for this brand and model already exists, it is overwritten. When you send `buttons`, they replace the profile\\\'s buttons. To add the picture, send it in `device_image` as `0x` followed by its bytes in hexadecimal, with its type, size, and dimensions in the other `device_image_` fields. A `202` means the change is accepted and already applied.  Requires Super User scope. Any other scope gets `403`. — [POST /deviceprofiles]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "device-models-brand": {
+                      "type": "string",
+                      "description": "The device brand. 1 to 32 characters: letters, digits, `-`, and `_`."
+                },
+                "device-models-model": {
+                      "type": "string",
+                      "description": "The device model. 1 to 64 characters: letters, digits, spaces, `-`, and `_`."
+                },
+                "device-models-type": {
+                      "type": "string",
+                      "description": "Whether the profile is a phone or a sidecar. Defaults to `phone`. Allowed values: \"phone\", \"sidecar\"",
+                      "enum": [
+                            "phone",
+                            "sidecar"
+                      ]
+                },
+                "profile-page-count": {
+                      "type": "number",
+                      "description": "How many pages of buttons the model has. Defaults to `1`."
+                },
+                "profile-sidecar-support": {
+                      "type": "string",
+                      "description": "The sidecars the model takes, as a JSON array of `{\"model\": \"<sidecar model>\", \"limit\": <count>}`. Send `[]` for none."
+                },
+                "buttons": {
+                      "type": "array",
+                      "description": "The buttons. When sent and not empty, they replace every button of the profile."
+                },
+                "device_image": {
+                      "type": "string",
+                      "description": "The picture: `0x` followed by the image bytes in hexadecimal. Up to 16 MB of image data."
+                },
+                "device_image_filetype": {
+                      "type": "string",
+                      "description": "The picture's media type. Up to 50 characters."
+                },
+                "device_image_filesize": {
+                      "type": "number",
+                      "description": "The picture file size, in bytes."
+                },
+                "device_image_height": {
+                      "type": "number",
+                      "description": "The picture height, in pixels."
+                },
+                "device_image_width": {
+                      "type": "number",
+                      "description": "The picture width, in pixels."
+                },
+                "device_image_default_position": {
+                      "type": "string",
+                      "description": "Where the phone template builder places and zooms the picture by default, as a JSON object `{\"x\": <px>, \"y\": <px>, \"zoom\": <factor>}`. Up to 127 characters."
+                }
+          },
+          "required": [
+                "device-models-brand",
+                "device-models-model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /deviceprofiles',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['device-models-brand', 'device-models-model', 'device-models-type', 'profile-page-count', 'profile-sidecar-support', 'buttons', 'device_image', 'device_image_filetype', 'device_image_filesize', 'device_image_height', 'device_image_width', 'device_image_default_position'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/deviceprofiles',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_device_profile: ToolDefinition = {
+  schema: {
+    name: 'update_device_profile',
+    description: 'Update device profile — Changes the device profile for one brand and model. The path names the profile, and fields you leave out keep their values. When you send a non-empty `buttons`, it replaces the profile\\\'s buttons; an empty or missing `buttons` leaves them as they are.  A `202` means the change is accepted and applied to every endpoints server shortly after. The API does not check that the profile exists first.  Requires Super User scope. Any other scope gets `403`. — [PUT /deviceprofiles/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "The device brand (`device-models-brand`), such as `Grandstream`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "The device model (`device-models-model`), such as `WP826`. Encode a space as `%20`."
+                },
+                "device-models-type": {
+                      "type": "string",
+                      "description": "Whether the profile is a phone or a sidecar. Defaults to `phone`. Allowed values: \"phone\", \"sidecar\"",
+                      "enum": [
+                            "phone",
+                            "sidecar"
+                      ]
+                },
+                "profile-page-count": {
+                      "type": "number",
+                      "description": "How many pages of buttons the model has. Defaults to `1`."
+                },
+                "profile-sidecar-support": {
+                      "type": "string",
+                      "description": "The sidecars the model takes, as a JSON array of `{\"model\": \"<sidecar model>\", \"limit\": <count>}`. Send `[]` for none."
+                },
+                "buttons": {
+                      "type": "array",
+                      "description": "The buttons. When sent and not empty, they replace every button of the profile. An empty or missing list leaves the buttons as they are."
+                },
+                "device_image": {
+                      "type": "string",
+                      "description": "The picture: `0x` followed by the image bytes in hexadecimal. Up to 16 MB of image data."
+                },
+                "device_image_filetype": {
+                      "type": "string",
+                      "description": "The picture's media type. Up to 50 characters."
+                },
+                "device_image_filesize": {
+                      "type": "number",
+                      "description": "The picture file size, in bytes."
+                },
+                "device_image_height": {
+                      "type": "number",
+                      "description": "The picture height, in pixels."
+                },
+                "device_image_width": {
+                      "type": "number",
+                      "description": "The picture width, in pixels."
+                },
+                "device_image_default_position": {
+                      "type": "string",
+                      "description": "Where the phone template builder places and zooms the picture by default, as a JSON object `{\"x\": <px>, \"y\": <px>, \"zoom\": <factor>}`. Up to 127 characters."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /deviceprofiles/{}/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['device-models-type', 'profile-page-count', 'profile-sidecar-support', 'buttons', 'device_image', 'device_image_filetype', 'device_image_filesize', 'device_image_height', 'device_image_width', 'device_image_default_position'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/deviceprofiles/{brand}/{model}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_device_profile: ToolDefinition = {
+  schema: {
+    name: 'delete_device_profile',
+    description: 'Delete device profile — Deletes the device profile for one brand and model, with its buttons. Deleting a profile that does not exist is accepted too. A `202` means the delete is accepted and already applied.  Requires Super User scope. Any other scope gets `403`. — [DELETE /deviceprofiles/{brand}/{model}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "brand": {
+                      "type": "string",
+                      "description": "The device brand (`device-models-brand`), such as `Grandstream`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "The device model (`device-models-model`), such as `WP826`. Encode a space as `%20`."
+                }
+          },
+          "required": [
+                "brand",
+                "model"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /deviceprofiles/{}/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['brand', 'model'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/deviceprofiles/{brand}/{model}',
+      pathParams,
     });
 
     return {

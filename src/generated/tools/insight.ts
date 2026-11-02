@@ -5,64 +5,61 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_insight_by_label: ToolDefinition = {
   schema: {
     name: 'get_insight_by_label',
-    description: 'Query Data from iNSight — [GET /insight/{label}]',
+    description: 'Read iNSight metric series — Returns a time series for one iNSight metric, such as active calls or registered devices, for a window that ends now. Requires Super User, Super User Read Only, or Reseller scope.  A Super User reads the whole platform. A Reseller always reads its own territory, and only the labels with a reseller form: `core_activecalls`, `core_domains`, `core_subscribers`, and `core_registered`. Any other label returns `403` for a Reseller, except the `nodeping_` health-check labels. A Super User Read Only token must name a `reseller`.  Set the window with `range`, or with `start` and `end` as Unix timestamps. `step` sets the interval between points. Times in the response are Unix timestamps in seconds, not RFC 3339. A window with no data returns `404`.  The alert labels `active_alerts`, `alert_groups`, `alert_silences`, `ruler_alerts`, and `ruler_rules` need Super User or Super User Read Only scope, ignore the window parameters, and answer an alert envelope instead of a series. See `GET /insight/active_alerts`. `ruler_rules` also takes `type`, `rule_name`, `rule_group`, and `file`. — [GET /insight/{label}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "label": {
                       "type": "string",
-                      "description": "Allowed values: \"core_activecalls\", \"core_domains\", \"node_load5\", \"node_load5_max\", \"alerts\", \"core_subscribers\", \"core_registered\", \"nsnode_sockets\", \"system_packet_dispatched_total\", \"sip_invite_received_total\", \"sbus_system_queued\", \"custom\"",
-                      "enum": [
-                            "core_activecalls",
-                            "core_domains",
-                            "node_load5",
-                            "node_load5_max",
-                            "alerts",
-                            "core_subscribers",
-                            "core_registered",
-                            "nsnode_sockets",
-                            "system_packet_dispatched_total",
-                            "sip_invite_received_total",
-                            "sbus_system_queued",
-                            "custom"
-                      ]
+                      "description": "The metric to read. One of `core_activecalls`, `core_domains`, `core_subscribers`, `core_registered`, `node_load5`, `node_load5_max`, `alerts`, `nsnode_sockets`, `system_packet_dispatched_total`, `sip_invite_received_total`, `sbus_system_queued`, `netsapiens_email_smtp_requests`, and the `nsmatrix_` labels `nsmatrix_primaries`, `nsmatrix_tuwunel_up`, `nsmatrix_primary_row_consistent`, `nsmatrix_inbound_events`, `nsmatrix_rooms_created`, `nsmatrix_homeserver_errors`, and `nsmatrix_detached_job_failures`. Any name that starts with `nodeping_` reads that health-check series. `custom` runs your own query, sent in `query`. The alert labels `active_alerts`, `alert_groups`, `alert_silences`, `ruler_alerts`, and `ruler_rules` return the alert envelope described on `GET /insight/active_alerts` instead of a series. Any other name returns `400`. A `nodeping_` label must be `nodeping_` followed by letters, digits, `_`, and `:` only."
                 },
                 "range": {
                       "type": "string",
-                      "description": "The range to use in the query, using this option will avoid the need to calculate start, end and step. Allowed values: \"last_hour\", \"last_6_hours\", \"last_12_hours\", \"last_24_hours\", \"last_7_days\", \"last_28_days\"",
-                      "enum": [
-                            "last_hour",
-                            "last_6_hours",
-                            "last_12_hours",
-                            "last_24_hours",
-                            "last_7_days",
-                            "last_28_days"
-                      ]
+                      "description": "How far back to read, ending now. A named range (`last_hour`, `last_6_hours`, `last_12_hours`, `last_24_hours`, `last_2_days`, `last_7_days`, or `last_28_days`) or a number followed by `m`, `h`, or `d`, such as `90m`, `24h`, or `3d`. A number with no unit is hours. Defaults to `last_24_hours`. The range also sets the default `step`: `1m` up to 1 day, `10m` up to 3 days, `1h` up to 14 days, and `1d` beyond. `last_7_days` uses `1h` and `last_28_days` uses `1d`. Default: \"last_24_hours\"",
+                      "default": "last_24_hours"
                 },
                 "aggregated": {
                       "type": "string",
-                      "description": "Select Eiterh aggregated data or by server. Allowed values: \"aggregated\", \"server\"",
+                      "description": "`aggregated`, the default, returns one series for the whole platform. `server` returns one series per server, each row naming its `server`. Not every label has a per-server form; one without it returns `400`. Ignored when the request is answered for a reseller. Allowed values: \"aggregated\", \"server\". Default: \"aggregated\"",
                       "enum": [
                             "aggregated",
                             "server"
-                      ]
+                      ],
+                      "default": "aggregated"
                 },
                 "start": {
                       "type": "number",
-                      "description": "The timestamp to start the range. Optional and will override range values. Default: 0",
+                      "description": "The start of the window, as a Unix timestamp in seconds. Overrides the start that `range` sets. Not an RFC 3339 date-time. Default: 0",
                       "default": 0
                 },
                 "end": {
                       "type": "number",
-                      "description": "The timestamp to end the range. Optional and will override range values."
+                      "description": "The end of the window, as a Unix timestamp in seconds. Overrides the end that `range` sets, which is now, rounded down to the step."
                 },
                 "step": {
                       "type": "string",
-                      "description": "The interval to use in the query. Optional and will override range values."
+                      "description": "The interval between points: a number and one unit, `ms`, `s`, `m`, `h`, `d`, or `w`, such as `30s`, `10m`, `1h`, or `1d`. Overrides the step that `range` sets. Any other value returns `400`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "The reseller (territory) to read. A Reseller token always reads its own territory, and naming another one returns `403`; you can leave it out. A Super User or Super User Read Only token that names a reseller gets that reseller's series. Only `core_activecalls`, `core_domains`, `core_subscribers`, and `core_registered` have a reseller form; any other label returns `403`. A quote, backslash, brace, or line break in it returns `400`."
+                },
+                "transport": {
+                      "type": "string",
+                      "description": "For `nodeping_` labels only: return only the checks over this transport. One of `udp`, `tcp`, `tls`, `ws`, `wss`, `http`, and `https`, in any letter case. Any other value returns `400`. Allowed values: \"udp\", \"tcp\", \"tls\", \"ws\", \"wss\", \"http\", \"https\"",
+                      "enum": [
+                            "udp",
+                            "tcp",
+                            "tls",
+                            "ws",
+                            "wss",
+                            "http",
+                            "https"
+                      ]
                 },
                 "query": {
                       "type": "string",
-                      "description": "advanced use only, will override full query if label set to \"custom\" you can use to provide full promQL query"
+                      "description": "For `custom` only, and required there: the query to run, in the metrics service's query language. Double quotes are changed to single quotes before it is sent. Needs a platform with iNSight Pro; otherwise `403`."
                 }
           },
           "required": [
@@ -70,13 +67,19 @@ export const get_insight_by_label: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /insight/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['label'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['range', 'aggregated', 'start', 'end', 'step', 'query'];
+    const queryParamNames = ['range', 'aggregated', 'start', 'end', 'step', 'reseller', 'transport', 'query'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -85,6 +88,75 @@ export const get_insight_by_label: ToolDefinition = {
       method: 'GET',
       pathTemplate: '/insight/{label}',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_insight_active_alerts: ToolDefinition = {
+  schema: {
+    name: 'get_insight_active_alerts',
+    description: 'List active iNSight alerts — Returns the alerts currently firing on the platform, as the iNSight alerting service reports them. Requires Super User or Super User Read Only scope; alerts are platform-wide and are not filtered by reseller.  The service\\\'s answer is passed through unchanged in `data`, wrapped with `status`, `source`, `endpoint`, and `count`. Filter with `filter`, `active`, `silenced`, `inhibited`, and `receiver`; any other parameter is ignored. Nothing firing returns `200` with an empty `data`.  This is `GET /insight/{label}` with the label `active_alerts`. The same envelope answers the other alert labels: `alert_groups` (alerts grouped by route), `alert_silences` (silences), `ruler_alerts` and `ruler_rules` (alert rules, with `source` `prometheus` and no `count`). For the number of firing alerts over time, read the `alerts` label as a series. — [GET /insight/active_alerts]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "filter": {
+                      "type": "string",
+                      "description": "Return only alerts that match this label matcher, such as `severity=\"critical\"`. To send several, repeat it as `filter[]`; an alert must match all of them."
+                },
+                "active": {
+                      "type": "string",
+                      "description": "`true` to include active alerts, `false` to leave them out. Defaults to `true`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "silenced": {
+                      "type": "string",
+                      "description": "`true` to include silenced alerts, `false` to leave them out. Defaults to `true`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "inhibited": {
+                      "type": "string",
+                      "description": "`true` to include inhibited alerts, `false` to leave them out. Defaults to `true`. Allowed values: \"true\", \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ]
+                },
+                "receiver": {
+                      "type": "string",
+                      "description": "Return only alerts sent to receivers whose name matches this regular expression."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /insight/active_alerts',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['filter', 'active', 'silenced', 'inhibited', 'receiver'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/insight/active_alerts',
       queryParams,
     });
 

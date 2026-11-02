@@ -1,0 +1,3368 @@
+{
+  "v2": {
+    "version": {
+      "key": "GET /version",
+      "lockKey": "GET /version",
+      "method": "GET"
+    },
+    "read_subscriptions": {
+      "key": "GET /subscriptions",
+      "lockKey": "GET /subscriptions",
+      "method": "GET"
+    },
+    "create_subscription": {
+      "key": "POST /subscriptions",
+      "lockKey": "POST /subscriptions",
+      "method": "POST"
+    },
+    "read_subscriptions_domain": {
+      "key": "GET /domains/{}/subscriptions",
+      "lockKey": "GET /domains/{}/subscriptions",
+      "method": "GET"
+    },
+    "create_subscription_domain": {
+      "key": "POST /domains/{}/subscriptions",
+      "lockKey": "POST /domains/{}/subscriptions",
+      "method": "POST"
+    },
+    "read_subscription": {
+      "key": "GET /subscriptions/{}",
+      "lockKey": "GET /subscriptions/{}",
+      "method": "GET"
+    },
+    "update_subscription": {
+      "key": "PUT /subscriptions/{}",
+      "lockKey": "PUT /subscriptions/{}",
+      "method": "PUT"
+    },
+    "delete_subscription": {
+      "key": "DELETE /subscriptions/{}",
+      "lockKey": "DELETE /subscriptions/{}",
+      "method": "DELETE"
+    },
+    "update_subscription_domain": {
+      "key": "PUT /domains/{}/subscriptions/{}",
+      "lockKey": "PUT /domains/{}/subscriptions/{}",
+      "method": "PUT"
+    },
+    "delete_subscription_domain": {
+      "key": "DELETE /domains/{}/subscriptions/{}",
+      "lockKey": "DELETE /domains/{}/subscriptions/{}",
+      "method": "DELETE"
+    },
+    "get_resellers": {
+      "key": "GET /resellers",
+      "lockKey": "GET /resellers",
+      "method": "GET"
+    },
+    "create_reseller": {
+      "key": "POST /resellers",
+      "lockKey": "POST /resellers",
+      "method": "POST"
+    },
+    "get_resellers_count": {
+      "key": "GET /resellers/count",
+      "lockKey": "GET /resellers/count",
+      "method": "GET"
+    },
+    "get_reseller": {
+      "key": "GET /resellers/{}",
+      "lockKey": "GET /resellers/{}",
+      "method": "GET"
+    },
+    "update_reseller": {
+      "key": "PUT /resellers/{}",
+      "lockKey": "PUT /resellers/{}",
+      "method": "PUT"
+    },
+    "delete_reseller": {
+      "key": "DELETE /resellers/{}",
+      "lockKey": "DELETE /resellers/{}",
+      "method": "DELETE"
+    },
+    "get_domains": {
+      "key": "GET /domains",
+      "lockKey": "GET /domains",
+      "method": "GET"
+    },
+    "create_domain": {
+      "key": "POST /domains",
+      "lockKey": "POST /domains",
+      "method": "POST"
+    },
+    "count_domains": {
+      "key": "GET /domains/count",
+      "lockKey": "GET /domains/count",
+      "method": "GET"
+    },
+    "get_domain": {
+      "key": "GET /domains/{}",
+      "lockKey": "GET /domains/{}",
+      "method": "GET"
+    },
+    "update_domain": {
+      "key": "PUT /domains/{}",
+      "lockKey": "PUT /domains/{}",
+      "method": "PUT"
+    },
+    "delete_domain": {
+      "key": "DELETE /domains/{}",
+      "lockKey": "DELETE /domains/{}",
+      "method": "DELETE"
+    },
+    "domain_billing": {
+      "key": "GET /domains/{}/billing",
+      "lockKey": "GET /domains/{}/billing",
+      "method": "GET"
+    },
+    "get_my_domain": {
+      "key": "GET /domains/{}",
+      "lockKey": "GET /domains/{}#1",
+      "method": "GET"
+    },
+    "count_domain": {
+      "key": "GET /domains/{}/count",
+      "lockKey": "GET /domains/{}/count",
+      "method": "GET"
+    },
+    "get_domain_phonenumbers": {
+      "key": "GET /domains/{}/phonenumbers",
+      "lockKey": "GET /domains/{}/phonenumbers",
+      "method": "GET"
+    },
+    "create_phonenumber": {
+      "key": "POST /domains/{}/phonenumbers",
+      "lockKey": "POST /domains/{}/phonenumbers",
+      "method": "POST"
+    },
+    "update_phonenumber_queue": {
+      "key": "PUT /domains/{}/phonenumbers",
+      "lockKey": "PUT /domains/{}/phonenumbers",
+      "method": "PUT"
+    },
+    "update_phonenumber_user": {
+      "key": "PUT /domains/{}/phonenumbers",
+      "lockKey": "PUT /domains/{}/phonenumbers#1",
+      "method": "PUT"
+    },
+    "update_phonenumber_offnet": {
+      "key": "PUT /domains/{}/phonenumbers",
+      "lockKey": "PUT /domains/{}/phonenumbers#2",
+      "method": "PUT"
+    },
+    "update_phonenumber_available": {
+      "key": "PUT /domains/{}/phonenumbers",
+      "lockKey": "PUT /domains/{}/phonenumbers#3",
+      "method": "PUT"
+    },
+    "count_domain_phonenumbers": {
+      "key": "GET /domains/{}/phonenumbers/count",
+      "lockKey": "GET /domains/{}/phonenumbers/count",
+      "method": "GET"
+    },
+    "get_phonenumbers": {
+      "key": "GET /phonenumbers",
+      "lockKey": "GET /phonenumbers",
+      "method": "GET"
+    },
+    "count_phonenumbers": {
+      "key": "GET /phonenumbers/count",
+      "lockKey": "GET /phonenumbers/count",
+      "method": "GET"
+    },
+    "get_phonenumber": {
+      "key": "GET /domains/{}/phonenumbers/{}",
+      "lockKey": "GET /domains/{}/phonenumbers/{}",
+      "method": "GET"
+    },
+    "update_phonenumber": {
+      "key": "PUT /domains/{}/phonenumbers/{}",
+      "lockKey": "PUT /domains/{}/phonenumbers/{}",
+      "method": "PUT"
+    },
+    "delete_phonenumber": {
+      "key": "DELETE /domains/{}/phonenumbers/{}",
+      "lockKey": "DELETE /domains/{}/phonenumbers/{}",
+      "method": "DELETE"
+    },
+    "get_users": {
+      "key": "GET /domains/{}/users",
+      "lockKey": "GET /domains/{}/users",
+      "method": "GET"
+    },
+    "create_user": {
+      "key": "POST /domains/{}/users",
+      "lockKey": "POST /domains/{}/users",
+      "method": "POST"
+    },
+    "count_users": {
+      "key": "GET /domains/{}/users/count",
+      "lockKey": "GET /domains/{}/users/count",
+      "method": "GET"
+    },
+    "search_users": {
+      "key": "GET /domains/{}/users",
+      "lockKey": "GET /domains/{}/users#1",
+      "method": "GET"
+    },
+    "get_user": {
+      "key": "GET /domains/{}/users/{}",
+      "lockKey": "GET /domains/{}/users/{}",
+      "method": "GET"
+    },
+    "update_user": {
+      "key": "PUT /domains/{}/users/{}",
+      "lockKey": "PUT /domains/{}/users/{}",
+      "method": "PUT"
+    },
+    "delete_user": {
+      "key": "DELETE /domains/{}/users/{}",
+      "lockKey": "DELETE /domains/{}/users/{}",
+      "method": "DELETE"
+    },
+    "get_my_user": {
+      "key": "GET /domains/{}/users/{}",
+      "lockKey": "GET /domains/{}/users/{}#1",
+      "method": "GET"
+    },
+    "list_users": {
+      "key": "GET /domains/{}/users/list",
+      "lockKey": "GET /domains/{}/users/list",
+      "method": "GET"
+    },
+    "get_devices": {
+      "key": "GET /domains/{}/users/{}/devices",
+      "lockKey": "GET /domains/{}/users/{}/devices",
+      "method": "GET"
+    },
+    "create_device": {
+      "key": "POST /domains/{}/users/{}/devices",
+      "lockKey": "POST /domains/{}/users/{}/devices",
+      "method": "POST"
+    },
+    "get_domains_by_domain_devices_count": {
+      "key": "GET /domains/{}/devices/count",
+      "lockKey": "GET /domains/{}/devices/count",
+      "method": "GET"
+    },
+    "get_resellers_by_reseller_devices_count": {
+      "key": "GET /resellers/{}/devices/count",
+      "lockKey": "GET /resellers/{}/devices/count",
+      "method": "GET"
+    },
+    "count_devices": {
+      "key": "GET /domains/{}/users/{}/devices/count",
+      "lockKey": "GET /domains/{}/users/{}/devices/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_devices_by_device_count": {
+      "key": "GET /domains/{}/devices/{}/count",
+      "lockKey": "GET /domains/{}/devices/{}/count",
+      "method": "GET"
+    },
+    "get_device": {
+      "key": "GET /domains/{}/users/{}/devices/{}",
+      "lockKey": "GET /domains/{}/users/{}/devices/{}",
+      "method": "GET"
+    },
+    "update_device": {
+      "key": "PUT /domains/{}/users/{}/devices/{}",
+      "lockKey": "PUT /domains/{}/users/{}/devices/{}",
+      "method": "PUT"
+    },
+    "delete_device": {
+      "key": "DELETE /domains/{}/users/{}/devices/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/devices/{}",
+      "method": "DELETE"
+    },
+    "get_domain_devices": {
+      "key": "GET /domains/{}/devices",
+      "lockKey": "GET /domains/{}/devices",
+      "method": "GET"
+    },
+    "get_supported_models": {
+      "key": "GET /phones/models",
+      "lockKey": "GET /phones/models",
+      "method": "GET"
+    },
+    "get_supported_models_by_vendor": {
+      "key": "GET /phones/models",
+      "lockKey": "GET /phones/models#1",
+      "method": "GET"
+    },
+    "get_specific_model": {
+      "key": "GET /phones/models",
+      "lockKey": "GET /phones/models#2",
+      "method": "GET"
+    },
+    "get_provisionable_servers": {
+      "key": "GET /phones/servers",
+      "lockKey": "GET /phones/servers",
+      "method": "GET"
+    },
+    "get_provisionable_server": {
+      "key": "GET /phones/servers/{}",
+      "lockKey": "GET /phones/servers/{}",
+      "method": "GET"
+    },
+    "get_phones": {
+      "key": "GET /phones",
+      "lockKey": "GET /phones",
+      "method": "GET"
+    },
+    "post_phones": {
+      "key": "POST /phones",
+      "lockKey": "POST /phones",
+      "method": "POST"
+    },
+    "put_phones": {
+      "key": "PUT /phones",
+      "lockKey": "PUT /phones",
+      "method": "PUT"
+    },
+    "delete_phones": {
+      "key": "DELETE /phones",
+      "lockKey": "DELETE /phones",
+      "method": "DELETE"
+    },
+    "get_phones_count": {
+      "key": "GET /phones/count",
+      "lockKey": "GET /phones/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_phones": {
+      "key": "GET /domains/{}/phones",
+      "lockKey": "GET /domains/{}/phones",
+      "method": "GET"
+    },
+    "post_domains_by_domain_phones": {
+      "key": "POST /domains/{}/phones",
+      "lockKey": "POST /domains/{}/phones",
+      "method": "POST"
+    },
+    "put_domains_by_domain_phones": {
+      "key": "PUT /domains/{}/phones",
+      "lockKey": "PUT /domains/{}/phones",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_phones": {
+      "key": "DELETE /domains/{}/phones",
+      "lockKey": "DELETE /domains/{}/phones",
+      "method": "DELETE"
+    },
+    "get_phones_by_mac": {
+      "key": "GET /phones/{}",
+      "lockKey": "GET /phones/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_phones_by_mac": {
+      "key": "GET /domains/{}/phones/{}",
+      "lockKey": "GET /domains/{}/phones/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_sites_list": {
+      "key": "GET /domains/{}/sites/list",
+      "lockKey": "GET /domains/{}/sites/list",
+      "method": "GET"
+    },
+    "get_domains_by_domain_sites": {
+      "key": "GET /domains/{}/sites",
+      "lockKey": "GET /domains/{}/sites",
+      "method": "GET"
+    },
+    "post_domains_by_domain_sites": {
+      "key": "POST /domains/{}/sites",
+      "lockKey": "POST /domains/{}/sites",
+      "method": "POST"
+    },
+    "get_domains_by_domain_sites_count": {
+      "key": "GET /domains/{}/sites/count",
+      "lockKey": "GET /domains/{}/sites/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_sites_by_site": {
+      "key": "GET /domains/{}/sites/{}",
+      "lockKey": "GET /domains/{}/sites/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_sites_by_site": {
+      "key": "PUT /domains/{}/sites/{}",
+      "lockKey": "PUT /domains/{}/sites/{}",
+      "method": "PUT"
+    },
+    "read_callqueues": {
+      "key": "GET /domains/{}/callqueues",
+      "lockKey": "GET /domains/{}/callqueues",
+      "method": "GET"
+    },
+    "create_callqueue": {
+      "key": "POST /domains/{}/callqueues",
+      "lockKey": "POST /domains/{}/callqueues",
+      "method": "POST"
+    },
+    "read_callqueue": {
+      "key": "GET /domains/{}/callqueues/{}",
+      "lockKey": "GET /domains/{}/callqueues/{}",
+      "method": "GET"
+    },
+    "update_callqueue": {
+      "key": "PUT /domains/{}/callqueues/{}",
+      "lockKey": "PUT /domains/{}/callqueues/{}",
+      "method": "PUT"
+    },
+    "delete_callqueue": {
+      "key": "DELETE /domains/{}/callqueues/{}",
+      "lockKey": "DELETE /domains/{}/callqueues/{}",
+      "method": "DELETE"
+    },
+    "list_callqueues": {
+      "key": "GET /domains/{}/callqueues/list",
+      "lockKey": "GET /domains/{}/callqueues/list",
+      "method": "GET"
+    },
+    "read_agents": {
+      "key": "GET /domains/{}/callqueues/{}/agents",
+      "lockKey": "GET /domains/{}/callqueues/{}/agents",
+      "method": "GET"
+    },
+    "create_agent": {
+      "key": "POST /domains/{}/callqueues/{}/agents",
+      "lockKey": "POST /domains/{}/callqueues/{}/agents",
+      "method": "POST"
+    },
+    "get_domains_by_domain_callqueues_by_callqueue_agents_count": {
+      "key": "GET /domains/{}/callqueues/{}/agents/count",
+      "lockKey": "GET /domains/{}/callqueues/{}/agents/count",
+      "method": "GET"
+    },
+    "read_agents_domain": {
+      "key": "GET /domains/{}/agents",
+      "lockKey": "GET /domains/{}/agents",
+      "method": "GET"
+    },
+    "read_agent": {
+      "key": "GET /domains/{}/callqueues/{}/agents/{}",
+      "lockKey": "GET /domains/{}/callqueues/{}/agents/{}",
+      "method": "GET"
+    },
+    "update_agent": {
+      "key": "PUT /domains/{}/callqueues/{}/agents/{}",
+      "lockKey": "PUT /domains/{}/callqueues/{}/agents/{}",
+      "method": "PUT"
+    },
+    "delete_agent": {
+      "key": "DELETE /domains/{}/callqueues/{}/agents/{}",
+      "lockKey": "DELETE /domains/{}/callqueues/{}/agents/{}",
+      "method": "DELETE"
+    },
+    "agent_login": {
+      "key": "PATCH /domains/{}/callqueues/{}/agents/{}/login",
+      "lockKey": "PATCH /domains/{}/callqueues/{}/agents/{}/login",
+      "method": "PATCH"
+    },
+    "agent_logout": {
+      "key": "PATCH /domains/{}/callqueues/{}/agents/{}/logout",
+      "lockKey": "PATCH /domains/{}/callqueues/{}/agents/{}/logout",
+      "method": "PATCH"
+    },
+    "agent_single_call": {
+      "key": "PATCH /domains/{}/callqueues/{}/agents/{}/onecall",
+      "lockKey": "PATCH /domains/{}/callqueues/{}/agents/{}/onecall",
+      "method": "PATCH"
+    },
+    "agent_status": {
+      "key": "PATCH /domains/{}/callqueues/all/agents/{}/{}",
+      "lockKey": "PATCH /domains/{}/callqueues/all/agents/{}/{}",
+      "method": "PATCH"
+    },
+    "get_domains_by_domain_queuedcall_by_queue": {
+      "key": "GET /domains/{}/queuedcall/{}",
+      "lockKey": "GET /domains/{}/queuedcall/{}",
+      "method": "GET"
+    },
+    "post_domains_by_domain_queuedcall_by_callqueue": {
+      "key": "POST /domains/{}/queuedcall/{}",
+      "lockKey": "POST /domains/{}/queuedcall/{}",
+      "method": "POST"
+    },
+    "get_domains_by_domain_statistics_callqueues_by_callqueue": {
+      "key": "GET /domains/{}/statistics/callqueues/{}",
+      "lockKey": "GET /domains/{}/statistics/callqueues/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_callqueues_aggregate": {
+      "key": "GET /domains/{}/statistics/callqueues/aggregate",
+      "lockKey": "GET /domains/{}/statistics/callqueues/aggregate",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_callqueues_per_queue": {
+      "key": "GET /domains/{}/statistics/callqueues/per-queue",
+      "lockKey": "GET /domains/{}/statistics/callqueues/per-queue",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_agent": {
+      "key": "GET /domains/{}/statistics/agent",
+      "lockKey": "GET /domains/{}/statistics/agent",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_agent_callqueues_by_callqueue": {
+      "key": "GET /domains/{}/statistics/agent/callqueues/{}",
+      "lockKey": "GET /domains/{}/statistics/agent/callqueues/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_agent_by_agent": {
+      "key": "GET /domains/{}/statistics/agent/{}",
+      "lockKey": "GET /domains/{}/statistics/agent/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_dnis": {
+      "key": "GET /domains/{}/statistics/DNIS",
+      "lockKey": "GET /domains/{}/statistics/DNIS",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_dnis_callqueues_by_callqueue": {
+      "key": "GET /domains/{}/statistics/DNIS/callqueues/{}",
+      "lockKey": "GET /domains/{}/statistics/DNIS/callqueues/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_statistics_agent_log": {
+      "key": "GET /domains/{}/statistics/agentLog",
+      "lockKey": "GET /domains/{}/statistics/agentLog",
+      "method": "GET"
+    },
+    "send_email": {
+      "key": "POST /domains/{}/users/{}/email",
+      "lockKey": "POST /domains/{}/users/{}/email",
+      "method": "POST"
+    },
+    "get_domains_by_domain_callqueuereport_abandoned": {
+      "key": "GET /domains/{}/callqueuereport/abandoned",
+      "lockKey": "GET /domains/{}/callqueuereport/abandoned",
+      "method": "GET"
+    },
+    "get_domains_by_domain_callqueuereport_abandoned_by_callqueue": {
+      "key": "GET /domains/{}/callqueuereport/abandoned/{}",
+      "lockKey": "GET /domains/{}/callqueuereport/abandoned/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_answerrules": {
+      "key": "GET /domains/{}/users/{}/answerrules",
+      "lockKey": "GET /domains/{}/users/{}/answerrules",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_answerrules": {
+      "key": "POST /domains/{}/users/{}/answerrules",
+      "lockKey": "POST /domains/{}/users/{}/answerrules",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_answerrules_count": {
+      "key": "GET /domains/{}/users/{}/answerrules/count",
+      "lockKey": "GET /domains/{}/users/{}/answerrules/count",
+      "method": "GET"
+    },
+    "get_domains_users_answerrules": {
+      "key": "GET /domains/{}/users/{}/answerrules",
+      "lockKey": "GET /domains/{}/users/{}/answerrules#1",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_answerrules_by_timeframe": {
+      "key": "GET /domains/{}/users/{}/answerrules/{}",
+      "lockKey": "GET /domains/{}/users/{}/answerrules/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_users_by_user_answerrules_by_timeframe": {
+      "key": "PUT /domains/{}/users/{}/answerrules/{}",
+      "lockKey": "PUT /domains/{}/users/{}/answerrules/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_answerrules_by_timeframe": {
+      "key": "DELETE /domains/{}/users/{}/answerrules/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/answerrules/{}",
+      "method": "DELETE"
+    },
+    "put_domains_by_domain_users_by_user_answerrules_reorder": {
+      "key": "PUT /domains/{}/users/{}/answerrules/reorder",
+      "lockKey": "PUT /domains/{}/users/{}/answerrules/reorder",
+      "method": "PUT"
+    },
+    "get_domains_by_domain_number_filters": {
+      "key": "GET /domains/{}/number-filters",
+      "lockKey": "GET /domains/{}/number-filters",
+      "method": "GET"
+    },
+    "post_domains_by_domain_number_filters": {
+      "key": "POST /domains/{}/number-filters",
+      "lockKey": "POST /domains/{}/number-filters",
+      "method": "POST"
+    },
+    "delete_domains_by_domain_number_filters": {
+      "key": "DELETE /domains/{}/number-filters",
+      "lockKey": "DELETE /domains/{}/number-filters",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_usernumber_filters": {
+      "key": "GET /domains/{}/users/{user}number-filters",
+      "lockKey": "GET /domains/{}/users/{user}number-filters",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_number_filters": {
+      "key": "POST /domains/{}/users/{}/number-filters",
+      "lockKey": "POST /domains/{}/users/{}/number-filters",
+      "method": "POST"
+    },
+    "delete_domains_by_domain_users_by_user_number_filters": {
+      "key": "DELETE /domains/{}/users/{}/number-filters",
+      "lockKey": "DELETE /domains/{}/users/{}/number-filters",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_autoattendants": {
+      "key": "GET /domains/{}/autoattendants",
+      "lockKey": "GET /domains/{}/autoattendants",
+      "method": "GET"
+    },
+    "post_domains_by_domain_autoattendants": {
+      "key": "POST /domains/{}/autoattendants",
+      "lockKey": "POST /domains/{}/autoattendants",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_autoattendants_by_prompt": {
+      "key": "GET /domains/{}/users/{}/autoattendants/{}",
+      "lockKey": "GET /domains/{}/users/{}/autoattendants/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_users_by_user_autoattendants_by_prompt": {
+      "key": "PUT /domains/{}/users/{}/autoattendants/{}",
+      "lockKey": "PUT /domains/{}/users/{}/autoattendants/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_autoattendants_by_prompt": {
+      "key": "DELETE /domains/{}/users/{}/autoattendants/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/autoattendants/{}",
+      "method": "DELETE"
+    },
+    "read_voicemails": {
+      "key": "GET /domains/{}/users/{}/voicemails/{}",
+      "lockKey": "GET /domains/{}/users/{}/voicemails/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_voicemails_by_folder_count": {
+      "key": "GET /domains/{}/users/{}/voicemails/{}/count",
+      "lockKey": "GET /domains/{}/users/{}/voicemails/{}/count",
+      "method": "GET"
+    },
+    "read_voicemail": {
+      "key": "GET /domains/{}/users/{}/voicemails/{}/{}",
+      "lockKey": "GET /domains/{}/users/{}/voicemails/{}/{}",
+      "method": "GET"
+    },
+    "delete_voicemail": {
+      "key": "DELETE /domains/{}/users/{}/voicemails/{}/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/voicemails/{}/{}",
+      "method": "DELETE"
+    },
+    "save_voicemail": {
+      "key": "PATCH /domains/{}/users/{}/voicemails/{}/{}/save",
+      "lockKey": "PATCH /domains/{}/users/{}/voicemails/{}/{}/save",
+      "method": "PATCH"
+    },
+    "forward_voicemail": {
+      "key": "PATCH /domains/{}/users/{}/voicemails/{}/{}/forward",
+      "lockKey": "PATCH /domains/{}/users/{}/voicemails/{}/{}/forward",
+      "method": "PATCH"
+    },
+    "read_greetings": {
+      "key": "GET /domains/{}/users/{}/greetings",
+      "lockKey": "GET /domains/{}/users/{}/greetings",
+      "method": "GET"
+    },
+    "create_greeting_tts": {
+      "key": "POST /domains/{}/users/{}/greetings",
+      "lockKey": "POST /domains/{}/users/{}/greetings",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_greetings_count": {
+      "key": "GET /domains/{}/users/{}/greetings/count",
+      "lockKey": "GET /domains/{}/users/{}/greetings/count",
+      "method": "GET"
+    },
+    "read_greeting": {
+      "key": "GET /domains/{}/users/{}/greetings/{}",
+      "lockKey": "GET /domains/{}/users/{}/greetings/{}",
+      "method": "GET"
+    },
+    "update_greeting_tts": {
+      "key": "PUT /domains/{}/users/{}/greetings/{}",
+      "lockKey": "PUT /domains/{}/users/{}/greetings/{}",
+      "method": "PUT"
+    },
+    "delete_greeting": {
+      "key": "DELETE /domains/{}/users/{}/greetings/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/greetings/{}",
+      "method": "DELETE"
+    },
+    "create_greeting_base64": {
+      "key": "POST /domains/{}/users/{}/greetings",
+      "lockKey": "POST /domains/{}/users/{}/greetings#2",
+      "method": "POST"
+    },
+    "update_greeting_base64": {
+      "key": "PUT /domains/{}/users/{}/greetings/{}",
+      "lockKey": "PUT /domains/{}/users/{}/greetings/{}#2",
+      "method": "PUT"
+    },
+    "create_greeting_file_upload": {
+      "key": "POST /domains/{}/users/{}/greetings",
+      "lockKey": "POST /domains/{}/users/{}/greetings#3",
+      "method": "POST"
+    },
+    "update_greeting_file_upload": {
+      "key": "PUT /domains/{}/users/{}/greetings/{}",
+      "lockKey": "PUT /domains/{}/users/{}/greetings/{}#3",
+      "method": "PUT"
+    },
+    "read_moh_domain": {
+      "key": "GET /domains/{}/moh",
+      "lockKey": "GET /domains/{}/moh",
+      "method": "GET"
+    },
+    "create_moh_domain_tts": {
+      "key": "POST /domains/{}/moh",
+      "lockKey": "POST /domains/{}/moh",
+      "method": "POST"
+    },
+    "get_domains_by_domain_moh_count": {
+      "key": "GET /domains/{}/moh/count",
+      "lockKey": "GET /domains/{}/moh/count",
+      "method": "GET"
+    },
+    "update_moh_domain_tts": {
+      "key": "PUT /domains/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/moh/{}",
+      "method": "PUT"
+    },
+    "delete_moh_domain": {
+      "key": "DELETE /domains/{}/moh/{}",
+      "lockKey": "DELETE /domains/{}/moh/{}",
+      "method": "DELETE"
+    },
+    "create_moh_domain_base64": {
+      "key": "POST /domains/{}/moh",
+      "lockKey": "POST /domains/{}/moh#2",
+      "method": "POST"
+    },
+    "update_moh_domain_base64": {
+      "key": "PUT /domains/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/moh/{}#2",
+      "method": "PUT"
+    },
+    "create_moh_domain_file_upload": {
+      "key": "POST /domains/{}/moh",
+      "lockKey": "POST /domains/{}/moh#1",
+      "method": "POST"
+    },
+    "update_moh_domain_file_upload": {
+      "key": "PUT /domains/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/moh/{}#1",
+      "method": "PUT"
+    },
+    "read_moh_user": {
+      "key": "GET /domains/{}/users/{}/moh",
+      "lockKey": "GET /domains/{}/users/{}/moh",
+      "method": "GET"
+    },
+    "create_moh_user_tts": {
+      "key": "POST /domains/{}/users/{}/moh",
+      "lockKey": "POST /domains/{}/users/{}/moh",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_moh_count": {
+      "key": "GET /domains/{}/users/{}/moh/count",
+      "lockKey": "GET /domains/{}/users/{}/moh/count",
+      "method": "GET"
+    },
+    "create_moh_user_base64": {
+      "key": "POST /domains/{}/users/{}/moh",
+      "lockKey": "POST /domains/{}/users/{}/moh#2",
+      "method": "POST"
+    },
+    "update_moh_user_base64": {
+      "key": "PUT /domains/{}/users/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/users/{}/moh/{}#2",
+      "method": "PUT"
+    },
+    "update_moh_user_tts": {
+      "key": "PUT /domains/{}/users/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/users/{}/moh/{}",
+      "method": "PUT"
+    },
+    "delete_moh_user": {
+      "key": "DELETE /domains/{}/users/{}/moh/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/moh/{}",
+      "method": "DELETE"
+    },
+    "create_moh_user_file_upload": {
+      "key": "POST /domains/{}/users/{}/moh",
+      "lockKey": "POST /domains/{}/users/{}/moh#1",
+      "method": "POST"
+    },
+    "update_moh_user_file_upload": {
+      "key": "PUT /domains/{}/users/{}/moh/{}",
+      "lockKey": "PUT /domains/{}/users/{}/moh/{}#1",
+      "method": "PUT"
+    },
+    "read_msg_domain": {
+      "key": "GET /domains/{}/msg",
+      "lockKey": "GET /domains/{}/msg",
+      "method": "GET"
+    },
+    "create_msg_domain_file_upload": {
+      "key": "POST /domains/{}/msg",
+      "lockKey": "POST /domains/{}/msg",
+      "method": "POST"
+    },
+    "get_domains_by_domain_msg_count": {
+      "key": "GET /domains/{}/msg/count",
+      "lockKey": "GET /domains/{}/msg/count",
+      "method": "GET"
+    },
+    "update_msg_domain_file_upload": {
+      "key": "PUT /domains/{}/msg/{}",
+      "lockKey": "PUT /domains/{}/msg/{}",
+      "method": "PUT"
+    },
+    "delete_msg_domain": {
+      "key": "DELETE /domains/{}/msg/{}",
+      "lockKey": "DELETE /domains/{}/msg/{}",
+      "method": "DELETE"
+    },
+    "read_msg_user": {
+      "key": "GET /domains/{}/users/{}/msg",
+      "lockKey": "GET /domains/{}/users/{}/msg",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_msg": {
+      "key": "POST /domains/{}/users/{}/msg",
+      "lockKey": "POST /domains/{}/users/{}/msg",
+      "method": "POST"
+    },
+    "count_msg_user": {
+      "key": "GET /domains/{}/users/{}/msg/count",
+      "lockKey": "GET /domains/{}/users/{}/msg/count",
+      "method": "GET"
+    },
+    "update_msg_user_file_upload": {
+      "key": "PUT /domains/{}/users/{}/msg/{}",
+      "lockKey": "PUT /domains/{}/users/{}/msg/{}",
+      "method": "PUT"
+    },
+    "delete_msg_user": {
+      "key": "DELETE /domains/{}/users/{}/msg/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/msg/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_user_voices_by_language": {
+      "key": "GET /domains/{}/users/{}/voices/{}",
+      "lockKey": "GET /domains/{}/users/{}/voices/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_voices": {
+      "key": "GET /domains/{}/users/{}/voices",
+      "lockKey": "GET /domains/{}/users/{}/voices",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_voices": {
+      "key": "POST /domains/{}/users/{}/voices",
+      "lockKey": "POST /domains/{}/users/{}/voices",
+      "method": "POST"
+    },
+    "get_cdrs": {
+      "key": "GET /cdrs",
+      "lockKey": "GET /cdrs",
+      "method": "GET"
+    },
+    "get_domains_by_domain_cdrs_1": {
+      "key": "GET /domains/{}/cdrs",
+      "lockKey": "GET /domains/{}/cdrs",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_cdrs": {
+      "key": "GET /domains/{}/users/{}/cdrs",
+      "lockKey": "GET /domains/{}/users/{}/cdrs",
+      "method": "GET"
+    },
+    "get_domains_by_domain_cdrs_2": {
+      "key": "GET /domains/{}/cdrs",
+      "lockKey": "GET /domains/{}/cdrs#2",
+      "method": "GET"
+    },
+    "get_domains_by_domain_cdrs_3": {
+      "key": "GET /domains/{}/cdrs",
+      "lockKey": "GET /domains/{}/cdrs#1",
+      "method": "GET"
+    },
+    "get_cdrs_count": {
+      "key": "GET /cdrs/count",
+      "lockKey": "GET /cdrs/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_cdrs_count": {
+      "key": "GET /domains/{}/cdrs/count",
+      "lockKey": "GET /domains/{}/cdrs/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_cdrs_count": {
+      "key": "GET /domains/{}/users/{}/cdrs/count",
+      "lockKey": "GET /domains/{}/users/{}/cdrs/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_schedule_count": {
+      "key": "GET /domains/{}/schedule/count",
+      "lockKey": "GET /domains/{}/schedule/count",
+      "method": "GET"
+    },
+    "get_resellers_by_reseller_schedule_count": {
+      "key": "GET /resellers/{}/schedule/count",
+      "lockKey": "GET /resellers/{}/schedule/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_schedule_by_schedule_name_count": {
+      "key": "GET /domains/{}/schedule/{}/count",
+      "lockKey": "GET /domains/{}/schedule/{}/count",
+      "method": "GET"
+    },
+    "get_sip_flow": {
+      "key": "GET /sipflow",
+      "lockKey": "GET /sipflow",
+      "method": "GET"
+    },
+    "get_cradle2grave": {
+      "key": "GET /sipflow",
+      "lockKey": "GET /sipflow#1",
+      "method": "GET"
+    },
+    "get_call_trace": {
+      "key": "GET /sipflow",
+      "lockKey": "GET /sipflow#2",
+      "method": "GET"
+    },
+    "get_domains_by_domain_transcriptions": {
+      "key": "GET /domains/{}/transcriptions",
+      "lockKey": "GET /domains/{}/transcriptions",
+      "method": "GET"
+    },
+    "get_domains_by_domain_calls": {
+      "key": "GET /domains/{}/calls",
+      "lockKey": "GET /domains/{}/calls",
+      "method": "GET"
+    },
+    "get_domains_by_domain_calls_count": {
+      "key": "GET /domains/{}/calls/count",
+      "lockKey": "GET /domains/{}/calls/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_calls": {
+      "key": "GET /domains/{}/users/{}/calls",
+      "lockKey": "GET /domains/{}/users/{}/calls",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_calls": {
+      "key": "POST /domains/{}/users/{}/calls",
+      "lockKey": "POST /domains/{}/users/{}/calls",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_calls_by_callid": {
+      "key": "GET /domains/{}/users/{}/calls/{}",
+      "lockKey": "GET /domains/{}/users/{}/calls/{}",
+      "method": "GET"
+    },
+    "delete_domains_by_domain_users_by_user_calls_by_call_id": {
+      "key": "DELETE /domains/{}/users/{}/calls/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/calls/{}",
+      "method": "DELETE"
+    },
+    "patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_peer": {
+      "key": "PATCH /domains/{}/users/{}/calls/{}/transferPeer",
+      "lockKey": "PATCH /domains/{}/users/{}/calls/{}/transferPeer",
+      "method": "PATCH"
+    },
+    "patch_domains_by_domain_users_by_user_calls_by_call_id_transfer": {
+      "key": "PATCH /domains/{}/users/{}/calls/{}/transfer",
+      "lockKey": "PATCH /domains/{}/users/{}/calls/{}/transfer",
+      "method": "PATCH"
+    },
+    "patch_domains_by_domain_users_by_user_calls_by_call_id_answer": {
+      "key": "PATCH /domains/{}/users/{}/calls/{}/answer",
+      "lockKey": "PATCH /domains/{}/users/{}/calls/{}/answer",
+      "method": "PATCH"
+    },
+    "patch_domains_by_domain_users_by_user_calls_by_call_id_hold": {
+      "key": "PATCH /domains/{}/users/{}/calls/{}/hold",
+      "lockKey": "PATCH /domains/{}/users/{}/calls/{}/hold",
+      "method": "PATCH"
+    },
+    "patch_domains_by_domain_users_by_user_calls_by_call_id_unhold": {
+      "key": "PATCH /domains/{}/users/{}/calls/{}/unhold",
+      "lockKey": "PATCH /domains/{}/users/{}/calls/{}/unhold",
+      "method": "PATCH"
+    },
+    "delete_domains_by_domain_users_by_user_calls_by_call_id_reject": {
+      "key": "DELETE /domains/{}/users/{}/calls/{}/reject",
+      "lockKey": "DELETE /domains/{}/users/{}/calls/{}/reject",
+      "method": "DELETE"
+    },
+    "post_calls_report": {
+      "key": "POST /calls/report",
+      "lockKey": "POST /calls/report",
+      "method": "POST"
+    },
+    "get_domains_by_domain_contacts": {
+      "key": "GET /domains/{}/contacts",
+      "lockKey": "GET /domains/{}/contacts",
+      "method": "GET"
+    },
+    "post_domains_by_domain_contacts": {
+      "key": "POST /domains/{}/contacts",
+      "lockKey": "POST /domains/{}/contacts",
+      "method": "POST"
+    },
+    "get_domains_by_domain_contacts_by_contact_id": {
+      "key": "GET /domains/{}/contacts/{}",
+      "lockKey": "GET /domains/{}/contacts/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_contacts_by_contact_id": {
+      "key": "PUT /domains/{}/contacts/{}",
+      "lockKey": "PUT /domains/{}/contacts/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_contacts_by_contact_id": {
+      "key": "DELETE /domains/{}/contacts/{}",
+      "lockKey": "DELETE /domains/{}/contacts/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_user_contacts": {
+      "key": "GET /domains/{}/users/{}/contacts",
+      "lockKey": "GET /domains/{}/users/{}/contacts",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_contacts": {
+      "key": "POST /domains/{}/users/{}/contacts",
+      "lockKey": "POST /domains/{}/users/{}/contacts",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_contacts_by_contact_id": {
+      "key": "GET /domains/{}/users/{}/contacts/{}",
+      "lockKey": "GET /domains/{}/users/{}/contacts/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_users_by_user_contacts_by_contact_id": {
+      "key": "PUT /domains/{}/users/{}/contacts/{}",
+      "lockKey": "PUT /domains/{}/users/{}/contacts/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_contacts_by_contact_id": {
+      "key": "DELETE /domains/{}/users/{}/contacts/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/contacts/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_user_contacts_count": {
+      "key": "GET /domains/{}/users/{}/contacts/count",
+      "lockKey": "GET /domains/{}/users/{}/contacts/count",
+      "method": "GET"
+    },
+    "get_domains_users_contacts": {
+      "key": "GET /domains/{}/users/{}/contacts",
+      "lockKey": "GET /domains/{}/users/{}/contacts#1",
+      "method": "GET"
+    },
+    "get_addresses_for_domain": {
+      "key": "GET /domains/{}/addresses",
+      "lockKey": "GET /domains/{}/addresses",
+      "method": "GET"
+    },
+    "create_address_for_domain": {
+      "key": "POST /domains/{}/addresses",
+      "lockKey": "POST /domains/{}/addresses",
+      "method": "POST"
+    },
+    "validate_address": {
+      "key": "POST /domains/{}/addresses/validate",
+      "lockKey": "POST /domains/{}/addresses/validate",
+      "method": "POST"
+    },
+    "update_address_for_domain": {
+      "key": "PUT /domains/{}/addresses/{}",
+      "lockKey": "PUT /domains/{}/addresses/{}",
+      "method": "PUT"
+    },
+    "delete_address_for_domain": {
+      "key": "DELETE /domains/{}/addresses/{}",
+      "lockKey": "DELETE /domains/{}/addresses/{}",
+      "method": "DELETE"
+    },
+    "get_address_using_address_id": {
+      "key": "GET /domains/{}/users/{}/addresses/{}",
+      "lockKey": "GET /domains/{}/users/{}/addresses/{}",
+      "method": "GET"
+    },
+    "update_address_for_user": {
+      "key": "PUT /domains/{}/users/{}/addresses/{}",
+      "lockKey": "PUT /domains/{}/users/{}/addresses/{}",
+      "method": "PUT"
+    },
+    "update_address_endpoint": {
+      "key": "PUT /domains/{}/addresses/endpoints/{}",
+      "lockKey": "PUT /domains/{}/addresses/endpoints/{}",
+      "method": "PUT"
+    },
+    "delete_address_endpoint": {
+      "key": "DELETE /domains/{}/addresses/endpoints/{}",
+      "lockKey": "DELETE /domains/{}/addresses/endpoints/{}",
+      "method": "DELETE"
+    },
+    "get_addresses_for_user": {
+      "key": "GET /domains/{}/users/{}/addresses",
+      "lockKey": "GET /domains/{}/users/{}/addresses",
+      "method": "GET"
+    },
+    "create_address_for_user": {
+      "key": "POST /domains/{}/users/{}/addresses",
+      "lockKey": "POST /domains/{}/users/{}/addresses",
+      "method": "POST"
+    },
+    "delete_address_for_user": {
+      "key": "DELETE /domains/{}/users/{}/addresses/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/addresses/{}",
+      "method": "DELETE"
+    },
+    "get_address_endpoints_for_domain": {
+      "key": "GET /domains/{}/addresses/endpoints",
+      "lockKey": "GET /domains/{}/addresses/endpoints",
+      "method": "GET"
+    },
+    "create_address_endpoint": {
+      "key": "POST /domains/{}/addresses/endpoints",
+      "lockKey": "POST /domains/{}/addresses/endpoints",
+      "method": "POST"
+    },
+    "get_addresses_count_for_domain": {
+      "key": "GET /domains/{}/addresses/count",
+      "lockKey": "GET /domains/{}/addresses/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_vmailnag": {
+      "key": "GET /domains/{}/users/{}/vmailnag",
+      "lockKey": "GET /domains/{}/users/{}/vmailnag",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_vmailnag": {
+      "key": "POST /domains/{}/users/{}/vmailnag",
+      "lockKey": "POST /domains/{}/users/{}/vmailnag",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_vmailnag": {
+      "key": "PUT /domains/{}/users/{}/vmailnag",
+      "lockKey": "PUT /domains/{}/users/{}/vmailnag",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_vmailnag": {
+      "key": "DELETE /domains/{}/users/{}/vmailnag",
+      "lockKey": "DELETE /domains/{}/users/{}/vmailnag",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_user_vmailnag_count": {
+      "key": "GET /domains/{}/users/{}/vmailnag/count",
+      "lockKey": "GET /domains/{}/users/{}/vmailnag/count",
+      "method": "GET"
+    },
+    "read_dialrules": {
+      "key": "GET /domains/{}/dialplans/{}/dialrules",
+      "lockKey": "GET /domains/{}/dialplans/{}/dialrules",
+      "method": "GET"
+    },
+    "create_dialrule": {
+      "key": "POST /domains/{}/dialplans/{}/dialrules",
+      "lockKey": "POST /domains/{}/dialplans/{}/dialrules",
+      "method": "POST"
+    },
+    "get_domains_by_domain_dialplans_by_dialplan_dialrules_count": {
+      "key": "GET /domains/{}/dialplans/{}/dialrules/count",
+      "lockKey": "GET /domains/{}/dialplans/{}/dialrules/count",
+      "method": "GET"
+    },
+    "read_dialrule": {
+      "key": "GET /domains/{}/dialplans/{}/dialrules/{}",
+      "lockKey": "GET /domains/{}/dialplans/{}/dialrules/{}",
+      "method": "GET"
+    },
+    "update_dialrule": {
+      "key": "PUT /domains/{}/dialplans/{}/dialrules/{}",
+      "lockKey": "PUT /domains/{}/dialplans/{}/dialrules/{}",
+      "method": "PUT"
+    },
+    "delete_dialrule": {
+      "key": "DELETE /domains/{}/dialplans/{}/dialrules/{}",
+      "lockKey": "DELETE /domains/{}/dialplans/{}/dialrules/{}",
+      "method": "DELETE"
+    },
+    "get_dialplans": {
+      "key": "GET /dialplans",
+      "lockKey": "GET /dialplans",
+      "method": "GET"
+    },
+    "post_dialplans": {
+      "key": "POST /dialplans",
+      "lockKey": "POST /dialplans",
+      "method": "POST"
+    },
+    "post_domains_by_domain_dialplans": {
+      "key": "POST /domains/{}/dialplans",
+      "lockKey": "POST /domains/{}/dialplans",
+      "method": "POST"
+    },
+    "put_domains_by_domain_dialplans_by_dialplan": {
+      "key": "PUT /domains/{}/dialplans/{}",
+      "lockKey": "PUT /domains/{}/dialplans/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_dialplans_by_dialplan": {
+      "key": "DELETE /domains/{}/dialplans/{}",
+      "lockKey": "DELETE /domains/{}/dialplans/{}",
+      "method": "DELETE"
+    },
+    "get_dialpolicy": {
+      "key": "GET /dialpolicy",
+      "lockKey": "GET /dialpolicy",
+      "method": "GET"
+    },
+    "post_dialpolicy": {
+      "key": "POST /dialpolicy",
+      "lockKey": "POST /dialpolicy",
+      "method": "POST"
+    },
+    "get_dialpolicy_by_policy": {
+      "key": "GET /dialpolicy/{}",
+      "lockKey": "GET /dialpolicy/{}",
+      "method": "GET"
+    },
+    "put_dialpolicy_by_policy": {
+      "key": "PUT /dialpolicy/{}",
+      "lockKey": "PUT /dialpolicy/{}",
+      "method": "PUT"
+    },
+    "delete_dialpolicy_by_policy": {
+      "key": "DELETE /dialpolicy/{}",
+      "lockKey": "DELETE /dialpolicy/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_dialpolicy_by_policy": {
+      "key": "GET /domains/{}/dialpolicy/{}",
+      "lockKey": "GET /domains/{}/dialpolicy/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_dialpolicy_by_policy": {
+      "key": "PUT /domains/{}/dialpolicy/{}",
+      "lockKey": "PUT /domains/{}/dialpolicy/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_dialpolicy_by_policy": {
+      "key": "DELETE /domains/{}/dialpolicy/{}",
+      "lockKey": "DELETE /domains/{}/dialpolicy/{}",
+      "method": "DELETE"
+    },
+    "get_dialpolicy_by_policy_permission": {
+      "key": "GET /dialpolicy/{}/permission",
+      "lockKey": "GET /dialpolicy/{}/permission",
+      "method": "GET"
+    },
+    "create_permission": {
+      "key": "POST /dialpolicy/{}/permission",
+      "lockKey": "POST /dialpolicy/{}/permission",
+      "method": "POST"
+    },
+    "get_domains_by_domain_dialpolicy_by_policy_permission": {
+      "key": "GET /domains/{}/dialpolicy/{}/permission",
+      "lockKey": "GET /domains/{}/dialpolicy/{}/permission",
+      "method": "GET"
+    },
+    "create_permission_domain": {
+      "key": "POST /domains/{}/dialpolicy/{}/permission",
+      "lockKey": "POST /domains/{}/dialpolicy/{}/permission",
+      "method": "POST"
+    },
+    "read_permission": {
+      "key": "GET /dialpolicy/{}/permission/{}",
+      "lockKey": "GET /dialpolicy/{}/permission/{}",
+      "method": "GET"
+    },
+    "update_permission": {
+      "key": "PUT /dialpolicy/{}/permission/{}",
+      "lockKey": "PUT /dialpolicy/{}/permission/{}",
+      "method": "PUT"
+    },
+    "delete_permission": {
+      "key": "DELETE /dialpolicy/{}/permission/{}",
+      "lockKey": "DELETE /dialpolicy/{}/permission/{}",
+      "method": "DELETE"
+    },
+    "read_permission_domain": {
+      "key": "GET /domains/{}/dialpolicy/{}/permission/{}",
+      "lockKey": "GET /domains/{}/dialpolicy/{}/permission/{}",
+      "method": "GET"
+    },
+    "update_permission_domain": {
+      "key": "PUT /domains/{}/dialpolicy/{}/permission/{}",
+      "lockKey": "PUT /domains/{}/dialpolicy/{}/permission/{}",
+      "method": "PUT"
+    },
+    "delete_permission_domain": {
+      "key": "DELETE /domains/{}/dialpolicy/{}/permission/{}",
+      "lockKey": "DELETE /domains/{}/dialpolicy/{}/permission/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_smsblocks": {
+      "key": "GET /domains/{}/smsblocks",
+      "lockKey": "GET /domains/{}/smsblocks",
+      "method": "GET"
+    },
+    "post_domains_by_domain_smsblocks": {
+      "key": "POST /domains/{}/smsblocks",
+      "lockKey": "POST /domains/{}/smsblocks",
+      "method": "POST"
+    },
+    "get_smsblocks": {
+      "key": "GET /smsblocks",
+      "lockKey": "GET /smsblocks",
+      "method": "GET"
+    },
+    "put_domains_by_domain_smsblocks_by_id": {
+      "key": "PUT /domains/{}/smsblocks/{}",
+      "lockKey": "PUT /domains/{}/smsblocks/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_smsblocks_by_id": {
+      "key": "DELETE /domains/{}/smsblocks/{}",
+      "lockKey": "DELETE /domains/{}/smsblocks/{}",
+      "method": "DELETE"
+    },
+    "get_message_sessions_for_domain": {
+      "key": "GET /domains/{}/messagesessions",
+      "lockKey": "GET /domains/{}/messagesessions",
+      "method": "GET"
+    },
+    "start_session": {
+      "key": "POST /domains/{}/users/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messages",
+      "method": "POST"
+    },
+    "get_message_sessions_for_user": {
+      "key": "GET /domains/{}/users/{}/messagesessions",
+      "lockKey": "GET /domains/{}/users/{}/messagesessions",
+      "method": "GET"
+    },
+    "get_message_session_for_user": {
+      "key": "GET /domains/{}/users/{}/messagesessions/{}",
+      "lockKey": "GET /domains/{}/users/{}/messagesessions/{}",
+      "method": "GET"
+    },
+    "update_message_session_participants": {
+      "key": "PUT /domains/{}/users/{}/messagesessions/{}",
+      "lockKey": "PUT /domains/{}/users/{}/messagesessions/{}",
+      "method": "PUT"
+    },
+    "delete_messagesession": {
+      "key": "DELETE /domains/{}/users/{}/messagesessions/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/messagesessions/{}",
+      "method": "DELETE"
+    },
+    "get_messages_for_messagesession": {
+      "key": "GET /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "GET /domains/{}/users/{}/messagesessions/{}/messages",
+      "method": "GET"
+    },
+    "send_message_chat": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "method": "POST"
+    },
+    "send_message_group_chat": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages#1",
+      "method": "POST"
+    },
+    "send_message_media_chat": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages#2",
+      "method": "POST"
+    },
+    "send_message_sms": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages#3",
+      "method": "POST"
+    },
+    "send_message_group_sms": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages#4",
+      "method": "POST"
+    },
+    "send_message_mms": {
+      "key": "POST /domains/{}/users/{}/messagesessions/{}/messages",
+      "lockKey": "POST /domains/{}/users/{}/messagesessions/{}/messages#5",
+      "method": "POST"
+    },
+    "update_message_session_session_name": {
+      "key": "PUT /domains/{}/users/{}/messagesessions/{}",
+      "lockKey": "PUT /domains/{}/users/{}/messagesessions/{}#1",
+      "method": "PUT"
+    },
+    "leave_messagesession": {
+      "key": "PUT /domains/{}/users/{}/messagesessions/{}/leave",
+      "lockKey": "PUT /domains/{}/users/{}/messagesessions/{}/leave",
+      "method": "PUT"
+    },
+    "get_sms_numbers_for_domain": {
+      "key": "GET /domains/{}/smsnumbers",
+      "lockKey": "GET /domains/{}/smsnumbers",
+      "method": "GET"
+    },
+    "create_smsnumber": {
+      "key": "POST /domains/{}/smsnumbers",
+      "lockKey": "POST /domains/{}/smsnumbers",
+      "method": "POST"
+    },
+    "get_all_smsnumbers_system": {
+      "key": "GET /smsnumbers",
+      "lockKey": "GET /smsnumbers",
+      "method": "GET"
+    },
+    "update_smsnumber": {
+      "key": "PUT /domains/{}/smsnumbers/{}",
+      "lockKey": "PUT /domains/{}/smsnumbers/{}",
+      "method": "PUT"
+    },
+    "delete_smsnumber": {
+      "key": "DELETE /domains/{}/smsnumbers/{}",
+      "lockKey": "DELETE /domains/{}/smsnumbers/{}",
+      "method": "DELETE"
+    },
+    "get_sms_numbers_for_user": {
+      "key": "GET /domains/{}/users/{}/smsnumbers",
+      "lockKey": "GET /domains/{}/users/{}/smsnumbers",
+      "method": "GET"
+    },
+    "count_sms_numbers": {
+      "key": "GET /domains/{}/users/{}/smsnumbers/count",
+      "lockKey": "GET /domains/{}/users/{}/smsnumbers/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_recordings_by_callid": {
+      "key": "GET /domains/{}/users/{}/recordings/{}",
+      "lockKey": "GET /domains/{}/users/{}/recordings/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_recordings_by_callid": {
+      "key": "GET /domains/{}/recordings/{}",
+      "lockKey": "GET /domains/{}/recordings/{}",
+      "method": "GET"
+    },
+    "get_connections": {
+      "key": "GET /connections",
+      "lockKey": "GET /connections",
+      "method": "GET"
+    },
+    "create_connection": {
+      "key": "POST /connections",
+      "lockKey": "POST /connections",
+      "method": "POST"
+    },
+    "count_all_connections": {
+      "key": "GET /connections/count",
+      "lockKey": "GET /connections/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_connections": {
+      "key": "GET /domains/{}/connections",
+      "lockKey": "GET /domains/{}/connections",
+      "method": "GET"
+    },
+    "get_domains_by_domain_connections_by_connection_id": {
+      "key": "GET /domains/{}/connections/{}",
+      "lockKey": "GET /domains/{}/connections/{}",
+      "method": "GET"
+    },
+    "delete_domains_by_domain_connections_by_connection_id": {
+      "key": "DELETE /domains/{}/connections/{}",
+      "lockKey": "DELETE /domains/{}/connections/{}",
+      "method": "DELETE"
+    },
+    "update_connection": {
+      "key": "PUT /domains/{}/connections/{}",
+      "lockKey": "PUT /domains/{}/connections/{}",
+      "method": "PUT"
+    },
+    "get_routes": {
+      "key": "GET /routes",
+      "lockKey": "GET /routes",
+      "method": "GET"
+    },
+    "post_routes": {
+      "key": "POST /routes",
+      "lockKey": "POST /routes",
+      "method": "POST"
+    },
+    "count_routes": {
+      "key": "GET /routes/count",
+      "lockKey": "GET /routes/count",
+      "method": "GET"
+    },
+    "get_routes_by_route_id_routecon": {
+      "key": "GET /routes/{}/routecon",
+      "lockKey": "GET /routes/{}/routecon",
+      "method": "GET"
+    },
+    "post_routes_by_route_id_routecon": {
+      "key": "POST /routes/{}/routecon",
+      "lockKey": "POST /routes/{}/routecon",
+      "method": "POST"
+    },
+    "get_routecon_count": {
+      "key": "GET /routecon/count",
+      "lockKey": "GET /routecon/count",
+      "method": "GET"
+    },
+    "put_routes_by_route_id": {
+      "key": "PUT /routes/{}",
+      "lockKey": "PUT /routes/{}",
+      "method": "PUT"
+    },
+    "delete_route": {
+      "key": "DELETE /routes/{}",
+      "lockKey": "DELETE /routes/{}",
+      "method": "DELETE"
+    },
+    "put_routes_by_route_id_routecon_by_index": {
+      "key": "PUT /routes/{}/routecon/{}",
+      "lockKey": "PUT /routes/{}/routecon/{}",
+      "method": "PUT"
+    },
+    "delete_route_con": {
+      "key": "DELETE /routes/{}/routecon/{}",
+      "lockKey": "DELETE /routes/{}/routecon/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log": {
+      "key": "GET /domains/{}/users/{}/meetings/{}/instance/{}/log",
+      "lockKey": "GET /domains/{}/users/{}/meetings/{}/instance/{}/log",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log": {
+      "key": "POST /domains/{}/users/{}/meetings/{}/instance/{}/log",
+      "lockKey": "POST /domains/{}/users/{}/meetings/{}/instance/{}/log",
+      "method": "POST"
+    },
+    "get_video_resellers": {
+      "key": "GET /video/resellers",
+      "lockKey": "GET /video/resellers",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_video": {
+      "key": "GET /domains/{}/users/{}/video",
+      "lockKey": "GET /domains/{}/users/{}/video",
+      "method": "GET"
+    },
+    "get_domains_by_domain_video_hosts": {
+      "key": "GET /domains/{}/video/hosts",
+      "lockKey": "GET /domains/{}/video/hosts",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_video_conference": {
+      "key": "GET /domains/{}/users/{}/video/conference",
+      "lockKey": "GET /domains/{}/users/{}/video/conference",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_video_conference": {
+      "key": "POST /domains/{}/users/{}/video/conference",
+      "lockKey": "POST /domains/{}/users/{}/video/conference",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_video_contacts": {
+      "key": "GET /domains/{}/users/{}/video/contacts",
+      "lockKey": "GET /domains/{}/users/{}/video/contacts",
+      "method": "GET"
+    },
+    "get_domains_by_domain_video": {
+      "key": "GET /domains/{}/video",
+      "lockKey": "GET /domains/{}/video",
+      "method": "GET"
+    },
+    "post_domains_by_domain_video": {
+      "key": "POST /domains/{}/video",
+      "lockKey": "POST /domains/{}/video",
+      "method": "POST"
+    },
+    "put_domains_by_domain_video": {
+      "key": "PUT /domains/{}/video",
+      "lockKey": "PUT /domains/{}/video",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_video": {
+      "key": "DELETE /domains/{}/video",
+      "lockKey": "DELETE /domains/{}/video",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_video_products": {
+      "key": "GET /domains/{}/video/products",
+      "lockKey": "GET /domains/{}/video/products",
+      "method": "GET"
+    },
+    "get_domains_by_domain_video_availableproducts": {
+      "key": "GET /domains/{}/video/availableproducts",
+      "lockKey": "GET /domains/{}/video/availableproducts",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_host": {
+      "key": "POST /domains/{}/users/{}/host",
+      "lockKey": "POST /domains/{}/users/{}/host",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_host": {
+      "key": "PUT /domains/{}/users/{}/host",
+      "lockKey": "PUT /domains/{}/users/{}/host",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_host": {
+      "key": "DELETE /domains/{}/users/{}/host",
+      "lockKey": "DELETE /domains/{}/users/{}/host",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_users_by_user_host_contacts": {
+      "key": "POST /domains/{}/users/{}/host/contacts",
+      "lockKey": "POST /domains/{}/users/{}/host/contacts",
+      "method": "POST"
+    },
+    "post_domains_by_domain_video_subscription_by_slug": {
+      "key": "POST /domains/{}/video/subscription/{}",
+      "lockKey": "POST /domains/{}/video/subscription/{}",
+      "method": "POST"
+    },
+    "delete_domains_by_domain_video_subscription_by_slug": {
+      "key": "DELETE /domains/{}/video/subscription/{}",
+      "lockKey": "DELETE /domains/{}/video/subscription/{}",
+      "method": "DELETE"
+    },
+    "put_domains_by_domain_video_subscriptions": {
+      "key": "PUT /domains/{}/video/subscriptions",
+      "lockKey": "PUT /domains/{}/video/subscriptions",
+      "method": "PUT"
+    },
+    "get_domains_by_domain_users_by_user_meetings_by_id": {
+      "key": "GET /domains/{}/users/{}/meetings/{}",
+      "lockKey": "GET /domains/{}/users/{}/meetings/{}",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_meetings_by_id": {
+      "key": "POST /domains/{}/users/{}/meetings/{}",
+      "lockKey": "POST /domains/{}/users/{}/meetings/{}",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_meetings": {
+      "key": "GET /domains/{}/users/{}/meetings",
+      "lockKey": "GET /domains/{}/users/{}/meetings",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_meetings": {
+      "key": "POST /domains/{}/users/{}/meetings",
+      "lockKey": "POST /domains/{}/users/{}/meetings",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_meetings_count": {
+      "key": "GET /domains/{}/users/{}/meetings/count",
+      "lockKey": "GET /domains/{}/users/{}/meetings/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_meetings_by_meeting_id_count": {
+      "key": "GET /domains/{}/users/{}/meetings/{}/count",
+      "lockKey": "GET /domains/{}/users/{}/meetings/{}/count",
+      "method": "GET"
+    },
+    "post_meetings_register_by_meeting_registration_id": {
+      "key": "POST /meetings/register/{}",
+      "lockKey": "POST /meetings/register/{}",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_meetings_by_meeting": {
+      "key": "PUT /domains/{}/users/{}/meetings/{}",
+      "lockKey": "PUT /domains/{}/users/{}/meetings/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_meetings_by_meeting": {
+      "key": "DELETE /domains/{}/users/{}/meetings/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/meetings/{}",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_users_by_user_meetings_get_id": {
+      "key": "POST /domains/{}/users/{}/meetings/getId",
+      "lockKey": "POST /domains/{}/users/{}/meetings/getId",
+      "method": "POST"
+    },
+    "post_domains_by_domain_backup": {
+      "key": "POST /domains/{}/backup",
+      "lockKey": "POST /domains/{}/backup",
+      "method": "POST"
+    },
+    "post_backup": {
+      "key": "POST /backup",
+      "lockKey": "POST /backup",
+      "method": "POST"
+    },
+    "get_restore": {
+      "key": "GET /restore",
+      "lockKey": "GET /restore",
+      "method": "GET"
+    },
+    "put_restore": {
+      "key": "PUT /restore",
+      "lockKey": "PUT /restore",
+      "method": "PUT"
+    },
+    "read_specific_configuration": {
+      "key": "GET /configurations/{}",
+      "lockKey": "GET /configurations/{}",
+      "method": "GET"
+    },
+    "delete_configuration": {
+      "key": "DELETE /configurations/{}",
+      "lockKey": "DELETE /configurations/{}",
+      "method": "DELETE"
+    },
+    "read_all_configurations": {
+      "key": "GET /configurations",
+      "lockKey": "GET /configurations",
+      "method": "GET"
+    },
+    "create_configuration": {
+      "key": "POST /configurations",
+      "lockKey": "POST /configurations",
+      "method": "POST"
+    },
+    "update_configuration": {
+      "key": "PUT /configurations",
+      "lockKey": "PUT /configurations",
+      "method": "PUT"
+    },
+    "get_configurations_count": {
+      "key": "GET /configurations/count",
+      "lockKey": "GET /configurations/count",
+      "method": "GET"
+    },
+    "get_config_definitions": {
+      "key": "GET /config-definitions",
+      "lockKey": "GET /config-definitions",
+      "method": "GET"
+    },
+    "post_config_definitions": {
+      "key": "POST /config-definitions",
+      "lockKey": "POST /config-definitions",
+      "method": "POST"
+    },
+    "get_config_definitions_by_config_name": {
+      "key": "GET /config-definitions/{}",
+      "lockKey": "GET /config-definitions/{}",
+      "method": "GET"
+    },
+    "put_config_definitions_by_config_name": {
+      "key": "PUT /config-definitions/{}",
+      "lockKey": "PUT /config-definitions/{}",
+      "method": "PUT"
+    },
+    "delete_config_definitions_by_config_name": {
+      "key": "DELETE /config-definitions/{}",
+      "lockKey": "DELETE /config-definitions/{}",
+      "method": "DELETE"
+    },
+    "read_image": {
+      "key": "GET /images/{}",
+      "lockKey": "GET /images/{}",
+      "method": "GET"
+    },
+    "create_image_base64": {
+      "key": "POST /images/{}",
+      "lockKey": "POST /images/{}",
+      "method": "POST"
+    },
+    "update_image_file_upload": {
+      "key": "PUT /images/{}",
+      "lockKey": "PUT /images/{}",
+      "method": "PUT"
+    },
+    "delete_image": {
+      "key": "DELETE /images/{}",
+      "lockKey": "DELETE /images/{}",
+      "method": "DELETE"
+    },
+    "create_image_file_upload": {
+      "key": "POST /images/{}",
+      "lockKey": "POST /images/{}#1",
+      "method": "POST"
+    },
+    "update_image_base64": {
+      "key": "PUT /images/{}",
+      "lockKey": "PUT /images/{}#1",
+      "method": "PUT"
+    },
+    "read_template": {
+      "key": "GET /templates/{}",
+      "lockKey": "GET /templates/{}",
+      "method": "GET"
+    },
+    "create_template_base64": {
+      "key": "POST /templates/{}",
+      "lockKey": "POST /templates/{}",
+      "method": "POST"
+    },
+    "update_template_base64": {
+      "key": "PUT /templates/{}",
+      "lockKey": "PUT /templates/{}",
+      "method": "PUT"
+    },
+    "delete_template": {
+      "key": "DELETE /templates/{}",
+      "lockKey": "DELETE /templates/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_timeframes": {
+      "key": "GET /domains/{}/timeframes",
+      "lockKey": "GET /domains/{}/timeframes",
+      "method": "GET"
+    },
+    "post_domains_by_domain_timeframes_1": {
+      "key": "POST /domains/{}/timeframes",
+      "lockKey": "POST /domains/{}/timeframes",
+      "method": "POST"
+    },
+    "post_domains_by_domain_timeframes_2": {
+      "key": "POST /domains/{}/timeframes",
+      "lockKey": "POST /domains/{}/timeframes#1",
+      "method": "POST"
+    },
+    "get_domains_by_domain_timeframes_by_id": {
+      "key": "GET /domains/{}/timeframes/{}",
+      "lockKey": "GET /domains/{}/timeframes/{}",
+      "method": "GET"
+    },
+    "post_domains_by_domain_timeframes_by_id_1": {
+      "key": "POST /domains/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/timeframes/{}",
+      "method": "POST"
+    },
+    "put_domains_by_domain_timeframes_by_id_1": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_timeframes_by_id_1": {
+      "key": "DELETE /domains/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/timeframes/{}",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_timeframes_by_id_2": {
+      "key": "POST /domains/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/timeframes/{}#1",
+      "method": "POST"
+    },
+    "put_domains_by_domain_timeframes_by_id_2": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#1",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_timeframes_by_id_2": {
+      "key": "DELETE /domains/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/timeframes/{}#1",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_timeframes_3": {
+      "key": "POST /domains/{}/timeframes",
+      "lockKey": "POST /domains/{}/timeframes#2",
+      "method": "POST"
+    },
+    "post_domains_by_domain_timeframes_by_id_3": {
+      "key": "POST /domains/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/timeframes/{}#2",
+      "method": "POST"
+    },
+    "put_domains_by_domain_timeframes_by_id_3": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#2",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_timeframes_by_id_3": {
+      "key": "DELETE /domains/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/timeframes/{}#2",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_timeframes_4": {
+      "key": "POST /domains/{}/timeframes",
+      "lockKey": "POST /domains/{}/timeframes#3",
+      "method": "POST"
+    },
+    "put_domains_by_domain_timeframes_by_id_4": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#3",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_timeframes_by_id_4": {
+      "key": "DELETE /domains/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/timeframes/{}#3",
+      "method": "DELETE"
+    },
+    "put_domains_by_domain_timeframes_by_id_5": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#4",
+      "method": "PUT"
+    },
+    "post_domains_by_domain_timeframes_5": {
+      "key": "POST /domains/{}/timeframes",
+      "lockKey": "POST /domains/{}/timeframes#4",
+      "method": "POST"
+    },
+    "put_domains_by_domain_timeframes_by_id_6": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#5",
+      "method": "PUT"
+    },
+    "put_domains_by_domain_timeframes_by_id_7": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#6",
+      "method": "PUT"
+    },
+    "put_domains_by_domain_timeframes_by_id_8": {
+      "key": "PUT /domains/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/timeframes/{}#7",
+      "method": "PUT"
+    },
+    "get_domains_by_domain_users_by_user_timeframes": {
+      "key": "GET /domains/{}/users/{}/timeframes",
+      "lockKey": "GET /domains/{}/users/{}/timeframes",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_1": {
+      "key": "POST /domains/{}/users/{}/timeframes",
+      "lockKey": "POST /domains/{}/users/{}/timeframes",
+      "method": "POST"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_2": {
+      "key": "POST /domains/{}/users/{}/timeframes",
+      "lockKey": "POST /domains/{}/users/{}/timeframes#1",
+      "method": "POST"
+    },
+    "get_domains_by_domain_users_by_user_timeframes_by_id": {
+      "key": "GET /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "GET /domains/{}/users/{}/timeframes/{}",
+      "method": "GET"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_by_id_1": {
+      "key": "POST /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/users/{}/timeframes/{}",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_1": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_timeframes_by_id_1": {
+      "key": "DELETE /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/timeframes/{}",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_by_id_2": {
+      "key": "POST /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/users/{}/timeframes/{}#1",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_2": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#1",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_timeframes_by_id_2": {
+      "key": "DELETE /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/timeframes/{}#1",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_3": {
+      "key": "POST /domains/{}/users/{}/timeframes",
+      "lockKey": "POST /domains/{}/users/{}/timeframes#2",
+      "method": "POST"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_by_id_3": {
+      "key": "POST /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "POST /domains/{}/users/{}/timeframes/{}#2",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_3": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#2",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_timeframes_by_id_3": {
+      "key": "DELETE /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/timeframes/{}#2",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_4": {
+      "key": "POST /domains/{}/users/{}/timeframes",
+      "lockKey": "POST /domains/{}/users/{}/timeframes#3",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_4": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#3",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_users_by_user_timeframes_by_id_4": {
+      "key": "DELETE /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "DELETE /domains/{}/users/{}/timeframes/{}#3",
+      "method": "DELETE"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_5": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#4",
+      "method": "PUT"
+    },
+    "post_domains_by_domain_users_by_user_timeframes_5": {
+      "key": "POST /domains/{}/users/{}/timeframes",
+      "lockKey": "POST /domains/{}/users/{}/timeframes#4",
+      "method": "POST"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_6": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#5",
+      "method": "PUT"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_7": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#6",
+      "method": "PUT"
+    },
+    "delete": {
+      "key": "DELETE /",
+      "lockKey": "DELETE /",
+      "method": "DELETE"
+    },
+    "put_domains_by_domain_users_by_user_timeframes_by_id_8": {
+      "key": "PUT /domains/{}/users/{}/timeframes/{}",
+      "lockKey": "PUT /domains/{}/users/{}/timeframes/{}#7",
+      "method": "PUT"
+    },
+    "get_holidays_countries": {
+      "key": "GET /holidays/countries",
+      "lockKey": "GET /holidays/countries",
+      "method": "GET"
+    },
+    "get_holidays_regions": {
+      "key": "GET /holidays/regions",
+      "lockKey": "GET /holidays/regions",
+      "method": "GET"
+    },
+    "get_holidays_by_country_by_year": {
+      "key": "GET /holidays/{}/{}",
+      "lockKey": "GET /holidays/{}/{}",
+      "method": "GET"
+    },
+    "get_holidays_by_country_by_region_by_year": {
+      "key": "GET /holidays/{}/{}/{}",
+      "lockKey": "GET /holidays/{}/{}/{}",
+      "method": "GET"
+    },
+    "get_insight_by_label": {
+      "key": "GET /insight/{}",
+      "lockKey": "GET /insight/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_conferences": {
+      "key": "GET /domains/{}/conferences",
+      "lockKey": "GET /domains/{}/conferences",
+      "method": "GET"
+    },
+    "post_domains_by_domain_conferences": {
+      "key": "POST /domains/{}/conferences",
+      "lockKey": "POST /domains/{}/conferences",
+      "method": "POST"
+    },
+    "get_domains_by_domain_conferences_by_conference": {
+      "key": "GET /domains/{}/conferences/{}",
+      "lockKey": "GET /domains/{}/conferences/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_conferences_by_conference": {
+      "key": "PUT /domains/{}/conferences/{}",
+      "lockKey": "PUT /domains/{}/conferences/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_conferences_by_conference": {
+      "key": "DELETE /domains/{}/conferences/{}",
+      "lockKey": "DELETE /domains/{}/conferences/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_conferences_count": {
+      "key": "GET /domains/{}/conferences/count",
+      "lockKey": "GET /domains/{}/conferences/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_conferences_by_conference_cdr": {
+      "key": "GET /domains/{}/conferences/{}/cdr",
+      "lockKey": "GET /domains/{}/conferences/{}/cdr",
+      "method": "GET"
+    },
+    "get_domains_by_domain_conferences_by_conference_participants": {
+      "key": "GET /domains/{}/conferences/{}/participants",
+      "lockKey": "GET /domains/{}/conferences/{}/participants",
+      "method": "GET"
+    },
+    "post_domains_by_domain_conferences_by_conference_participants": {
+      "key": "POST /domains/{}/conferences/{}/participants",
+      "lockKey": "POST /domains/{}/conferences/{}/participants",
+      "method": "POST"
+    },
+    "put_domains_by_domain_conferences_by_conference_participants_by_participant": {
+      "key": "PUT /domains/{}/conferences/{}/participants/{}",
+      "lockKey": "PUT /domains/{}/conferences/{}/participants/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_conferences_by_conference_participants_by_participant": {
+      "key": "DELETE /domains/{}/conferences/{}/participants/{}",
+      "lockKey": "DELETE /domains/{}/conferences/{}/participants/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_phonetemplates": {
+      "key": "GET /domains/{}/phonetemplates",
+      "lockKey": "GET /domains/{}/phonetemplates",
+      "method": "GET"
+    },
+    "post_domains_by_domain_phonetemplates": {
+      "key": "POST /domains/{}/phonetemplates",
+      "lockKey": "POST /domains/{}/phonetemplates",
+      "method": "POST"
+    },
+    "get_domains_by_domain_phonetemplates_by_name": {
+      "key": "GET /domains/{}/phonetemplates/{}",
+      "lockKey": "GET /domains/{}/phonetemplates/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_phonetemplates_by_name": {
+      "key": "PUT /domains/{}/phonetemplates/{}",
+      "lockKey": "PUT /domains/{}/phonetemplates/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_phonetemplates_by_name": {
+      "key": "DELETE /domains/{}/phonetemplates/{}",
+      "lockKey": "DELETE /domains/{}/phonetemplates/{}",
+      "method": "DELETE"
+    },
+    "get_domains_by_domain_phonetemplates_count": {
+      "key": "GET /domains/{}/phonetemplates/count",
+      "lockKey": "GET /domains/{}/phonetemplates/count",
+      "method": "GET"
+    },
+    "get_deviceprofiles": {
+      "key": "GET /deviceprofiles",
+      "lockKey": "GET /deviceprofiles",
+      "method": "GET"
+    },
+    "get_deviceprofiles_count": {
+      "key": "GET /deviceprofiles/count",
+      "lockKey": "GET /deviceprofiles/count",
+      "method": "GET"
+    },
+    "get_deviceprofiles_by_make_by_model": {
+      "key": "GET /deviceprofiles/{}/{}",
+      "lockKey": "GET /deviceprofiles/{}/{}",
+      "method": "GET"
+    },
+    "get_domains_by_domain_phoneconfiguration_count": {
+      "key": "GET /domains/{}/phoneconfiguration/count",
+      "lockKey": "GET /domains/{}/phoneconfiguration/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_phoneconfiguration_by_mac": {
+      "key": "GET /domains/{}/phoneconfiguration/{}",
+      "lockKey": "GET /domains/{}/phoneconfiguration/{}",
+      "method": "GET"
+    },
+    "put_domains_by_domain_phoneconfiguration_by_mac": {
+      "key": "PUT /domains/{}/phoneconfiguration/{}",
+      "lockKey": "PUT /domains/{}/phoneconfiguration/{}",
+      "method": "PUT"
+    },
+    "delete_domains_by_domain_phoneconfiguration_by_mac": {
+      "key": "DELETE /domains/{}/phoneconfiguration/{}",
+      "lockKey": "DELETE /domains/{}/phoneconfiguration/{}",
+      "method": "DELETE"
+    },
+    "post_domains_by_domain_phoneconfiguration": {
+      "key": "POST /domains/{}/phoneconfiguration",
+      "lockKey": "POST /domains/{}/phoneconfiguration",
+      "method": "POST"
+    },
+    "get_domains_by_domain_charts_by_dashboard_id_count": {
+      "key": "GET /domains/{}/charts/{}/count",
+      "lockKey": "GET /domains/{}/charts/{}/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_charts_by_dashboard_id_list": {
+      "key": "GET /domains/{}/charts/{}/list",
+      "lockKey": "GET /domains/{}/charts/{}/list",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_dashboards_count": {
+      "key": "GET /domains/{}/users/{}/dashboards/count",
+      "lockKey": "GET /domains/{}/users/{}/dashboards/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_users_by_user_dashboards_list": {
+      "key": "GET /domains/{}/users/{}/dashboards/list",
+      "lockKey": "GET /domains/{}/users/{}/dashboards/list",
+      "method": "GET"
+    },
+    "get_domains_by_domain_quotas": {
+      "key": "GET /domains/{}/quotas",
+      "lockKey": "GET /domains/{}/quotas",
+      "method": "GET"
+    },
+    "get_resellers_by_reseller_quotas": {
+      "key": "GET /resellers/{}/quotas",
+      "lockKey": "GET /resellers/{}/quotas",
+      "method": "GET"
+    },
+    "get_domains_by_domain_quotas_count": {
+      "key": "GET /domains/{}/quotas/count",
+      "lockKey": "GET /domains/{}/quotas/count",
+      "method": "GET"
+    },
+    "get_resellers_by_reseller_quotas_count": {
+      "key": "GET /resellers/{}/quotas/count",
+      "lockKey": "GET /resellers/{}/quotas/count",
+      "method": "GET"
+    },
+    "get_domains_by_domain_departments_list": {
+      "key": "GET /domains/{}/departments/list",
+      "lockKey": "GET /domains/{}/departments/list",
+      "method": "GET"
+    },
+    "get_domains_by_domain_presence_list": {
+      "key": "GET /domains/{}/presence/list",
+      "lockKey": "GET /domains/{}/presence/list",
+      "method": "GET"
+    },
+    "get_domains_by_domain_departments_by_department_presence_list": {
+      "key": "GET /domains/{}/departments/{}/presence/list",
+      "lockKey": "GET /domains/{}/departments/{}/presence/list",
+      "method": "GET"
+    },
+    "get_auditlog": {
+      "key": "GET /auditlog",
+      "lockKey": "GET /auditlog",
+      "method": "GET"
+    },
+    "get_accesslog": {
+      "key": "GET /accesslog",
+      "lockKey": "GET /accesslog",
+      "method": "GET"
+    }
+  },
+  "v1": {
+    "v1_address_copy_endpoint_to_domain": {
+      "key": "POST ?object=address&action=copyEndpoint",
+      "method": "POST"
+    },
+    "v1_address_count": {
+      "key": "POST ?object=address&action=count",
+      "method": "POST"
+    },
+    "v1_address_create": {
+      "key": "POST ?object=address&action=create",
+      "method": "POST"
+    },
+    "v1_address_create_endpoint": {
+      "key": "POST ?object=address&action=createAddressEndpoint",
+      "method": "POST"
+    },
+    "v1_address_delete": {
+      "key": "POST ?object=address&action=delete",
+      "method": "POST"
+    },
+    "v1_address_delete_endpoint": {
+      "key": "POST ?object=address&action=deleteAddressEndpoint",
+      "method": "POST"
+    },
+    "v1_address_duplicate": {
+      "key": "POST ?object=address&action=duplicate",
+      "method": "POST"
+    },
+    "v1_address_read": {
+      "key": "POST ?object=address&action=read",
+      "method": "POST"
+    },
+    "v1_address_read_endpoints": {
+      "key": "POST ?object=address&action=readAddressEndpoint",
+      "method": "POST"
+    },
+    "v1_address_update": {
+      "key": "POST ?object=address&action=update",
+      "method": "POST"
+    },
+    "v1_address_update_user_endpoints": {
+      "key": "POST ?object=address&action=applyEndpoints",
+      "method": "POST"
+    },
+    "v1_address_validate": {
+      "key": "POST ?object=address&action=validate",
+      "method": "POST"
+    },
+    "v1_agent_count": {
+      "key": "POST ?object=agent&action=count",
+      "method": "POST"
+    },
+    "v1_agent_create": {
+      "key": "POST ?object=agent&action=create",
+      "method": "POST"
+    },
+    "v1_agent_delete": {
+      "key": "POST ?object=agent&action=delete",
+      "method": "POST"
+    },
+    "v1_agent_read": {
+      "key": "POST ?object=agent&action=read",
+      "method": "POST"
+    },
+    "v1_agent_update": {
+      "key": "POST ?object=agent&action=update",
+      "method": "POST"
+    },
+    "v1_agent_updatestatus": {
+      "key": "POST ?object=agent&action=update",
+      "method": "POST"
+    },
+    "v1_agentlog_create": {
+      "key": "POST ?object=agentlog&action=create",
+      "method": "POST"
+    },
+    "v1_agentlog_read": {
+      "key": "POST ?object=agentlog&action=read",
+      "method": "POST"
+    },
+    "v1_answerrule_count": {
+      "key": "POST ?object=answerrule&action=count",
+      "method": "POST"
+    },
+    "v1_answerrule_create": {
+      "key": "POST ?object=answerrule&action=create",
+      "method": "POST"
+    },
+    "v1_answerrule_delete": {
+      "key": "POST ?object=answerrule&action=delete",
+      "method": "POST"
+    },
+    "v1_answerrule_read": {
+      "key": "POST ?object=answerrule&action=read",
+      "method": "POST"
+    },
+    "v1_answerrule_reorder": {
+      "key": "POST ?object=answerrule&action=reorder",
+      "method": "POST"
+    },
+    "v1_audio_count": {
+      "key": "POST ?object=audio&action=count",
+      "method": "POST"
+    },
+    "v1_audio_delete": {
+      "key": "POST ?object=audio&action=delete",
+      "method": "POST"
+    },
+    "v1_audio_link_delete": {
+      "key": "POST ?object=audio&action=link_delete",
+      "method": "POST"
+    },
+    "v1_audio_link_update": {
+      "key": "POST ?object=audio&action=link_update",
+      "method": "POST"
+    },
+    "v1_audio_play": {
+      "key": "GET ?object=audio&action=play",
+      "method": "GET"
+    },
+    "v1_audio_read": {
+      "key": "POST ?object=audio&action=read",
+      "method": "POST"
+    },
+    "v1_audio_update": {
+      "key": "POST ?object=audio&action=update",
+      "method": "POST"
+    },
+    "v1_audio_upload": {
+      "key": "POST ?object=audio&action=upload",
+      "method": "POST"
+    },
+    "v1_cdr2_countbydomain": {
+      "key": "POST ?object=cdr2&action=count",
+      "method": "POST"
+    },
+    "v1_cdr2_countbygroup": {
+      "key": "POST ?object=cdr2&action=count",
+      "method": "POST"
+    },
+    "v1_cdr2_countbyterritory": {
+      "key": "POST ?object=cdr2&action=count",
+      "method": "POST"
+    },
+    "v1_cdr2_countbyuser": {
+      "key": "POST ?object=cdr2&action=count",
+      "method": "POST"
+    },
+    "v1_cdr2_optimizecdrs": {
+      "key": "POST ?object=cdr2&action=optimize",
+      "method": "POST"
+    },
+    "v1_cdr2_purgecdrs": {
+      "key": "POST ?object=cdr2&action=purge",
+      "method": "POST"
+    },
+    "v1_cdr2_readbydomain": {
+      "key": "POST ?object=cdr2&action=read",
+      "method": "POST"
+    },
+    "v1_cdr2_readbygroup": {
+      "key": "POST ?object=cdr2&action=read",
+      "method": "POST"
+    },
+    "v1_cdr2_readbyid": {
+      "key": "POST ?object=cdr2&action=read",
+      "method": "POST"
+    },
+    "v1_cdr2_readbyterritory": {
+      "key": "POST ?object=cdr2&action=read",
+      "method": "POST"
+    },
+    "v1_cdr2_readbyuser": {
+      "key": "POST ?object=cdr2&action=read",
+      "method": "POST"
+    },
+    "v1_cdr2_reportbydomain": {
+      "key": "POST ?object=cdr2&action=report",
+      "method": "POST"
+    },
+    "v1_cdr2_reportbygroup": {
+      "key": "POST ?object=cdr2&action=report",
+      "method": "POST"
+    },
+    "v1_cdr2_reportbygrouptype": {
+      "key": "POST ?object=cdr2&action=report",
+      "method": "POST"
+    },
+    "v1_cdr2_reportbyhostname": {
+      "key": "POST ?object=cdr2&action=report",
+      "method": "POST"
+    },
+    "v1_cdr2_reportbyreseller": {
+      "key": "POST ?object=cdr2&action=report",
+      "method": "POST"
+    },
+    "v1_cdr2_update": {
+      "key": "POST ?object=cdr2&action=update",
+      "method": "POST"
+    },
+    "v1_cdrexport_create": {
+      "key": "POST ?object=cdrexport&action=create",
+      "method": "POST"
+    },
+    "v1_cdrexport_delete": {
+      "key": "POST ?object=cdrexport&action=delete",
+      "method": "POST"
+    },
+    "v1_cdrexport_download": {
+      "key": "GET ?object=cdrexport&action=download",
+      "method": "GET"
+    },
+    "v1_cdrexport_read": {
+      "key": "POST ?object=cdrexport&action=read",
+      "method": "POST"
+    },
+    "v1_cdrexport_update": {
+      "key": "POST ?object=cdrexport&action=update",
+      "method": "POST"
+    },
+    "v1_cdrschedule_count": {
+      "key": "POST ?object=cdrschedule&action=count",
+      "method": "POST"
+    },
+    "v1_cdrschedule_create": {
+      "key": "POST ?object=cdrschedule&action=create",
+      "method": "POST"
+    },
+    "v1_cdrschedule_delete": {
+      "key": "POST ?object=cdrschedule&action=delete",
+      "method": "POST"
+    },
+    "v1_cdrschedule_read": {
+      "key": "POST ?object=cdrschedule&action=read",
+      "method": "POST"
+    },
+    "v1_cdrschedule_update": {
+      "key": "POST ?object=cdrschedule&action=update",
+      "method": "POST"
+    },
+    "v1_call_answer": {
+      "key": "POST ?object=call&action=answer",
+      "method": "POST"
+    },
+    "v1_call_calltorecord": {
+      "key": "POST ?object=call&action=call_to_record",
+      "method": "POST"
+    },
+    "v1_call_count": {
+      "key": "POST ?object=call&action=count",
+      "method": "POST"
+    },
+    "v1_call_disconnect": {
+      "key": "POST ?object=call&action=disconnect",
+      "method": "POST"
+    },
+    "v1_call_holdorig": {
+      "key": "POST ?object=call&action=hold_orig",
+      "method": "POST"
+    },
+    "v1_call_holdterm": {
+      "key": "POST ?object=call&action=hold_term",
+      "method": "POST"
+    },
+    "v1_call_make": {
+      "key": "POST ?object=call&action=call",
+      "method": "POST"
+    },
+    "v1_call_park": {
+      "key": "POST ?object=call&action=park",
+      "method": "POST"
+    },
+    "v1_call_park_2": {
+      "key": "POST ?object=call&action=xfer_peer",
+      "method": "POST"
+    },
+    "v1_call_playback": {
+      "key": "POST ?object=call&action=call_to_playback",
+      "method": "POST"
+    },
+    "v1_call_read": {
+      "key": "POST ?object=call&action=read",
+      "method": "POST"
+    },
+    "v1_call_recordstart": {
+      "key": "POST ?object=call&action=record_on",
+      "method": "POST"
+    },
+    "v1_call_recordstop": {
+      "key": "POST ?object=call&action=record_off",
+      "method": "POST"
+    },
+    "v1_call_recordstop_2": {
+      "key": "POST ?object=call&action=record_unpause",
+      "method": "POST"
+    },
+    "v1_call_reject": {
+      "key": "POST ?object=call&action=reject",
+      "method": "POST"
+    },
+    "v1_call_report": {
+      "key": "POST ?object=call&action=report",
+      "method": "POST"
+    },
+    "v1_call_transfer": {
+      "key": "POST ?object=call&action=xfer",
+      "method": "POST"
+    },
+    "v1_call_unhold": {
+      "key": "POST ?object=call&action=unhold",
+      "method": "POST"
+    },
+    "v1_statistics_readagentlog": {
+      "key": "POST ?object=statistics&action=read",
+      "method": "POST"
+    },
+    "v1_statistics_readdnisstats": {
+      "key": "POST ?object=statistics&action=read",
+      "method": "POST"
+    },
+    "v1_email_readprocessemail": {
+      "key": "POST ?object=email&action=create",
+      "method": "POST"
+    },
+    "v1_statistics_readqueuestats": {
+      "key": "POST ?object=statistics&action=read",
+      "method": "POST"
+    },
+    "v1_statistics_readuserstats": {
+      "key": "POST ?object=statistics&action=read",
+      "method": "POST"
+    },
+    "v1_callqueue_create": {
+      "key": "POST ?object=callqueue&action=create",
+      "method": "POST"
+    },
+    "v1_queuedcall_create_queued_call": {
+      "key": "POST ?object=queuedcall&action=create",
+      "method": "POST"
+    },
+    "v1_callqueue_delete": {
+      "key": "POST ?object=callqueue&action=delete",
+      "method": "POST"
+    },
+    "v1_callqueue_read": {
+      "key": "POST ?object=callqueue&action=read",
+      "method": "POST"
+    },
+    "v1_callqueuereport_report": {
+      "key": "POST ?object=callqueuereport&action=read",
+      "method": "POST"
+    },
+    "v1_callqueue_update": {
+      "key": "POST ?object=callqueue&action=update",
+      "method": "POST"
+    },
+    "v1_callqueuestat_read": {
+      "key": "POST ?object=callqueuestat&action=read",
+      "method": "POST"
+    },
+    "v1_callrequest_create": {
+      "key": "POST ?object=callrequest&action=addWakeUp",
+      "method": "POST"
+    },
+    "v1_callrequest_delete": {
+      "key": "POST ?object=callrequest&action=delWakeUp",
+      "method": "POST"
+    },
+    "v1_callrequest_read": {
+      "key": "POST ?object=callrequest&action=read",
+      "method": "POST"
+    },
+    "v1_callidemgr_read": {
+      "key": "POST ?object=callidemgr&action=read",
+      "method": "POST"
+    },
+    "v1_callqueueemailreport_create": {
+      "key": "POST ?object=callqueueemailreport&action=create",
+      "method": "POST"
+    },
+    "v1_callqueueemailreport_delete": {
+      "key": "POST ?object=callqueueemailreport&action=delete",
+      "method": "POST"
+    },
+    "v1_callqueueemailreport_read": {
+      "key": "POST ?object=callqueueemailreport&action=read",
+      "method": "POST"
+    },
+    "v1_callqueueemailreport_update": {
+      "key": "POST ?object=callqueueemailreport&action=update",
+      "method": "POST"
+    },
+    "v1_call_record_pause": {
+      "key": "POST ?object=call&action=record_pause",
+      "method": "POST"
+    },
+    "v1_chart_count": {
+      "key": "POST ?object=chart&action=count",
+      "method": "POST"
+    },
+    "v1_chart_create": {
+      "key": "POST ?object=chart&action=create",
+      "method": "POST"
+    },
+    "v1_chart_delete": {
+      "key": "POST ?object=chart&action=delete",
+      "method": "POST"
+    },
+    "v1_chart_list": {
+      "key": "POST ?object=chart&action=list",
+      "method": "POST"
+    },
+    "v1_chart_read": {
+      "key": "POST ?object=chart&action=read",
+      "method": "POST"
+    },
+    "v1_chart_update": {
+      "key": "POST ?object=chart&action=update",
+      "method": "POST"
+    },
+    "v1_conference_count": {
+      "key": "POST ?object=conference&action=count",
+      "method": "POST"
+    },
+    "v1_conference_create": {
+      "key": "POST ?object=conference&action=create",
+      "method": "POST"
+    },
+    "v1_conference_delete": {
+      "key": "POST ?object=conference&action=delete",
+      "method": "POST"
+    },
+    "v1_conference_read": {
+      "key": "POST ?object=conference&action=read",
+      "method": "POST"
+    },
+    "v1_conference_update": {
+      "key": "POST ?object=conference&action=update",
+      "method": "POST"
+    },
+    "v1_participant_create": {
+      "key": "POST ?object=participant&action=create",
+      "method": "POST"
+    },
+    "v1_participant_read": {
+      "key": "POST ?object=participant&action=read",
+      "method": "POST"
+    },
+    "v1_conferencecdr_cdr": {
+      "key": "POST ?object=conferencecdr&action=read",
+      "method": "POST"
+    },
+    "v1_connection_count": {
+      "key": "POST ?object=connection&action=count",
+      "method": "POST"
+    },
+    "v1_connection_create": {
+      "key": "POST ?object=connection&action=create",
+      "method": "POST"
+    },
+    "v1_connection_delete": {
+      "key": "POST ?object=connection&action=delete",
+      "method": "POST"
+    },
+    "v1_connection_read": {
+      "key": "POST ?object=connection&action=read",
+      "method": "POST"
+    },
+    "v1_connection_update": {
+      "key": "POST ?object=connection&action=update",
+      "method": "POST"
+    },
+    "v1_contact_count": {
+      "key": "POST ?object=contact&action=count",
+      "method": "POST"
+    },
+    "v1_contact_create": {
+      "key": "POST ?object=contact&action=create",
+      "method": "POST"
+    },
+    "v1_contact_delete": {
+      "key": "POST ?object=contact&action=delete",
+      "method": "POST"
+    },
+    "v1_contact_read": {
+      "key": "POST ?object=contact&action=read",
+      "method": "POST"
+    },
+    "v1_contact_read_2": {
+      "key": "POST ?object=contact&action=read",
+      "method": "POST"
+    },
+    "v1_contact_update": {
+      "key": "POST ?object=contact&action=update",
+      "method": "POST"
+    },
+    "v1_dashboard_count": {
+      "key": "POST ?object=dashboard&action=count",
+      "method": "POST"
+    },
+    "v1_dashboard_create": {
+      "key": "POST ?object=dashboard&action=create",
+      "method": "POST"
+    },
+    "v1_dashboard_delete": {
+      "key": "POST ?object=dashboard&action=delete",
+      "method": "POST"
+    },
+    "v1_dashboard_favorite": {
+      "key": "POST ?object=dashboard&action=favorite",
+      "method": "POST"
+    },
+    "v1_dashboard_hide": {
+      "key": "POST ?object=dashboard&action=hide",
+      "method": "POST"
+    },
+    "v1_dashboard_list": {
+      "key": "POST ?object=dashboard&action=list",
+      "method": "POST"
+    },
+    "v1_dashboard_read": {
+      "key": "POST ?object=dashboard&action=read",
+      "method": "POST"
+    },
+    "v1_dashboard_update": {
+      "key": "POST ?object=dashboard&action=update",
+      "method": "POST"
+    },
+    "v1_defaultvalue_read": {
+      "key": "POST ?object=defaultvalue&action=read",
+      "method": "POST"
+    },
+    "v1_subscriber_create": {
+      "key": "POST ?object=subscriber&action=create&directory_match=departments",
+      "method": "POST"
+    },
+    "v1_department_list": {
+      "key": "POST ?object=department&action=list",
+      "method": "POST"
+    },
+    "v1_device_count": {
+      "key": "POST ?object=device&action=count",
+      "method": "POST"
+    },
+    "v1_device_create": {
+      "key": "POST ?object=device&action=create",
+      "method": "POST"
+    },
+    "v1_device_delete": {
+      "key": "POST ?object=device&action=delete",
+      "method": "POST"
+    },
+    "v1_device_read": {
+      "key": "POST ?object=device&action=read",
+      "method": "POST"
+    },
+    "v1_device_update": {
+      "key": "POST ?object=device&action=update",
+      "method": "POST"
+    },
+    "v1_devicemodel_read": {
+      "key": "POST ?object=devicemodel&action=read",
+      "method": "POST"
+    },
+    "v1_deviceprofile_count": {
+      "key": "POST ?object=deviceprofile&action=count",
+      "method": "POST"
+    },
+    "v1_deviceprofile_create": {
+      "key": "POST ?object=deviceprofile&action=create",
+      "method": "POST"
+    },
+    "v1_agent_delete_2": {
+      "key": "POST ?object=agent&action=delete",
+      "method": "POST"
+    },
+    "v1_deviceprofile_read": {
+      "key": "POST ?object=deviceprofile&action=read",
+      "method": "POST"
+    },
+    "v1_image_readimage": {
+      "key": "POST ?object=image&action=read",
+      "method": "POST"
+    },
+    "v1_dialplan_create": {
+      "key": "POST ?object=dialplan&action=create",
+      "method": "POST"
+    },
+    "v1_dialrule_delete": {
+      "key": "POST ?object=dialrule&action=delete",
+      "method": "POST"
+    },
+    "v1_dialplan_read": {
+      "key": "POST ?object=dialplan&action=read",
+      "method": "POST"
+    },
+    "v1_dialpolicy_read": {
+      "key": "POST ?object=dialpolicy&action=read",
+      "method": "POST"
+    },
+    "v1_dialrule_count": {
+      "key": "POST ?object=dialrule&action=count",
+      "method": "POST"
+    },
+    "v1_dialrule_create": {
+      "key": "POST ?object=dialrule&action=create",
+      "method": "POST"
+    },
+    "v1_dialrule_delete_2": {
+      "key": "POST ?object=dialrule&action=delete",
+      "method": "POST"
+    },
+    "v1_dialrule_read": {
+      "key": "POST ?object=dialrule&action=read",
+      "method": "POST"
+    },
+    "v1_dialrule_update": {
+      "key": "POST ?object=dialrule&action=update",
+      "method": "POST"
+    },
+    "v1_domain_count": {
+      "key": "POST ?object=domain&action=count",
+      "method": "POST"
+    },
+    "v1_domain_create": {
+      "key": "POST ?object=domain&action=create",
+      "method": "POST"
+    },
+    "v1_domain_delete": {
+      "key": "POST ?object=domain&action=delete",
+      "method": "POST"
+    },
+    "v1_domain_read": {
+      "key": "POST ?object=domain&action=read",
+      "method": "POST"
+    },
+    "v1_domain_readbilling": {
+      "key": "POST ?object=domain&action=read&billing=yes",
+      "method": "POST"
+    },
+    "v1_domain_update": {
+      "key": "POST ?object=domain&action=update",
+      "method": "POST"
+    },
+    "v1_image_read": {
+      "key": "POST ?object=image&action=read",
+      "method": "POST"
+    },
+    "v1_mac_count": {
+      "key": "POST ?object=mac&action=count",
+      "method": "POST"
+    },
+    "v1_mac_create": {
+      "key": "POST ?object=mac&action=create",
+      "method": "POST"
+    },
+    "v1_mac_delete": {
+      "key": "POST ?object=mac&action=delete",
+      "method": "POST"
+    },
+    "v1_mac_read": {
+      "key": "POST ?object=mac&action=read",
+      "method": "POST"
+    },
+    "v1_mac_update": {
+      "key": "POST ?object=mac&action=update",
+      "method": "POST"
+    },
+    "v1_meeting_count": {
+      "key": "POST ?object=meeting&action=count",
+      "method": "POST"
+    },
+    "v1_meeting_create": {
+      "key": "POST ?object=meeting&action=create",
+      "method": "POST"
+    },
+    "v1_meeting_delete": {
+      "key": "POST ?object=meeting&action=delete",
+      "method": "POST"
+    },
+    "v1_meeting_read": {
+      "key": "POST ?object=meeting&action=read",
+      "method": "POST"
+    },
+    "v1_meeting_request": {
+      "key": "POST ?object=meeting&action=create",
+      "method": "POST"
+    },
+    "v1_meeting_update": {
+      "key": "POST ?object=meeting&action=update",
+      "method": "POST"
+    },
+    "v1_meeting_deleteevents": {
+      "key": "POST ?object=meeting&action=deleteEvents",
+      "method": "POST"
+    },
+    "v1_meeting_logevent": {
+      "key": "POST ?object=meeting&action=logEvent",
+      "method": "POST"
+    },
+    "v1_meeting_readevents": {
+      "key": "POST ?object=meeting&action=readEvents",
+      "method": "POST"
+    },
+    "v1_message_create": {
+      "key": "POST ?object=message&action=create",
+      "method": "POST"
+    },
+    "v1_message_delete": {
+      "key": "POST ?object=message&action=delete",
+      "method": "POST"
+    },
+    "v1_email_notifyunreadmessages": {
+      "key": "POST ?object=email&action=create",
+      "method": "POST"
+    },
+    "v1_message_read": {
+      "key": "POST ?object=message&action=read",
+      "method": "POST"
+    },
+    "v1_email_readprocessemail_2": {
+      "key": "POST ?object=email&action=create",
+      "method": "POST"
+    },
+    "v1_message_read_media": {
+      "key": "GET ?object=message&action=read_media",
+      "method": "GET"
+    },
+    "v1_messagesession_accept": {
+      "key": "POST ?object=messagesession&action=accept",
+      "method": "POST"
+    },
+    "v1_messagesession_delete": {
+      "key": "POST ?object=messagesession&action=delete",
+      "method": "POST"
+    },
+    "v1_messagesession_end": {
+      "key": "POST ?object=messagesession&action=dispatch",
+      "method": "POST"
+    },
+    "v1_messagesession_leave": {
+      "key": "POST ?object=messagesession&action=leave",
+      "method": "POST"
+    },
+    "v1_messagesession_read": {
+      "key": "POST ?object=messagesession&action=read",
+      "method": "POST"
+    },
+    "v1_messagesession_update": {
+      "key": "POST ?object=messagesession&action=update",
+      "method": "POST"
+    },
+    "v1_ndpserver_list": {
+      "key": "POST ?object=ndpserver&action=list",
+      "method": "POST"
+    },
+    "v1_ndpserver_read": {
+      "key": "POST ?object=ndpserver&action=read",
+      "method": "POST"
+    },
+    "v1_permission_create": {
+      "key": "POST ?object=permission&action=create",
+      "method": "POST"
+    },
+    "v1_permission_delete": {
+      "key": "POST ?object=permission&action=delete",
+      "method": "POST"
+    },
+    "v1_permission_read": {
+      "key": "POST ?object=permission&action=read",
+      "method": "POST"
+    },
+    "v1_permission_update": {
+      "key": "POST ?object=permission&action=update",
+      "method": "POST"
+    },
+    "v1_phoneconfiguration_count": {
+      "key": "POST ?object=phoneconfiguration&action=count",
+      "method": "POST"
+    },
+    "v1_phoneconfiguration_create": {
+      "key": "POST ?object=phoneconfiguration&action=create",
+      "method": "POST"
+    },
+    "v1_phoneconfiguration_delete": {
+      "key": "POST ?object=phoneconfiguration&action=delete",
+      "method": "POST"
+    },
+    "v1_phoneconfiguration_read": {
+      "key": "POST ?object=phoneconfiguration&action=read",
+      "method": "POST"
+    },
+    "v1_phonenumber_count": {
+      "key": "POST ?object=phonenumber&action=count",
+      "method": "POST"
+    },
+    "v1_phonenumber_create": {
+      "key": "POST ?object=phonenumber&action=create",
+      "method": "POST"
+    },
+    "v1_phonenumber_delete": {
+      "key": "POST ?object=phonenumber&action=delete",
+      "method": "POST"
+    },
+    "v1_phonenumber_read": {
+      "key": "POST ?object=phonenumber&action=read",
+      "method": "POST"
+    },
+    "v1_phonenumber_update": {
+      "key": "POST ?object=phonenumber&action=update",
+      "method": "POST"
+    },
+    "v1_presence_list": {
+      "key": "POST ?object=presence&action=list",
+      "method": "POST"
+    },
+    "v1_queued_read": {
+      "key": "POST ?object=queued&action=read",
+      "method": "POST"
+    },
+    "v1_queued_updatequeued": {
+      "key": "POST ?object=queued&action=update",
+      "method": "POST"
+    },
+    "v1_domain_count_2": {
+      "key": "POST ?object=domain&action=count",
+      "method": "POST"
+    },
+    "v1_quota_create": {
+      "key": "POST ?object=quota&action=create",
+      "method": "POST"
+    },
+    "v1_quota_delete": {
+      "key": "POST ?object=quota&action=delete",
+      "method": "POST"
+    },
+    "v1_quota_read": {
+      "key": "POST ?object=quota&action=read",
+      "method": "POST"
+    },
+    "v1_quotausage_readusages": {
+      "key": "POST ?object=quotaUsage&action=read",
+      "method": "POST"
+    },
+    "v1_quota_update": {
+      "key": "POST ?object=quota&action=update",
+      "method": "POST"
+    },
+    "v1_recording_create": {
+      "key": "POST ?object=recording&action=create",
+      "method": "POST"
+    },
+    "v1_recording_delete": {
+      "key": "POST ?object=recording&action=delete",
+      "method": "POST"
+    },
+    "v1_recording_read": {
+      "key": "POST ?object=recording&action=read",
+      "method": "POST"
+    },
+    "v1_recording_update": {
+      "key": "POST ?object=recording&action=update",
+      "method": "POST"
+    },
+    "v1_reseller_count": {
+      "key": "POST ?object=reseller&action=count",
+      "method": "POST"
+    },
+    "v1_reseller_create": {
+      "key": "POST ?object=reseller&action=create",
+      "method": "POST"
+    },
+    "v1_reseller_delete": {
+      "key": "POST ?object=reseller&action=delete",
+      "method": "POST"
+    },
+    "v1_reseller_read": {
+      "key": "POST ?object=reseller&action=read",
+      "method": "POST"
+    },
+    "v1_reseller_update": {
+      "key": "POST ?object=reseller&action=update",
+      "method": "POST"
+    },
+    "v1_route_countroute": {
+      "key": "POST ?object=route&action=count",
+      "method": "POST"
+    },
+    "v1_routecon_countrouteconn": {
+      "key": "POST ?object=routecon&action=count",
+      "method": "POST"
+    },
+    "v1_route_createroute": {
+      "key": "POST ?object=route&action=create",
+      "method": "POST"
+    },
+    "v1_route_deleteroute": {
+      "key": "POST ?object=route&action=delete",
+      "method": "POST"
+    },
+    "v1_routecon_deleterouteconn": {
+      "key": "POST ?object=routecon&action=delete",
+      "method": "POST"
+    },
+    "v1_route_readroute": {
+      "key": "POST ?object=route&action=read",
+      "method": "POST"
+    },
+    "v1_routecon_readroutecon": {
+      "key": "POST ?object=routecon&action=read",
+      "method": "POST"
+    },
+    "v1_route_updateroute": {
+      "key": "POST ?object=route&action=update",
+      "method": "POST"
+    },
+    "v1_routecon_updaterouteconn": {
+      "key": "POST ?object=routecon&action=update",
+      "method": "POST"
+    },
+    "v1_routecon_createroutecon": {
+      "key": "POST ?object=routecon&action=create",
+      "method": "POST"
+    },
+    "v1_smsnumber_count": {
+      "key": "POST ?object=smsnumber&action=count",
+      "method": "POST"
+    },
+    "v1_smsnumber_create": {
+      "key": "POST ?object=smsnumber&action=create",
+      "method": "POST"
+    },
+    "v1_smsnumber_read": {
+      "key": "POST ?object=smsnumber&action=read",
+      "method": "POST"
+    },
+    "v1_smsnumber_update": {
+      "key": "POST ?object=smsnumber&action=update",
+      "method": "POST"
+    },
+    "v1_elementdomain_read": {
+      "key": "POST ?object=elementdomain&action=read",
+      "method": "POST"
+    },
+    "v1_site_list": {
+      "key": "POST ?object=site&action=list",
+      "method": "POST"
+    },
+    "v1_site_countsites": {
+      "key": "POST ?object=site&action=count",
+      "method": "POST"
+    },
+    "v1_site_read": {
+      "key": "POST ?object=site&action=read",
+      "method": "POST"
+    },
+    "v1_site_readbilling": {
+      "key": "POST ?object=site&action=read&billing=yes",
+      "method": "POST"
+    },
+    "v1_subscriber_count": {
+      "key": "POST ?object=subscriber&action=count",
+      "method": "POST"
+    },
+    "v1_subscriber_create_2": {
+      "key": "POST ?object=subscriber&action=create",
+      "method": "POST"
+    },
+    "v1_subscriber_delete": {
+      "key": "POST ?object=subscriber&action=delete",
+      "method": "POST"
+    },
+    "v1_subscriber_list": {
+      "key": "POST ?object=subscriber&action=list",
+      "method": "POST"
+    },
+    "v1_subscriber_read": {
+      "key": "POST ?object=subscriber&action=read",
+      "method": "POST"
+    },
+    "v1_subscriber_update": {
+      "key": "POST ?object=subscriber&action=update",
+      "method": "POST"
+    },
+    "v1_event_create": {
+      "key": "POST ?object=event&action=create",
+      "method": "POST"
+    },
+    "v1_event_delete": {
+      "key": "POST ?object=event&action=delete",
+      "method": "POST"
+    },
+    "v1_event_read": {
+      "key": "POST ?object=event&action=read",
+      "method": "POST"
+    },
+    "v1_timeframe_create": {
+      "key": "POST ?object=timeframe&action=create",
+      "method": "POST"
+    },
+    "v1_timeframe_read": {
+      "key": "POST ?object=timeframe&action=read",
+      "method": "POST"
+    },
+    "v1_timeframe_update": {
+      "key": "POST ?object=timeframe&action=update",
+      "method": "POST"
+    },
+    "v1_timerange_create": {
+      "key": "POST ?object=timerange&action=create",
+      "method": "POST"
+    },
+    "v1_timerange_update": {
+      "key": "POST ?object=timerange&action=update",
+      "method": "POST"
+    },
+    "v1_trace_export": {
+      "key": "POST ?object=trace&action=export",
+      "method": "POST"
+    },
+    "v1_turn_read": {
+      "key": "POST ?object=turn&action=read",
+      "method": "POST"
+    },
+    "v1_conversation_read": {
+      "key": "POST ?object=conversation&action=read",
+      "method": "POST"
+    },
+    "v1_uiconfig_count": {
+      "key": "POST ?object=uiconfig&action=count",
+      "method": "POST"
+    },
+    "v1_uiconfigdef_count": {
+      "key": "POST ?object=uiconfigdef&action=count",
+      "method": "POST"
+    },
+    "v1_uiconfig_create": {
+      "key": "POST ?object=uiconfig&action=create",
+      "method": "POST"
+    },
+    "v1_uiconfigdef_create_definition": {
+      "key": "POST ?object=uiconfigdef&action=create",
+      "method": "POST"
+    },
+    "v1_uiconfig_delete": {
+      "key": "POST ?object=uiconfig&action=delete",
+      "method": "POST"
+    },
+    "v1_uiconfigdef_delete_definition": {
+      "key": "POST ?object=uiconfigdef&action=delete",
+      "method": "POST"
+    },
+    "v1_uiconfig_read": {
+      "key": "POST ?object=uiconfig&action=read",
+      "method": "POST"
+    },
+    "v1_uiconfigdef_read": {
+      "key": "POST ?object=uiconfigdef&action=read",
+      "method": "POST"
+    },
+    "v1_uiconfig_update": {
+      "key": "POST ?object=uiconfig&action=update",
+      "method": "POST"
+    },
+    "v1_upload_create": {
+      "key": "POST ?object=upload&action=create",
+      "method": "POST"
+    },
+    "v1_upload_upload": {
+      "key": "POST ?object=upload&action=upload",
+      "method": "POST"
+    },
+    "v1_vmailnag_count": {
+      "key": "POST ?object=vmailnag&action=count",
+      "method": "POST"
+    },
+    "v1_vmailnag_create": {
+      "key": "POST ?object=vmailnag&action=create",
+      "method": "POST"
+    },
+    "v1_vmailnag_delete": {
+      "key": "POST ?object=vmailnag&action=delete",
+      "method": "POST"
+    },
+    "v1_vmailnag_read": {
+      "key": "POST ?object=vmailnag&action=read",
+      "method": "POST"
+    },
+    "v1_vmailnag_update": {
+      "key": "POST ?object=vmailnag&action=update",
+      "method": "POST"
+    }
+  }
+}

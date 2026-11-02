@@ -12,18 +12,18 @@ import { createHash, randomBytes } from 'node:crypto';
 
 vi.mock('axios');
 const mockedAxios = axios as unknown as {
-  post: ReturnType<typeof vi.fn>;
-  get: ReturnType<typeof vi.fn>;
-  create: ReturnType<typeof vi.fn>;
-  request: ReturnType<typeof vi.fn>;
-  isAxiosError: (err: unknown) => boolean;
+ post: ReturnType<typeof vi.fn>;
+ get: ReturnType<typeof vi.fn>;
+ create: ReturnType<typeof vi.fn>;
+ request: ReturnType<typeof vi.fn>;
+ isAxiosError: (err: unknown) => boolean;
 };
 
 mockedAxios.create = vi.fn(() => ({
-  interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
-  request: vi.fn(),
-  get: vi.fn(),
-  post: vi.fn(),
+ interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+ request: vi.fn(),
+ get: vi.fn(),
+ post: vi.fn(),
 })) as unknown as typeof mockedAxios.create;
 mockedAxios.isAxiosError = () => false;
 
@@ -31,7 +31,7 @@ const NS_TOKEN_URL = 'https://ns.example.com/ns-api/v2/tokens';
 const NS_USER_URL = 'https://ns.example.com/ns-api/v2/domains/~/users/~';
 
 function pkceChallenge(verifier: string): string {
-  return createHash('sha256').update(verifier).digest('base64url');
+ return createHash('sha256').update(verifier).digest('base64url');
 }
 
 /**
@@ -39,39 +39,37 @@ function pkceChallenge(verifier: string): string {
  * in the form, never in a cookie, so this is how a browser carries it forward.
  */
 function hiddenField(html: string, name: string): string | undefined {
-  return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
+ return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
 async function importApp() {
-  // Re-import after env vars are set so loadConfig picks them up.
-  vi.resetModules();
-  process.env.MCP_TRANSPORT = 'http';
-  process.env.MCP_BASE_URL = 'http://localhost';
-  process.env.NETSAPIENS_API_URL = 'https://ns.example.com';
-  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
-  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
-  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
-  // MCP_TOKEN_STORE_PATH is set per worker in src/__tests__/setup.ts, which
-  // keeps every test off the developer's real token store.
-  delete process.env.MCP_PERSISTENCE;
-  const mod = await import('../http-server.js');
-  const created = mod.createApp();
-  // supertest binds and closes an ephemeral server for every request when
-  // handed a bare Express app. Under parallel workers that produced sporadic
-  // ECONNRESET / "socket hang up" on an arbitrary request. Hand it one real
-  // listener per app instead, torn down in afterEach.
-  const server = created.app.listen(0);
-  openServers.push(server);
-  return { ...created, app: server as unknown as typeof created.app };
+ // Re-import after env vars are set so loadConfig picks them up.
+ vi.resetModules();
+ process.env.MCP_TRANSPORT = 'http';
+ process.env.MCP_BASE_URL = 'http://localhost';
+ process.env.NETSAPIENS_API_URL = 'https://ns.example.com';
+ process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'op-client-id';
+ process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
+ process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
+ process.env.MCP_PERSISTENCE = 'memory';
+ const mod = await import('../http-server.js');
+ const created = await mod.createApp();
+ // supertest binds and closes an ephemeral server for every request when
+ // handed a bare Express app. Under parallel workers that produced sporadic
+ // ECONNRESET / "socket hang up" on an arbitrary request. Hand it one real
+ // listener per app instead, torn down in afterEach.
+ const server = created.app.listen(0);
+ openServers.push(server);
+ return { ...created, app: server as unknown as typeof created.app };
 }
 
 /** Listeners opened by importApp(), closed after each test. */
 const openServers: import('node:http').Server[] = [];
 
 async function closeOpenServers(): Promise<void> {
-  await Promise.all(
-    openServers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
-  );
+ await Promise.all(
+  openServers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+ );
 }
 
 /**
@@ -86,958 +84,958 @@ async function closeOpenServers(): Promise<void> {
 const SOCKET_RETRY = { retry: 2 };
 
 describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
-  beforeEach(() => {
-    mockedAxios.post = vi.fn();
-    mockedAxios.get = vi.fn();
+ beforeEach(() => {
+  mockedAxios.post = vi.fn();
+  mockedAxios.get = vi.fn();
+ });
+
+ afterEach(async () => {
+  await closeOpenServers();
+  vi.clearAllMocks();
+ });
+
+ it('serves OAuth discovery and PRM at both standard and compat paths', async () => {
+  const { app } = await importApp();
+
+  const asMeta = await request(app).get('/.well-known/oauth-authorization-server').expect(200);
+  expect(asMeta.body.issuer).toBeTruthy();
+  expect(asMeta.body.token_endpoint).toContain('/token');
+
+  const prmStandard = await request(app).get('/.well-known/oauth-protected-resource/mcp').expect(200);
+  expect(prmStandard.body.resource).toContain('/mcp');
+
+  const prmCompat = await request(app).get('/.well-known/oauth-protected-resource').expect(200);
+  expect(prmCompat.body.resource).toContain('/mcp');
+  expect(prmCompat.body.authorization_servers[0]).toBeTruthy();
+ });
+
+ it('rejects /mcp without a bearer token', async () => {
+  const { app } = await importApp();
+  await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'ping', id: 1 }).expect(401);
+ });
+
+ it('returns 401 with a WWW-Authenticate challenge (not 500) for an unknown bearer', async () => {
+  const { app } = await importApp();
+  const res = await request(app)
+   .post('/mcp')
+   .set('Authorization', 'Bearer not-a-real-token')
+   .send({ jsonrpc: '2.0', method: 'ping', id: 1 });
+
+  // The 401 + challenge is what tells an MCP client to refresh or
+  // re-authenticate. A plain Error from verifyAccessToken becomes a 500
+  // the client can't act on.
+  expect(res.status).toBe(401);
+  expect(res.headers['www-authenticate']).toContain('invalid_token');
+  expect(res.headers['www-authenticate']).toContain('resource_metadata');
+ });
+
+ it('returns invalid_grant (not 500) for an unknown refresh token at /token', async () => {
+  const { app } = await importApp();
+  const reg = await request(app)
+   .post('/register')
+   .send({ redirect_uris: ['http://localhost/cb'], client_name: 'grant-error-test' })
+   .expect(201);
+
+  const res = await request(app)
+   .post('/token')
+   .type('form')
+   .send({
+    grant_type: 'refresh_token',
+    refresh_token: 'unknown-refresh-token',
+    client_id: reg.body.client_id,
+    client_secret: reg.body.client_secret,
+   });
+
+  expect(res.status).toBe(400);
+  expect(res.body.error).toBe('invalid_grant');
+ });
+
+ describe('bearer token lifetime', () => {
+  it('issues a 7-day bearer by default (no MCP_TOKEN_LIFETIME_HOURS set)', async () => {
+   delete process.env.MCP_TOKEN_LIFETIME_HOURS;
+   const { app } = await importApp();
+
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-default' })
+    .expect(201);
+
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+   const login = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'pw', auth_state: authState })
+    .expect(302);
+   const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+   const tokenResp = await request(app)
+    .post('/token')
+    .type('form')
+    .send({
+     grant_type: 'authorization_code',
+     code,
+     code_verifier: verifier,
+     client_id: reg.body.client_id,
+     client_secret: reg.body.client_secret,
+     redirect_uri: 'http://localhost/cb',
+    })
+    .expect(200);
+
+   // 7 days = 604800 seconds; tolerate ±1s round-trip jitter from the bridge.
+   expect(tokenResp.body.expires_in).toBeGreaterThanOrEqual(604_799);
+   expect(tokenResp.body.expires_in).toBeLessThanOrEqual(604_801);
+   expect(tokenResp.body.refresh_token).toBeTruthy();
   });
 
-  afterEach(async () => {
-    await closeOpenServers();
-    vi.clearAllMocks();
+  it('honors MCP_TOKEN_LIFETIME_HOURS', async () => {
+   process.env.MCP_TOKEN_LIFETIME_HOURS = '24'; // 1 day
+   const { app } = await importApp();
+   delete process.env.MCP_TOKEN_LIFETIME_HOURS;
+
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-custom' })
+    .expect(201);
+
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+   const login = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'pw', auth_state: authState })
+    .expect(302);
+   const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+   const tokenResp = await request(app)
+    .post('/token')
+    .type('form')
+    .send({
+     grant_type: 'authorization_code',
+     code,
+     code_verifier: verifier,
+     client_id: reg.body.client_id,
+     client_secret: reg.body.client_secret,
+     redirect_uri: 'http://localhost/cb',
+    })
+    .expect(200);
+
+   // 24 hours = 86400 seconds
+   expect(tokenResp.body.expires_in).toBe(86_400);
+  });
+ });
+
+ describe('Dynamic Client Registration', () => {
+  it('issues a client_secret for confidential clients (default)', async () => {
+   const { app } = await importApp();
+   const r = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['https://example.com/cb'], client_name: 'Test' })
+    .expect(201);
+   expect(r.body.client_id).toBeTruthy();
+   expect(r.body.client_secret).toBeTruthy();
   });
 
-  it('serves OAuth discovery and PRM at both standard and compat paths', async () => {
-    const { app } = await importApp();
+  it('omits client_secret for public clients (token_endpoint_auth_method=none)', async () => {
+   const { app } = await importApp();
+   const r = await request(app)
+    .post('/register')
+    .send({
+     redirect_uris: ['https://chatgpt.com/cb'],
+     client_name: 'Public Client',
+     token_endpoint_auth_method: 'none',
+    })
+    .expect(201);
+   expect(r.body.client_id).toBeTruthy();
+   expect(r.body.client_secret).toBeUndefined();
+  });
+ });
 
-    const asMeta = await request(app).get('/.well-known/oauth-authorization-server').expect(200);
-    expect(asMeta.body.issuer).toBeTruthy();
-    expect(asMeta.body.token_endpoint).toContain('/token');
+ describe('loopback callback on a changed port', () => {
+  async function registerLoopbackClient(app: unknown, port: number): Promise<string> {
+   const reg = await request(app as never)
+    .post('/register')
+    .send({
+     redirect_uris: [`http://localhost:${port}/callback`],
+     client_name: 'native client',
+     token_endpoint_auth_method: 'none',
+    })
+    .expect(201);
+   return reg.body.client_id as string;
+  }
 
-    const prmStandard = await request(app).get('/.well-known/oauth-protected-resource/mcp').expect(200);
-    expect(prmStandard.body.resource).toContain('/mcp');
+  function authorize(app: unknown, clientId: string, redirectUri: string) {
+   return request(app as never).get('/authorize').query({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: pkceChallenge(randomBytes(32).toString('base64url')),
+    code_challenge_method: 'S256',
+    state: 'xyz',
+   });
+  }
 
-    const prmCompat = await request(app).get('/.well-known/oauth-protected-resource').expect(200);
-    expect(prmCompat.body.resource).toContain('/mcp');
-    expect(prmCompat.body.authorization_servers[0]).toBeTruthy();
+  // A native client picks its loopback port per attempt and persists only its
+  // client_id, so without this the second sign-in fails forever and nothing
+  // prompts the client to register again.
+  it('serves the login page when the port differs from the registered one', async () => {
+   const { app } = await importApp();
+   const clientId = await registerLoopbackClient(app, 1410);
+
+   const res = await authorize(app, clientId, 'http://localhost:54321/callback').expect(200);
+
+   expect(res.text).toContain('<form');
+   expect(res.text).not.toContain('Unregistered redirect_uri');
   });
 
-  it('rejects /mcp without a bearer token', async () => {
-    const { app } = await importApp();
-    await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'ping', id: 1 }).expect(401);
+  it('accepts an equivalent loopback spelling on a different port', async () => {
+   const { app } = await importApp();
+   const clientId = await registerLoopbackClient(app, 1410);
+
+   await authorize(app, clientId, 'http://127.0.0.1:9876/callback').expect(200);
   });
 
-  it('returns 401 with a WWW-Authenticate challenge (not 500) for an unknown bearer', async () => {
-    const { app } = await importApp();
-    const res = await request(app)
-      .post('/mcp')
-      .set('Authorization', 'Bearer not-a-real-token')
-      .send({ jsonrpc: '2.0', method: 'ping', id: 1 });
+  it('still refuses a redirect_uri that leaves the machine', async () => {
+   const { app } = await importApp();
+   const clientId = await registerLoopbackClient(app, 1410);
 
-    // The 401 + challenge is what tells an MCP client to refresh or
-    // re-authenticate. A plain Error from verifyAccessToken becomes a 500
-    // the client can't act on.
-    expect(res.status).toBe(401);
-    expect(res.headers['www-authenticate']).toContain('invalid_token');
-    expect(res.headers['www-authenticate']).toContain('resource_metadata');
+   const res = await authorize(app, clientId, 'https://evil.example.com/callback').expect(400);
+
+   expect(res.body.error_description).toBe('Unregistered redirect_uri');
   });
 
-  it('returns invalid_grant (not 500) for an unknown refresh token at /token', async () => {
+  it('still refuses a loopback redirect_uri on an unregistered path', async () => {
+   const { app } = await importApp();
+   const clientId = await registerLoopbackClient(app, 1410);
+
+   const res = await authorize(app, clientId, 'http://localhost:1410/steal').expect(400);
+
+   expect(res.body.error_description).toBe('Unregistered redirect_uri');
+  });
+ });
+
+ describe('login → token (no MFA)', () => {
+  it('walks /authorize → /login → /token and issues bearer + refresh', async () => {
+   const { app } = await importApp();
+
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/callback'], client_name: 'E2E' })
+    .expect(201);
+   const { client_id, client_secret } = reg.body;
+
+   const verifier = randomBytes(32).toString('base64url');
+   const challenge = pkceChallenge(verifier);
+
+   const authResp = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id,
+     redirect_uri: 'http://localhost/callback',
+     code_challenge: challenge,
+     code_challenge_method: 'S256',
+     state: 'xyz',
+    })
+    .expect(200);
+
+   // The login page carries its own state, and sets no cookies at all.
+   const authState = hiddenField(authResp.text, 'auth_state');
+   expect(authState).toBeTruthy();
+   expect(authResp.headers['set-cookie']).toBeUndefined();
+
+   // Mock NS password grant (no MFA challenge) + user role detection
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+
+   const loginResp = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(302);
+
+   const location = loginResp.headers.location as string;
+   expect(location).toContain('http://localhost/callback?');
+   const params = new URL(location).searchParams;
+   const code = params.get('code')!;
+   expect(code).toBeTruthy();
+   expect(params.get('state')).toBe('xyz');
+
+   const tokenResp = await request(app)
+    .post('/token')
+    .type('form')
+    .send({
+     grant_type: 'authorization_code',
+     code,
+     code_verifier: verifier,
+     client_id,
+     client_secret,
+     redirect_uri: 'http://localhost/callback',
+    })
+    .expect(200);
+
+   expect(tokenResp.body.access_token).toBeTruthy();
+   expect(tokenResp.body.refresh_token).toBeTruthy();
+   expect(tokenResp.body.token_type).toBe('Bearer');
+
+   // Verify NS was called with v2 JSON shape
+   const nsCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
+   expect(nsCall[0]).toBe(NS_TOKEN_URL);
+   expect(nsCall[1]).toMatchObject({
+    grant_type: 'password',
+    client_id: 'op-client-id',
+    client_secret: 'op-client-secret',
+    username: 'alice',
+    password: 'hunter2',
+   });
+  });
+
+  it('surfaces NS error messages in the login error page on failed grant', async () => {
+   const { app } = await importApp();
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
+    .expect(201);
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn().mockRejectedValueOnce({
+    response: { status: 403, data: { code: 403, message: 'Invalid User Login' } },
+   });
+
+   const r = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'x', password: 'y', auth_state: authState })
+    .expect(200);
+   expect(r.text).toContain('Invalid User Login');
+  });
+
+  it('shows expired-session page when the post carries no state', async () => {
+   const { app } = await importApp();
+   const r = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'a', password: 'b' });
+   // Nothing to complete the flow with → friendly expiry page (HTTP 440).
+   expect(r.status).toBe(440);
+   expect(r.text).toMatch(/session has expired|reconnect/i);
+   expect(r.headers['cache-control']).toContain('no-store');
+  });
+ });
+
+ describe('MFA flow', () => {
+  it('renders MFA page when NS returns mfa_type, then completes via grant_type=mfa', async () => {
+   const { app } = await importApp();
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-test' })
+    .expect(201);
+
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   // First NS call: password grant returns MFA challenge
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({
+     data: {
+      access_token: 'partial-token',
+      mfa_type: 'authenticator',
+      mfa_vendor: 'google',
+      ns_id_type: 'subscriber',
+     },
+    })
+    // Second NS call: MFA grant succeeds
+    .mockResolvedValueOnce({
+     data: { access_token: 'final-ns', refresh_token: 'final-refresh', expires_in: 3600 },
+    });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+   const mfaResp = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(200);
+
+   const mfaState = hiddenField(mfaResp.text, 'mfa_state')!;
+   expect(mfaState).toBeTruthy();
+   expect(mfaResp.text).toMatch(/Authentication Code/i);
+   expect(mfaResp.text).toMatch(/google/i);
+
+   const finalize = await request(app)
+    .post('/mfa')
+    .type('form')
+    .send({ passcode: '123456', mfa_state: mfaState })
+    .expect(302);
+
+   expect(finalize.headers.location).toContain('http://localhost/cb?code=');
+
+   // Verify the second NS call used grant_type=mfa with the partial token
+   const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
+   expect(mfaCall[0]).toBe(NS_TOKEN_URL);
+   expect(mfaCall[1]).toMatchObject({
+    grant_type: 'mfa',
+    passcode: '123456',
+    mfa_type: 'authenticator',
+    mfa_vendor: 'google',
+    ns_id_type: 'subscriber',
+    access_token: 'partial-token',
+   });
+  });
+
+  it('rejects an invalid passcode with the MFA error page', async () => {
+   const { app } = await importApp();
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
+    .expect(201);
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({
+     data: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' },
+    })
+    .mockRejectedValueOnce({
+     response: { status: 401, data: { message: 'Invalid passcode' } },
+    });
+
+   const mfaPage = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'pw', auth_state: authState })
+    .expect(200);
+   const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
+
+   const bad = await request(app)
+    .post('/mfa')
+    .type('form')
+    .send({ passcode: '000000', mfa_state: mfaState })
+    .expect(200);
+   expect(bad.text).toMatch(/Invalid|expired|passcode/i);
+  });
+ });
+
+ describe('cookieless login state', () => {
+  async function startAuthorize(app: unknown, clientName: string) {
+   const reg = await request(app as never)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: clientName })
+    .expect(201);
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app as never)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+     state: 'xyz',
+    })
+    .expect(200);
+   return { reg, auth, verifier };
+  }
+
+  it('sets no cookies anywhere in the flow', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'no-cookies');
+   expect(auth.headers['set-cookie']).toBeUndefined();
+
+   const authState = hiddenField(auth.text, 'auth_state');
+   expect(authState).toBeTruthy();
+
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+   const login = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(302);
+
+   expect(login.headers['set-cookie']).toBeUndefined();
+   expect(login.headers.location).toContain('http://localhost/cb?');
+   expect(new URL(login.headers.location as string).searchParams.get('state')).toBe('xyz');
+  });
+
+  it('two concurrent authorize tabs both work, each with its own state', async () => {
+   const { app } = await importApp();
+   // The cookie era's worst failure: the second tab clobbered the first
+   // tab's state, so whichever the user finished in could be stranded.
+   const first = await startAuthorize(app, 'tab-one');
+   const second = await startAuthorize(app, 'tab-two');
+   const firstState = hiddenField(first.auth.text, 'auth_state')!;
+   const secondState = hiddenField(second.auth.text, 'auth_state')!;
+   expect(firstState).not.toBe(secondState);
+
+   mockedAxios.post = vi.fn().mockResolvedValue({
+    data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Basic User' } });
+
+   // Finish in the older tab, then the newer one. Both complete.
+   for (const state of [firstState, secondState]) {
+    await request(app)
+     .post('/login')
+     .type('form')
+     .send({ username: 'alice', password: 'hunter2', auth_state: state })
+     .expect(302);
+   }
+  });
+
+  it('accepts a login page that sat open well past a typical session', async () => {
+   const { app } = await importApp();
+   const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+
+   // 90 minutes old, inside the 2-hour window. A stale tab still signs in.
+   const staleState = signValue(
+    {
+     clientId: 'any',
+     codeChallenge: 'chal',
+     redirectUri: 'http://localhost/cb',
+     state: 'xyz',
+     scopes: [],
+     createdAt: Date.now() - 90 * 60 * 1000,
+    },
+    30 * 60,
+   );
+
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+   const login = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: staleState })
+    .expect(302);
+
+   expect(login.headers.location).toContain('http://localhost/cb?');
+  });
+
+  it('rejects a login page past its window', async () => {
+   const { app } = await importApp();
+   const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+
+   const expiredState = signValue(
+    {
+     clientId: 'any',
+     codeChallenge: 'chal',
+     redirectUri: 'http://localhost/cb',
+     scopes: [],
+     createdAt: Date.now() - 3 * 60 * 60 * 1000,
+    },
+    -60,
+   );
+
+   const r = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: expiredState })
+    .expect(440);
+   expect(r.text).toMatch(/session has expired/i);
+  });
+
+  it('rejects a forged state', async () => {
+   const { app } = await importApp();
+   const { signValue } = await import('../auth/netsapiens-auth-provider.js');
+   const good = signValue({ clientId: 'a', redirectUri: 'http://localhost/cb', createdAt: Date.now() }, 600);
+   const forged = `${good.split('.')[0]}.deadbeef`;
+
+   await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: forged })
+    .expect(440);
+  });
+
+  it('keeps the state on the page after a wrong password, so the retry works', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'retry-state');
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn().mockRejectedValueOnce({
+    response: { status: 403, data: { message: 'Invalid User Login' } },
+   });
+
+   const failed = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'wrong', auth_state: authState })
+    .expect(200);
+   expect(failed.text).toContain('Invalid User Login');
+
+   const retryState = hiddenField(failed.text, 'auth_state');
+   expect(retryState).toBeTruthy();
+
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+   });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+   await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'right', auth_state: retryState })
+    .expect(302);
+  });
+
+  it('completes MFA from the form state, without leaking the password into the page', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'mfa-form-state');
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({
+     data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
+    })
+    .mockResolvedValueOnce({
+     data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
+    });
+   mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
+
+   const mfaPage = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(200);
+
+   const mfaState = hiddenField(mfaPage.text, 'mfa_state');
+   expect(mfaState).toBeTruthy();
+   // The challenge carries the password for the NS mfa grant; sealed, it
+   // must not be readable in the page the browser renders.
+   expect(mfaPage.text).not.toContain('hunter2');
+   expect(mfaPage.text).not.toContain('partial-token');
+
+   const done = await request(app)
+    .post('/mfa')
+    .type('form')
+    .send({ passcode: '123456', mfa_state: mfaState })
+    .expect(302);
+   expect(done.headers.location).toContain('http://localhost/cb?');
+
+   const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
+   expect(mfaCall[1]).toMatchObject({
+    grant_type: 'mfa',
+    passcode: '123456',
+    password: 'hunter2',
+    access_token: 'partial-token',
+   });
+  });
+
+  it('keeps the MFA state on the page after a bad passcode', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'mfa-retry-state');
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({
+     data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
+    })
+    .mockRejectedValueOnce({ response: { status: 401, data: { message: 'Invalid passcode' } } });
+
+   const mfaPage = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(200);
+   const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
+
+   const bad = await request(app)
+    .post('/mfa')
+    .type('form')
+    .send({ passcode: '000000', mfa_state: mfaState })
+    .expect(200);
+   expect(bad.text).toMatch(/Invalid|expired|passcode/i);
+   expect(hiddenField(bad.text, 'mfa_state')).toBeTruthy();
+   expect(bad.text).not.toContain('hunter2');
+  });
+
+  it('rejects a cross-site POST even when it carries valid state', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'cross-site');
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   // With no cookies there is no SameSite behavior to lean on, so the fetch
+   // metadata is what stops another origin posting at our login form.
+   mockedAxios.post = vi.fn();
+   const r = await request(app)
+    .post('/login')
+    .set('Sec-Fetch-Site', 'cross-site')
+    .type('form')
+    .send({ username: 'alice', password: 'hunter2', auth_state: authState })
+    .expect(440);
+   expect(r.text).toMatch(/session has expired/i);
+   expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('serves the credential pages no-store', async () => {
+   const { app } = await importApp();
+   const { auth } = await startAuthorize(app, 'no-store');
+   expect(auth.headers['cache-control']).toContain('no-store');
+  });
+
+  it('still rejects a login with no state anywhere', async () => {
+   const { app } = await importApp();
+   const r = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'a', password: 'b' })
+    .expect(440);
+   expect(r.text).toMatch(/session has expired|reconnect/i);
+  });
+ });
+
+ describe('transparent NS token refresh', () => {
+  it('refreshes the upstream NS token when it is within the skew window', async () => {
+   const { app } = await importApp();
+   const reg = await request(app)
+    .post('/register')
+    .send({ redirect_uris: ['http://localhost/cb'], client_name: 'refresh-test' })
+    .expect(201);
+   const verifier = randomBytes(32).toString('base64url');
+   const auth = await request(app)
+    .get('/authorize')
+    .query({
+     response_type: 'code',
+     client_id: reg.body.client_id,
+     redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(verifier),
+     code_challenge_method: 'S256',
+    })
+    .expect(200);
+   const authState = hiddenField(auth.text, 'auth_state')!;
+
+   // NS password grant returns a token that's ALREADY expired so
+   // verifyAccessToken will trigger an immediate refresh.
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({
+     data: { access_token: 'old-ns', refresh_token: 'ns-refresh', expires_in: 1 },
+    });
+   mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
+
+   const login = await request(app)
+    .post('/login')
+    .type('form')
+    .send({ username: 'alice', password: 'pw', auth_state: authState })
+    .expect(302);
+   const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+   const tokenResp = await request(app)
+    .post('/token')
+    .type('form')
+    .send({
+     grant_type: 'authorization_code',
+     code,
+     code_verifier: verifier,
+     client_id: reg.body.client_id,
+     client_secret: reg.body.client_secret,
+     redirect_uri: 'http://localhost/cb',
+    })
+    .expect(200);
+   const mcpBearer = tokenResp.body.access_token;
+   expect(mcpBearer).toBeTruthy();
+
+   // Wait long enough that the 1-second NS token is in the skew window
+   await new Promise((r) => setTimeout(r, 50));
+
+   // Queue the refresh response
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({
+    data: { access_token: 'fresh-ns', refresh_token: 'ns-refresh-2', expires_in: 3600 },
+   });
+
+   // Hit /mcp with our bearer — server should silently refresh the NS token
+   await request(app)
+    .post('/mcp')
+    .set('Authorization', `Bearer ${mcpBearer}`)
+    .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+
+   const refreshCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
+   expect(refreshCall?.[0]).toBe(NS_TOKEN_URL);
+   expect(refreshCall?.[1]).toMatchObject({
+    grant_type: 'refresh_token',
+    refresh_token: 'ns-refresh',
+   });
+  });
+
+  it('propagates a mid-session NS refresh into the live session client', async () => {
+   // Capture the request interceptor of every NetSapiensClient built while
+   // this test runs, so we can see which bearer the session's client would
+   // put on its next NS API call.
+   const interceptors: Array<(cfg: { headers: Record<string, string> }) => Promise<{ headers: Record<string, string> }>> = [];
+   const origCreate = mockedAxios.create;
+   mockedAxios.create = vi.fn(() => ({
+    interceptors: {
+     request: { use: vi.fn((fn: (cfg: unknown) => unknown) => { interceptors.push(fn as never); }) },
+     response: { use: vi.fn() },
+    },
+    request: vi.fn(),
+    get: vi.fn(),
+    post: vi.fn(),
+   })) as unknown as typeof mockedAxios.create;
+
+   try {
+    // This behaviour is session-mode only: stateless rebuilds the client
+    // from the bearer on every request, so there is no long-lived client
+    // to propagate a refreshed token into.
+    process.env.MCP_STATELESS = 'false';
     const { app } = await importApp();
     const reg = await request(app)
-      .post('/register')
-      .send({ redirect_uris: ['http://localhost/cb'], client_name: 'grant-error-test' })
-      .expect(201);
+     .post('/register')
+     .send({ redirect_uris: ['http://localhost/cb'], client_name: 'propagate-test' })
+     .expect(201);
+    const verifier = randomBytes(32).toString('base64url');
+    const auth = await request(app)
+     .get('/authorize')
+     .query({
+      response_type: 'code',
+      client_id: reg.body.client_id,
+      redirect_uri: 'http://localhost/cb',
+      code_challenge: pkceChallenge(verifier),
+      code_challenge_method: 'S256',
+     })
+     .expect(200);
+    const authState = hiddenField(auth.text, 'auth_state')!;
 
-    const res = await request(app)
-      .post('/token')
-      .type('form')
-      .send({
-        grant_type: 'refresh_token',
-        refresh_token: 'unknown-refresh-token',
-        client_id: reg.body.client_id,
-        client_secret: reg.body.client_secret,
-      });
+    // NS token with a 1s lifetime sits inside the 60s refresh-skew window
+    // from the moment it's issued, so EVERY /mcp request triggers a
+    // transparent refresh — no clock manipulation needed.
+    mockedAxios.post = vi.fn().mockResolvedValueOnce({
+     data: { access_token: 'ns-1', refresh_token: 'nsr-1', expires_in: 1 },
+    });
+    mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('invalid_grant');
+    const login = await request(app)
+     .post('/login')
+     .type('form')
+     .send({ username: 'alice', password: 'pw', auth_state: authState })
+     .expect(302);
+    const code = new URL(login.headers.location as string).searchParams.get('code')!;
+
+    const tokenResp = await request(app)
+     .post('/token')
+     .type('form')
+     .send({
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: verifier,
+      client_id: reg.body.client_id,
+      client_secret: reg.body.client_secret,
+      redirect_uri: 'http://localhost/cb',
+     })
+     .expect(200);
+    const mcpBearer = tokenResp.body.access_token;
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Refresh #1 fires while verifying the initialize request; refresh #2
+    // fires on the follow-up request. Both mint tokens that are again
+    // inside the skew window.
+    mockedAxios.post = vi.fn()
+     .mockResolvedValueOnce({
+      data: { access_token: 'ns-2', refresh_token: 'nsr-2', expires_in: 1 },
+     })
+     .mockResolvedValueOnce({
+      data: { access_token: 'ns-3', refresh_token: 'nsr-3', expires_in: 1 },
+     });
+
+    const init = await request(app)
+     .post('/mcp')
+     .set('Authorization', `Bearer ${mcpBearer}`)
+     .set('Accept', 'application/json, text/event-stream')
+     .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+    const sessionId = init.headers['mcp-session-id'] as string;
+    expect(sessionId).toBeTruthy();
+
+    // The session's client was built with ns-2 (refreshed during initialize).
+    const sessionClientInterceptor = interceptors[interceptors.length - 1];
+    let cfg = await sessionClientInterceptor({ headers: {} });
+    expect(cfg.headers.Authorization).toBe('Bearer ns-2');
+
+    // The follow-up request refreshes ns-2 → ns-3 in the token store. The
+    // live session client must pick that up, or every NS API call for the
+    // rest of the session runs with a token NS has already invalidated.
+    await request(app)
+     .post('/mcp')
+     .set('Authorization', `Bearer ${mcpBearer}`)
+     .set('mcp-session-id', sessionId)
+     .set('Accept', 'application/json, text/event-stream')
+     .send({ jsonrpc: '2.0', method: 'tools/list', id: 2 });
+
+    cfg = await sessionClientInterceptor({ headers: {} });
+    expect(cfg.headers.Authorization).toBe('Bearer ns-3');
+   } finally {
+    mockedAxios.create = origCreate;
+    delete process.env.MCP_STATELESS;
+   }
   });
-
-  describe('bearer token lifetime', () => {
-    it('issues a 7-day bearer by default (no MCP_TOKEN_LIFETIME_HOURS set)', async () => {
-      delete process.env.MCP_TOKEN_LIFETIME_HOURS;
-      const { app } = await importApp();
-
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-default' })
-        .expect(201);
-
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
-
-      const login = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'pw', auth_state: authState })
-        .expect(302);
-      const code = new URL(login.headers.location as string).searchParams.get('code')!;
-
-      const tokenResp = await request(app)
-        .post('/token')
-        .type('form')
-        .send({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          client_id: reg.body.client_id,
-          client_secret: reg.body.client_secret,
-          redirect_uri: 'http://localhost/cb',
-        })
-        .expect(200);
-
-      // 7 days = 604800 seconds; tolerate ±1s round-trip jitter from the bridge.
-      expect(tokenResp.body.expires_in).toBeGreaterThanOrEqual(604_799);
-      expect(tokenResp.body.expires_in).toBeLessThanOrEqual(604_801);
-      expect(tokenResp.body.refresh_token).toBeTruthy();
-    });
-
-    it('honors MCP_TOKEN_LIFETIME_HOURS', async () => {
-      process.env.MCP_TOKEN_LIFETIME_HOURS = '24'; // 1 day
-      const { app } = await importApp();
-      delete process.env.MCP_TOKEN_LIFETIME_HOURS;
-
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'lifetime-custom' })
-        .expect(201);
-
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns', refresh_token: 'nsr', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
-
-      const login = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'pw', auth_state: authState })
-        .expect(302);
-      const code = new URL(login.headers.location as string).searchParams.get('code')!;
-
-      const tokenResp = await request(app)
-        .post('/token')
-        .type('form')
-        .send({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          client_id: reg.body.client_id,
-          client_secret: reg.body.client_secret,
-          redirect_uri: 'http://localhost/cb',
-        })
-        .expect(200);
-
-      // 24 hours = 86400 seconds
-      expect(tokenResp.body.expires_in).toBe(86_400);
-    });
-  });
-
-  describe('Dynamic Client Registration', () => {
-    it('issues a client_secret for confidential clients (default)', async () => {
-      const { app } = await importApp();
-      const r = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['https://example.com/cb'], client_name: 'Test' })
-        .expect(201);
-      expect(r.body.client_id).toBeTruthy();
-      expect(r.body.client_secret).toBeTruthy();
-    });
-
-    it('omits client_secret for public clients (token_endpoint_auth_method=none)', async () => {
-      const { app } = await importApp();
-      const r = await request(app)
-        .post('/register')
-        .send({
-          redirect_uris: ['https://chatgpt.com/cb'],
-          client_name: 'Public Client',
-          token_endpoint_auth_method: 'none',
-        })
-        .expect(201);
-      expect(r.body.client_id).toBeTruthy();
-      expect(r.body.client_secret).toBeUndefined();
-    });
-  });
-
-  describe('loopback callback on a changed port', () => {
-    async function registerLoopbackClient(app: unknown, port: number): Promise<string> {
-      const reg = await request(app as never)
-        .post('/register')
-        .send({
-          redirect_uris: [`http://localhost:${port}/callback`],
-          client_name: 'native client',
-          token_endpoint_auth_method: 'none',
-        })
-        .expect(201);
-      return reg.body.client_id as string;
-    }
-
-    function authorize(app: unknown, clientId: string, redirectUri: string) {
-      return request(app as never).get('/authorize').query({
-        response_type: 'code',
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        code_challenge: pkceChallenge(randomBytes(32).toString('base64url')),
-        code_challenge_method: 'S256',
-        state: 'xyz',
-      });
-    }
-
-    // A native client picks its loopback port per attempt and persists only its
-    // client_id, so without this the second sign-in fails forever and nothing
-    // prompts the client to register again.
-    it('serves the login page when the port differs from the registered one', async () => {
-      const { app } = await importApp();
-      const clientId = await registerLoopbackClient(app, 1410);
-
-      const res = await authorize(app, clientId, 'http://localhost:54321/callback').expect(200);
-
-      expect(res.text).toContain('<form');
-      expect(res.text).not.toContain('Unregistered redirect_uri');
-    });
-
-    it('accepts an equivalent loopback spelling on a different port', async () => {
-      const { app } = await importApp();
-      const clientId = await registerLoopbackClient(app, 1410);
-
-      await authorize(app, clientId, 'http://127.0.0.1:9876/callback').expect(200);
-    });
-
-    it('still refuses a redirect_uri that leaves the machine', async () => {
-      const { app } = await importApp();
-      const clientId = await registerLoopbackClient(app, 1410);
-
-      const res = await authorize(app, clientId, 'https://evil.example.com/callback').expect(400);
-
-      expect(res.text).toContain('sign-in refused');
-    });
-
-    it('still refuses a loopback redirect_uri on an unregistered path', async () => {
-      const { app } = await importApp();
-      const clientId = await registerLoopbackClient(app, 1410);
-
-      const res = await authorize(app, clientId, 'http://localhost:1410/steal').expect(400);
-
-      expect(res.text).toContain('sign-in refused');
-    });
-  });
-
-  describe('login → token (no MFA)', () => {
-    it('walks /authorize → /login → /token and issues bearer + refresh', async () => {
-      const { app } = await importApp();
-
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/callback'], client_name: 'E2E' })
-        .expect(201);
-      const { client_id, client_secret } = reg.body;
-
-      const verifier = randomBytes(32).toString('base64url');
-      const challenge = pkceChallenge(verifier);
-
-      const authResp = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id,
-          redirect_uri: 'http://localhost/callback',
-          code_challenge: challenge,
-          code_challenge_method: 'S256',
-          state: 'xyz',
-        })
-        .expect(200);
-
-      // The login page carries its own state, and sets no cookies at all.
-      const authState = hiddenField(authResp.text, 'auth_state');
-      expect(authState).toBeTruthy();
-      expect(authResp.headers['set-cookie']).toBeUndefined();
-
-      // Mock NS password grant (no MFA challenge) + user role detection
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
-
-      const loginResp = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(302);
-
-      const location = loginResp.headers.location as string;
-      expect(location).toContain('http://localhost/callback?');
-      const params = new URL(location).searchParams;
-      const code = params.get('code')!;
-      expect(code).toBeTruthy();
-      expect(params.get('state')).toBe('xyz');
-
-      const tokenResp = await request(app)
-        .post('/token')
-        .type('form')
-        .send({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          client_id,
-          client_secret,
-          redirect_uri: 'http://localhost/callback',
-        })
-        .expect(200);
-
-      expect(tokenResp.body.access_token).toBeTruthy();
-      expect(tokenResp.body.refresh_token).toBeTruthy();
-      expect(tokenResp.body.token_type).toBe('Bearer');
-
-      // Verify NS was called with v2 JSON shape
-      const nsCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(nsCall[0]).toBe(NS_TOKEN_URL);
-      expect(nsCall[1]).toMatchObject({
-        grant_type: 'password',
-        client_id: 'op-client-id',
-        client_secret: 'op-client-secret',
-        username: 'alice',
-        password: 'hunter2',
-      });
-    });
-
-    it('surfaces NS error messages in the login error page on failed grant', async () => {
-      const { app } = await importApp();
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
-        .expect(201);
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn().mockRejectedValueOnce({
-        response: { status: 403, data: { code: 403, message: 'Invalid User Login' } },
-      });
-
-      const r = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'x', password: 'y', auth_state: authState })
-        .expect(200);
-      expect(r.text).toContain('Invalid User Login');
-    });
-
-    it('shows expired-session page when the post carries no state', async () => {
-      const { app } = await importApp();
-      const r = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'a', password: 'b' });
-      // Nothing to complete the flow with → friendly expiry page (HTTP 440).
-      expect(r.status).toBe(440);
-      expect(r.text).toMatch(/session has expired|reconnect/i);
-      expect(r.headers['cache-control']).toContain('no-store');
-    });
-  });
-
-  describe('MFA flow', () => {
-    it('renders MFA page when NS returns mfa_type, then completes via grant_type=mfa', async () => {
-      const { app } = await importApp();
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-test' })
-        .expect(201);
-
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      // First NS call: password grant returns MFA challenge
-      mockedAxios.post = vi.fn()
-        .mockResolvedValueOnce({
-          data: {
-            access_token: 'partial-token',
-            mfa_type: 'authenticator',
-            mfa_vendor: 'google',
-            ns_id_type: 'subscriber',
-          },
-        })
-        // Second NS call: MFA grant succeeds
-        .mockResolvedValueOnce({
-          data: { access_token: 'final-ns', refresh_token: 'final-refresh', expires_in: 3600 },
-        });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
-
-      const mfaResp = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(200);
-
-      const mfaState = hiddenField(mfaResp.text, 'mfa_state')!;
-      expect(mfaState).toBeTruthy();
-      expect(mfaResp.text).toMatch(/Authentication Code/i);
-      expect(mfaResp.text).toMatch(/google/i);
-
-      const finalize = await request(app)
-        .post('/mfa')
-        .type('form')
-        .send({ passcode: '123456', mfa_state: mfaState })
-        .expect(302);
-
-      expect(finalize.headers.location).toContain('http://localhost/cb?code=');
-
-      // Verify the second NS call used grant_type=mfa with the partial token
-      const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
-      expect(mfaCall[0]).toBe(NS_TOKEN_URL);
-      expect(mfaCall[1]).toMatchObject({
-        grant_type: 'mfa',
-        passcode: '123456',
-        mfa_type: 'authenticator',
-        mfa_vendor: 'google',
-        ns_id_type: 'subscriber',
-        access_token: 'partial-token',
-      });
-    });
-
-    it('rejects an invalid passcode with the MFA error page', async () => {
-      const { app } = await importApp();
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 't' })
-        .expect(201);
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn()
-        .mockResolvedValueOnce({
-          data: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' },
-        })
-        .mockRejectedValueOnce({
-          response: { status: 401, data: { message: 'Invalid passcode' } },
-        });
-
-      const mfaPage = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'pw', auth_state: authState })
-        .expect(200);
-      const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
-
-      const bad = await request(app)
-        .post('/mfa')
-        .type('form')
-        .send({ passcode: '000000', mfa_state: mfaState })
-        .expect(200);
-      expect(bad.text).toMatch(/Invalid|expired|passcode/i);
-    });
-  });
-
-  describe('cookieless login state', () => {
-    async function startAuthorize(app: unknown, clientName: string) {
-      const reg = await request(app as never)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: clientName })
-        .expect(201);
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app as never)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-          state: 'xyz',
-        })
-        .expect(200);
-      return { reg, auth, verifier };
-    }
-
-    it('sets no cookies anywhere in the flow', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'no-cookies');
-      expect(auth.headers['set-cookie']).toBeUndefined();
-
-      const authState = hiddenField(auth.text, 'auth_state');
-      expect(authState).toBeTruthy();
-
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
-
-      const login = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(302);
-
-      expect(login.headers['set-cookie']).toBeUndefined();
-      expect(login.headers.location).toContain('http://localhost/cb?');
-      expect(new URL(login.headers.location as string).searchParams.get('state')).toBe('xyz');
-    });
-
-    it('two concurrent authorize tabs both work, each with its own state', async () => {
-      const { app } = await importApp();
-      // The cookie era's worst failure: the second tab clobbered the first
-      // tab's state, so whichever the user finished in could be stranded.
-      const first = await startAuthorize(app, 'tab-one');
-      const second = await startAuthorize(app, 'tab-two');
-      const firstState = hiddenField(first.auth.text, 'auth_state')!;
-      const secondState = hiddenField(second.auth.text, 'auth_state')!;
-      expect(firstState).not.toBe(secondState);
-
-      mockedAxios.post = vi.fn().mockResolvedValue({
-        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Basic User' } });
-
-      // Finish in the older tab, then the newer one. Both complete.
-      for (const state of [firstState, secondState]) {
-        await request(app)
-          .post('/login')
-          .type('form')
-          .send({ username: 'alice', password: 'hunter2', auth_state: state })
-          .expect(302);
-      }
-    });
-
-    it('accepts a login page that sat open well past a typical session', async () => {
-      const { app } = await importApp();
-      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
-
-      // 90 minutes old, inside the 2-hour window. A stale tab still signs in.
-      const staleState = signValue(
-        {
-          clientId: 'any',
-          codeChallenge: 'chal',
-          redirectUri: 'http://localhost/cb',
-          state: 'xyz',
-          scopes: [],
-          createdAt: Date.now() - 90 * 60 * 1000,
-        },
-        30 * 60,
-      );
-
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
-
-      const login = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: staleState })
-        .expect(302);
-
-      expect(login.headers.location).toContain('http://localhost/cb?');
-    });
-
-    it('rejects a login page past its window', async () => {
-      const { app } = await importApp();
-      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
-
-      const expiredState = signValue(
-        {
-          clientId: 'any',
-          codeChallenge: 'chal',
-          redirectUri: 'http://localhost/cb',
-          scopes: [],
-          createdAt: Date.now() - 3 * 60 * 60 * 1000,
-        },
-        -60,
-      );
-
-      const r = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: expiredState })
-        .expect(440);
-      expect(r.text).toMatch(/session has expired/i);
-    });
-
-    it('rejects a forged state', async () => {
-      const { app } = await importApp();
-      const { signValue } = await import('../auth/netsapiens-auth-provider.js');
-      const good = signValue({ clientId: 'a', redirectUri: 'http://localhost/cb', createdAt: Date.now() }, 600);
-      const forged = `${good.split('.')[0]}.deadbeef`;
-
-      await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: forged })
-        .expect(440);
-    });
-
-    it('keeps the state on the page after a wrong password, so the retry works', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'retry-state');
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn().mockRejectedValueOnce({
-        response: { status: 403, data: { message: 'Invalid User Login' } },
-      });
-
-      const failed = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'wrong', auth_state: authState })
-        .expect(200);
-      expect(failed.text).toContain('Invalid User Login');
-
-      const retryState = hiddenField(failed.text, 'auth_state');
-      expect(retryState).toBeTruthy();
-
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-      });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
-
-      await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'right', auth_state: retryState })
-        .expect(302);
-    });
-
-    it('completes MFA from the form state, without leaking the password into the page', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'mfa-form-state');
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn()
-        .mockResolvedValueOnce({
-          data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
-        })
-        .mockResolvedValueOnce({
-          data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 },
-        });
-      mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Basic User' } });
-
-      const mfaPage = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(200);
-
-      const mfaState = hiddenField(mfaPage.text, 'mfa_state');
-      expect(mfaState).toBeTruthy();
-      // The challenge carries the password for the NS mfa grant; sealed, it
-      // must not be readable in the page the browser renders.
-      expect(mfaPage.text).not.toContain('hunter2');
-      expect(mfaPage.text).not.toContain('partial-token');
-
-      const done = await request(app)
-        .post('/mfa')
-        .type('form')
-        .send({ passcode: '123456', mfa_state: mfaState })
-        .expect(302);
-      expect(done.headers.location).toContain('http://localhost/cb?');
-
-      const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
-      expect(mfaCall[1]).toMatchObject({
-        grant_type: 'mfa',
-        passcode: '123456',
-        password: 'hunter2',
-        access_token: 'partial-token',
-      });
-    });
-
-    it('keeps the MFA state on the page after a bad passcode', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'mfa-retry-state');
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      mockedAxios.post = vi.fn()
-        .mockResolvedValueOnce({
-          data: { access_token: 'partial-token', mfa_type: 'authenticator', mfa_vendor: 'google' },
-        })
-        .mockRejectedValueOnce({ response: { status: 401, data: { message: 'Invalid passcode' } } });
-
-      const mfaPage = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(200);
-      const mfaState = hiddenField(mfaPage.text, 'mfa_state')!;
-
-      const bad = await request(app)
-        .post('/mfa')
-        .type('form')
-        .send({ passcode: '000000', mfa_state: mfaState })
-        .expect(200);
-      expect(bad.text).toMatch(/Invalid|expired|passcode/i);
-      expect(hiddenField(bad.text, 'mfa_state')).toBeTruthy();
-      expect(bad.text).not.toContain('hunter2');
-    });
-
-    it('rejects a cross-site POST even when it carries valid state', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'cross-site');
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      // With no cookies there is no SameSite behavior to lean on, so the fetch
-      // metadata is what stops another origin posting at our login form.
-      mockedAxios.post = vi.fn();
-      const r = await request(app)
-        .post('/login')
-        .set('Sec-Fetch-Site', 'cross-site')
-        .type('form')
-        .send({ username: 'alice', password: 'hunter2', auth_state: authState })
-        .expect(440);
-      expect(r.text).toMatch(/session has expired/i);
-      expect(mockedAxios.post).not.toHaveBeenCalled();
-    });
-
-    it('serves the credential pages no-store', async () => {
-      const { app } = await importApp();
-      const { auth } = await startAuthorize(app, 'no-store');
-      expect(auth.headers['cache-control']).toContain('no-store');
-    });
-
-    it('still rejects a login with no state anywhere', async () => {
-      const { app } = await importApp();
-      const r = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'a', password: 'b' })
-        .expect(440);
-      expect(r.text).toMatch(/session has expired|reconnect/i);
-    });
-  });
-
-  describe('transparent NS token refresh', () => {
-    it('refreshes the upstream NS token when it is within the skew window', async () => {
-      const { app } = await importApp();
-      const reg = await request(app)
-        .post('/register')
-        .send({ redirect_uris: ['http://localhost/cb'], client_name: 'refresh-test' })
-        .expect(201);
-      const verifier = randomBytes(32).toString('base64url');
-      const auth = await request(app)
-        .get('/authorize')
-        .query({
-          response_type: 'code',
-          client_id: reg.body.client_id,
-          redirect_uri: 'http://localhost/cb',
-          code_challenge: pkceChallenge(verifier),
-          code_challenge_method: 'S256',
-        })
-        .expect(200);
-      const authState = hiddenField(auth.text, 'auth_state')!;
-
-      // NS password grant returns a token that's ALREADY expired so
-      // verifyAccessToken will trigger an immediate refresh.
-      mockedAxios.post = vi.fn()
-        .mockResolvedValueOnce({
-          data: { access_token: 'old-ns', refresh_token: 'ns-refresh', expires_in: 1 },
-        });
-      mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
-
-      const login = await request(app)
-        .post('/login')
-        .type('form')
-        .send({ username: 'alice', password: 'pw', auth_state: authState })
-        .expect(302);
-      const code = new URL(login.headers.location as string).searchParams.get('code')!;
-
-      const tokenResp = await request(app)
-        .post('/token')
-        .type('form')
-        .send({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          client_id: reg.body.client_id,
-          client_secret: reg.body.client_secret,
-          redirect_uri: 'http://localhost/cb',
-        })
-        .expect(200);
-      const mcpBearer = tokenResp.body.access_token;
-      expect(mcpBearer).toBeTruthy();
-
-      // Wait long enough that the 1-second NS token is in the skew window
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Queue the refresh response
-      mockedAxios.post = vi.fn().mockResolvedValueOnce({
-        data: { access_token: 'fresh-ns', refresh_token: 'ns-refresh-2', expires_in: 3600 },
-      });
-
-      // Hit /mcp with our bearer — server should silently refresh the NS token
-      await request(app)
-        .post('/mcp')
-        .set('Authorization', `Bearer ${mcpBearer}`)
-        .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
-
-      const refreshCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(refreshCall?.[0]).toBe(NS_TOKEN_URL);
-      expect(refreshCall?.[1]).toMatchObject({
-        grant_type: 'refresh_token',
-        refresh_token: 'ns-refresh',
-      });
-    });
-
-    it('propagates a mid-session NS refresh into the live session client', async () => {
-      // Capture the request interceptor of every NetSapiensClient built while
-      // this test runs, so we can see which bearer the session's client would
-      // put on its next NS API call.
-      const interceptors: Array<(cfg: { headers: Record<string, string> }) => Promise<{ headers: Record<string, string> }>> = [];
-      const origCreate = mockedAxios.create;
-      mockedAxios.create = vi.fn(() => ({
-        interceptors: {
-          request: { use: vi.fn((fn: (cfg: unknown) => unknown) => { interceptors.push(fn as never); }) },
-          response: { use: vi.fn() },
-        },
-        request: vi.fn(),
-        get: vi.fn(),
-        post: vi.fn(),
-      })) as unknown as typeof mockedAxios.create;
-
-      try {
-        // This behaviour is session-mode only: stateless rebuilds the client
-        // from the bearer on every request, so there is no long-lived client
-        // to propagate a refreshed token into.
-        process.env.MCP_STATELESS = 'false';
-        const { app } = await importApp();
-        const reg = await request(app)
-          .post('/register')
-          .send({ redirect_uris: ['http://localhost/cb'], client_name: 'propagate-test' })
-          .expect(201);
-        const verifier = randomBytes(32).toString('base64url');
-        const auth = await request(app)
-          .get('/authorize')
-          .query({
-            response_type: 'code',
-            client_id: reg.body.client_id,
-            redirect_uri: 'http://localhost/cb',
-            code_challenge: pkceChallenge(verifier),
-            code_challenge_method: 'S256',
-          })
-          .expect(200);
-        const authState = hiddenField(auth.text, 'auth_state')!;
-
-        // NS token with a 1s lifetime sits inside the 60s refresh-skew window
-        // from the moment it's issued, so EVERY /mcp request triggers a
-        // transparent refresh — no clock manipulation needed.
-        mockedAxios.post = vi.fn().mockResolvedValueOnce({
-          data: { access_token: 'ns-1', refresh_token: 'nsr-1', expires_in: 1 },
-        });
-        mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
-
-        const login = await request(app)
-          .post('/login')
-          .type('form')
-          .send({ username: 'alice', password: 'pw', auth_state: authState })
-          .expect(302);
-        const code = new URL(login.headers.location as string).searchParams.get('code')!;
-
-        const tokenResp = await request(app)
-          .post('/token')
-          .type('form')
-          .send({
-            grant_type: 'authorization_code',
-            code,
-            code_verifier: verifier,
-            client_id: reg.body.client_id,
-            client_secret: reg.body.client_secret,
-            redirect_uri: 'http://localhost/cb',
-          })
-          .expect(200);
-        const mcpBearer = tokenResp.body.access_token;
-
-        await new Promise((r) => setTimeout(r, 5));
-
-        // Refresh #1 fires while verifying the initialize request; refresh #2
-        // fires on the follow-up request. Both mint tokens that are again
-        // inside the skew window.
-        mockedAxios.post = vi.fn()
-          .mockResolvedValueOnce({
-            data: { access_token: 'ns-2', refresh_token: 'nsr-2', expires_in: 1 },
-          })
-          .mockResolvedValueOnce({
-            data: { access_token: 'ns-3', refresh_token: 'nsr-3', expires_in: 1 },
-          });
-
-        const init = await request(app)
-          .post('/mcp')
-          .set('Authorization', `Bearer ${mcpBearer}`)
-          .set('Accept', 'application/json, text/event-stream')
-          .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
-        const sessionId = init.headers['mcp-session-id'] as string;
-        expect(sessionId).toBeTruthy();
-
-        // The session's client was built with ns-2 (refreshed during initialize).
-        const sessionClientInterceptor = interceptors[interceptors.length - 1];
-        let cfg = await sessionClientInterceptor({ headers: {} });
-        expect(cfg.headers.Authorization).toBe('Bearer ns-2');
-
-        // The follow-up request refreshes ns-2 → ns-3 in the token store. The
-        // live session client must pick that up, or every NS API call for the
-        // rest of the session runs with a token NS has already invalidated.
-        await request(app)
-          .post('/mcp')
-          .set('Authorization', `Bearer ${mcpBearer}`)
-          .set('mcp-session-id', sessionId)
-          .set('Accept', 'application/json, text/event-stream')
-          .send({ jsonrpc: '2.0', method: 'tools/list', id: 2 });
-
-        cfg = await sessionClientInterceptor({ headers: {} });
-        expect(cfg.headers.Authorization).toBe('Bearer ns-3');
-      } finally {
-        mockedAxios.create = origCreate;
-        delete process.env.MCP_STATELESS;
-      }
-    });
-  });
+ });
 });

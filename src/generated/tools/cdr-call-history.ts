@@ -5,39 +5,113 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_cdrs: ToolDefinition = {
   schema: {
     name: 'get_cdrs',
-    description: 'Read CDRs — [GET /cdrs]',
+    description: 'List CDRs — Returns call detail records (CDRs) across domains, newest first. Requires Super User, Super User Read Only, or Reseller scope. A Reseller sees only its own territory\\\'s domains. A Super User sees every domain unless you narrow the request with `domain` or `reseller`. Office Manager and Basic User scopes use `GET /domains/{domain}/cdrs` and `GET /domains/{domain}/users/{user}/cdrs`.  Set the window with `datetime-start` and `datetime-end`, matched on `call-start-datetime`. Without both, or when the start is not before the end, the window is about the last 60 days, from 00:00 UTC through the end of today. The offset you send moves the window and sets the offset of the response times.  Page with `start` and `limit`, 100 rows by default. `limit` also picks the response shape:  - `limit` of 100 or less, or `raw=yes`: the expanded shape, with the full call record merged into each row - `limit` over 100, or `0` for no limit: the base shape, without `id`, the SIP Call-IDs, `core-server`, and about 60 other fields  The expanded shape costs one extra lookup per row. `call-parent-cdr-id` is on every row, and it is the id the keyed paths and `/quality` take.  Filter with the parameters listed here, or with any field of the row for an exact match, such as `call-orig-user=1001`, `call-direction=0`, or `call-disposition=Sale`. A name that is not a field of this read is ignored and does not filter. Fields that are empty are left out of the row.  Use `GET /cdrs/count` for the total and the talk time. There is no `/cdrs/list`: it returns `405`. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /cdrs]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, the window is about the last 60 days."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
                 },
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Rows to skip before the first one returned. Defaults to `0`. Offsets carry across monthly tables. Default: 0",
                       "default": 0
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Most rows to return. Defaults to `100`, and `0` means no limit. It also picks the response shape: `100` or less returns the expanded shape, and more than `100` or `0` returns the base shape. Default: 100",
                       "default": 100
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
                 },
                 "orig_callid": {
                       "type": "string",
-                      "description": "Optional and legacy ability to lookup a specific call by orig_callid . Only available for top level without specific domain set."
+                      "description": "Finds the call whose originating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
                 },
                 "term_callid": {
                       "type": "string",
-                      "description": "Optional and legacy ability to lookup a specific call by term_callid. Only available for top level without specific domain set."
+                      "description": "Finds the call whose terminating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
+                },
+                "raw": {
+                      "type": "string",
+                      "description": "`yes` returns the expanded shape whatever `limit` is. Any non-empty value works. An empty value is dropped and does nothing. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "is_asc": {
+                      "type": "string",
+                      "description": "`true` lists oldest first. Defaults to `false`, newest first. Any value other than `false` sorts oldest first. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "order_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by net sentiment, positive minus negative percent, highest first, instead of by start time. `is_asc=true` puts the most negative first. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain's calls. A Super User can name any domain. A Reseller can name a domain in its territory; another returns `403`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only calls in this territory's domains. For a Super User. A Reseller's own territory applies anyway, and another territory returns `403`."
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose dialed number, `call-orig-to-user`, contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls whose caller's From URI, `call-orig-from-uri`, contains this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls filed under this site. The rows then use the site shape, `CdrG`, with `grp` and `grp_type`. A Site Manager must name its own site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Only calls filed under this department. The rows then use the site shape, `CdrG`. `department` is accepted as the same parameter."
+                },
+                "order_ending_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by `ending_sentiment`, highest first, with rows that have none last. `is_asc=true` reverses the order. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -46,8 +120,14 @@ export const get_cdrs: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type', 'orig_callid', 'term_callid'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type', 'orig_callid', 'term_callid', 'raw', 'is_asc', 'showhidden', 'order_sentiment', 'domain', 'reseller', 'dialled', 'caller', 'site', 'group', 'order_ending_sentiment'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -70,35 +150,109 @@ export const get_cdrs: ToolDefinition = {
 export const get_domains_by_domain_cdrs_1: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_cdrs_1',
-    description: 'Read CDRs for Domain — [GET /domains/{domain}/cdrs]',
+    description: 'List domain CDRs — Returns one domain\\\'s call detail records (CDRs), newest first. Requires Office Manager, Office Manager Read-Only, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User or Super User Read Only scope. A Site Manager reads its own site by adding `site`.  Set the window with `datetime-start` and `datetime-end`, matched on `call-start-datetime`. Without both, or when the start is not before the end, the window is about the last 60 days, from 00:00 UTC through the end of today. The offset you send moves the window and sets the offset of the response times.  Page with `start` and `limit`, 100 rows by default. `limit` also picks the response shape:  - `limit` of 100 or less, or `raw=yes`: the expanded shape, with the full call record merged into each row - `limit` over 100, or `0` for no limit: the base shape, without `id`, the SIP Call-IDs, `core-server`, and about 60 other fields  The expanded shape costs one extra lookup per row. `call-parent-cdr-id` is on every row, and it is the id the keyed paths and `/quality` take.  ## Search and site forms  The same path takes these forms. Each is a named example:  - **Search:** `dialled` matches part of the dialed number and `caller` part of the caller\\\'s From URI - **Site or department:** `site` or `group` returns the calls filed under it, in the site shape (`CdrG`) with `grp` and `grp_type` - **By SIP Call-ID:** `orig_callid` or `term_callid` finds one call  Filter with the parameters listed here, or with any field of the row for an exact match, such as `call-orig-user=1001`, `call-direction=0`, or `call-disposition=Sale`. A name that is not a field of this read is ignored and does not filter. Fields that are empty are left out of the row.  Use `GET /domains/{domain}/cdrs/count` for the total, and `GET /domains/{domain}/cdrs/stats` for a time series. There is no `/list` form: it returns `405`. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /domains/{domain}/cdrs]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, the window is about the last 60 days."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
                 },
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Rows to skip before the first one returned. Defaults to `0`. Offsets carry across monthly tables. Default: 0",
                       "default": 0
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Most rows to return. Defaults to `100`, and `0` means no limit. It also picks the response shape: `100` or less returns the expanded shape, and more than `100` or `0` returns the base shape. Default: 100",
                       "default": 100
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
+                },
+                "raw": {
+                      "type": "string",
+                      "description": "`yes` returns the expanded shape whatever `limit` is. Any non-empty value works. An empty value is dropped and does nothing. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "is_asc": {
+                      "type": "string",
+                      "description": "`true` lists oldest first. Defaults to `false`, newest first. Any value other than `false` sorts oldest first. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "order_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by net sentiment, positive minus negative percent, highest first, instead of by start time. `is_asc=true` puts the most negative first. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose dialed number, `call-orig-to-user`, contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls whose caller's From URI, `call-orig-from-uri`, contains this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls filed under this site. The rows then use the site shape, `CdrG`, with `grp` and `grp_type`. A Site Manager must name its own site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Only calls filed under this department. The rows then use the site shape, `CdrG`. `department` is accepted as the same parameter."
+                },
+                "orig_callid": {
+                      "type": "string",
+                      "description": "Finds the call whose originating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
+                },
+                "term_callid": {
+                      "type": "string",
+                      "description": "Finds the call whose terminating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
+                },
+                "order_ending_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by `ending_sentiment`, highest first, with rows that have none last. `is_asc=true` reverses the order. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -108,13 +262,19 @@ export const get_domains_by_domain_cdrs_1: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type', 'raw', 'is_asc', 'showhidden', 'order_sentiment', 'dialled', 'caller', 'site', 'group', 'orig_callid', 'term_callid', 'order_ending_sentiment'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -138,39 +298,105 @@ export const get_domains_by_domain_cdrs_1: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_cdrs: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_cdrs',
-    description: ' Read CDRs for Specific User — [GET /domains/{domain}/users/{user}/cdrs]',
+    description: 'List user CDRs — Returns one user\\\'s call detail records (CDRs), newest first. Requires Basic User scope or a scope that covers the user. Basic User, Advanced User, Simple User, and Call Center Agent scopes read only their own calls. A Site Manager reads users in its own site, Office Manager scopes read any user in their domain, and Reseller and Super User scopes read users in the domains they cover.  Set the window with `datetime-start` and `datetime-end`, matched on `call-start-datetime`. Without both, or when the start is not before the end, the window is about the last 60 days, from 00:00 UTC through the end of today. The offset you send moves the window and sets the offset of the response times.  Page with `start` and `limit`, 100 rows by default. `limit` also picks the response shape:  - `limit` of 100 or less, or `raw=yes`: the expanded shape, with the full call record merged into each row - `limit` over 100, or `0` for no limit: the base shape, without `id`, the SIP Call-IDs, `core-server`, and about 60 other fields  The expanded shape costs one extra lookup per row. `call-parent-cdr-id` is on every row, and it is the id the keyed paths and `/quality` take.  `dialled` matches part of the To URI, and `caller` part of the other party\\\'s number on calls the user received. Basic User, Site Manager, and the other user-level scopes get `403` if they add `site`, `group`, `orig_from_uri`, or `orig_to_user`, because those filters read beyond one user. Filter with the parameters listed here, or with any field of the row for an exact match, such as `call-orig-user=1001`, `call-direction=0`, or `call-disposition=Sale`. A name that is not a field of this read is ignored and does not filter. Fields that are empty are left out of the row.  Use `GET /domains/{domain}/users/{user}/cdrs/count` for the total. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /domains/{domain}/users/{user}/cdrs]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, the window is about the last 60 days."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
                 },
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Rows to skip before the first one returned. Defaults to `0`. Offsets carry across monthly tables. Default: 0",
                       "default": 0
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Most rows to return. Defaults to `100`, and `0` means no limit. It also picks the response shape: `100` or less returns the expanded shape, and more than `100` or `0` returns the base shape. Default: 100",
                       "default": 100
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
+                },
+                "raw": {
+                      "type": "string",
+                      "description": "`yes` returns the expanded shape whatever `limit` is. Any non-empty value works. An empty value is dropped and does nothing. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "is_asc": {
+                      "type": "string",
+                      "description": "`true` lists oldest first. Defaults to `false`, newest first. Any value other than `false` sorts oldest first. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "order_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by net sentiment, positive minus negative percent, highest first, instead of by start time. `is_asc=true` puts the most negative first. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose To URI contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls the user received, or missed, whose other party's number contains this value. Outbound calls are left out."
+                },
+                "orig_callid": {
+                      "type": "string",
+                      "description": "Finds the call whose originating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
+                },
+                "term_callid": {
+                      "type": "string",
+                      "description": "Finds the call whose terminating leg has this SIP Call-ID, and returns that call's rows in your scope. The rows use the expanded shape."
+                },
+                "order_ending_sentiment": {
+                      "type": "string",
+                      "description": "`yes` sorts by `ending_sentiment`, highest first, with rows that have none last. `is_asc=true` reverses the order. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -181,13 +407,19 @@ export const get_domains_by_domain_users_by_user_cdrs: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/cdrs',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'start', 'limit', 'type', 'raw', 'is_asc', 'showhidden', 'order_sentiment', 'dialled', 'caller', 'orig_callid', 'term_callid', 'order_ending_sentiment'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -221,7 +453,7 @@ export const get_domains_by_domain_cdrs_2: ToolDefinition = {
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Supported formats include. * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
                 },
                 "datetime-end": {
                       "type": "string",
@@ -250,6 +482,12 @@ export const get_domains_by_domain_cdrs_2: ToolDefinition = {
                 "datetime-end"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -291,7 +529,7 @@ export const get_domains_by_domain_cdrs_3: ToolDefinition = {
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Supported formats include. * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
                 },
                 "datetime-end": {
                       "type": "string",
@@ -306,6 +544,12 @@ export const get_domains_by_domain_cdrs_3: ToolDefinition = {
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -337,21 +581,65 @@ export const get_domains_by_domain_cdrs_3: ToolDefinition = {
 export const get_cdrs_count: ToolDefinition = {
   schema: {
     name: 'get_cdrs_count',
-    description: 'Count CDRs and SUM minutes — [GET /cdrs/count]',
+    description: 'Count CDRs — Counts the call detail records (CDRs) that match across domains, and totals their talk time. Requires Super User, Super User Read Only, or Reseller scope. A Reseller sees only its own territory\\\'s domains. A Super User sees every domain unless you narrow the request with `domain` or `reseller`.  Send `datetime-start` and `datetime-end`: unlike the list, a count has no default window, and without them it returns `400`. The filters are the list\\\'s, and rows hidden with `hide-from-results` are left out unless you send `showhidden`. `minutes` rounds up month by month, so it can exceed `seconds` / 60 by up to 1 per month. Refused scope returns `403`. — [GET /cdrs/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Required: without both `datetime-start` and `datetime-end` the request returns `400`."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`. Required."
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain's calls. A Super User can name any domain. A Reseller can name a domain in its territory; another returns `403`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only calls in this territory's domains. For a Super User. A Reseller's own territory applies anyway, and another territory returns `403`."
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose dialed number, `call-orig-to-user`, contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls whose caller's From URI, `call-orig-from-uri`, contains this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls filed under this site. The rows then use the site shape, `CdrG`, with `grp` and `grp_type`. A Site Manager must name its own site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Only calls filed under this department. The rows then use the site shape, `CdrG`. `department` is accepted as the same parameter."
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -360,8 +648,14 @@ export const get_cdrs_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['datetime-start', 'datetime-end', 'type'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'type', 'domain', 'reseller', 'dialled', 'caller', 'site', 'group', 'showhidden'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -384,25 +678,61 @@ export const get_cdrs_count: ToolDefinition = {
 export const get_domains_by_domain_cdrs_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_cdrs_count',
-    description: 'Count CDRs and SUM minutes for Domain — [GET /domains/{domain}/cdrs/count]',
+    description: 'Count domain CDRs — Counts one domain\\\'s call detail records (CDRs) that match, and totals their talk time. Requires Office Manager, Office Manager Read-Only, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User or Super User Read Only scope. A Site Manager reads its own site by adding `site`.  Send `datetime-start` and `datetime-end`: unlike the list, a count has no default window, and without them it returns `400`. The filters are the list\\\'s, and rows hidden with `hide-from-results` are left out unless you send `showhidden`. `minutes` rounds up month by month, so it can exceed `seconds` / 60 by up to 1 per month. Refused scope returns `403`. — [GET /domains/{domain}/cdrs/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Required: without both `datetime-start` and `datetime-end` the request returns `400`."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`. Required."
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose dialed number, `call-orig-to-user`, contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls whose caller's From URI, `call-orig-from-uri`, contains this value."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls filed under this site. The rows then use the site shape, `CdrG`, with `grp` and `grp_type`. A Site Manager must name its own site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Only calls filed under this department. The rows then use the site shape, `CdrG`. `department` is accepted as the same parameter."
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -412,13 +742,19 @@ export const get_domains_by_domain_cdrs_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'type'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'type', 'dialled', 'caller', 'site', 'group', 'showhidden'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -442,29 +778,57 @@ export const get_domains_by_domain_cdrs_count: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_cdrs_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_cdrs_count',
-    description: 'Count CDRs and SUM minutes for Specifc User — [GET /domains/{domain}/users/{user}/cdrs/count]',
+    description: 'Count user CDRs — Counts one user\\\'s call detail records (CDRs) that match, and totals their talk time. Requires Basic User scope or a scope that covers the user. Basic User, Advanced User, Simple User, and Call Center Agent scopes read only their own calls. A Site Manager reads users in its own site, Office Manager scopes read any user in their domain, and Reseller and Super User scopes read users in the domains they cover.  Send `datetime-start` and `datetime-end`: unlike the list, a count has no default window, and without them it returns `400`. The filters are the list\\\'s, and rows hidden with `hide-from-results` are left out unless you send `showhidden`. `minutes` rounds up month by month, so it can exceed `seconds` / 60 by up to 1 per month. Refused scope returns `403`. — [GET /domains/{domain}/users/{user}/cdrs/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Required: without both `datetime-start` and `datetime-end` the request returns `400`."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`. Required."
                 },
                 "type": {
                       "type": "string",
-                      "description": "Options include Inbound, Outbound, On-net, Off-net, Missed, Received, or integer type 0,1,2,3"
+                      "description": "Only calls of one kind: `Inbound` is `call-direction` `1` or `2`, `Received` is `1`, `Missed` is `2`, `Outbound` is `0`, `On-net` or `Ext to Ext` is `3`, and `Off-net` is anything below `3`. A number matches `call-direction` exactly. Names match exactly, so `inbound` is refused: any other value returns `400`. Allowed values: \"Inbound\", \"Received\", \"Missed\", \"Outbound\", \"On-net\", \"Ext to Ext\", \"Off-net\", \"0\", \"1\", \"2\", \"3\"",
+                      "enum": [
+                            "Inbound",
+                            "Received",
+                            "Missed",
+                            "Outbound",
+                            "On-net",
+                            "Ext to Ext",
+                            "Off-net",
+                            "0",
+                            "1",
+                            "2",
+                            "3"
+                      ]
+                },
+                "dialled": {
+                      "type": "string",
+                      "description": "Only calls whose To URI contains this value. `dialed` is accepted as the same parameter."
+                },
+                "caller": {
+                      "type": "string",
+                      "description": "Only calls the user received, or missed, whose other party's number contains this value. Outbound calls are left out."
+                },
+                "showhidden": {
+                      "type": "string",
+                      "description": "`yes` includes rows whose `hide-from-results` is `1`. They are left out otherwise. Any non-empty value works. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
@@ -475,13 +839,19 @@ export const get_domains_by_domain_users_by_user_cdrs_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/cdrs/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'type'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'type', 'dialled', 'caller', 'showhidden'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -491,6 +861,860 @@ export const get_domains_by_domain_users_by_user_cdrs_count: ToolDefinition = {
       pathTemplate: '/domains/{domain}/users/{user}/cdrs/count',
       pathParams,
       queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_single_cdrcall_id: ToolDefinition = {
+  schema: {
+    name: 'read_single_cdrcall_id',
+    description: 'Read CDR — Returns one call detail record (CDR) by its id. Requires Super User, Super User Read Only, or Reseller scope, and a Reseller reads only calls in its territory. Office Manager and Basic User scopes use the domain or user path.  `{callid}` is the record\\\'s `call-parent-cdr-id`, not a SIP Call-ID. The record is looked for in the window set by `datetime-start` and `datetime-end`, about the last 60 days by default, so an older call needs the window. A read by id always returns the expanded shape, including rows hidden with `hide-from-results`. A record outside the window or outside your scope returns `404`. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record: the `call-parent-cdr-id` from a list read. Despite the name, this is not a SIP Call-ID. To find a call by SIP Call-ID, list with `orig_callid` or `term_callid`."
+                },
+                "datetime-start": {
+                      "type": "string",
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, only about the last 60 days are searched."
+                },
+                "datetime-end": {
+                      "type": "string",
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
+                }
+          },
+          "required": [
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['datetime-start', 'datetime-end'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/cdrs/{callid}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_cdrrecord: ToolDefinition = {
+  schema: {
+    name: 'update_cdrrecord',
+    description: 'Update CDR — Sets the disposition fields on one call detail record (CDR): `notes`, `disposition`, `reason`, `pac`, and `time_disp`. Requires Reseller or Super User scope, and a Reseller updates only calls in its territory.  The path\\\'s `{callid}` picks the record. The record must be from this month or last month, and within your scope. Send only the fields to change; the other fields of the record are never written. `call-disposition-submitted-datetime` takes RFC 3339 or Unix seconds and is stored as Unix seconds. The v1 names (`notes`, `disposition`, `reason`, `pac`, `time_disp`) are accepted as the same fields.  A `202` means the change was published over the service bus (SBUS), not that it is applied: read the record back to see it. A body with none of the five fields returns `400`, and so does a body `call-parent-cdr-id` that differs from the path. A record that is not found, or not within your scope, returns `404`. — [PUT /cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record to change: its `call-parent-cdr-id`. Despite the name, this is not a SIP Call-ID. A `call-parent-cdr-id` in the body is optional, and one that differs from the path returns `400`."
+                },
+                "call-parent-cdr-id": {
+                      "type": "string",
+                      "description": "Id of the record. Optional: the path names it, and a different value returns `400`."
+                },
+                "call-disposition": {
+                      "type": "string",
+                      "description": "Disposition to set, such as a wrap-up code"
+                },
+                "call-disposition-reason": {
+                      "type": "string",
+                      "description": "Reason to record with the disposition"
+                },
+                "call-disposition-notes": {
+                      "type": "string",
+                      "description": "Notes to record with the disposition. Stored as text with no practical length limit."
+                },
+                "call-account-code": {
+                      "type": "string",
+                      "description": "Account code for the call"
+                },
+                "call-disposition-submitted-datetime": {
+                      "type": "string",
+                      "description": "When the disposition was submitted. RFC 3339, or Unix seconds. Stored as Unix seconds."
+                }
+          },
+          "required": [
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /cdrs/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['call-parent-cdr-id', 'call-disposition', 'call-disposition-reason', 'call-disposition-notes', 'call-account-code', 'call-disposition-submitted-datetime'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/cdrs/{callid}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdr_stats: ToolDefinition = {
+  schema: {
+    name: 'read_cdr_stats',
+    description: 'Read CDR statistics — Returns call counts and talk time as a time series for your territory or the whole platform. Requires Reseller, Super User, or Super User Read Only scope. A Reseller always gets its own territory, and `domain` and `reseller` are ignored. A Super User gets the whole platform, or one domain with `domain`, or one territory with `reseller`. The response says which: `scope` reads `system`, or the response carries `reseller` or `domain`. Other scopes get `403`.  The window, bucket, and `count_only` rules are those of `GET /domains/{domain}/cdrs/stats`. Whole-platform results are cached for up to 60 seconds. Rows hidden with `hide-from-results` are counted unless you narrow to one domain. Months moved to archive storage are skipped by default, so a window that reaches into them undercounts. — [GET /cdrs/stats]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "range": {
+                      "type": "string",
+                      "description": "Window ending now: `1h`, `3h`, `6h`, `12h`, `24h`, `2d`, `7d`, or `28d`. Defaults to `24h`. Ignored when you send both `start_date` and `end_date`. Any other value returns `400`. Allowed values: \"1h\", \"3h\", \"6h\", \"12h\", \"24h\", \"2d\", \"7d\", \"28d\". Default: \"24h\"",
+                      "enum": [
+                            "1h",
+                            "3h",
+                            "6h",
+                            "12h",
+                            "24h",
+                            "2d",
+                            "7d",
+                            "28d"
+                      ],
+                      "default": "24h"
+                },
+                "start_date": {
+                      "type": "string",
+                      "description": "Start of an explicit window. Takes precedence over `range`, and only with `end_date`. Use RFC 3339, such as `2026-09-01T12:00:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. `datetime-start` is accepted as the same parameter. A start that is not before the end returns `400`."
+                },
+                "end_date": {
+                      "type": "string",
+                      "description": "End of an explicit window, in the same forms as `start_date`. `datetime-end` is accepted as the same parameter."
+                },
+                "period": {
+                      "type": "string",
+                      "description": "Bucket size: `minute`, `tens` (10 minutes), `hour`, or `day`. By default it follows `range`: `1h` and `3h` use `minute`, `6h` to `24h` use `tens`, `2d` and `7d` use `hour`, and `28d` uses `day`. For explicit dates it is `minute` up to 1 hour, `tens` up to 12 hours, `hour` up to 7 days, and `day` beyond. More than 5,000 buckets returns `400`. Allowed values: \"minute\", \"tens\", \"hour\", \"day\"",
+                      "enum": [
+                            "minute",
+                            "tens",
+                            "hour",
+                            "day"
+                      ]
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Only calls of one kind, as in `GET /cdrs`: `Inbound`, `Received`, `Missed`, `Outbound`, `On-net`, or `Off-net`. Allowed values: \"Inbound\", \"Outbound\", \"On-net\", \"Off-net\", \"Missed\", \"Received\"",
+                      "enum": [
+                            "Inbound",
+                            "Outbound",
+                            "On-net",
+                            "Off-net",
+                            "Missed",
+                            "Received"
+                      ]
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "One territory only. For a Super User; a Reseller's request always uses its own territory."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "One domain only. For a Super User; a Reseller's request ignores it."
+                },
+                "count_only": {
+                      "type": "string",
+                      "description": "`yes` returns only `calls` in each point, leaving out `minutes` and `seconds`, which is faster. `1`, `true`, and `on` work too. Allowed values: \"yes\", \"true\", \"1\", \"on\"",
+                      "enum": [
+                            "yes",
+                            "true",
+                            "1",
+                            "on"
+                      ]
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs/stats',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['range', 'start_date', 'end_date', 'period', 'type', 'reseller', 'domain', 'count_only'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/cdrs/stats',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdr_top: ToolDefinition = {
+  schema: {
+    name: 'read_cdr_top',
+    description: 'Rank domains by call volume — Ranks domains, or territories with `by=reseller`, by the number of calls in a window, busiest first. Requires Reseller, Super User, or Super User Read Only scope. A Reseller ranks only its own territory\\\'s domains, and `domain` and `reseller` are ignored. A Super User ranks the whole platform, or narrows with `domain` or `reseller`. Other scopes get `403`.  Set the window with `range`, which ends now and defaults to `24h`, or with both `start_date` and `end_date`. `limit` sets how many to return, 10 by default, clamped to 1 to 100. Each entry carries `calls` only. Whole-platform results are cached for up to 60 seconds, and months moved to archive storage are skipped by default. Use `GET /cdrs/stats` for a time series. — [GET /cdrs/top]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "by": {
+                      "type": "string",
+                      "description": "Rank `domain`, the default, or `reseller`. Any other value returns `400`. Allowed values: \"domain\", \"reseller\". Default: \"domain\"",
+                      "enum": [
+                            "domain",
+                            "reseller"
+                      ],
+                      "default": "domain"
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "How many to return. Defaults to `10`. A value below 1 or above 100 is clamped to that bound rather than refused. Default: 100",
+                      "default": 100
+                },
+                "range": {
+                      "type": "string",
+                      "description": "Window ending now: `1h`, `3h`, `6h`, `12h`, `24h`, `2d`, `7d`, or `28d`. Defaults to `24h`. Ignored when you send both `start_date` and `end_date`. Any other value returns `400`. Allowed values: \"1h\", \"3h\", \"6h\", \"12h\", \"24h\", \"2d\", \"7d\", \"28d\". Default: \"24h\"",
+                      "enum": [
+                            "1h",
+                            "3h",
+                            "6h",
+                            "12h",
+                            "24h",
+                            "2d",
+                            "7d",
+                            "28d"
+                      ],
+                      "default": "24h"
+                },
+                "start_date": {
+                      "type": "string",
+                      "description": "Start of an explicit window. Takes precedence over `range`, and only with `end_date`. Use RFC 3339, such as `2026-09-01T12:00:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. `datetime-start` is accepted as the same parameter. A start that is not before the end returns `400`."
+                },
+                "end_date": {
+                      "type": "string",
+                      "description": "End of an explicit window, in the same forms as `start_date`. `datetime-end` is accepted as the same parameter."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Only calls of one kind, as in `GET /cdrs`: `Inbound`, `Received`, `Missed`, `Outbound`, `On-net`, or `Off-net`. Allowed values: \"Inbound\", \"Outbound\", \"On-net\", \"Off-net\", \"Missed\", \"Received\"",
+                      "enum": [
+                            "Inbound",
+                            "Outbound",
+                            "On-net",
+                            "Off-net",
+                            "Missed",
+                            "Received"
+                      ]
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "One territory only. For a Super User; a Reseller's request always uses its own territory."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "One domain only. For a Super User; a Reseller's request ignores it."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs/top',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['by', 'limit', 'range', 'start_date', 'end_date', 'type', 'reseller', 'domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/cdrs/top',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdr_call_quality: ToolDefinition = {
+  schema: {
+    name: 'read_cdr_call_quality',
+    description: 'Read call quality — Returns the audio quality of each leg of one call: MOS, jitter, and packet loss in both directions, with links to the quality monitor that captured it. Requires Super User, Super User Read Only, Super User CDR, or Reseller scope, and a Reseller reads only calls that involve a domain in its territory. A call outside your scope, or one that does not exist, returns `404`, so an id cannot be used as an existence probe. Other scopes get `403`; use `GET /domains/{domain}/cdrs/{id}/quality`.  `{id}` is the call\\\'s `call-parent-cdr-id`. By default this month and last month are searched; for an older call, send `date`, which also searches the months either side. `side` returns one leg.  Each entry has both audio directions of its leg. `call-quality-direction-a` is audio from `call-quality-caller` to `call-quality-called`, and `call-quality-direction-b` is the reverse. `voipmonitor-url` opens the capture on the monitor that recorded it, and `voipmonitor-search-url` searches that monitor by SIP Call-ID; both need a monitor login.  An empty array means the call exists but has no quality data: it predates quality scanning, scanning is off on this cluster, or the call ended less than about 30 seconds ago. A metric that was not measured is left out rather than reported as `0`, and the `rtcp-*` metrics are left out until RTCP capture is on. The summary MOS of each leg is also on the CDR as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`. — [GET /cdrs/{id}/quality]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "id": {
+                      "type": "string",
+                      "description": "Id of the call record: its `call-parent-cdr-id`, from a CDR read. Letters, digits, `-`, and `_`."
+                },
+                "side": {
+                      "type": "string",
+                      "description": "Return one leg only: `orig` or `term`. Omitted or empty returns both. Any other value returns `400`. Allowed values: \"orig\", \"term\"",
+                      "enum": [
+                            "orig",
+                            "term"
+                      ]
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month to search first, as `YYYYMM`, such as `202609`, or a date in that month, such as `2026-09-01`. The months before and after are searched too, because the monthly tables are split by UTC month. A value that cannot be read returns `400`."
+                }
+          },
+          "required": [
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /cdrs/{}/quality',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['side', 'date'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/cdrs/{id}/quality',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_domain_scoped_cdrcall_id: ToolDefinition = {
+  schema: {
+    name: 'read_domain_scoped_cdrcall_id',
+    description: 'Read domain CDR — Returns one call detail record (CDR) in a domain, by its id. Requires Office Manager, Office Manager Read-Only, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User or Super User Read Only scope. A Site Manager reads its own site by adding `site`.  `{callid}` is the record\\\'s `call-parent-cdr-id`, not a SIP Call-ID. The record is looked for in the window set by `datetime-start` and `datetime-end`, about the last 60 days by default, so an older call needs the window. A read by id always returns the expanded shape, including rows hidden with `hide-from-results`. A record outside the window or outside your scope returns `404`. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /domains/{domain}/cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record: the `call-parent-cdr-id` from a list read. Despite the name, this is not a SIP Call-ID. To find a call by SIP Call-ID, list with `orig_callid` or `term_callid`."
+                },
+                "datetime-start": {
+                      "type": "string",
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, only about the last 60 days are searched."
+                },
+                "datetime-end": {
+                      "type": "string",
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
+                }
+          },
+          "required": [
+                "domain",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['datetime-start', 'datetime-end'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/cdrs/{callid}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_domain_scoped_cdr: ToolDefinition = {
+  schema: {
+    name: 'update_domain_scoped_cdr',
+    description: 'Update domain CDR — Sets the disposition fields on one call detail record (CDR) in a domain: `notes`, `disposition`, `reason`, `pac`, and `time_disp`. Requires Office Manager, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User scope.  The path\\\'s `{callid}` picks the record. The record must be from this month or last month, and within your scope. Send only the fields to change; the other fields of the record are never written. `call-disposition-submitted-datetime` takes RFC 3339 or Unix seconds and is stored as Unix seconds. The v1 names (`notes`, `disposition`, `reason`, `pac`, `time_disp`) are accepted as the same fields.  A `202` means the change was published over the service bus (SBUS), not that it is applied: read the record back to see it. A body with none of the five fields returns `400`, and so does a body `call-parent-cdr-id` that differs from the path. A record that is not found, or not within your scope, returns `404`. — [PUT /domains/{domain}/cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record to change: its `call-parent-cdr-id`. Despite the name, this is not a SIP Call-ID. A `call-parent-cdr-id` in the body is optional, and one that differs from the path returns `400`."
+                },
+                "call-parent-cdr-id": {
+                      "type": "string",
+                      "description": "Id of the record. Optional: the path names it, and a different value returns `400`."
+                },
+                "call-disposition": {
+                      "type": "string",
+                      "description": "Disposition to set, such as a wrap-up code"
+                },
+                "call-disposition-reason": {
+                      "type": "string",
+                      "description": "Reason to record with the disposition"
+                },
+                "call-disposition-notes": {
+                      "type": "string",
+                      "description": "Notes to record with the disposition. Stored as text with no practical length limit."
+                },
+                "call-account-code": {
+                      "type": "string",
+                      "description": "Account code for the call"
+                },
+                "call-disposition-submitted-datetime": {
+                      "type": "string",
+                      "description": "When the disposition was submitted. RFC 3339, or Unix seconds. Stored as Unix seconds."
+                }
+          },
+          "required": [
+                "domain",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/cdrs/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['call-parent-cdr-id', 'call-disposition', 'call-disposition-reason', 'call-disposition-notes', 'call-account-code', 'call-disposition-submitted-datetime'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/cdrs/{callid}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdr_stats_domain: ToolDefinition = {
+  schema: {
+    name: 'read_cdr_stats_domain',
+    description: 'Read domain CDR statistics — Returns one domain\\\'s call counts and talk time as a time series, one point per bucket. Requires Office Manager, Office Manager Read-Only, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User or Super User Read Only scope.  Set the window with `range`, which ends now and defaults to `24h`, or with both `start_date` and `end_date`, which take precedence. `datetime-start` and `datetime-end` are accepted as the same pair. The bucket size follows the window unless you set `period`, and more than 5,000 buckets returns `400`. Every bucket is returned, with `0` where there were no calls, and `count_only=yes` leaves out `minutes` and `seconds` for a faster answer.  Rows hidden with `hide-from-results` are not counted. Months moved to archive storage are skipped by default, so a window that reaches into them undercounts. Use `GET /cdrs/stats` for a territory or the whole platform, and `GET /domains/{domain}/cdrs/count` for one total. — [GET /domains/{domain}/cdrs/stats]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "range": {
+                      "type": "string",
+                      "description": "Window ending now: `1h`, `3h`, `6h`, `12h`, `24h`, `2d`, `7d`, or `28d`. Defaults to `24h`. Ignored when you send both `start_date` and `end_date`. Any other value returns `400`. Allowed values: \"1h\", \"3h\", \"6h\", \"12h\", \"24h\", \"2d\", \"7d\", \"28d\". Default: \"24h\"",
+                      "enum": [
+                            "1h",
+                            "3h",
+                            "6h",
+                            "12h",
+                            "24h",
+                            "2d",
+                            "7d",
+                            "28d"
+                      ],
+                      "default": "24h"
+                },
+                "start_date": {
+                      "type": "string",
+                      "description": "Start of an explicit window. Takes precedence over `range`, and only with `end_date`. Use RFC 3339, such as `2026-09-01T12:00:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. `datetime-start` is accepted as the same parameter. A start that is not before the end returns `400`."
+                },
+                "end_date": {
+                      "type": "string",
+                      "description": "End of an explicit window, in the same forms as `start_date`. `datetime-end` is accepted as the same parameter."
+                },
+                "period": {
+                      "type": "string",
+                      "description": "Bucket size: `minute`, `tens` (10 minutes), `hour`, or `day`. By default it follows `range`: `1h` and `3h` use `minute`, `6h` to `24h` use `tens`, `2d` and `7d` use `hour`, and `28d` uses `day`. For explicit dates it is `minute` up to 1 hour, `tens` up to 12 hours, `hour` up to 7 days, and `day` beyond. More than 5,000 buckets returns `400`. Allowed values: \"minute\", \"tens\", \"hour\", \"day\"",
+                      "enum": [
+                            "minute",
+                            "tens",
+                            "hour",
+                            "day"
+                      ]
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Only calls of one kind, as in `GET /cdrs`: `Inbound`, `Received`, `Missed`, `Outbound`, `On-net`, or `Off-net`. Allowed values: \"Inbound\", \"Outbound\", \"On-net\", \"Off-net\", \"Missed\", \"Received\"",
+                      "enum": [
+                            "Inbound",
+                            "Outbound",
+                            "On-net",
+                            "Off-net",
+                            "Missed",
+                            "Received"
+                      ]
+                },
+                "count_only": {
+                      "type": "string",
+                      "description": "`yes` returns only `calls` in each point, leaving out `minutes` and `seconds`, which is faster. `1`, `true`, and `on` work too. Allowed values: \"yes\", \"true\", \"1\", \"on\"",
+                      "enum": [
+                            "yes",
+                            "true",
+                            "1",
+                            "on"
+                      ]
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/stats',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['range', 'start_date', 'end_date', 'period', 'type', 'count_only'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/cdrs/stats',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdr_call_quality_by_domain: ToolDefinition = {
+  schema: {
+    name: 'read_cdr_call_quality_by_domain',
+    description: 'Read domain call quality — Returns the audio quality of each leg of one call: MOS, jitter, and packet loss in both directions, with links to the quality monitor that captured it. Requires Office Manager, Office Manager Read-Only, Call Center Supervisor, or Route Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User or Super User Read Only scope. The call must involve the domain in the path: a call that does not, or that does not exist, returns `404`, so an id cannot be used to probe other domains.  `{id}` is the call\\\'s `call-parent-cdr-id`. By default this month and last month are searched; for an older call, send `date`, which also searches the months either side. `side` returns one leg.  Each entry has both audio directions of its leg. `call-quality-direction-a` is audio from `call-quality-caller` to `call-quality-called`, and `call-quality-direction-b` is the reverse. `voipmonitor-url` opens the capture on the monitor that recorded it, and `voipmonitor-search-url` searches that monitor by SIP Call-ID; both need a monitor login.  An empty array means the call exists but has no quality data: it predates quality scanning, scanning is off on this cluster, or the call ended less than about 30 seconds ago. A metric that was not measured is left out rather than reported as `0`, and the `rtcp-*` metrics are left out until RTCP capture is on. The summary MOS of each leg is also on the CDR as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`. — [GET /domains/{domain}/cdrs/{id}/quality]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Id of the call record: its `call-parent-cdr-id`, from a CDR read. Letters, digits, `-`, and `_`."
+                },
+                "side": {
+                      "type": "string",
+                      "description": "Return one leg only: `orig` or `term`. Omitted or empty returns both. Any other value returns `400`. Allowed values: \"orig\", \"term\"",
+                      "enum": [
+                            "orig",
+                            "term"
+                      ]
+                },
+                "date": {
+                      "type": "string",
+                      "description": "Month to search first, as `YYYYMM`, such as `202609`, or a date in that month, such as `2026-09-01`. The months before and after are searched too, because the monthly tables are split by UTC month. A value that cannot be read returns `400`."
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/cdrs/{}/quality',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['side', 'date'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/cdrs/{id}/quality',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_user_scoped_cdrcall_id: ToolDefinition = {
+  schema: {
+    name: 'read_user_scoped_cdrcall_id',
+    description: 'Read user CDR — Returns one call detail record (CDR) of a user, by its id. Requires Basic User scope or a scope that covers the user. Basic User, Advanced User, Simple User, and Call Center Agent scopes read only their own calls. A Site Manager reads users in its own site, Office Manager scopes read any user in their domain, and Reseller and Super User scopes read users in the domains they cover.  `{callid}` is the record\\\'s `call-parent-cdr-id`, not a SIP Call-ID. The record is looked for in the window set by `datetime-start` and `datetime-end`, about the last 60 days by default, so an older call needs the window. A read by id always returns the expanded shape, including rows hidden with `hide-from-results`. A record outside the window or outside your scope returns `404`. The `qos` parameter is no longer supported. It is ignored, and the response carries a `Warning: 299` header. The summary MOS of each leg is on the row as `call-audio-quality-orig-mos` and `call-audio-quality-term-mos`, and `GET /cdrs/{id}/quality` has each direction. — [GET /domains/{domain}/users/{user}/cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record: the `call-parent-cdr-id` from a list read. Despite the name, this is not a SIP Call-ID. To find a call by SIP Call-ID, list with `orig_callid` or `term_callid`."
+                },
+                "datetime-start": {
+                      "type": "string",
+                      "description": "Start of the window, matched on `call-start-datetime`. Use RFC 3339, such as `2026-09-01T00:00:00+00:00`. Also accepted: `YYYY-MM-DD HH:MM:SS` in UTC, a date alone (from 00:00:00), and a time zone name in brackets after the time, such as `2026-09-01T00:00:00-05:00[America/Chicago]`, which reads the clock time in that zone and shows the response times in it. A numeric offset, such as `-05:00`, moves the window the same way and sets the offset of the response times. An offset that cannot be read returns `400`. Without both `datetime-start` and `datetime-end`, only about the last 60 days are searched."
+                },
+                "datetime-end": {
+                      "type": "string",
+                      "description": "End of the window, exclusive, in the same forms as `datetime-start`. A date alone means 23:59:59 that day. It must be later than `datetime-start`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/cdrs/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['datetime-start', 'datetime-end'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/cdrs/{callid}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_user_scoped_cdr: ToolDefinition = {
+  schema: {
+    name: 'update_user_scoped_cdr',
+    description: 'Update user CDR — Sets the disposition fields on one call detail record (CDR) of a user: `notes`, `disposition`, `reason`, `pac`, and `time_disp`. Requires Basic User scope for your own calls, or a scope that covers the user: Site Manager for its site, Office Manager, Call Center Supervisor, or Route Manager for its domain, Reseller, or Super User.  The path\\\'s `{callid}` picks the record. The record must be from this month or last month, and within your scope. Send only the fields to change; the other fields of the record are never written. `call-disposition-submitted-datetime` takes RFC 3339 or Unix seconds and is stored as Unix seconds. The v1 names (`notes`, `disposition`, `reason`, `pac`, `time_disp`) are accepted as the same fields.  A `202` means the change was published over the service bus (SBUS), not that it is applied: read the record back to see it. A body with none of the five fields returns `400`, and so does a body `call-parent-cdr-id` that differs from the path. A record that is not found, or not within your scope, returns `404`. — [PUT /domains/{domain}/users/{user}/cdrs/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Id of the call record to change: its `call-parent-cdr-id`. Despite the name, this is not a SIP Call-ID. A `call-parent-cdr-id` in the body is optional, and one that differs from the path returns `400`."
+                },
+                "call-parent-cdr-id": {
+                      "type": "string",
+                      "description": "Id of the record. Optional: the path names it, and a different value returns `400`."
+                },
+                "call-disposition": {
+                      "type": "string",
+                      "description": "Disposition to set, such as a wrap-up code"
+                },
+                "call-disposition-reason": {
+                      "type": "string",
+                      "description": "Reason to record with the disposition"
+                },
+                "call-disposition-notes": {
+                      "type": "string",
+                      "description": "Notes to record with the disposition. Stored as text with no practical length limit."
+                },
+                "call-account-code": {
+                      "type": "string",
+                      "description": "Account code for the call"
+                },
+                "call-disposition-submitted-datetime": {
+                      "type": "string",
+                      "description": "When the disposition was submitted. RFC 3339, or Unix seconds. Stored as Unix seconds."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/cdrs/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['call-parent-cdr-id', 'call-disposition', 'call-disposition-reason', 'call-disposition-notes', 'call-account-code', 'call-disposition-submitted-datetime'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/cdrs/{callid}',
+      pathParams,
+      body,
     });
 
     return {
