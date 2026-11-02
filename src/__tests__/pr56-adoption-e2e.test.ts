@@ -144,8 +144,10 @@ describe('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant sha
     const ctrlFenced = await getCutoverFenceRecord(db, namespace);
     const report = await adoptFirestoreLegacyTokens({
       db,
+      FieldPath: { documentId: () => '__name__' },
       namespace,
       key,
+      dryRun: false,
       expectedEpoch: ctrlFenced!.epoch,
       migrationRunId: 'pr56-run',
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',

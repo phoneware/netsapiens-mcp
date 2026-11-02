@@ -22,16 +22,23 @@ import type {
 } from './types.js';
 import { logger } from '../utils/logger.js';
 
-export const ACCESS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-export const SESSION_RETENTION_MS = ACCESS_RETENTION_MS;
-export const REFRESH_RETRY_WINDOW_MS = 30_000;
-export const MAX_RETIRED_REFRESH_FINGERPRINTS = 64;
-export const AUTH_CODE_TTL_MS = 5 * 60 * 1000;
-export const RESUME_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-export const REFRESH_WAIT_MS = 15_000;
-export const REFRESH_POLL_MS = 150;
-export const REFRESH_LEASE_MS = 15_000;
-export const REFRESH_SKEW_MS = 60_000;
+export {
+  ACCESS_RETENTION_MS,
+  SESSION_RETENTION_MS,
+  REFRESH_RETRY_WINDOW_MS,
+  MAX_RETIRED_REFRESH_FINGERPRINTS,
+  AUTH_CODE_TTL_MS,
+  RESUME_TOKEN_TTL_MS,
+  REFRESH_WAIT_MS,
+  REFRESH_POLL_MS,
+  REFRESH_LEASE_MS,
+  REFRESH_SKEW_MS,
+  accessAad,
+  refreshAad,
+  familyAad,
+  upstreamAad,
+  sessionAad,
+} from './row-format.js';
 
 export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): OAuthClientInformationFull {
   if ('_mcp_format' in (client as Record<string, unknown>)) {
@@ -44,26 +51,6 @@ export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 
   if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
   else delete full.client_secret;
   return full;
-}
-
-export function accessAad(row: { id: string; familyId: string }): string {
-  return `access:${row.id}:${row.familyId}`;
-}
-
-export function refreshAad(row: { id: string; familyId: string; generation: number }): string {
-  return `refresh:${row.id}:${row.familyId}:${row.generation}`;
-}
-
-export function familyAad(row: { id: string; generation: number }): string {
-  return `family:${row.id}:${row.generation}`;
-}
-
-export function upstreamAad(row: { id: string; grantVersion: number }): string {
-  return `upstream:${row.id}:${row.grantVersion}`;
-}
-
-export function sessionAad(row: Pick<SessionRow, 'id' | 'refreshId'>): string {
-  return `session:${row.id}:${row.refreshId}`;
 }
 
 interface FamilySealedData {

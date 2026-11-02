@@ -141,8 +141,10 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
     const ctrlFenced = await getCutoverFenceRecord(db, namespace);
     const report = await adoptFirestoreLegacyTokens({
       db,
+      FieldPath: { documentId: () => '__name__' },
       namespace,
       key,
+      dryRun: false,
       expectedEpoch: ctrlFenced!.epoch,
       migrationRunId: 'pr56-retired-run',
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
