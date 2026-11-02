@@ -4662,19 +4662,41 @@ function extractCandidatesAndPlan(params) {
   for (const d of tokensDocs) {
     const data = d.data() || {};
     const credToken = data.accessToken ?? data.token?.accessToken ?? d.id;
-    if (typeof credToken === "string") {
+    if (typeof credToken === "string" && credToken.length > 0) {
+      const expId = legacyDocId(credToken);
+      if (d.id !== expId && d.id !== credToken) {
+        reasons.malformedRecords++;
+        continue;
+      }
+      if (tokensByCredential.has(credToken)) {
+        const existing = tokensByCredential.get(credToken);
+        if (existing.physicalId !== d.id) {
+          reasons.conflictingClaims++;
+          continue;
+        }
+      }
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       tokensByCredential.set(credToken, entry);
       tokensByPhysicalId.set(d.id, entry);
       tokensByPhysicalId.set(legacyDocId(credToken), entry);
     }
   }
-  const refreshByCredential = /* @__PURE__ */ new Map();
-  const refreshByPhysicalId = /* @__PURE__ */ new Map();
   for (const d of refreshDocs) {
     const data = d.data() || {};
     const credToken = data.refreshToken ?? data.token?.refreshToken ?? d.id;
-    if (typeof credToken === "string") {
+    if (typeof credToken === "string" && credToken.length > 0) {
+      const expId = legacyDocId(credToken);
+      if (d.id !== expId && d.id !== credToken) {
+        reasons.malformedRecords++;
+        continue;
+      }
+      if (refreshByCredential.has(credToken)) {
+        const existing = refreshByCredential.get(credToken);
+        if (existing.physicalId !== d.id) {
+          reasons.conflictingClaims++;
+          continue;
+        }
+      }
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       refreshByCredential.set(credToken, entry);
       refreshByPhysicalId.set(d.id, entry);
@@ -4950,15 +4972,18 @@ function extractCandidatesAndPlan(params) {
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "tokens", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "tokens", tokEntry.physicalId), tokData)
       }
     ];
-    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken))) {
-      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken);
-      candSources.push({
-        collection: "refresh",
-        id: computeKeyedDocId(storeKey, "source-id", namespace, epoch, "refresh", refEntry.physicalId),
-        rawId: refEntry.physicalId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "refresh", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "refresh", refEntry.physicalId), refEntry.data || {})
-      });
-      claimedRefreshIds.add(refEntry.credentialToken);
+    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken) || refreshByPhysicalId.has(legacyDocId(tokData.refreshToken)))) {
+      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken) || refreshByPhysicalId.get(legacyDocId(tokData.refreshToken));
+      const expRefId = legacyDocId(refEntry.credentialToken);
+      if (refEntry.physicalId === expRefId || refEntry.physicalId === refEntry.credentialToken) {
+        candSources.push({
+          collection: "refresh",
+          id: computeKeyedDocId(storeKey, "source-id", namespace, epoch, "refresh", refEntry.physicalId),
+          rawId: refEntry.physicalId,
+          recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "refresh", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "refresh", refEntry.physicalId), refEntry.data || {})
+        });
+        claimedRefreshIds.add(refEntry.credentialToken);
+      }
     }
     candSources.sort(compareDescriptors);
     const famTargetId = computeKeyedDocId(storeKey, "target-id", namespace, epoch, "families", familyId);
