@@ -342,12 +342,19 @@ export function extractCandidatesAndPlan(params: {
 
   for (const d of tokensDocs) {
     const data = d.data() || {};
-    const credToken = data.accessToken ?? data.token?.accessToken ?? d.id;
+    const credToken = data.accessToken ?? data.token?.accessToken;
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
-      if (d.id !== expId && d.id !== credToken) {
+      if (d.id !== expId) {
         reasons.malformedRecords++;
         continue;
+      }
+      if (tokensByPhysicalId.has(d.id)) {
+        const existing = tokensByPhysicalId.get(d.id)!;
+        if (existing.credentialToken !== credToken) {
+          reasons.conflictingClaims++;
+          continue;
+        }
       }
       if (tokensByCredential.has(credToken)) {
         const existing = tokensByCredential.get(credToken)!;
@@ -359,18 +366,27 @@ export function extractCandidatesAndPlan(params: {
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       tokensByCredential.set(credToken, entry);
       tokensByPhysicalId.set(d.id, entry);
-      tokensByPhysicalId.set(legacyDocId(credToken), entry);
     }
   }
 
+  const refreshByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
+  const refreshByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
+
   for (const d of refreshDocs) {
     const data = d.data() || {};
-    const credToken = data.refreshToken ?? data.token?.refreshToken ?? d.id;
+    const credToken = data.refreshToken ?? data.token?.refreshToken;
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
-      if (d.id !== expId && d.id !== credToken) {
+      if (d.id !== expId) {
         reasons.malformedRecords++;
         continue;
+      }
+      if (refreshByPhysicalId.has(d.id)) {
+        const existing = refreshByPhysicalId.get(d.id)!;
+        if (existing.credentialToken !== credToken) {
+          reasons.conflictingClaims++;
+          continue;
+        }
       }
       if (refreshByCredential.has(credToken)) {
         const existing = refreshByCredential.get(credToken)!;
@@ -382,7 +398,6 @@ export function extractCandidatesAndPlan(params: {
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       refreshByCredential.set(credToken, entry);
       refreshByPhysicalId.set(d.id, entry);
-      refreshByPhysicalId.set(legacyDocId(credToken), entry);
     }
   }
 
@@ -402,7 +417,13 @@ export function extractCandidatesAndPlan(params: {
       continue;
     }
     const currentRefToken = famData.currentRefreshToken;
-    const curRefEntry = currentRefToken ? (refreshByCredential.get(currentRefToken) || refreshByPhysicalId.get(currentRefToken) || refreshByPhysicalId.get(legacyDocId(currentRefToken))) : undefined;
+    let curRefEntry = currentRefToken ? refreshByCredential.get(currentRefToken) : undefined;
+    if (!curRefEntry && currentRefToken) {
+      const byPhys = refreshByPhysicalId.get(legacyDocId(currentRefToken));
+      if (byPhys && byPhys.credentialToken === currentRefToken) {
+        curRefEntry = byPhys;
+      }
+    }
     if (!currentRefToken || !curRefEntry) {
       reasons.missingRefreshPointers++;
       continue;
@@ -420,7 +441,13 @@ export function extractCandidatesAndPlan(params: {
     claimedRefreshIds.add(curRefEntry.credentialToken);
 
     const accessId = famData.currentAccessToken ?? curRefDoc.accessToken ?? curRefDoc.token?.accessToken;
-    const accessEntry = accessId ? (tokensByCredential.get(accessId) || tokensByPhysicalId.get(accessId) || tokensByPhysicalId.get(legacyDocId(accessId))) : undefined;
+    let accessEntry = accessId ? tokensByCredential.get(accessId) : undefined;
+    if (!accessEntry && accessId) {
+      const byPhys = tokensByPhysicalId.get(legacyDocId(accessId));
+      if (byPhys && byPhys.credentialToken === accessId) {
+        accessEntry = byPhys;
+      }
+    }
 
     if (!accessId || typeof accessId !== 'string' || !accessId.trim() || !accessEntry) {
       reasons.missingAccessTokens++;
@@ -435,7 +462,13 @@ export function extractCandidatesAndPlan(params: {
     let prevRefEntry: any = undefined;
     if (famData.previousRefreshToken) {
       const prevRefToken = famData.previousRefreshToken;
-      prevRefEntry = refreshByCredential.get(prevRefToken) || refreshByPhysicalId.get(prevRefToken);
+      prevRefEntry = refreshByCredential.get(prevRefToken);
+      if (!prevRefEntry) {
+        const byPhys = refreshByPhysicalId.get(legacyDocId(prevRefToken));
+        if (byPhys && byPhys.credentialToken === prevRefToken) {
+          prevRefEntry = byPhys;
+        }
+      }
       if (prevRefToken === currentRefToken || claimedRefreshIds.has(prevRefToken) || !prevRefEntry) {
         reasons.conflictingClaims++;
         continue;
@@ -1761,6 +1794,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       );
     }
 
+    const totalErrors = Object.values(plan.prepared.reasons || {}).reduce((a: number, b: any) => a + (typeof b === 'number' ? b : 0), 0);
+
     if (dryRun) {
       timer.assertUnderDeadline(16_000, 'Dry run inspection');
       return {
@@ -1768,8 +1803,14 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         scanned: candidates.length,
         migrated: 0,
         skipped: 0,
-        errors: 0,
+        errors: totalErrors,
       };
+    }
+
+    if (plan.prepared.reasons && (plan.prepared.reasons.malformedRecords > 0 || plan.prepared.reasons.conflictingClaims > 0)) {
+      throw new CutoverFenceError(
+        `Cannot prepare migration for namespace ${namespace}: detected ${plan.prepared.reasons.malformedRecords} malformed record(s) and ${plan.prepared.reasons.conflictingClaims} conflicting claim(s)`,
+      );
     }
 
     timer.assertUnderDeadline(16_000, 'Preparation attempt');
