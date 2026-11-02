@@ -67,8 +67,8 @@ export async function computeSourceInventoryDigest(
   for (const colKey of cols) {
     const snap = await db.collection(colNames[colKey]).get();
     for (const doc of snap.docs) {
-      const sourceId = H(key, 'source-id', namespace, epoch, [colKey, doc.id]);
-      const recDigest = H(key, 'source-record', namespace, epoch, [colKey, sourceId, doc.data() || {}]);
+      const sourceId = computeKeyedDocId(key, 'source-id', namespace, epoch, colKey, doc.id);
+      const recDigest = computeSourceRecordDigest(key, namespace, epoch, colKey, sourceId, doc.data() || {});
       descriptors.push({ collection: colKey, id: sourceId, recordDigest: recDigest });
     }
   }
@@ -76,7 +76,7 @@ export async function computeSourceInventoryDigest(
     if (a.collection !== b.collection) return a.collection < b.collection ? -1 : 1;
     return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
   });
-  return H(key, 'source-inventory', namespace, epoch, descriptors);
+  return protoComputeSourceInventoryDigest(key, namespace, epoch, descriptors);
 }
 
 export async function ensureFirestoreAdopted(options: {

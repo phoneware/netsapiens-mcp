@@ -5770,7 +5770,8 @@ async function adoptFirestoreLegacyTokens(options) {
       namespace,
       prepDoc: plan.prepared,
       storeKey,
-      FieldPath
+      FieldPath,
+      timer
     });
     timer.assertUnderDeadline(16e3, "Preparation commit");
     return {
@@ -5947,6 +5948,9 @@ async function adoptFirestoreLegacyTokens(options) {
         }
       }
       timer.assertUnderDeadline(16e3, "Item transaction attempt");
+      if (!allTargetsAlreadyRetained && control.emptyNamespace !== true) {
+        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId2, () => now);
+      }
       for (const sa of c.sourceActions) {
         const physicalCol = colMap[sa.collection];
         if (physicalCol && sa.rawId && sa.action === "delete") {
@@ -5954,9 +5958,6 @@ async function adoptFirestoreLegacyTokens(options) {
         }
       }
       if (!allTargetsAlreadyRetained) {
-        if (control.emptyNamespace !== true) {
-          await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId2, () => now);
-        }
         for (const t of c.targets) {
           const post = c.postimageByTargetId.get(t.id);
           const physicalCol = targetColMap[t.collection];
@@ -6112,7 +6113,8 @@ async function adoptFirestoreLegacyTokens(options) {
       finalDoc,
       markerDoc,
       storeKey,
-      FieldPath
+      FieldPath,
+      timer
     });
     timer.assertUnderDeadline(16e3, "Finalization commit");
   });
@@ -6168,7 +6170,8 @@ async function activateFirestoreMigration(context) {
       const res2 = await activateMigrationInTransaction(transaction, db, {
         ...context,
         storeKey: key,
-        migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest
+        migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+        timer
       });
       timer.assertUnderDeadline(16e3, "Activation check commit");
       return {
@@ -6186,7 +6189,8 @@ async function activateFirestoreMigration(context) {
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
       storeKey: key,
-      migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest
+      migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+      timer
     });
     timer.assertUnderDeadline(16e3, "Activation commit");
     return {

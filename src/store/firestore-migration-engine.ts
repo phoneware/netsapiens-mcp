@@ -1650,6 +1650,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       prepDoc: plan.prepared,
       storeKey,
       FieldPath,
+      timer,
     });
 
     timer.assertUnderDeadline(16_000, 'Preparation commit');
@@ -1860,6 +1861,12 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       }
 
       timer.assertUnderDeadline(16_000, 'Item transaction attempt');
+
+      // All transaction reads must precede any buffered writes or deletes
+      if (!allTargetsAlreadyRetained && control.emptyNamespace !== true) {
+        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
+      }
+
       // Execute source actions (deletions / replacements)
       for (const sa of c.sourceActions) {
         const physicalCol = colMap[sa.collection];
@@ -1870,10 +1877,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // Write target documents if not already completely retained
       if (!allTargetsAlreadyRetained) {
-        // Latch only in a transaction performing the first actual v3 credential write
-        if (control.emptyNamespace !== true) {
-          await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
-        }
         for (const t of c.targets) {
           const post = c.postimageByTargetId.get(t.id);
           const physicalCol = targetColMap[t.collection];
@@ -1881,7 +1884,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
           transaction.set(db.collection(physicalCol).doc(docId), post);
         }
       }
-
       // Write exact receipt
       const targetAfter = c.targets.map((t: any) => {
         const post = c.postimageByTargetId.get(t.id);
@@ -2051,6 +2053,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       markerDoc,
       storeKey,
       FieldPath,
+      timer,
     });
 
     timer.assertUnderDeadline(16_000, 'Finalization commit');
@@ -2122,6 +2125,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
         ...context,
         storeKey: key,
         migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+        timer,
       });
       timer.assertUnderDeadline(16_000, 'Activation check commit');
       return {
@@ -2143,8 +2147,8 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
       ...context,
       storeKey: key,
       migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+      timer,
     });
-
     timer.assertUnderDeadline(16_000, 'Activation commit');
 
     return {
