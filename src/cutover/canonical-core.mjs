@@ -58,7 +58,7 @@ export function isCutoverRefusedError(err) {
 
 export function sanitizeId(id) {
   if (typeof id !== 'string' || !id) return '[sanitized]';
-  return createHash('sha256').update(id).digest('hex').slice(0, 12);
+  return createHash('sha256').update(id).digest('hex');
 }
 
 export const PHYSICAL_COUNT_KEYS = [
@@ -357,9 +357,9 @@ export function getTargetCollectionAllowlist(namespace) {
   return [...TARGET_COUNT_KEYS];
 }
 
-export function isTargetFormatRow(collection, data, rawId = '') {
+export function isTargetFormatRow(collection, data) {
   if (data === null || data === undefined || typeof data !== 'object' || Array.isArray(data)) {
-    throw new CutoverFenceError(`Malformed document in '${collection}/${sanitizeId(rawId)}': data must be a non-null object`);
+    throw new CutoverFenceError(`Malformed document in '${collection}': data must be a non-null object`);
   }
 
   if (collection.endsWith('_auth_codes')) {
@@ -367,7 +367,7 @@ export function isTargetFormatRow(collection, data, rawId = '') {
     const isSource = !data.sealed && (data.code !== undefined || data.clientId !== undefined || data.redirectUri !== undefined || data.expiresAt !== undefined);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError(`Ambiguous auth_codes document format in '${collection}/${sanitizeId(rawId)}'`);
+    throw new CutoverFenceError(`Ambiguous auth_codes document format in '${collection}'`);
   }
 
   if (collection.endsWith('_resume_tokens')) {
@@ -375,22 +375,22 @@ export function isTargetFormatRow(collection, data, rawId = '') {
     const isSource = data.v === undefined && data.ttlAt === undefined && data._mcp_format === undefined && (data.consumedAt !== undefined || data.expiresAt !== undefined || data.token !== undefined);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError(`Ambiguous resume_tokens document format in '${collection}/${sanitizeId(rawId)}'`);
+    throw new CutoverFenceError(`Ambiguous resume_tokens document format in '${collection}'`);
   }
 
   if (collection.endsWith('_oauth_clients')) {
     const hasClientId = typeof data.client_id === 'string' || typeof data.clientId === 'string';
     if (!hasClientId) {
-      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}/${sanitizeId(rawId)}': missing client_id`);
+      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}': missing client_id`);
     }
     if (data._targetFormat !== undefined) {
-      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}/${sanitizeId(rawId)}': reserved field _targetFormat present`);
+      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}': reserved field _targetFormat present`);
     }
     const isTarget = data._mcp_format === 'v3_target';
     const isSource = data._mcp_format === undefined;
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}/${sanitizeId(rawId)}'`);
+    throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}'`);
   }
 
   if (data._mcp_format === 'v3_target' || data.format === 'v3') return true;
@@ -2125,12 +2125,12 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
 
   const activePointerId = family.currentRefreshToken;
   if (typeof activePointerId !== 'string' || !activePointerId.trim()) {
-    throw new CutoverFenceError(`Family missing active refresh pointer: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError('Family missing active refresh pointer');
   }
   const pointerRef = db.collection(refreshCollection).doc(activePointerId);
   const pointerSnap = await transaction.get(pointerRef);
   if (!pointerSnap.exists) {
-    throw new CutoverFenceError(`Active refresh pointer missing: ${sanitizeId(activePointerId)}`);
+    throw new CutoverFenceError('Active refresh pointer missing');
   }
   const pointer = pointerSnap.data();
   if (typeof pointer.familyId !== 'string' || pointer.familyId !== familyId) {
@@ -2143,7 +2143,7 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
   const grantRef = db.collection(collection).doc(familyId);
   const grantSnap = await transaction.get(grantRef);
   if (!grantSnap.exists) {
-    throw new CutoverFenceError(`Upstream grant missing for family: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError('Upstream grant missing for family');
   }
   const current = grantSnap.data();
   const actualGrantVersion = current.grantVersion ?? current.version ?? 1;
@@ -2157,21 +2157,20 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
     const priorOpRef = getCutoverOperationDocRef(db, namespace, holdingOpId);
     const priorOpSnap = await transaction.get(priorOpRef);
     if (!priorOpSnap.exists) {
-      throw new CutoverFenceError(
-        `Upstream grant is held by unknown operation ${sanitizeId(holdingOpId)}; fail closed`,
-      );
+      throw new CutoverFenceError('Upstream grant is held by unknown operation; fail closed');
     }
     const priorOp = priorOpSnap.data();
     if (priorOp.phase === 'upstream_pending' || priorOp.phase === 'admitted' || priorOp.ambiguousRemoteOutcome) {
       throw new CutoverFenceError(
-        `Upstream grant is held by nonterminal operation ${sanitizeId(holdingOpId)} in phase ${priorOp.phase}; lease expiry cannot release nonterminal claims`,
+        `Upstream grant is held by nonterminal operation in phase ${priorOp.phase}; lease expiry cannot release nonterminal claims`,
       );
     }
   }
 
   if (current.ambiguousRemoteOutcome || current.ambiguousOutcome) {
-    throw new CutoverFenceError(`Upstream grant for family ${sanitizeId(familyId)} has unresolved ambiguous outcome`);
+    throw new CutoverFenceError('Upstream grant for family has unresolved ambiguous outcome');
   }
+
 
   const isLeaseActive = (typeof current.leaseExpiresAt === 'number' && current.leaseExpiresAt > now) ||
                         (typeof current.leaseUntil === 'number' && current.leaseUntil > now);
@@ -2264,20 +2263,20 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError(`Operation record missing: ${sanitizeId(operationId)}`);
+    throw new CutoverFenceError('Operation record missing for upstream reconciliation');
   }
   const opData = opSnap.data();
   if (opData.phase !== 'upstream_pending') {
-    throw new CutoverFenceError(`Operation ${sanitizeId(operationId)} is in phase ${opData.phase}; expected upstream_pending`);
+    throw new CutoverFenceError(`Operation is in phase ${opData.phase}; expected upstream_pending`);
   }
   if (opData.familyId && opData.familyId !== familyId) {
-    throw new CutoverFenceError(`Operation family mismatch: expected ${sanitizeId(familyId)}, got ${sanitizeId(opData.familyId)}`);
+    throw new CutoverFenceError('Operation family mismatch for upstream reconciliation');
   }
 
   const docRef = db.collection(collection).doc(familyId);
   const snap = await transaction.get(docRef);
   if (!snap.exists) {
-    throw new CutoverFenceError(`Upstream grant missing for family: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError('Upstream grant missing for family');
   }
   const current = snap.data();
   if (current.leaseOwner && current.leaseOwner !== claimOwner) {
@@ -2321,9 +2320,8 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
     return { status: 'ambiguous_pending', operationId, familyId };
   }
 
-  // All other caller-supplied reconciliations unconditionally fail closed per C10 reset
   throw new CutoverFenceError(
-    `Upstream grant reconciliation refused: trusted provider recovery mechanism is not established; operation ${sanitizeId(operationId)} remains held in upstream_pending`,
+    'Upstream grant reconciliation refused: trusted provider recovery mechanism is not established; operation remains held in upstream_pending',
   );
 }
 
@@ -2370,6 +2368,13 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
   validateMapKeysExact(prepDoc, expectedPrepKeys, 'prepared manifest');
   validateMigrationIdentityFields(prepDoc, namespace, control.epoch, prepDoc.migrationRunId);
 
+  const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
+  if (prepDoc.planDigest !== computedPlanDigest) {
+    throw new CutoverFenceError(
+      `prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${prepDoc.planDigest}`,
+    );
+  }
+
   if (prepDoc.kind !== 'prepared') {
     throw new CutoverFenceError(`prepared manifest kind must be 'prepared', got '${prepDoc.kind}'`);
   }
@@ -2403,12 +2408,6 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
   }
 
   validateCandidateCommitments(prepDoc.candidateCommitments, prepDoc, namespace, control.epoch, prepDoc.migrationRunId);
-  const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
-  if (prepDoc.planDigest !== computedPlanDigest) {
-    throw new CutoverFenceError(
-      `prepDoc.planDigest (${prepDoc.planDigest}) does not match computePlanDigest(prepDoc.planSpec) (${computedPlanDigest})`,
-    );
-  }
 
   // Exact read strategy: query ALL 13 distinct collections once
   const distinctColNames = getCutoverDistinctCollectionNames(namespace).distinct;
@@ -2469,7 +2468,7 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
       const sKey = sourcePhysicalToKey[physicalName];
       const tKey = targetPhysicalToKey[physicalName];
       for (const d of snap.docs) {
-        if (isTargetFormatRow(physicalName, d.data(), d.id)) {
+        if (isTargetFormatRow(physicalName, d.data())) {
           targetDocsByKey.get(tKey).push(d);
         } else {
           sourceDocsByKey.get(sKey).push(d);
@@ -2485,11 +2484,11 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== 'oauthClients' && colKey !== 'clients') {
         if (typeof data.id === 'string' && data.id !== d.id) {
-          throw new CutoverFenceError(`Document ID mismatch in ${colKey}/${d.id}: stored id '${data.id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === 'string' && data.client_id !== d.id) {
-          throw new CutoverFenceError(`client_id mismatch in ${colKey}/${d.id}: stored client_id '${data.client_id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
@@ -2555,10 +2554,10 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
     for (const d of docs) {
       const data = d.data() || {};
       if ((colKey === 'families' || colKey === 'resumeTokens') && typeof data.id === 'string' && data.id !== d.id) {
-        throw new CutoverFenceError(`Document ID mismatch in ${colKey}/${d.id}: stored id '${data.id}' != docId '${d.id}'`);
+        throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
       }
       if ((colKey === 'oauthClients' || colKey === 'clients') && typeof data.client_id === 'string' && data.client_id !== d.id) {
-        throw new CutoverFenceError(`client_id mismatch in ${colKey}/${d.id}: stored client_id '${data.client_id}' != docId '${d.id}'`);
+        throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
       }
       const sourceId = computeKeyedDocId(options.storeKey, 'source-id', namespace, control.epoch, colKey, d.id);
       const recDigest = computeSourceRecordDigest(options.storeKey, namespace, control.epoch, colKey, sourceId, data);
@@ -2618,7 +2617,7 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
           return entry && entry.rawId === famData.currentRefreshToken && entry.data?.status === 'active';
         });
         if (!activeRefDesc) {
-          throw new CutoverFenceError(`Candidate ${c.id} missing active refresh descriptor in sources matching currentRefreshToken '${famData.currentRefreshToken}'`);
+          throw new CutoverFenceError(`Candidate ${c.id} missing active refresh descriptor in sources matching currentRefreshToken`);
         }
         const re = sourceKeyedMap.get(`refresh:${activeRefDesc.id}`);
         if (!re) throw new CutoverFenceError(`Candidate ${c.id} missing active refresh document in sourceKeyedMap`);
@@ -2632,12 +2631,12 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
             return entry && entry.rawId === famData.previousRefreshToken && entry.data?.status === 'consumed';
           });
           if (!prevRefDesc) {
-            throw new CutoverFenceError(`Candidate ${c.id} has previousRefreshToken '${famData.previousRefreshToken}' but missing previous refresh descriptor in sources`);
+            throw new CutoverFenceError(`Candidate ${c.id} has previousRefreshToken but missing previous refresh descriptor in sources`);
           }
           const pe = sourceKeyedMap.get(`refresh:${prevRefDesc.id}`);
           if (!pe) throw new CutoverFenceError(`Candidate ${c.id} missing previous refresh document in sourceKeyedMap`);
           if (typeof pe.data?.consumedAt !== 'number') {
-            throw new CutoverFenceError(`Candidate ${c.id} previous refresh document '${pe.rawId}' missing numeric consumedAt`);
+            throw new CutoverFenceError(`Candidate ${c.id} previous refresh document missing numeric consumedAt`);
           }
           sourcesMap.set('prevRefresh', { ...(pe.data || {}), id: pe.rawId });
         }
@@ -2689,7 +2688,7 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
             C(oData.redirect_uris || []) !== C(cData.redirect_uris || []) ||
             oData.token_endpoint_auth_method !== cData.token_endpoint_auth_method
           ) {
-            throw new CutoverFenceError(`Conflicting claims between clients and oauthClients for clientId ${clientEntry.rawId}`);
+            throw new CutoverFenceError(`Conflicting claims between clients and oauthClients for candidate ${c.id}`);
           }
           sourcesMap.set('clients', { ...cData, ...oData, id: clientEntry.rawId });
         } else if (oauthEntry) {
@@ -2754,7 +2753,7 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
           for (const t of retiredTargets) {
             const e = existingTargetKeyedMap.get(`retiredRefreshTokens:${t.id}`);
             if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
-            if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Retired refresh token '${e.rawId}' familyId mismatch`);
+            if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Candidate ${c.id} retired refresh token target familyId mismatch`);
             retiredIds.push(e.rawId);
           }
           targetsMap.set('retiredRefresh', { ids: retiredIds.sort(canonicalCompare) });
@@ -2940,17 +2939,16 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
   }
 
   for (const k of REQUIRED_IDENTITY_KEYS) {
-    if (finalDoc[k] !== prep[k]) {
-      throw new CutoverFenceError(`finalDoc.${k} (${finalDoc[k]}) does not match prepared manifest (${prep[k]})`);
-    }
-    if (markerDoc[k] !== prep[k]) {
-      throw new CutoverFenceError(`markerDoc.${k} (${markerDoc[k]}) does not match prepared manifest (${prep[k]})`);
+    if (finalDoc[k] !== prep[k] || markerDoc[k] !== prep[k]) {
+      throw new CutoverFenceError(`Identity field '${k}' mismatch across prepared, final, and marker manifests`);
     }
   }
 
   const computedPlanDigest = computePlanDigest(namespace, control.epoch, prep.planSpec);
   if (prep.planDigest !== computedPlanDigest) {
-    throw new CutoverFenceError(`prep.planDigest (${prep.planDigest}) does not match computePlanDigest(prep.planSpec) (${computedPlanDigest})`);
+    throw new CutoverFenceError(
+      `Prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${prep.planDigest}`,
+    );
   }
 
   const computedPreparedDigest = D('prepared', namespace, control.epoch, prep);
@@ -3131,7 +3129,7 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
       const sKey = sourcePhysicalToKey[physicalName];
       const tKey = targetPhysicalToKey[physicalName];
       for (const d of snap.docs) {
-        if (isTargetFormatRow(physicalName, d.data(), d.id)) {
+        if (isTargetFormatRow(physicalName, d.data())) {
           targetDocsByKey.get(tKey).push(d);
         } else {
           sourceDocsByKey.get(sKey).push(d);
@@ -3146,10 +3144,10 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
     for (const d of docs) {
       const data = d.data() || {};
       if ((colKey === 'families' || colKey === 'resumeTokens') && typeof data.id === 'string' && data.id !== d.id) {
-        throw new CutoverFenceError(`Document ID mismatch in ${colKey}/${d.id}: stored id '${data.id}' != docId '${d.id}'`);
+        throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
       }
       if ((colKey === 'oauthClients' || colKey === 'clients') && typeof data.client_id === 'string' && data.client_id !== d.id) {
-        throw new CutoverFenceError(`client_id mismatch in ${colKey}/${d.id}: stored client_id '${data.client_id}' != docId '${d.id}'`);
+        throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
       }
       const sourceId = computeKeyedDocId(options.storeKey, 'source-id', namespace, control.epoch, colKey, d.id);
       const recDigest = computeSourceRecordDigest(options.storeKey, namespace, control.epoch, colKey, sourceId, data);
@@ -3164,11 +3162,11 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== 'oauthClients' && colKey !== 'clients') {
         if (typeof data.id === 'string' && data.id !== d.id) {
-          throw new CutoverFenceError(`Document ID mismatch in ${colKey}/${d.id}: stored id '${data.id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === 'string' && data.client_id !== d.id) {
-          throw new CutoverFenceError(`client_id mismatch in ${colKey}/${d.id}: stored client_id '${data.client_id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
@@ -3331,7 +3329,7 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
         for (const t of retiredTargets) {
           const e = currentTargetKeyedMap.get(`retiredRefreshTokens:${t.id}`);
           if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
-          if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Retired refresh token '${e.rawId}' familyId mismatch`);
+          if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Candidate ${c.id} retired refresh token target familyId mismatch`);
           retiredIds.push(e.rawId);
         }
         targetsMap.set('retiredRefresh', { ids: retiredIds.sort(canonicalCompare) });
@@ -3557,16 +3555,14 @@ export async function activateMigrationInTransaction(transaction, db, options) {
     if (p.kind !== 'prepared') {
       throw new CutoverFenceError(`Already active prep manifest kind must be 'prepared', got '${p.kind}'`);
     }
-    if (D('prepared', namespace, expectedEpoch, p) !== f.preparedDigest) {
-      throw new CutoverFenceError('Already active immutable prep manifest digest mismatch');
-    }
     for (const k of REQUIRED_IDENTITY_KEYS) {
       if (f[k] !== p[k] || m[k] !== p[k]) {
-        throw new CutoverFenceError(`Already active identity mismatch for ${k}`);
+        throw new CutoverFenceError(`Already active identity field '${k}' mismatch across prepared, final, and marker manifests`);
       }
     }
-    if (p.planDigest !== computePlanDigest(namespace, expectedEpoch, p.planSpec)) {
-      throw new CutoverFenceError('Already active planDigest does not match computePlanDigest(planSpec)');
+    const computedPlanDigest = computePlanDigest(namespace, expectedEpoch, p.planSpec);
+    if (p.planDigest !== computedPlanDigest) {
+      throw new CutoverFenceError(`Already active prep manifest planDigest mismatch: expected ${computedPlanDigest}, got ${p.planDigest}`);
     }
 
     if (f.totalPhysicalRecords > 0) {
@@ -3664,6 +3660,15 @@ export async function activateMigrationInTransaction(transaction, db, options) {
   if (computedPrepDigest !== f.preparedDigest) {
     throw new CutoverFenceError('Cannot activate: prepared digest does not match final manifest preparedDigest');
   }
+  for (const k of REQUIRED_IDENTITY_KEYS) {
+    if (f[k] !== p[k] || m[k] !== p[k]) {
+      throw new CutoverFenceError(`Cannot activate: identity field '${k}' mismatch across prepared, final, and marker manifests`);
+    }
+  }
+  const computedPlanDigest = computePlanDigest(namespace, expectedEpoch, p.planSpec);
+  if (p.planDigest !== computedPlanDigest) {
+    throw new CutoverFenceError(`Cannot activate: prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${p.planDigest}`);
+  }
 
   if (f.totalPhysicalRecords > 0) {
     if (m.projectorId !== f.projectorId || m.projectorVersion !== f.projectorVersion || m.projectorDigest !== f.projectorDigest) {
@@ -3730,7 +3735,7 @@ export async function activateMigrationInTransaction(transaction, db, options) {
       const isOverlap = physicalName.endsWith('_auth_codes') || physicalName.endsWith('_resume_tokens') || physicalName.endsWith('_oauth_clients');
       if (isOverlap) {
         for (const d of snap.docs) {
-          if (isTargetFormatRow(physicalName, d.data(), d.id)) {
+          if (isTargetFormatRow(physicalName, d.data())) {
             targetDocsByKey.get(colKey).push(d);
           }
         }
@@ -3746,11 +3751,11 @@ export async function activateMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== 'oauthClients' && colKey !== 'clients') {
         if (typeof data.id === 'string' && data.id !== d.id) {
-          throw new CutoverFenceError(`Document ID mismatch in ${colKey}/${d.id}: stored id '${data.id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === 'string' && data.client_id !== d.id) {
-          throw new CutoverFenceError(`client_id mismatch in ${colKey}/${d.id}: stored client_id '${data.client_id}' != docId '${d.id}'`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, 'target-id', namespace, expectedEpoch, colKey, d.id);
