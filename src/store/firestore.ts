@@ -142,7 +142,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
           );
         }
         if (!control.irreversible) {
-          tx.set(controlRef, { irreversible: true, updatedAt: Date.now() }, { merge: true });
+          tx.set(controlRef, { irreversible: true, emptyNamespace: false, updatedAt: Date.now() }, { merge: true });
         }
         tx.set(this.options.db.collection(this.options.collection).doc(full.client_id), defined(full));
       });

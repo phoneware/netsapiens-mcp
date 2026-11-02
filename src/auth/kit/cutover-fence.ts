@@ -648,15 +648,21 @@ export function parseCutoverFenceRecord(data: unknown, namespace: string): Cutov
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationManifestDigest`,
       );
     }
-    if (record.emptyNamespace !== undefined && typeof record.emptyNamespace !== 'boolean') {
+    if (typeof record.emptyNamespace !== 'boolean') {
       throw new CutoverFenceError(
-        `Invalid emptyNamespace field in cutover fence record for namespace ${namespace}: expected boolean, got ${typeof record.emptyNamespace}`,
+        `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires emptyNamespace to be a boolean`,
       );
     }
-    if (record.irreversible !== true) {
-      if (record.emptyNamespace !== true) {
+    if (record.emptyNamespace === true) {
+      if (record.irreversible !== false) {
         throw new CutoverFenceError(
-          `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} must be irreversible: true unless emptyNamespace is true`,
+          `Invalid cutover fence invariants for namespace ${namespace}: emptyNamespace requires irreversible: false`,
+        );
+      }
+    } else {
+      if (record.irreversible !== true) {
+        throw new CutoverFenceError(
+          `Invalid cutover fence invariants for namespace ${namespace}: non-empty ${record.state} requires irreversible: true`,
         );
       }
     }
