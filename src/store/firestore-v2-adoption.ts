@@ -160,7 +160,23 @@ export interface FirestoreAdoptionReport {
   errors: number;
 }
 
-export interface AdoptFirestoreLegacyTokensOptions {
+export type SupportedNamespace = 'mcp' | 'pwmcp' | 'readonly_mcp';
+
+export interface MigrationContext {
+  db: FirestoreLike;
+  FieldPath?: any;
+  key: Uint8Array;
+  namespace: string;
+  expectedEpoch: number;
+  migrationRunId: string;
+  codeSha: string;
+  codeArtifact: string;
+  packageIntegrity: string;
+  protocolDigest: string;
+  projectorDigest?: string;
+}
+
+export interface AdoptFirestoreLegacyTokensOptions extends Partial<MigrationContext> {
   db: FirestoreLike;
   namespace: string;
   key: Uint8Array;
@@ -1964,6 +1980,95 @@ export async function adoptFirestoreLegacyTokens(
     });
   }
   return report;
+}
+
+export async function inspectFirestoreLegacyMigration(
+  options: MigrationContext & { now?: () => number },
+): Promise<{
+  sourceInventoryDigest: string;
+  scanned: number;
+  prospectiveWritten: number;
+  prospectiveRetained: number;
+  preflight: {
+    totalDocuments: number;
+    maxDocBytes: number;
+    maxIndexEntries: number;
+    maxIndexBytes: number;
+    readDeadlineMs: number;
+  };
+}> {
+  const report = await adoptFirestoreLegacyTokens({
+    ...options,
+    dryRun: true,
+    expectedSourceInventoryDigest: options.protocolDigest,
+  });
+  const sourceDigest = await computeSourceInventoryDigest(options.db, options.namespace, options.key, options.expectedEpoch);
+  return {
+    sourceInventoryDigest: sourceDigest,
+    scanned: report.scanned,
+    prospectiveWritten: report.migrated,
+    prospectiveRetained: report.skipped,
+    preflight: {
+      totalDocuments: report.scanned,
+      maxDocBytes: PREFLIGHT_MAX_DOC_BYTES,
+      maxIndexEntries: PREFLIGHT_MAX_INDEX_ENTRIES,
+      maxIndexBytes: PREFLIGHT_MAX_INDEX_BYTES,
+      readDeadlineMs: FIRESTORE_TRANSACTION_READ_DEADLINE_MS,
+    },
+  };
+}
+
+export async function activateFirestoreMigration(
+  options: MigrationContext & {
+    migrationManifestDigest: string;
+    now?: () => number;
+  },
+): Promise<{ status: 'activated' | 'already_active' }> {
+  const { db, namespace, expectedEpoch, migrationRunId, migrationManifestDigest } = options;
+  assertSupportedCutoverNamespace(namespace);
+  const now = options.now ?? Date.now;
+
+  const controlRef = getCutoverFenceDocRef(db, namespace);
+  const snap = await controlRef.get();
+  if (!snap.exists) {
+    throw new CutoverFenceError(`Cannot activate cutover fence for namespace ${namespace}: control record missing`);
+  }
+  const control = parseCutoverFenceRecord(snap.data(), namespace);
+
+  if (control.state === 'v3_active') {
+    if (control.epoch !== expectedEpoch) {
+      throw new CutoverFenceError(`Epoch mismatch for namespace ${namespace}: expected ${expectedEpoch}, got ${control.epoch}`);
+    }
+    if (control.migrationManifestDigest !== migrationManifestDigest) {
+      throw new CutoverFenceError(`migrationManifestDigest mismatch for namespace ${namespace}`);
+    }
+    return { status: 'already_active' };
+  }
+
+  if (control.state !== 'v3_ready') {
+    throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
+  }
+
+  const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+  const markerSnap = await markerRef.get();
+  if (!markerSnap.exists) {
+    throw new CutoverFenceError(`Cannot activate namespace ${namespace}: v2_adopted marker missing`);
+  }
+  const marker = markerSnap.data() as Record<string, unknown>;
+  if (marker.kind !== 'ownership' || marker.migrationManifestDigest !== migrationManifestDigest) {
+    throw new CutoverFenceError(`Cannot activate namespace ${namespace}: v2_adopted marker mismatch`);
+  }
+
+  await transitionCutoverFenceState(db, namespace, {
+    fromState: 'v3_ready',
+    toState: 'v3_active',
+    expectedEpoch,
+    migrationRunId,
+    migrationManifestDigest,
+    now,
+  });
+
+  return { status: 'activated' };
 }
 
 export async function ensureFirestoreAdopted(options: {
