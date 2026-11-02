@@ -21,40 +21,19 @@ export function assertSupportedCutoverNamespace(namespace) {
   }
 }
 
-export class CutoverFenceError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'CutoverFenceError';
-    this.kitCode = 'cutover_fence_error';
-    Object.defineProperty(this, 'kitCode', { value: 'cutover_fence_error', enumerable: true });
-  }
-}
+import {
+  CutoverFenceError,
+  CutoverRefusedError,
+  isCutoverFenceError,
+  isCutoverRefusedError,
+} from '../store/errors.js';
 
-export class CutoverRefusedError extends Error {
-  constructor(message, details) {
-    super(message);
-    this.name = 'CutoverRefusedError';
-    this.kitCode = 'cutover_refused';
-    this.cutoverState = details?.cutoverState;
-    this.epoch = details?.epoch;
-  }
-}
-
-export function isCutoverFenceError(err) {
-  return Boolean(
-    err &&
-      typeof err === 'object' &&
-      (err.kitCode === 'cutover_fence_error' || err.name === 'CutoverFenceError'),
-  );
-}
-
-export function isCutoverRefusedError(err) {
-  return Boolean(
-    err &&
-      typeof err === 'object' &&
-      err.kitCode === 'cutover_refused',
-  );
-}
+export {
+  CutoverFenceError,
+  CutoverRefusedError,
+  isCutoverFenceError,
+  isCutoverRefusedError,
+};
 
 export function sanitizeId(_id) {
   return '[redacted]';

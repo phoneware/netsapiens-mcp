@@ -38,6 +38,7 @@ export class CutoverFenceError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'CutoverFenceError';
+    Object.defineProperty(this, 'kitCode', { value: 'cutover_fence_error', enumerable: true });
   }
 }
 
@@ -53,6 +54,7 @@ export class CutoverRefusedError extends Error {
   ) {
     super(message, options);
     this.name = 'CutoverRefusedError';
+    Object.defineProperty(this, 'kitCode', { value: 'cutover_refused', enumerable: true });
     this.retryAfterSeconds = options?.retryAfterSeconds ?? 30;
     this.cutoverState = options?.cutoverState;
     this.epoch = options?.epoch;

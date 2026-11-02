@@ -61,6 +61,7 @@ var CutoverFenceError = class extends Error {
   constructor(message, options) {
     super(message, options);
     this.name = "CutoverFenceError";
+    Object.defineProperty(this, "kitCode", { value: "cutover_fence_error", enumerable: true });
   }
 };
 var CutoverRefusedError = class extends Error {
@@ -74,6 +75,7 @@ var CutoverRefusedError = class extends Error {
   constructor(message = "Cutover in progress; operation temporarily unavailable", options) {
     super(message, options);
     this.name = "CutoverRefusedError";
+    Object.defineProperty(this, "kitCode", { value: "cutover_refused", enumerable: true });
     this.retryAfterSeconds = options?.retryAfterSeconds ?? 30;
     this.cutoverState = options?.cutoverState;
     this.epoch = options?.epoch;
@@ -779,47 +781,12 @@ function isSupportedCutoverNamespace(namespace) {
 __name(isSupportedCutoverNamespace, "isSupportedCutoverNamespace");
 function assertSupportedCutoverNamespace(namespace) {
   if (!isSupportedCutoverNamespace(namespace)) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Unsupported cutover namespace: ${namespace}. Supported namespaces are: ${SUPPORTED_CUTOVER_NAMESPACES.join(", ")}`
     );
   }
 }
 __name(assertSupportedCutoverNamespace, "assertSupportedCutoverNamespace");
-var CutoverFenceError2 = class extends Error {
-  static {
-    __name(this, "CutoverFenceError");
-  }
-  constructor(message) {
-    super(message);
-    this.name = "CutoverFenceError";
-    this.kitCode = "cutover_fence_error";
-    Object.defineProperty(this, "kitCode", { value: "cutover_fence_error", enumerable: true });
-  }
-};
-var CutoverRefusedError2 = class extends Error {
-  static {
-    __name(this, "CutoverRefusedError");
-  }
-  constructor(message, details) {
-    super(message);
-    this.name = "CutoverRefusedError";
-    this.kitCode = "cutover_refused";
-    this.cutoverState = details?.cutoverState;
-    this.epoch = details?.epoch;
-  }
-};
-function isCutoverFenceError2(err) {
-  return Boolean(
-    err && typeof err === "object" && (err.kitCode === "cutover_fence_error" || err.name === "CutoverFenceError")
-  );
-}
-__name(isCutoverFenceError2, "isCutoverFenceError");
-function isCutoverRefusedError2(err) {
-  return Boolean(
-    err && typeof err === "object" && err.kitCode === "cutover_refused"
-  );
-}
-__name(isCutoverRefusedError2, "isCutoverRefusedError");
 function sanitizeId2(_id) {
   return "[redacted]";
 }
@@ -963,95 +930,95 @@ var APPROVED_GRAPH_PROJECTOR_VERSION = PROJECTOR_VERSION;
 var NONEMPTY_PROJECTOR_KEYS = ["projectorId", "projectorVersion", "projectorDigest"];
 function validateMapKeysExact(obj, allowedKeys, label = "object") {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
-    throw new CutoverFenceError2(`${label} must be a non-null object`);
+    throw new CutoverFenceError(`${label} must be a non-null object`);
   }
   const actualKeys = Object.keys(obj);
   const allowedSet = new Set(allowedKeys);
   for (const k of actualKeys) {
     if (!allowedSet.has(k)) {
-      throw new CutoverFenceError2(`Unexpected extra field '${k}' in ${label}`);
+      throw new CutoverFenceError(`Unexpected extra field '${k}' in ${label}`);
     }
   }
   for (const k of allowedKeys) {
     if (!(k in obj) || obj[k] === void 0) {
-      throw new CutoverFenceError2(`Missing required field '${k}' in ${label}`);
+      throw new CutoverFenceError(`Missing required field '${k}' in ${label}`);
     }
   }
 }
 __name(validateMapKeysExact, "validateMapKeysExact");
 function validateMigrationIdentityFields(doc, expectedNamespace, expectedEpoch, expectedRunId) {
   if (!doc || typeof doc !== "object") {
-    throw new CutoverFenceError2("Migration manifest must be an object");
+    throw new CutoverFenceError("Migration manifest must be an object");
   }
   if (doc.schemaVersion !== 2 && doc.schemaVersion !== 1) {
-    throw new CutoverFenceError2(`Unsupported manifest schemaVersion: expected 2, got ${doc.schemaVersion}`);
+    throw new CutoverFenceError(`Unsupported manifest schemaVersion: expected 2, got ${doc.schemaVersion}`);
   }
   if (doc.namespace !== expectedNamespace) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Manifest namespace mismatch: expected ${expectedNamespace}, got ${doc.namespace}`
     );
   }
   if (doc.epoch !== expectedEpoch) {
-    throw new CutoverFenceError2(`Manifest epoch mismatch: expected ${expectedEpoch}, got ${doc.epoch}`);
+    throw new CutoverFenceError(`Manifest epoch mismatch: expected ${expectedEpoch}, got ${doc.epoch}`);
   }
   if (expectedRunId && doc.migrationRunId !== expectedRunId) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Manifest migrationRunId mismatch: expected ${expectedRunId}, got ${doc.migrationRunId}`
     );
   }
   if (typeof doc.codeSha !== "string" || !/^[0-9a-f]{40}$/.test(doc.codeSha)) {
-    throw new CutoverFenceError2(`Invalid codeSha in manifest: ${doc.codeSha}`);
+    throw new CutoverFenceError(`Invalid codeSha in manifest: ${doc.codeSha}`);
   }
   if (typeof doc.codeArtifact !== "string" || !doc.codeArtifact.trim()) {
-    throw new CutoverFenceError2("Invalid codeArtifact in manifest");
+    throw new CutoverFenceError("Invalid codeArtifact in manifest");
   }
   if (typeof doc.packageIntegrity !== "string" || !doc.packageIntegrity.trim()) {
-    throw new CutoverFenceError2("Invalid packageIntegrity in manifest");
+    throw new CutoverFenceError("Invalid packageIntegrity in manifest");
   }
   if (typeof doc.protocolDigest !== "string" || !/^[0-9a-f]{64}$/.test(doc.protocolDigest)) {
-    throw new CutoverFenceError2(`Invalid protocolDigest in manifest: ${doc.protocolDigest}`);
+    throw new CutoverFenceError(`Invalid protocolDigest in manifest: ${doc.protocolDigest}`);
   }
   if (typeof doc.assemblyDigest !== "string" || !/^[0-9a-f]{64}$/.test(doc.assemblyDigest)) {
-    throw new CutoverFenceError2(`Invalid assemblyDigest in manifest: ${doc.assemblyDigest}`);
+    throw new CutoverFenceError(`Invalid assemblyDigest in manifest: ${doc.assemblyDigest}`);
   }
   if (typeof doc.indexSchemaDigest !== "string" || !/^[0-9a-f]{64}$/.test(doc.indexSchemaDigest)) {
-    throw new CutoverFenceError2(`Invalid indexSchemaDigest in manifest: ${doc.indexSchemaDigest}`);
+    throw new CutoverFenceError(`Invalid indexSchemaDigest in manifest: ${doc.indexSchemaDigest}`);
   }
   if (doc.encoderVersion !== 1) {
-    throw new CutoverFenceError2(`Unsupported encoderVersion: expected 1, got ${doc.encoderVersion}`);
+    throw new CutoverFenceError(`Unsupported encoderVersion: expected 1, got ${doc.encoderVersion}`);
   }
   if (typeof doc.planDigest !== "string" || !/^[0-9a-f]{64}$/.test(doc.planDigest)) {
-    throw new CutoverFenceError2(`Invalid planDigest in manifest: ${doc.planDigest}`);
+    throw new CutoverFenceError(`Invalid planDigest in manifest: ${doc.planDigest}`);
   }
 }
 __name(validateMigrationIdentityFields, "validateMigrationIdentityFields");
 function validateCandidateProjection(kind, candidateId, proj) {
   if (!proj || typeof proj !== "object" || Array.isArray(proj)) {
-    throw new CutoverFenceError2(`Projector must return a plain non-null object for candidate ${candidateId}`);
+    throw new CutoverFenceError(`Projector must return a plain non-null object for candidate ${candidateId}`);
   }
   const keys = Object.keys(proj);
   if (keys.length === 0) {
-    throw new CutoverFenceError2(`Projector returned empty projection for candidate ${candidateId}`);
+    throw new CutoverFenceError(`Projector returned empty projection for candidate ${candidateId}`);
   }
   if (kind === "clients" || kind === "client") {
     if (typeof proj.clientId !== "string" || !proj.clientId) {
-      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required clientId`);
+      throw new CutoverFenceError(`Projector projection for ${kind} candidate ${candidateId} missing required clientId`);
     }
   } else if (kind === "pr56Families" || kind === "family") {
     if (typeof proj.familyId !== "string" || typeof proj.generation !== "number") {
-      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or generation`);
+      throw new CutoverFenceError(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or generation`);
     }
   } else if (kind === "baseFormatTokens" || kind === "base") {
     if (typeof proj.familyId !== "string" && typeof proj.accessTokenId !== "string" && typeof proj.accessToken !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or accessTokenId`);
+      throw new CutoverFenceError(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or accessTokenId`);
     }
   } else if (kind === "authCodes" || kind === "code") {
     if (typeof proj.codeId !== "string" && typeof proj.code !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required codeId`);
+      throw new CutoverFenceError(`Projector projection for ${kind} candidate ${candidateId} missing required codeId`);
     }
   } else if (kind === "resumeTokens" || kind === "resume") {
     if (typeof proj.resumeId !== "string" && typeof proj.resumeTokenId !== "string" && typeof proj.token !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required resumeId`);
+      throw new CutoverFenceError(`Projector projection for ${kind} candidate ${candidateId} missing required resumeId`);
     }
   }
 }
@@ -1109,35 +1076,35 @@ function getTargetCollectionAllowlist(namespace) {
 __name(getTargetCollectionAllowlist, "getTargetCollectionAllowlist");
 function isTargetFormatRow(collection, data) {
   if (data === null || data === void 0 || typeof data !== "object" || Array.isArray(data)) {
-    throw new CutoverFenceError2(`Malformed document in '${collection}': data must be a non-null object`);
+    throw new CutoverFenceError(`Malformed document in '${collection}': data must be a non-null object`);
   }
   if (collection.endsWith("_auth_codes")) {
     const isTarget = typeof data.sealed === "string";
     const isSource = !data.sealed && (data.code !== void 0 || data.clientId !== void 0 || data.redirectUri !== void 0 || data.expiresAt !== void 0);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError2(`Ambiguous auth_codes document format in '${collection}'`);
+    throw new CutoverFenceError(`Ambiguous auth_codes document format in '${collection}'`);
   }
   if (collection.endsWith("_resume_tokens")) {
     const isTarget = data.v === 2 || data.ttlAt !== void 0 || data._mcp_format === "v3_target";
     const isSource = data.v === void 0 && data.ttlAt === void 0 && data._mcp_format === void 0 && (data.consumedAt !== void 0 || data.expiresAt !== void 0 || data.token !== void 0);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError2(`Ambiguous resume_tokens document format in '${collection}'`);
+    throw new CutoverFenceError(`Ambiguous resume_tokens document format in '${collection}'`);
   }
   if (collection.endsWith("_oauth_clients")) {
     const hasClientId = typeof data.client_id === "string" || typeof data.clientId === "string";
     if (!hasClientId) {
-      throw new CutoverFenceError2(`Ambiguous oauth_clients document format in '${collection}': missing client_id`);
+      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}': missing client_id`);
     }
     if (data._targetFormat !== void 0) {
-      throw new CutoverFenceError2(`Ambiguous oauth_clients document format in '${collection}': reserved field _targetFormat present`);
+      throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}': reserved field _targetFormat present`);
     }
     const isTarget = data._mcp_format === "v3_target";
     const isSource = data._mcp_format === void 0;
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
-    throw new CutoverFenceError2(`Ambiguous oauth_clients document format in '${collection}'`);
+    throw new CutoverFenceError(`Ambiguous oauth_clients document format in '${collection}'`);
   }
   if (data._mcp_format === "v3_target" || data.format === "v3") return true;
   return false;
@@ -1171,15 +1138,15 @@ function validateNoLoneSurrogates(str) {
     const code = str.charCodeAt(i);
     if (code >= 55296 && code <= 56319) {
       if (i + 1 >= str.length) {
-        throw new CutoverFenceError2("Invalid lone high surrogate in string");
+        throw new CutoverFenceError("Invalid lone high surrogate in string");
       }
       const next = str.charCodeAt(i + 1);
       if (next < 56320 || next > 57343) {
-        throw new CutoverFenceError2("Invalid lone high surrogate in string");
+        throw new CutoverFenceError("Invalid lone high surrogate in string");
       }
       i++;
     } else if (code >= 56320 && code <= 57343) {
-      throw new CutoverFenceError2("Invalid lone low surrogate in string");
+      throw new CutoverFenceError("Invalid lone low surrogate in string");
     }
   }
 }
@@ -1189,12 +1156,12 @@ function normalizeValue(val) {
   if (typeof val === "boolean") return ["boolean", val];
   if (typeof val === "number") {
     if (!Number.isFinite(val)) {
-      throw new CutoverFenceError2(`Cannot normalize non-finite number: ${val}`);
+      throw new CutoverFenceError(`Cannot normalize non-finite number: ${val}`);
     }
     const normalizedNum = Object.is(val, -0) ? 0 : val;
     if (Number.isInteger(normalizedNum)) {
       if (!Number.isSafeInteger(normalizedNum)) {
-        throw new CutoverFenceError2(`Cannot normalize unsafe integer: ${normalizedNum}`);
+        throw new CutoverFenceError(`Cannot normalize unsafe integer: ${normalizedNum}`);
       }
     }
     return ["number", normalizedNum];
@@ -1206,7 +1173,7 @@ function normalizeValue(val) {
   if (val instanceof Date) {
     const ms = val.getTime();
     if (Number.isNaN(ms)) {
-      throw new CutoverFenceError2("Invalid Date object");
+      throw new CutoverFenceError("Invalid Date object");
     }
     const seconds = Math.floor(ms / 1e3);
     const nanoseconds = (ms - seconds * 1e3) * 1e6;
@@ -1216,7 +1183,7 @@ function normalizeValue(val) {
     (k) => ["seconds", "nanoseconds", "_seconds", "_nanoseconds"].includes(k)
   ))) {
     if (!Number.isSafeInteger(val.seconds) || !Number.isSafeInteger(val.nanoseconds) || val.nanoseconds < 0 || val.nanoseconds >= 1e9) {
-      throw new CutoverFenceError2("Invalid Firestore Timestamp field ranges");
+      throw new CutoverFenceError("Invalid Firestore Timestamp field ranges");
     }
     return ["timestamp", String(val.seconds), val.nanoseconds];
   }
@@ -1226,14 +1193,14 @@ function normalizeValue(val) {
   if (Array.isArray(val)) {
     for (let i = 0; i < val.length; i++) {
       if (!(i in val)) {
-        throw new CutoverFenceError2(`Sparse arrays are not supported at index ${i}`);
+        throw new CutoverFenceError(`Sparse arrays are not supported at index ${i}`);
       }
     }
     return ["array", val.map(normalizeValue)];
   }
   if (typeof val === "object") {
     if (val.constructor && val.constructor !== Object && val.constructor.name !== "Object") {
-      throw new CutoverFenceError2(`Unsupported object class: ${val.constructor.name}`);
+      throw new CutoverFenceError(`Unsupported object class: ${val.constructor.name}`);
     }
     const keys = Object.keys(val).sort(canonicalCompare);
     return ["map", keys.map((k) => {
@@ -1241,7 +1208,7 @@ function normalizeValue(val) {
       return [k, normalizeValue(val[k])];
     })];
   }
-  throw new CutoverFenceError2(`Unsupported type for canonical normalization: ${typeof val}`);
+  throw new CutoverFenceError(`Unsupported type for canonical normalization: ${typeof val}`);
 }
 __name(normalizeValue, "normalizeValue");
 function rfc8785CanonicalJson(val) {
@@ -1249,7 +1216,7 @@ function rfc8785CanonicalJson(val) {
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") {
     if (!Number.isFinite(val)) {
-      throw new CutoverFenceError2(`Cannot serialize non-finite number: ${val}`);
+      throw new CutoverFenceError(`Cannot serialize non-finite number: ${val}`);
     }
     return Object.is(val, -0) ? "0" : String(val);
   }
@@ -1267,7 +1234,7 @@ function rfc8785CanonicalJson(val) {
       return JSON.stringify(k) + ":" + rfc8785CanonicalJson(val[k]);
     }).join(",") + "}";
   }
-  throw new CutoverFenceError2(`Unsupported type for canonical JSON: ${typeof val}`);
+  throw new CutoverFenceError(`Unsupported type for canonical JSON: ${typeof val}`);
 }
 __name(rfc8785CanonicalJson, "rfc8785CanonicalJson");
 function C(value) {
@@ -1307,7 +1274,7 @@ function D(purpose, namespace, epoch, value) {
 __name(D, "D");
 function H(storeKey, purpose, namespace, epoch, value) {
   if (!storeKey || typeof storeKey !== "string" && !Buffer.isBuffer(storeKey) && !(storeKey instanceof Uint8Array)) {
-    throw new CutoverFenceError2("storeKey is REQUIRED for keyed HMAC operations");
+    throw new CutoverFenceError("storeKey is REQUIRED for keyed HMAC operations");
   }
   const K = deriveKey(storeKey);
   const payload = frame(purpose, namespace, epoch, value);
@@ -1320,14 +1287,14 @@ function computeKeyedDocId(storeKey, purpose, namespace, epoch, collectionKey, r
 __name(computeKeyedDocId, "computeKeyedDocId");
 function computeSourceRecordDigest(storeKey, namespace, epoch, collectionKey, sourceId, data) {
   if (data === null || data === void 0 || typeof data !== "object" || Array.isArray(data)) {
-    throw new CutoverFenceError2(`Malformed source data in '${collectionKey}/${sourceId}'`);
+    throw new CutoverFenceError(`Malformed source data in '${collectionKey}/${sourceId}'`);
   }
   return H(storeKey, "source-record", namespace, epoch, [collectionKey, sourceId, data]);
 }
 __name(computeSourceRecordDigest, "computeSourceRecordDigest");
 function computeTargetRecordDigest(storeKey, namespace, epoch, collectionKey, targetId, data) {
   if (data === null || data === void 0 || typeof data !== "object" || Array.isArray(data)) {
-    throw new CutoverFenceError2(`Malformed target data in '${collectionKey}/${targetId}'`);
+    throw new CutoverFenceError(`Malformed target data in '${collectionKey}/${targetId}'`);
   }
   return H(storeKey, "target-record", namespace, epoch, [collectionKey, targetId, data]);
 }
@@ -1355,12 +1322,12 @@ function computeLogicalInventoryDigest(storeKey, namespace, epoch, logicalItems)
 __name(computeLogicalInventoryDigest, "computeLogicalInventoryDigest");
 function computeManifestDigest(manifest, namespace, epoch) {
   if (!manifest || typeof manifest !== "object") {
-    throw new CutoverFenceError2("Manifest must be an object");
+    throw new CutoverFenceError("Manifest must be an object");
   }
   const ns = namespace ?? manifest.namespace;
   const ep = epoch ?? manifest.epoch;
   if (!ns || !ep) {
-    throw new CutoverFenceError2("namespace and epoch are required to compute manifest digest");
+    throw new CutoverFenceError("namespace and epoch are required to compute manifest digest");
   }
   return D("final", ns, ep, manifest);
 }
@@ -1386,7 +1353,7 @@ function startMonotonicTimer2() {
     assertUnderDeadline(label = "Transaction callback") {
       const ms = Number(process.hrtime.bigint() - start) / 1e6;
       if (ms > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `${label} elapsed duration (${Math.round(ms)} ms) exceeds 16,000 ms lock deadline`
         );
       }
@@ -1472,30 +1439,30 @@ function validateMigrationPreflightLimits(prep, options = {}) {
   const jsonStr = C(prep);
   const sizeBytes = Buffer.byteLength(jsonStr, "utf8");
   if (sizeBytes > PREFLIGHT_MAX_DOC_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared migration manifest canonical size (${sizeBytes} bytes) exceeds 80% limit (${PREFLIGHT_MAX_DOC_BYTES} bytes)`
     );
   }
   const estFirestoreSize = computeEstimatedFirestoreDocSize(prep);
   if (estFirestoreSize > PREFLIGHT_MAX_DOC_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared migration manifest estimated Firestore storage size (${estFirestoreSize} bytes) exceeds 80% limit (${PREFLIGHT_MAX_DOC_BYTES} bytes)`
     );
   }
   const depth = getMaxDepth(prep);
   if (depth > PREFLIGHT_MAX_NESTING_DEPTH) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared migration manifest nesting depth (${depth}) exceeds 80% budget (${PREFLIGHT_MAX_NESTING_DEPTH})`
     );
   }
   const indexMetrics = countIndexMetrics(prep);
   if (indexMetrics.entries > PREFLIGHT_MAX_INDEX_ENTRIES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared migration manifest index entries (${indexMetrics.entries}) exceeds 80% budget (${PREFLIGHT_MAX_INDEX_ENTRIES})`
     );
   }
   if (indexMetrics.bytes > PREFLIGHT_MAX_INDEX_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared migration manifest index bytes (${indexMetrics.bytes}) exceeds 80% budget (${PREFLIGHT_MAX_INDEX_BYTES})`
     );
   }
@@ -1509,27 +1476,27 @@ function validateMigrationPreflightLimits(prep, options = {}) {
       }
     }
     if (fullBytes > PREFLIGHT_MAX_REQUEST_BYTES) {
-      throw new CutoverFenceError2(`Full readset estimated size (${fullBytes} bytes) exceeds 80% request budget`);
+      throw new CutoverFenceError(`Full readset estimated size (${fullBytes} bytes) exceeds 80% request budget`);
     }
     if (fullEntries > PREFLIGHT_MAX_INDEX_ENTRIES) {
-      throw new CutoverFenceError2(`Full readset index entries (${fullEntries}) exceeds 80% budget`);
+      throw new CutoverFenceError(`Full readset index entries (${fullEntries}) exceeds 80% budget`);
     }
   }
   if (options.finalDoc) {
     const finalSize = computeEstimatedFirestoreDocSize(options.finalDoc);
     if (finalSize > PREFLIGHT_MAX_DOC_BYTES) {
-      throw new CutoverFenceError2(`finalDoc size (${finalSize} bytes) exceeds 80% budget`);
+      throw new CutoverFenceError(`finalDoc size (${finalSize} bytes) exceeds 80% budget`);
     }
   }
   if (options.markerDoc) {
     const markerSize = computeEstimatedFirestoreDocSize(options.markerDoc);
     if (markerSize > PREFLIGHT_MAX_DOC_BYTES) {
-      throw new CutoverFenceError2(`markerDoc size (${markerSize} bytes) exceeds 80% budget`);
+      throw new CutoverFenceError(`markerDoc size (${markerSize} bytes) exceeds 80% budget`);
     }
   }
   if (options.readDurationMs !== void 0) {
     if (options.readDurationMs > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Preflight read duration (${options.readDurationMs} ms) exceeds 16,000 ms lock deadline`
       );
     }
@@ -1539,34 +1506,34 @@ function validateMigrationPreflightLimits(prep, options = {}) {
 __name(validateMigrationPreflightLimits, "validateMigrationPreflightLimits");
 function validateProspectiveDocBudget(doc, label = "Document") {
   if (!doc || typeof doc !== "object") {
-    throw new CutoverFenceError2(`${label} is missing or not an object`);
+    throw new CutoverFenceError(`${label} is missing or not an object`);
   }
   const estFirestoreSize = computeEstimatedFirestoreDocSize(doc);
   if (estFirestoreSize > PREFLIGHT_MAX_DOC_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} estimated Firestore size (${estFirestoreSize} bytes) exceeds 80% document budget (${PREFLIGHT_MAX_DOC_BYTES} bytes)`
     );
   }
   const depth = getMaxDepth(doc);
   if (depth > PREFLIGHT_MAX_NESTING_DEPTH) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} nesting depth (${depth}) exceeds 80% budget (${PREFLIGHT_MAX_NESTING_DEPTH})`
     );
   }
   const indexMetrics = countIndexMetrics(doc);
   if (indexMetrics.entries > PREFLIGHT_MAX_INDEX_ENTRIES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} index entries (${indexMetrics.entries}) exceeds 80% budget (${PREFLIGHT_MAX_INDEX_ENTRIES})`
     );
   }
   if (indexMetrics.bytes > PREFLIGHT_MAX_INDEX_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} index bytes (${indexMetrics.bytes}) exceeds 80% budget (${PREFLIGHT_MAX_INDEX_BYTES})`
     );
   }
   const transforms = doc._transformsCount ?? 0;
   if (transforms > PREFLIGHT_MAX_FIELD_TRANSFORMS) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} field transforms (${transforms}) exceeds 80% budget (${PREFLIGHT_MAX_FIELD_TRANSFORMS})`
     );
   }
@@ -1575,17 +1542,17 @@ function validateProspectiveDocBudget(doc, label = "Document") {
 __name(validateProspectiveDocBudget, "validateProspectiveDocBudget");
 function validateTransactionBudgetPlan(txPlan, label = "Transaction") {
   if (!txPlan || typeof txPlan !== "object") {
-    throw new CutoverFenceError2(`${label} transaction budget plan is missing or not an object`);
+    throw new CutoverFenceError(`${label} transaction budget plan is missing or not an object`);
   }
   const commitBytes = txPlan.estimatedCommitBytes ?? txPlan.commitBytes;
   if (typeof commitBytes !== "number" || !Number.isSafeInteger(commitBytes) || commitBytes <= 0 || commitBytes > PREFLIGHT_MAX_REQUEST_BYTES) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} estimated commit bytes (${commitBytes}) must be a positive integer <= 80% request budget (${PREFLIGHT_MAX_REQUEST_BYTES})`
     );
   }
   const readDurationMs = txPlan.estimatedReadDurationMs ?? txPlan.readDurationMs;
   if (typeof readDurationMs !== "number" || !Number.isFinite(readDurationMs) || readDurationMs <= 0 || readDurationMs > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `${label} estimated read duration (${readDurationMs} ms) must be positive and <= 16,000 ms lock deadline`
     );
   }
@@ -1594,19 +1561,19 @@ function validateTransactionBudgetPlan(txPlan, label = "Transaction") {
 __name(validateTransactionBudgetPlan, "validateTransactionBudgetPlan");
 function validateCompleteMigrationPlan(plan) {
   if (!plan || typeof plan !== "object") {
-    throw new CutoverFenceError2("CompleteMigrationPlan must be a non-null object");
+    throw new CutoverFenceError("CompleteMigrationPlan must be a non-null object");
   }
   if (!plan.prepared || typeof plan.prepared !== "object") {
-    throw new CutoverFenceError2("CompleteMigrationPlan missing required prepared document");
+    throw new CutoverFenceError("CompleteMigrationPlan missing required prepared document");
   }
   const preparedMetrics = validateProspectiveDocBudget(plan.prepared, "Prepared manifest");
   validateTransactionBudgetPlan(plan.preparation, "Preparation");
   if (!Array.isArray(plan.items)) {
-    throw new CutoverFenceError2("CompleteMigrationPlan missing required items array");
+    throw new CutoverFenceError("CompleteMigrationPlan missing required items array");
   }
   const candidateCommitments = plan.prepared.candidateCommitments || [];
   if (plan.items.length !== candidateCommitments.length) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `CompleteMigrationPlan items count (${plan.items.length}) does not match prepared candidates count (${candidateCommitments.length})`
     );
   }
@@ -1614,47 +1581,47 @@ function validateCompleteMigrationPlan(plan) {
   for (let i = 0; i < plan.items.length; i++) {
     const item = plan.items[i];
     if (!item || typeof item !== "object") {
-      throw new CutoverFenceError2(`Item plan at index ${i} is missing or not an object`);
+      throw new CutoverFenceError(`Item plan at index ${i} is missing or not an object`);
     }
     if (typeof item.candidateId !== "string" || !item.candidateId.trim()) {
-      throw new CutoverFenceError2(`Item plan at index ${i} missing candidateId`);
+      throw new CutoverFenceError(`Item plan at index ${i} missing candidateId`);
     }
     if (seenCandidateIds.has(item.candidateId)) {
-      throw new CutoverFenceError2(`Duplicate item plan for candidateId '${item.candidateId}'`);
+      throw new CutoverFenceError(`Duplicate item plan for candidateId '${item.candidateId}'`);
     }
     seenCandidateIds.add(item.candidateId);
     const matchingCandidate = candidateCommitments.find((c) => c.id === item.candidateId);
     if (!matchingCandidate) {
-      throw new CutoverFenceError2(`Item plan candidateId '${item.candidateId}' not found in prepared candidates`);
+      throw new CutoverFenceError(`Item plan candidateId '${item.candidateId}' not found in prepared candidates`);
     }
     if (!Array.isArray(item.sourceReferences) || !Array.isArray(item.targetReferences)) {
-      throw new CutoverFenceError2(`Item plan ${item.candidateId} missing sourceReferences or targetReferences array`);
+      throw new CutoverFenceError(`Item plan ${item.candidateId} missing sourceReferences or targetReferences array`);
     }
     if (item.sourceReferences.length !== matchingCandidate.sources.length) {
-      throw new CutoverFenceError2(`Item plan ${item.candidateId} sourceReferences count mismatch`);
+      throw new CutoverFenceError(`Item plan ${item.candidateId} sourceReferences count mismatch`);
     }
     for (let sIdx = 0; sIdx < matchingCandidate.sources.length; sIdx++) {
       const expectedS = matchingCandidate.sources[sIdx];
       const actualS = item.sourceReferences[sIdx];
       if (!actualS || actualS.collection !== expectedS.collection || actualS.id !== expectedS.id) {
-        throw new CutoverFenceError2(`Item plan ${item.candidateId} sourceReferences[${sIdx}] mismatch: expected '${expectedS.collection}:${expectedS.id}'`);
+        throw new CutoverFenceError(`Item plan ${item.candidateId} sourceReferences[${sIdx}] mismatch: expected '${expectedS.collection}:${expectedS.id}'`);
       }
     }
     if (item.targetReferences.length !== matchingCandidate.targets.length) {
-      throw new CutoverFenceError2(`Item plan ${item.candidateId} targetReferences count mismatch`);
+      throw new CutoverFenceError(`Item plan ${item.candidateId} targetReferences count mismatch`);
     }
     for (let tIdx = 0; tIdx < matchingCandidate.targets.length; tIdx++) {
       const expectedT = matchingCandidate.targets[tIdx];
       const actualT = item.targetReferences[tIdx];
       if (!actualT || actualT.collection !== expectedT.collection || actualT.id !== expectedT.id) {
-        throw new CutoverFenceError2(`Item plan ${item.candidateId} targetReferences[${tIdx}] mismatch: expected '${expectedT.collection}:${expectedT.id}'`);
+        throw new CutoverFenceError(`Item plan ${item.candidateId} targetReferences[${tIdx}] mismatch: expected '${expectedT.collection}:${expectedT.id}'`);
       }
     }
     if (!Array.isArray(item.sourceActions) || item.sourceActions.length === 0) {
-      throw new CutoverFenceError2(`Item plan ${item.candidateId} missing non-empty sourceActions`);
+      throw new CutoverFenceError(`Item plan ${item.candidateId} missing non-empty sourceActions`);
     }
     if (!Array.isArray(item.prospectiveTargetPostimages) || item.prospectiveTargetPostimages.length !== matchingCandidate.targets.length) {
-      throw new CutoverFenceError2(`Item plan ${item.candidateId} prospectiveTargetPostimages count must equal targets count (${matchingCandidate.targets.length})`);
+      throw new CutoverFenceError(`Item plan ${item.candidateId} prospectiveTargetPostimages count must equal targets count (${matchingCandidate.targets.length})`);
     }
     for (let j = 0; j < item.prospectiveTargetPostimages.length; j++) {
       validateProspectiveDocBudget(
@@ -1667,18 +1634,18 @@ function validateCompleteMigrationPlan(plan) {
   }
   for (const c of candidateCommitments) {
     if (!seenCandidateIds.has(c.id)) {
-      throw new CutoverFenceError2(`Prepared candidate '${c.id}' has no corresponding item plan`);
+      throw new CutoverFenceError(`Prepared candidate '${c.id}' has no corresponding item plan`);
     }
   }
   if (!plan.finalization || typeof plan.finalization !== "object") {
-    throw new CutoverFenceError2("CompleteMigrationPlan missing required finalization section");
+    throw new CutoverFenceError("CompleteMigrationPlan missing required finalization section");
   }
   validateProspectiveDocBudget(plan.finalization.finalUpperBound, "Final manifest upper bound");
   validateProspectiveDocBudget(plan.finalization.markerUpperBound, "Marker document upper bound");
   validateProspectiveDocBudget(plan.finalization.controlUpperBound, "Finalization control upper bound");
   validateTransactionBudgetPlan(plan.finalization.transaction, "Finalization");
   if (!plan.activation || typeof plan.activation !== "object") {
-    throw new CutoverFenceError2("CompleteMigrationPlan missing required activation section");
+    throw new CutoverFenceError("CompleteMigrationPlan missing required activation section");
   }
   validateProspectiveDocBudget(plan.activation.controlUpperBound, "Activation control upper bound");
   validateTransactionBudgetPlan(plan.activation.transaction, "Activation");
@@ -1691,7 +1658,7 @@ function validateCompleteMigrationPlan(plan) {
 __name(validateCompleteMigrationPlan, "validateCompleteMigrationPlan");
 function validateCandidateCommitments(candidates, prepDoc, expectedNamespace, expectedEpoch, expectedRunId) {
   if (!Array.isArray(candidates)) {
-    throw new CutoverFenceError2("candidateCommitments must be an array");
+    throw new CutoverFenceError("candidateCommitments must be an array");
   }
   const candidateIds = /* @__PURE__ */ new Set();
   const sourceKeys = /* @__PURE__ */ new Set();
@@ -1703,71 +1670,71 @@ function validateCandidateCommitments(candidates, prepDoc, expectedNamespace, ex
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
     if (!c || typeof c !== "object") {
-      throw new CutoverFenceError2(`candidateCommitments[${i}] must be an object`);
+      throw new CutoverFenceError(`candidateCommitments[${i}] must be an object`);
     }
     validateMapKeysExact(c, REQUIRED_CANDIDATE_KEYS, `candidateCommitments[${i}]`);
     if (typeof c.id !== "string" || !/^[0-9a-f]{64}$/.test(c.id)) {
-      throw new CutoverFenceError2(`candidateCommitments[${i}].id must be 64-char hex`);
+      throw new CutoverFenceError(`candidateCommitments[${i}].id must be 64-char hex`);
     }
     const classificationKind = CANDIDATE_KIND_TO_CLASSIFICATION[c.kind];
     if (!classificationKind || !CLASSIFICATION_KEYS.includes(classificationKind)) {
-      throw new CutoverFenceError2(`candidateCommitments[${i}].kind must map to valid classification (${CLASSIFICATION_KEYS.join(", ")})`);
+      throw new CutoverFenceError(`candidateCommitments[${i}].kind must map to valid classification (${CLASSIFICATION_KEYS.join(", ")})`);
     }
     kindCounts[classificationKind] = (kindCounts[classificationKind] ?? 0) + 1;
     if (!Array.isArray(c.sources) || c.sources.length === 0) {
-      throw new CutoverFenceError2(`candidateCommitments[${i}].sources must be a non-empty array`);
+      throw new CutoverFenceError(`candidateCommitments[${i}].sources must be a non-empty array`);
     }
     if (!Array.isArray(c.targets)) {
-      throw new CutoverFenceError2(`candidateCommitments[${i}].targets must be an array`);
+      throw new CutoverFenceError(`candidateCommitments[${i}].targets must be an array`);
     }
     if (!/^[0-9a-f]{64}$/.test(c.logicalDigest)) {
-      throw new CutoverFenceError2(`candidateCommitments[${i}].logicalDigest must be 64-char hex`);
+      throw new CutoverFenceError(`candidateCommitments[${i}].logicalDigest must be 64-char hex`);
     }
     if (candidateIds.has(c.id)) {
-      throw new CutoverFenceError2(`Duplicate candidate id '${c.id}' in candidateCommitments`);
+      throw new CutoverFenceError(`Duplicate candidate id '${c.id}' in candidateCommitments`);
     }
     candidateIds.add(c.id);
     let prevSourceKey = "";
     for (const s of c.sources) {
       if (!s || typeof s !== "object") {
-        throw new CutoverFenceError2(`Invalid source descriptor in candidate ${c.id}`);
+        throw new CutoverFenceError(`Invalid source descriptor in candidate ${c.id}`);
       }
       validateMapKeysExact(s, ["collection", "id", "recordDigest"], `candidate ${c.id} source`);
       if (typeof s.collection !== "string" || typeof s.id !== "string" || !/^[0-9a-f]{64}$/.test(s.id) || !/^[0-9a-f]{64}$/.test(s.recordDigest)) {
-        throw new CutoverFenceError2(`Invalid source descriptor formats in candidate ${c.id}`);
+        throw new CutoverFenceError(`Invalid source descriptor formats in candidate ${c.id}`);
       }
       if (!allowedSources.includes(s.collection)) {
-        throw new CutoverFenceError2(`Candidate ${c.id} source collection '${s.collection}' not in allowlist`);
+        throw new CutoverFenceError(`Candidate ${c.id} source collection '${s.collection}' not in allowlist`);
       }
       const sKey = `${s.collection}:${s.id}`;
       if (sKey < prevSourceKey) {
-        throw new CutoverFenceError2(`Candidate ${c.id} sources must be sorted by collection then id`);
+        throw new CutoverFenceError(`Candidate ${c.id} sources must be sorted by collection then id`);
       }
       prevSourceKey = sKey;
       if (sourceKeys.has(sKey)) {
-        throw new CutoverFenceError2(`Duplicate source record '${sKey}' across candidateCommitments`);
+        throw new CutoverFenceError(`Duplicate source record '${sKey}' across candidateCommitments`);
       }
       sourceKeys.add(sKey);
     }
     let prevTargetKey = "";
     for (const t of c.targets) {
       if (!t || typeof t !== "object") {
-        throw new CutoverFenceError2(`Invalid target descriptor in candidate ${c.id}`);
+        throw new CutoverFenceError(`Invalid target descriptor in candidate ${c.id}`);
       }
       validateMapKeysExact(t, ["collection", "id"], `candidate ${c.id} target`);
       if (typeof t.collection !== "string" || typeof t.id !== "string" || !/^[0-9a-f]{64}$/.test(t.id)) {
-        throw new CutoverFenceError2(`Invalid target descriptor formats in candidate ${c.id}`);
+        throw new CutoverFenceError(`Invalid target descriptor formats in candidate ${c.id}`);
       }
       if (!allowedTargets.includes(t.collection)) {
-        throw new CutoverFenceError2(`Candidate ${c.id} target collection '${t.collection}' not in allowlist`);
+        throw new CutoverFenceError(`Candidate ${c.id} target collection '${t.collection}' not in allowlist`);
       }
       const tKey = `${t.collection}:${t.id}`;
       if (tKey < prevTargetKey) {
-        throw new CutoverFenceError2(`Candidate ${c.id} targets must be sorted by collection then id`);
+        throw new CutoverFenceError(`Candidate ${c.id} targets must be sorted by collection then id`);
       }
       prevTargetKey = tKey;
       if (targetKeys.has(tKey)) {
-        throw new CutoverFenceError2(`Duplicate target record '${tKey}' across candidateCommitments`);
+        throw new CutoverFenceError(`Duplicate target record '${tKey}' across candidateCommitments`);
       }
       targetKeys.add(tKey);
     }
@@ -1775,7 +1742,7 @@ function validateCandidateCommitments(candidates, prepDoc, expectedNamespace, ex
   if (prepDoc && prepDoc.classifications) {
     for (const k of CLASSIFICATION_KEYS) {
       if (prepDoc.classifications[k] !== (kindCounts[k] ?? 0)) {
-        throw new CutoverFenceError2(`Partition count mismatch for '${k}': prepDoc has ${prepDoc.classifications[k]}, candidates have ${kindCounts[k] ?? 0}`);
+        throw new CutoverFenceError(`Partition count mismatch for '${k}': prepDoc has ${prepDoc.classifications[k]}, candidates have ${kindCounts[k] ?? 0}`);
       }
     }
   }
@@ -1783,65 +1750,65 @@ function validateCandidateCommitments(candidates, prepDoc, expectedNamespace, ex
 __name(validateCandidateCommitments, "validateCandidateCommitments");
 function validateReceipt(receipt, expectedNamespace, expectedEpoch, expectedRunId) {
   if (!receipt || typeof receipt !== "object") {
-    throw new CutoverFenceError2("Receipt must be an object");
+    throw new CutoverFenceError("Receipt must be an object");
   }
   validateMapKeysExact(receipt, REQUIRED_RECEIPT_KEYS, "receipt");
   validateMigrationIdentityFields(receipt, expectedNamespace, expectedEpoch, expectedRunId);
   if (receipt.kind !== "receipt") {
-    throw new CutoverFenceError2(`Receipt kind must be 'receipt', got '${receipt.kind}'`);
+    throw new CutoverFenceError(`Receipt kind must be 'receipt', got '${receipt.kind}'`);
   }
   if (!/^[0-9a-f]{64}$/.test(receipt.preparedDigest)) {
-    throw new CutoverFenceError2(`Receipt preparedDigest must be 64-char hex, got '${receipt.preparedDigest}'`);
+    throw new CutoverFenceError(`Receipt preparedDigest must be 64-char hex, got '${receipt.preparedDigest}'`);
   }
   if (!/^[0-9a-f]{64}$/.test(receipt.candidateDigest)) {
-    throw new CutoverFenceError2(`Receipt candidateDigest must be 64-char hex, got '${receipt.candidateDigest}'`);
+    throw new CutoverFenceError(`Receipt candidateDigest must be 64-char hex, got '${receipt.candidateDigest}'`);
   }
   if (!/^[0-9a-f]{64}$/.test(receipt.logicalDigest)) {
-    throw new CutoverFenceError2(`Receipt logicalDigest must be 64-char hex, got '${receipt.logicalDigest}'`);
+    throw new CutoverFenceError(`Receipt logicalDigest must be 64-char hex, got '${receipt.logicalDigest}'`);
   }
   const validDispositions = ["written", "retained"];
   if (!validDispositions.includes(receipt.disposition)) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Receipt disposition must be one of [${validDispositions.join(", ")}], got '${receipt.disposition}'`
     );
   }
   const allowedSources = getSourceCollectionAllowlist(expectedNamespace);
   const allowedTargets = getTargetCollectionAllowlist(expectedNamespace);
   if (!Array.isArray(receipt.sourceAfter)) {
-    throw new CutoverFenceError2("Receipt sourceAfter must be an array of source after-state descriptors");
+    throw new CutoverFenceError("Receipt sourceAfter must be an array of source after-state descriptors");
   }
   for (const s of receipt.sourceAfter) {
     if (!s || typeof s !== "object") {
-      throw new CutoverFenceError2("Invalid sourceAfter item in receipt");
+      throw new CutoverFenceError("Invalid sourceAfter item in receipt");
     }
     validateMapKeysExact(s, ["collection", "id", "recordDigest"], "receipt sourceAfter item");
     if (typeof s.collection !== "string" || typeof s.id !== "string" || !/^[0-9a-f]{64}$/.test(s.id)) {
-      throw new CutoverFenceError2("Invalid sourceAfter collection or id format");
+      throw new CutoverFenceError("Invalid sourceAfter collection or id format");
     }
     if (!allowedSources.includes(s.collection)) {
-      throw new CutoverFenceError2(`Receipt sourceAfter collection '${s.collection}' not in allowlist`);
+      throw new CutoverFenceError(`Receipt sourceAfter collection '${s.collection}' not in allowlist`);
     }
     if (s.recordDigest !== null && (typeof s.recordDigest !== "string" || !/^[0-9a-f]{64}$/.test(s.recordDigest))) {
-      throw new CutoverFenceError2("sourceAfter recordDigest must be 64-char hex or null");
+      throw new CutoverFenceError("sourceAfter recordDigest must be 64-char hex or null");
     }
   }
   if (!Array.isArray(receipt.targetAfter)) {
-    throw new CutoverFenceError2("Receipt targetAfter must be an array of target after-state descriptors");
+    throw new CutoverFenceError("Receipt targetAfter must be an array of target after-state descriptors");
   }
   for (const t of receipt.targetAfter) {
     if (!t || typeof t !== "object") {
-      throw new CutoverFenceError2("Invalid targetAfter item in receipt");
+      throw new CutoverFenceError("Invalid targetAfter item in receipt");
     }
     validateMapKeysExact(t, ["collection", "id", "recordDigest"], "receipt targetAfter item");
     if (typeof t.collection !== "string" || typeof t.id !== "string" || !/^[0-9a-f]{64}$/.test(t.id) || typeof t.recordDigest !== "string" || !/^[0-9a-f]{64}$/.test(t.recordDigest)) {
-      throw new CutoverFenceError2("Invalid targetAfter descriptor format in receipt");
+      throw new CutoverFenceError("Invalid targetAfter descriptor format in receipt");
     }
     if (!allowedTargets.includes(t.collection)) {
-      throw new CutoverFenceError2(`Receipt targetAfter collection '${t.collection}' not in allowlist`);
+      throw new CutoverFenceError(`Receipt targetAfter collection '${t.collection}' not in allowlist`);
     }
   }
   if (!Number.isInteger(receipt.completedAt) || receipt.completedAt <= 0) {
-    throw new CutoverFenceError2("Receipt completedAt must be a positive integer timestamp");
+    throw new CutoverFenceError("Receipt completedAt must be a positive integer timestamp");
   }
 }
 __name(validateReceipt, "validateReceipt");
@@ -1852,23 +1819,23 @@ function computeReceiptDigest(receipt) {
 __name(computeReceiptDigest, "computeReceiptDigest");
 function computePlanDigest(namespace, epoch, planSpec) {
   if (!planSpec || typeof planSpec !== "object") {
-    throw new CutoverFenceError2("planSpec must be a non-null object");
+    throw new CutoverFenceError("planSpec must be a non-null object");
   }
   return D("plan", namespace, epoch, planSpec);
 }
 __name(computePlanDigest, "computePlanDigest");
 function computeReceiptSetDigest(receipts, namespace, epoch) {
   if (!Array.isArray(receipts)) {
-    throw new CutoverFenceError2("Receipts must be an array");
+    throw new CutoverFenceError("Receipts must be an array");
   }
   const pairs = [];
   const candidateIds = /* @__PURE__ */ new Set();
   for (const r of receipts) {
     if (r.namespace !== namespace || r.epoch !== epoch) {
-      throw new CutoverFenceError2("Receipt namespace or epoch mismatch in receipt set");
+      throw new CutoverFenceError("Receipt namespace or epoch mismatch in receipt set");
     }
     if (candidateIds.has(r.candidateId)) {
-      throw new CutoverFenceError2(`Duplicate candidate receipt in receipt set: ${r.candidateId}`);
+      throw new CutoverFenceError(`Duplicate candidate receipt in receipt set: ${r.candidateId}`);
     }
     candidateIds.add(r.candidateId);
     pairs.push([r.candidateId, computeReceiptDigest(r)]);
@@ -1880,7 +1847,7 @@ __name(computeReceiptSetDigest, "computeReceiptSetDigest");
 function parseCutoverFenceRecord(data, namespace) {
   assertSupportedCutoverNamespace(namespace);
   if (!data || typeof data !== "object") {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Invalid cutover fence record for namespace ${namespace}: expected object, got ${typeof data}`
     );
   }
@@ -1903,102 +1870,102 @@ function parseCutoverFenceRecord(data, namespace) {
   ];
   for (const key of Object.keys(record)) {
     if (!ALLOWED_CONTROL_KEYS.includes(key)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Unknown field '${key}' in cutover fence control record for namespace ${namespace}`
       );
     }
   }
   if (record.schemaVersion !== 1) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Unsupported schemaVersion for namespace ${namespace}: expected 1, got ${record.schemaVersion}`
     );
   }
   if (record.namespace !== namespace) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Namespace mismatch in cutover fence record: expected ${namespace}, got ${record.namespace}`
     );
   }
   if (typeof record.epoch !== "number" || !Number.isInteger(record.epoch) || record.epoch < 1) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Invalid epoch in cutover fence record for namespace ${namespace}: ${record.epoch}`
     );
   }
   const validStates = ["legacy_open", "closing", "fenced", "migrating", "v3_ready", "v3_active"];
   if (typeof record.state !== "string" || !validStates.includes(record.state)) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Invalid cutover fence state for namespace ${namespace}: ${String(record.state)}`
     );
   }
   if (typeof record.activeOperations !== "number" || !Number.isInteger(record.activeOperations) || record.activeOperations < 0) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Invalid activeOperations in cutover fence record for namespace ${namespace}: ${String(record.activeOperations)}`
     );
   }
   if (typeof record.irreversible !== "boolean") {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Invalid irreversible field in cutover fence record for namespace ${namespace}: expected boolean, got ${typeof record.irreversible}`
     );
   }
   if (["legacy_open", "closing", "fenced", "migrating"].includes(record.state)) {
     if (record.emptyNamespace !== void 0) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} cannot define emptyNamespace`
       );
     }
   }
   if (record.state === "legacy_open") {
     if (record.irreversible !== false) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: legacy_open cannot have irreversible: true`
       );
     }
     if (record.migrationRunId !== void 0 || record.migrationManifestDigest !== void 0) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: legacy_open cannot have migration markers`
       );
     }
   } else if (record.state === "closing" || record.state === "fenced") {
     if (record.migrationRunId !== void 0 || record.migrationManifestDigest !== void 0) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} cannot have migration markers`
       );
     }
   } else if (record.state === "migrating") {
     if (typeof record.migrationRunId !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(record.migrationRunId)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: migrating requires non-empty migrationRunId matching /^[A-Za-z0-9_-]{8,64}$/`
       );
     }
     if (record.migrationManifestDigest !== void 0) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: migrating cannot have migrationManifestDigest before v3_ready`
       );
     }
   } else if (record.state === "v3_ready" || record.state === "v3_active") {
     if (typeof record.migrationRunId !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(record.migrationRunId)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationRunId matching /^[A-Za-z0-9_-]{8,64}$/`
       );
     }
     if (typeof record.migrationManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(record.migrationManifestDigest)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires migrationManifestDigest to be 64-char hex`
       );
     }
     if (typeof record.emptyNamespace !== "boolean") {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Invalid cutover fence invariants for namespace ${namespace}: ${record.state} requires emptyNamespace to be a boolean`
       );
     }
     if (record.emptyNamespace === true) {
       if (record.irreversible !== false) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Invalid cutover fence invariants for namespace ${namespace}: emptyNamespace requires irreversible: false`
         );
       }
     } else {
       if (record.irreversible !== true) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Invalid cutover fence invariants for namespace ${namespace}: non-empty ${record.state} requires irreversible: true`
         );
       }
@@ -2006,12 +1973,12 @@ function parseCutoverFenceRecord(data, namespace) {
   }
   if (record.codeSha !== void 0) {
     if (typeof record.codeSha !== "string" || !/^[0-9a-f]{40}$/.test(record.codeSha)) {
-      throw new CutoverFenceError2(`Invalid codeSha in cutover fence record for namespace ${namespace}`);
+      throw new CutoverFenceError(`Invalid codeSha in cutover fence record for namespace ${namespace}`);
     }
   }
   if (record.codeArtifact !== void 0) {
     if (typeof record.codeArtifact !== "string" || !record.codeArtifact.trim()) {
-      throw new CutoverFenceError2(`Invalid codeArtifact in cutover fence record for namespace ${namespace}`);
+      throw new CutoverFenceError(`Invalid codeArtifact in cutover fence record for namespace ${namespace}`);
     }
   }
   return {
@@ -2037,7 +2004,7 @@ async function readCutoverFenceInTransaction(transaction, db, namespace) {
   const docRef = getCutoverFenceDocRef(db, namespace);
   const snap = await transaction.get(docRef);
   if (!snap.exists) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cutover fence record not initialized for namespace ${namespace} at ${namespace}_meta/cutover_fence`
     );
   }
@@ -2060,13 +2027,13 @@ async function initializeCutoverFence(db, namespace, options = {}) {
   const now = (options.now ?? Date.now)();
   const requestedInitialEpoch = options.initialEpoch ?? 1;
   if (typeof requestedInitialEpoch !== "number" || !Number.isInteger(requestedInitialEpoch) || requestedInitialEpoch !== 1) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Initial epoch for namespace ${namespace} must be exactly 1, got ${requestedInitialEpoch}`
     );
   }
   const requestedInitialState = options.initialState ?? "legacy_open";
   if (requestedInitialState !== "legacy_open") {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Initial state for namespace ${namespace} must be 'legacy_open', got '${requestedInitialState}'`
     );
   }
@@ -2075,7 +2042,7 @@ async function initializeCutoverFence(db, namespace, options = {}) {
     if (snap.exists) {
       const existing = parseCutoverFenceRecord(snap.data(), namespace);
       if (existing.epoch !== 1 || existing.state !== "legacy_open") {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cutover fence record for namespace ${namespace} already exists with epoch ${existing.epoch}, state ${existing.state}`
         );
       }
@@ -2101,14 +2068,14 @@ async function transitionCutoverFenceState(db, namespace, params) {
   const docRef = getCutoverFenceDocRef(db, namespace);
   const now = (params.now ?? Date.now)();
   if (["migrating", "v3_ready", "v3_active"].includes(params.toState)) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Transition to '${params.toState}' must use atomic transaction helper (prepareMigrationInTransaction, finalizeMigrationInTransaction, or activateMigrationInTransaction)`
     );
   }
   return await db.runTransaction(async (transaction) => {
     const snap = await transaction.get(docRef);
     if (!snap.exists) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Cannot transition: cutover fence record missing for namespace ${namespace}`
       );
     }
@@ -2117,26 +2084,26 @@ async function transitionCutoverFenceState(db, namespace, params) {
       if (params.allowIdempotent) {
         return current;
       }
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Idempotent transition rejected for namespace ${namespace}: already in state '${current.state}'`
       );
     }
     if (params.fromState !== void 0) {
       const allowedFrom = Array.isArray(params.fromState) ? params.fromState : [params.fromState];
       if (!allowedFrom.includes(current.state)) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Invalid fromState precondition for namespace ${namespace}: expected ${allowedFrom.join("|")}, got '${current.state}'`
         );
       }
     }
     if (current.epoch !== params.expectedEpoch) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Epoch mismatch on transition for namespace ${namespace}: expected ${params.expectedEpoch}, got ${current.epoch}`
       );
     }
     const allowedNext = ALLOWED_STATE_TRANSITIONS[current.state] ?? [];
     if (!allowedNext.includes(params.toState)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Illegal cutover state transition for namespace ${namespace}: ${current.state} -> ${params.toState}`
       );
     }
@@ -2145,12 +2112,12 @@ async function transitionCutoverFenceState(db, namespace, params) {
         getCutoverOperationsColRef(db, namespace).where("phase", "in", ["admitted", "upstream_pending"])
       );
       if (nonterminalOps.size !== current.activeOperations) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot transition to fenced: activeOperations counter (${current.activeOperations}) does not match nonterminal operations count (${nonterminalOps.size})`
         );
       }
       if (nonterminalOps.size !== 0) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot transition to fenced for namespace ${namespace}: ${nonterminalOps.size} active or pending operations exist`
         );
       }
@@ -2158,30 +2125,30 @@ async function transitionCutoverFenceState(db, namespace, params) {
         getCutoverOperationsColRef(db, namespace).where("ambiguousRemoteOutcome", "==", true)
       );
       if (!ambiguousOps.empty) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot transition to fenced for namespace ${namespace}: unresolved ambiguous remote operations exist`
         );
       }
     } else if (params.toState === "legacy_open") {
       if (current.irreversible) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: irreversible migration latch is engaged`
         );
       }
       if (current.migrationRunId || current.emptyNamespace) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: migration ownership record exists`
         );
       }
       const markerRef = db.collection(`${namespace}_meta`).doc("v2_adopted");
       const markerSnap = await transaction.get(markerRef);
       if (markerSnap.exists) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: durable v2_adopted ownership marker exists`
         );
       }
       if (current.activeOperations !== 0) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: activeOperations is ${current.activeOperations}`
         );
       }
@@ -2189,7 +2156,7 @@ async function transitionCutoverFenceState(db, namespace, params) {
     if (params.nextEpoch !== void 0) {
       const allowedNext2 = params.toState === "fenced" && current.state === "closing" ? current.epoch + 1 : current.epoch;
       if (params.nextEpoch !== allowedNext2) {
-        throw new CutoverFenceError2(`Arbitrary nextEpoch is not permitted for transition to ${params.toState}`);
+        throw new CutoverFenceError(`Arbitrary nextEpoch is not permitted for transition to ${params.toState}`);
       }
     }
     const nextEpoch = params.toState === "fenced" && current.state === "closing" ? current.epoch + 1 : current.epoch;
@@ -2218,22 +2185,22 @@ async function markIrreversibleInTransaction(transaction, db, namespace, expecte
   assertSupportedCutoverNamespace(namespace);
   const current = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (current.state !== "migrating") {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot set irreversible latch for namespace ${namespace}: state must be 'migrating', got '${current.state}'`
     );
   }
   if (current.epoch !== expectedEpoch) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Epoch mismatch when setting irreversible latch for namespace ${namespace}: expected ${expectedEpoch}, got ${current.epoch}`
     );
   }
   if (migrationRunId2 && current.migrationRunId !== migrationRunId2) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `migrationRunId mismatch when setting irreversible latch: expected ${migrationRunId2}, got ${current.migrationRunId}`
     );
   }
   if (current.emptyNamespace === true) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot set irreversible latch for namespace ${namespace}: emptyNamespace must remain irreversible: false`
     );
   }
@@ -2261,56 +2228,56 @@ async function withLegacyOperation(options, fn) {
     const timer = startMonotonicTimer2();
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Operation already exists in namespace ${options.namespace}`
       );
     }
     const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
     if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
-      throw new CutoverRefusedError2(
+      throw new CutoverRefusedError(
         `Cutover state is ${control.state}; new operations refused for namespace ${options.namespace}`,
         { cutoverState: control.state, epoch: control.epoch }
       );
     }
     if (control.state === "closing") {
-      throw new CutoverRefusedError2(
+      throw new CutoverRefusedError(
         `Cutover state is closing; new admissions refused for namespace ${options.namespace}`,
         { cutoverState: control.state, epoch: control.epoch }
       );
     }
     const forbiddenKindTerms = ["token", "password", "upstream", "secret", "auth_code"];
     if (forbiddenKindTerms.some((t) => options.kind.toLowerCase().includes(t))) {
-      throw new CutoverFenceError2(`Operation kind must not contain sensitive credential terms: '${options.kind}'`);
+      throw new CutoverFenceError(`Operation kind must not contain sensitive credential terms: '${options.kind}'`);
     }
     if (options.metadata) {
       const allowedKeys = ["revision", "attempt", "phase", "reconciled"];
       for (const [key, value] of Object.entries(options.metadata)) {
         if (!allowedKeys.includes(key)) {
-          throw new CutoverFenceError2(
+          throw new CutoverFenceError(
             `Operation metadata key '${key}' is not in the allowlist (${allowedKeys.join(", ")})`
           );
         }
         if (key === "revision") {
           if (typeof value !== "string" || !/^[a-zA-Z0-9._-]{1,32}$/.test(value)) {
-            throw new CutoverFenceError2(
+            throw new CutoverFenceError(
               `Operation metadata 'revision' must be a safe identifier matching /^[a-zA-Z0-9._-]{1,32}$/, got '${String(value)}'`
             );
           }
         } else if (key === "phase") {
           if (typeof value !== "string" || !/^[a-zA-Z0-9._-]{1,32}$/.test(value)) {
-            throw new CutoverFenceError2(
+            throw new CutoverFenceError(
               `Operation metadata 'phase' must be a safe identifier matching /^[a-zA-Z0-9._-]{1,32}$/, got '${String(value)}'`
             );
           }
         } else if (key === "attempt") {
           if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 100) {
-            throw new CutoverFenceError2(
+            throw new CutoverFenceError(
               `Operation metadata 'attempt' must be an integer between 1 and 100, got '${String(value)}'`
             );
           }
         } else if (key === "reconciled") {
           if (typeof value !== "boolean") {
-            throw new CutoverFenceError2(
+            throw new CutoverFenceError(
               `Operation metadata 'reconciled' must be a boolean, got '${String(value)}'`
             );
           }
@@ -2411,7 +2378,7 @@ __name(withLegacyOperation, "withLegacyOperation");
 async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvider = Date.now) {
   assertSupportedCutoverNamespace(ctx.namespace);
   if (outcome !== "completed" && outcome !== "failed") {
-    throw new CutoverFenceError2(`Invalid outcome for release: ${outcome}`);
+    throw new CutoverFenceError(`Invalid outcome for release: ${outcome}`);
   }
   const controlRef = getCutoverFenceDocRef(db, ctx.namespace);
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
@@ -2421,27 +2388,27 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
     if (!controlSnap.exists) {
-      throw new CutoverFenceError2(`Control record missing for namespace ${ctx.namespace}`);
+      throw new CutoverFenceError(`Control record missing for namespace ${ctx.namespace}`);
     }
     if (!opSnap.exists) {
-      throw new CutoverFenceError2("Operation record missing on release");
+      throw new CutoverFenceError("Operation record missing on release");
     }
     const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
     const opData = opSnap.data();
     if (opData.schemaVersion !== 1) {
-      throw new CutoverFenceError2(`Invalid operation schemaVersion: expected 1, got ${opData.schemaVersion}`);
+      throw new CutoverFenceError(`Invalid operation schemaVersion: expected 1, got ${opData.schemaVersion}`);
     }
     if (opData.id !== ctx.id || opData.operationId !== ctx.id) {
-      throw new CutoverFenceError2("Operation id mismatch on release");
+      throw new CutoverFenceError("Operation id mismatch on release");
     }
     if (opData.namespace !== ctx.namespace) {
-      throw new CutoverFenceError2(`Operation namespace mismatch: expected ${ctx.namespace}, got ${opData.namespace}`);
+      throw new CutoverFenceError(`Operation namespace mismatch: expected ${ctx.namespace}, got ${opData.namespace}`);
     }
     if (opData.kind !== ctx.kind) {
-      throw new CutoverFenceError2(`Operation kind mismatch on release: expected ${ctx.kind}, got ${opData.kind}`);
+      throw new CutoverFenceError(`Operation kind mismatch on release: expected ${ctx.kind}, got ${opData.kind}`);
     }
     if (opData.epoch !== ctx.epoch) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Epoch mismatch on release: context epoch ${ctx.epoch} != recorded epoch ${opData.epoch}`
       );
     }
@@ -2449,12 +2416,12 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
       return;
     }
     if (opData.phase === "upstream_pending" || opData.ambiguousRemoteOutcome === true) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Cannot release operation in phase ${opData.phase}; pending or ambiguous claims must be resolved`
       );
     }
     if (control.activeOperations <= 0) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Active operations underflow in namespace ${ctx.namespace}: recorded count is ${control.activeOperations}`
       );
     }
@@ -2485,23 +2452,23 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
     const timer = startMonotonicTimer2();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
-      throw new CutoverFenceError2("Operation record missing on mark ambiguous");
+      throw new CutoverFenceError("Operation record missing on mark ambiguous");
     }
     const opData = opSnap.data();
     if (opData.schemaVersion !== 1) {
-      throw new CutoverFenceError2(`Invalid operation schemaVersion: expected 1, got ${opData.schemaVersion}`);
+      throw new CutoverFenceError(`Invalid operation schemaVersion: expected 1, got ${opData.schemaVersion}`);
     }
     if (opData.id !== ctx.id || opData.operationId !== ctx.id) {
-      throw new CutoverFenceError2("Operation id mismatch on mark ambiguous");
+      throw new CutoverFenceError("Operation id mismatch on mark ambiguous");
     }
     if (opData.namespace !== ctx.namespace) {
-      throw new CutoverFenceError2(`Operation namespace mismatch on mark ambiguous`);
+      throw new CutoverFenceError(`Operation namespace mismatch on mark ambiguous`);
     }
     if (opData.kind !== ctx.kind) {
-      throw new CutoverFenceError2(`Operation kind mismatch on mark ambiguous: expected ${ctx.kind}, got ${opData.kind}`);
+      throw new CutoverFenceError(`Operation kind mismatch on mark ambiguous: expected ${ctx.kind}, got ${opData.kind}`);
     }
     if (opData.epoch !== ctx.epoch) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Epoch mismatch on mark ambiguous: context epoch ${ctx.epoch} != recorded epoch ${opData.epoch}`
       );
     }
@@ -2524,48 +2491,48 @@ async function checkMutationGuardInTransaction(transaction, options) {
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
-    throw new CutoverRefusedError2(
+    throw new CutoverRefusedError(
       `Cutover state is ${control.state}; mutations refused for namespace ${options.namespace}`,
       { cutoverState: control.state, epoch: control.epoch }
     );
   }
   if (!options.operation) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Durable operation context is required for guarded mutation in namespace ${options.namespace}`
     );
   }
   const opRef = getCutoverOperationDocRef(options.db, options.namespace, options.operation.id);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Durable operation record missing in namespace ${options.namespace}`
     );
   }
   const opRecord = opSnap.data();
   if (opRecord.schemaVersion !== 1) {
-    throw new CutoverFenceError2(`Invalid operation schemaVersion: expected 1, got ${opRecord.schemaVersion}`);
+    throw new CutoverFenceError(`Invalid operation schemaVersion: expected 1, got ${opRecord.schemaVersion}`);
   }
   if (opRecord.id !== options.operation.id || opRecord.operationId !== options.operation.id) {
-    throw new CutoverFenceError2("Durable operation id mismatch");
+    throw new CutoverFenceError("Durable operation id mismatch");
   }
   if (opRecord.namespace !== options.namespace) {
-    throw new CutoverFenceError2(`Durable operation namespace mismatch: expected ${options.namespace}, got ${opRecord.namespace}`);
+    throw new CutoverFenceError(`Durable operation namespace mismatch: expected ${options.namespace}, got ${opRecord.namespace}`);
   }
   if (opRecord.kind !== options.operation.kind) {
-    throw new CutoverFenceError2(`Durable operation kind mismatch: expected ${options.operation.kind}, got ${opRecord.kind}`);
+    throw new CutoverFenceError(`Durable operation kind mismatch: expected ${options.operation.kind}, got ${opRecord.kind}`);
   }
   if (opRecord.epoch !== control.epoch) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Operation epoch mismatch: operation epoch ${opRecord.epoch} != control epoch ${control.epoch}`
     );
   }
   if (opRecord.phase !== "admitted" && opRecord.phase !== "upstream_pending") {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Operation is already in phase ${opRecord.phase}; cannot be reused`
     );
   }
   if (options.operation.isCompleted()) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       "Operation was marked completed locally; cannot be reused"
     );
   }
@@ -2598,7 +2565,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
       );
       const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
       if (control.activeOperations <= 0) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Active operations underflow in namespace ${options.namespace}: recorded count is ${control.activeOperations}`
         );
       }
@@ -2670,132 +2637,132 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
   const expectedFamilyCollection = `${namespace}_tokens_refresh_families`;
   const expectedRefreshCollection = `${namespace}_tokens_refresh`;
   if (options.collection !== void 0 && options.collection !== expectedCollection) {
-    throw new CutoverFenceError2(`Invalid legacy collection override '${options.collection}': exact '${expectedCollection}' required`);
+    throw new CutoverFenceError(`Invalid legacy collection override '${options.collection}': exact '${expectedCollection}' required`);
   }
   if (options.familyCollection !== void 0 && options.familyCollection !== expectedFamilyCollection) {
-    throw new CutoverFenceError2(`Invalid legacy familyCollection override '${options.familyCollection}': exact '${expectedFamilyCollection}' required`);
+    throw new CutoverFenceError(`Invalid legacy familyCollection override '${options.familyCollection}': exact '${expectedFamilyCollection}' required`);
   }
   if (options.refreshCollection !== void 0 && options.refreshCollection !== expectedRefreshCollection) {
-    throw new CutoverFenceError2(`Invalid legacy refreshCollection override '${options.refreshCollection}': exact '${expectedRefreshCollection}' required`);
+    throw new CutoverFenceError(`Invalid legacy refreshCollection override '${options.refreshCollection}': exact '${expectedRefreshCollection}' required`);
   }
   const collection = expectedCollection;
   const familyCollection = expectedFamilyCollection;
   const refreshCollection = expectedRefreshCollection;
   if (typeof epoch !== "number" || !Number.isInteger(epoch) || epoch < 1) {
-    throw new CutoverFenceError2("epoch (positive integer) is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("epoch (positive integer) is required for claimUpstreamGrantInTransaction");
   }
   if (typeof familyId !== "string" || !familyId.trim()) {
-    throw new CutoverFenceError2("familyId is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("familyId is required for claimUpstreamGrantInTransaction");
   }
   if (typeof operationId !== "string" || !operationId.trim()) {
-    throw new CutoverFenceError2("operationId is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("operationId is required for claimUpstreamGrantInTransaction");
   }
   if (typeof claimOwner !== "string" || !claimOwner.trim()) {
-    throw new CutoverFenceError2("claimOwner is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("claimOwner is required for claimUpstreamGrantInTransaction");
   }
   if (typeof expectedFamilyGeneration !== "number" || !Number.isInteger(expectedFamilyGeneration) || expectedFamilyGeneration < 1) {
-    throw new CutoverFenceError2("expectedFamilyGeneration (positive integer) is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("expectedFamilyGeneration (positive integer) is required for claimUpstreamGrantInTransaction");
   }
   if (typeof expectedGrantVersion !== "number" || !Number.isInteger(expectedGrantVersion) || expectedGrantVersion < 1) {
-    throw new CutoverFenceError2("expectedGrantVersion (positive integer) is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("expectedGrantVersion (positive integer) is required for claimUpstreamGrantInTransaction");
   }
   if (typeof expectedKind !== "string" || !expectedKind.trim()) {
-    throw new CutoverFenceError2("expectedKind is required for claimUpstreamGrantInTransaction");
+    throw new CutoverFenceError("expectedKind is required for claimUpstreamGrantInTransaction");
   }
   const now = nowProvider();
   const clampedLeaseMs = Math.max(5e3, Math.min(12e4, leaseMs));
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
-    throw new CutoverRefusedError2(
+    throw new CutoverRefusedError(
       `Cutover state is ${control.state}; upstream claim refused for namespace ${namespace}`,
       { cutoverState: control.state, epoch: control.epoch }
     );
   }
   if (epoch !== control.epoch) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Operation epoch mismatch for upstream claim in namespace ${namespace}: expected ${control.epoch}, got ${epoch}`
     );
   }
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2("Durable operation record missing for upstream claim");
+    throw new CutoverFenceError("Durable operation record missing for upstream claim");
   }
   const opData = opSnap.data();
   if (opData.schemaVersion !== 1 || opData.id !== operationId || opData.operationId !== operationId) {
-    throw new CutoverFenceError2("Operation id mismatch on record");
+    throw new CutoverFenceError("Operation id mismatch on record");
   }
   if (opData.namespace !== namespace) {
-    throw new CutoverFenceError2(`Operation namespace mismatch: expected ${namespace}, got ${opData.namespace}`);
+    throw new CutoverFenceError(`Operation namespace mismatch: expected ${namespace}, got ${opData.namespace}`);
   }
   if (opData.kind !== expectedKind) {
-    throw new CutoverFenceError2(`Operation kind mismatch: expected ${expectedKind}, got ${opData.kind}`);
+    throw new CutoverFenceError(`Operation kind mismatch: expected ${expectedKind}, got ${opData.kind}`);
   }
   if (opData.epoch !== control.epoch) {
-    throw new CutoverFenceError2(`Operation record epoch mismatch: expected ${control.epoch}, got ${opData.epoch}`);
+    throw new CutoverFenceError(`Operation record epoch mismatch: expected ${control.epoch}, got ${opData.epoch}`);
   }
   if (opData.phase !== "admitted") {
-    throw new CutoverFenceError2(`Operation is in phase ${opData.phase}; claim refused`);
+    throw new CutoverFenceError(`Operation is in phase ${opData.phase}; claim refused`);
   }
   const familyRef = db.collection(familyCollection).doc(familyId);
   const familySnap = await transaction.get(familyRef);
   if (!familySnap.exists) {
-    throw new CutoverFenceError2("Family record missing for claim");
+    throw new CutoverFenceError("Family record missing for claim");
   }
   const family = familySnap.data();
   const actualFamilyGen = typeof family.generation === "number" ? family.generation : 1;
   if (typeof actualFamilyGen !== "number" || actualFamilyGen !== expectedFamilyGeneration) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Family generation mismatch: expected ${expectedFamilyGeneration}, got ${actualFamilyGen}`
     );
   }
   const activePointerId = family.currentRefreshToken;
   if (typeof activePointerId !== "string" || !activePointerId.trim()) {
-    throw new CutoverFenceError2("Family missing active refresh pointer");
+    throw new CutoverFenceError("Family missing active refresh pointer");
   }
   const pointerRef = db.collection(refreshCollection).doc(activePointerId);
   const pointerSnap = await transaction.get(pointerRef);
   if (!pointerSnap.exists) {
-    throw new CutoverFenceError2("Active refresh pointer missing");
+    throw new CutoverFenceError("Active refresh pointer missing");
   }
   const pointer = pointerSnap.data();
   if (typeof pointer.familyId !== "string" || pointer.familyId !== familyId) {
-    throw new CutoverFenceError2("Pointer family binding mismatch");
+    throw new CutoverFenceError("Pointer family binding mismatch");
   }
   if (typeof pointer.status !== "string" || pointer.status !== "active") {
-    throw new CutoverFenceError2(`Current refresh pointer is not active: ${pointer.status}`);
+    throw new CutoverFenceError(`Current refresh pointer is not active: ${pointer.status}`);
   }
   const grantRef = db.collection(collection).doc(familyId);
   const grantSnap = await transaction.get(grantRef);
   if (!grantSnap.exists) {
-    throw new CutoverFenceError2("Upstream grant missing for family");
+    throw new CutoverFenceError("Upstream grant missing for family");
   }
   const current = grantSnap.data();
   const actualGrantVersion = current.grantVersion ?? current.version ?? 1;
   if (actualGrantVersion !== expectedGrantVersion) {
-    throw new CutoverFenceError2(`Grant version mismatch: expected ${expectedGrantVersion}, got ${actualGrantVersion}`);
+    throw new CutoverFenceError(`Grant version mismatch: expected ${expectedGrantVersion}, got ${actualGrantVersion}`);
   }
   const holdingOpId = current.ambiguousOperationId ?? current.operationId;
   if (holdingOpId && holdingOpId !== operationId) {
     const priorOpRef = getCutoverOperationDocRef(db, namespace, holdingOpId);
     const priorOpSnap = await transaction.get(priorOpRef);
     if (!priorOpSnap.exists) {
-      throw new CutoverFenceError2("Upstream grant is held by unknown operation; fail closed");
+      throw new CutoverFenceError("Upstream grant is held by unknown operation; fail closed");
     }
     const priorOp = priorOpSnap.data();
     if (priorOp.phase === "upstream_pending" || priorOp.phase === "admitted" || priorOp.ambiguousRemoteOutcome) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Upstream grant is held by nonterminal operation in phase ${priorOp.phase}; lease expiry cannot release nonterminal claims`
       );
     }
   }
   if (current.ambiguousRemoteOutcome || current.ambiguousOutcome) {
-    throw new CutoverFenceError2("Upstream grant for family has unresolved ambiguous outcome");
+    throw new CutoverFenceError("Upstream grant for family has unresolved ambiguous outcome");
   }
   const isLeaseActive = typeof current.leaseExpiresAt === "number" && current.leaseExpiresAt > now || typeof current.leaseUntil === "number" && current.leaseUntil > now;
   if (current.leaseOwner && isLeaseActive) {
     if (current.leaseOwner !== claimOwner || current.ambiguousOperationId !== operationId) {
-      throw new CutoverFenceError2(`Upstream grant lease held by another claimant: ${current.leaseOwner}`);
+      throw new CutoverFenceError(`Upstream grant lease held by another claimant: ${current.leaseOwner}`);
     }
   }
   timer.assertUnderDeadline("claimUpstreamGrantInTransaction reads");
@@ -2848,28 +2815,28 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
   assertSupportedCutoverNamespace(namespace);
   const expectedCollection = `${namespace}_tokens_upstream`;
   if (options.collection !== void 0 && options.collection !== expectedCollection) {
-    throw new CutoverFenceError2(`Invalid legacy collection override '${options.collection}': exact '${expectedCollection}' required`);
+    throw new CutoverFenceError(`Invalid legacy collection override '${options.collection}': exact '${expectedCollection}' required`);
   }
   const collection = expectedCollection;
   if (typeof familyId !== "string" || !familyId.trim()) {
-    throw new CutoverFenceError2("familyId is required for upstream reconciliation");
+    throw new CutoverFenceError("familyId is required for upstream reconciliation");
   }
   if (typeof operationId !== "string" || !operationId.trim()) {
-    throw new CutoverFenceError2("operationId is required for upstream reconciliation");
+    throw new CutoverFenceError("operationId is required for upstream reconciliation");
   }
   if (typeof claimOwner !== "string" || !claimOwner.trim()) {
-    throw new CutoverFenceError2("claimOwner is required for upstream reconciliation");
+    throw new CutoverFenceError("claimOwner is required for upstream reconciliation");
   }
   if (typeof expectedFamilyGeneration !== "number" || !Number.isInteger(expectedFamilyGeneration) || expectedFamilyGeneration < 1) {
-    throw new CutoverFenceError2("expectedFamilyGeneration (positive integer) is required for upstream reconciliation");
+    throw new CutoverFenceError("expectedFamilyGeneration (positive integer) is required for upstream reconciliation");
   }
   if (typeof expectedGrantVersion !== "number" || !Number.isInteger(expectedGrantVersion) || expectedGrantVersion < 1) {
-    throw new CutoverFenceError2("expectedGrantVersion (positive integer) is required for upstream reconciliation");
+    throw new CutoverFenceError("expectedGrantVersion (positive integer) is required for upstream reconciliation");
   }
   const now = nowProvider();
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["migrating", "v3_ready", "v3_active"].includes(control.state)) {
-    throw new CutoverRefusedError2(
+    throw new CutoverRefusedError(
       `Cannot reconcile legacy upstream grant: cutover state is ${control.state}`,
       { cutoverState: control.state, epoch: control.epoch }
     );
@@ -2877,26 +2844,26 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2("Operation record missing for upstream reconciliation");
+    throw new CutoverFenceError("Operation record missing for upstream reconciliation");
   }
   const opData = opSnap.data();
   if (opData.phase !== "upstream_pending") {
-    throw new CutoverFenceError2(`Operation is in phase ${opData.phase}; expected upstream_pending`);
+    throw new CutoverFenceError(`Operation is in phase ${opData.phase}; expected upstream_pending`);
   }
   if (opData.familyId && opData.familyId !== familyId) {
-    throw new CutoverFenceError2("Operation family mismatch for upstream reconciliation");
+    throw new CutoverFenceError("Operation family mismatch for upstream reconciliation");
   }
   const docRef = db.collection(collection).doc(familyId);
   const snap = await transaction.get(docRef);
   if (!snap.exists) {
-    throw new CutoverFenceError2("Upstream grant missing for family");
+    throw new CutoverFenceError("Upstream grant missing for family");
   }
   const current = snap.data();
   if (current.leaseOwner && current.leaseOwner !== claimOwner) {
-    throw new CutoverFenceError2("Claim owner mismatch for upstream reconciliation");
+    throw new CutoverFenceError("Claim owner mismatch for upstream reconciliation");
   }
   if (current.ambiguousOperationId && current.ambiguousOperationId !== operationId) {
-    throw new CutoverFenceError2("Ambiguous operation mismatch for upstream reconciliation");
+    throw new CutoverFenceError("Ambiguous operation mismatch for upstream reconciliation");
   }
   if (outcome === "transient_timeout") {
     const ALLOWED_AMBIGUOUS_REASONS = ["upstream_timeout", "upstream_gateway_timeout", "upstream_disconnect", "transport_error"];
@@ -2928,7 +2895,7 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
     timer.assertUnderDeadline("reconcileUpstreamGrantInTransaction complete");
     return { status: "ambiguous_pending", operationId, familyId };
   }
-  throw new CutoverFenceError2(
+  throw new CutoverFenceError(
     "Upstream grant reconciliation refused: trusted provider recovery mechanism is not established; operation remains held in upstream_pending"
   );
 }
@@ -2938,12 +2905,12 @@ async function prepareMigrationInTransaction(transaction, db, options) {
   const { namespace, prepDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
-    throw new CutoverFenceError2("storeKey is REQUIRED for prepareMigrationInTransaction");
+    throw new CutoverFenceError("storeKey is REQUIRED for prepareMigrationInTransaction");
   }
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   const FieldPath = options.FieldPath;
   if (!FieldPath || typeof FieldPath.documentId !== "function") {
-    throw new CutoverFenceError2("FieldPath with documentId() is REQUIRED for prepareMigrationInTransaction");
+    throw new CutoverFenceError("FieldPath with documentId() is REQUIRED for prepareMigrationInTransaction");
   }
   const docIdField = FieldPath.documentId();
   if (control.state === "migrating") {
@@ -2952,50 +2919,50 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     if (prepSnap2.exists && C(prepSnap2.data()) === C(prepDoc) && control.migrationRunId === prepDoc.migrationRunId) {
       return control;
     }
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       "Already migrating with different manifest or runId; immutable retry violation"
     );
   }
   if (control.state !== "fenced") {
-    throw new CutoverFenceError2(`Cannot prepare migration: state must be 'fenced', got '${control.state}'`);
+    throw new CutoverFenceError(`Cannot prepare migration: state must be 'fenced', got '${control.state}'`);
   }
   if (control.activeOperations !== 0) {
-    throw new CutoverFenceError2(`Cannot prepare migration: activeOperations must be 0, got ${control.activeOperations}`);
+    throw new CutoverFenceError(`Cannot prepare migration: activeOperations must be 0, got ${control.activeOperations}`);
   }
   const expectedPrepKeys = prepDoc.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS;
   validateMapKeysExact(prepDoc, expectedPrepKeys, "prepared manifest");
   validateMigrationIdentityFields(prepDoc, namespace, control.epoch, prepDoc.migrationRunId);
   const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
   if (prepDoc.planDigest !== computedPlanDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${prepDoc.planDigest}`
     );
   }
   if (prepDoc.kind !== "prepared") {
-    throw new CutoverFenceError2(`prepared manifest kind must be 'prepared', got '${prepDoc.kind}'`);
+    throw new CutoverFenceError(`prepared manifest kind must be 'prepared', got '${prepDoc.kind}'`);
   }
   if (typeof prepDoc.preparedAt !== "number" || !Number.isInteger(prepDoc.preparedAt) || prepDoc.preparedAt <= 0) {
-    throw new CutoverFenceError2("preparedAt must be a positive integer timestamp");
+    throw new CutoverFenceError("preparedAt must be a positive integer timestamp");
   }
   validateMapKeysExact(prepDoc.physicalCounts, PHYSICAL_COUNT_KEYS, "prepared physicalCounts");
   validateMapKeysExact(prepDoc.expectedTargetCounts, TARGET_COUNT_KEYS, "prepared expectedTargetCounts");
   validateMapKeysExact(prepDoc.classifications, CLASSIFICATION_KEYS, "prepared classifications");
   validateMapKeysExact(prepDoc.reasons, REASON_KEYS, "prepared reasons");
   const prepPhysicalSum = Object.values(prepDoc.physicalCounts).reduce((sum, n) => {
-    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError2("Invalid physical count");
+    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError("Invalid physical count");
     return sum + n;
   }, 0);
   if (prepPhysicalSum !== prepDoc.totalPhysicalRecords) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `prepared totalPhysicalRecords must equal sum(physicalCounts): expected ${prepPhysicalSum}, got ${prepDoc.totalPhysicalRecords}`
     );
   }
   const prepClassSum = Object.values(prepDoc.classifications).reduce((sum, n) => {
-    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError2("Invalid classification count");
+    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError("Invalid classification count");
     return sum + n;
   }, 0);
   if (prepClassSum !== prepDoc.scanned || prepDoc.scanned !== prepDoc.candidateCommitments.length) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       "prepared classifications sum must equal scanned and candidateCommitments.length"
     );
   }
@@ -3010,7 +2977,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
   }
   const readDurationMs = Date.now() - readStart;
   if (readDurationMs > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
-    throw new CutoverFenceError2(`Preparation read duration (${readDurationMs} ms) exceeds 16,000 ms lock deadline`);
+    throw new CutoverFenceError(`Preparation read duration (${readDurationMs} ms) exceeds 16,000 ms lock deadline`);
   }
   const sourcePhysicalToKey = {
     [`${namespace}_tokens_refresh_families`]: "families",
@@ -3063,11 +3030,11 @@ async function prepareMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== "oauthClients" && colKey !== "clients") {
         if (typeof data.id === "string" && data.id !== d.id) {
-          throw new CutoverFenceError2(`Document ID mismatch in ${colKey}: stored id does not match document key`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === "string" && data.client_id !== d.id) {
-          throw new CutoverFenceError2(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, "target-id", namespace, control.epoch, colKey, d.id);
@@ -3085,7 +3052,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     }
     if (existingTargetsForCandidate > 0) {
       if (existingTargetsForCandidate !== c.targets.length) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Candidate ${c.id} has partial retained target graph in Firestore (${existingTargetsForCandidate}/${c.targets.length}); must be all-or-none complete`
         );
       }
@@ -3093,7 +3060,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
         const targetKey = `${t.collection}:${t.id}`;
         const entry = existingTargetKeyedMap.get(targetKey);
         if (t.recordDigest && entry.recordDigest !== t.recordDigest) {
-          throw new CutoverFenceError2(
+          throw new CutoverFenceError(
             `Retained target '${targetKey}' for candidate ${c.id} is not equivalent to candidate target recordDigest`
           );
         }
@@ -3108,13 +3075,13 @@ async function prepareMigrationInTransaction(transaction, db, options) {
   }
   for (const targetKey of existingTargetKeyedMap.keys()) {
     if (!candidateTargetKeys.has(targetKey)) {
-      throw new CutoverFenceError2(`Cannot prepare migration: unexpected extra target '${targetKey}' exists prior to migration`);
+      throw new CutoverFenceError(`Cannot prepare migration: unexpected extra target '${targetKey}' exists prior to migration`);
     }
   }
   for (const k of PHYSICAL_COUNT_KEYS) {
     const actualCount = sourceDocsByKey.get(k).length;
     if (actualCount !== prepDoc.physicalCounts[k]) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Physical collection count mismatch for '${k}': Firestore has ${actualCount}, prepared manifest has ${prepDoc.physicalCounts[k]}`
       );
     }
@@ -3125,10 +3092,10 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     for (const d of docs) {
       const data = d.data() || {};
       if ((colKey === "families" || colKey === "resumeTokens") && typeof data.id === "string" && data.id !== d.id) {
-        throw new CutoverFenceError2(`Document ID mismatch in ${colKey}: stored id does not match document key`);
+        throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
       }
       if ((colKey === "oauthClients" || colKey === "clients") && typeof data.client_id === "string" && data.client_id !== d.id) {
-        throw new CutoverFenceError2(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
+        throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
       }
       const sourceId = computeKeyedDocId(options.storeKey, "source-id", namespace, control.epoch, colKey, d.id);
       const recDigest = computeSourceRecordDigest(options.storeKey, namespace, control.epoch, colKey, sourceId, data);
@@ -3141,36 +3108,36 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     for (const s of c.sources) {
       const entry = sourceKeyedMap.get(`${s.collection}:${s.id}`);
       if (!entry) {
-        throw new CutoverFenceError2(`Candidate ${c.id} references source document '${s.collection}:${s.id}' not found in Firestore`);
+        throw new CutoverFenceError(`Candidate ${c.id} references source document '${s.collection}:${s.id}' not found in Firestore`);
       }
       if (entry.recordDigest !== s.recordDigest) {
-        throw new CutoverFenceError2(`Candidate ${c.id} source recordDigest mismatch for '${s.collection}:${s.id}'`);
+        throw new CutoverFenceError(`Candidate ${c.id} source recordDigest mismatch for '${s.collection}:${s.id}'`);
       }
       coveredSources.add(`${s.collection}:${s.id}`);
     }
   }
   for (const key of sourceKeyedMap.keys()) {
     if (!coveredSources.has(key)) {
-      throw new CutoverFenceError2(`Extra source document '${key}' found in Firestore not partitioned into candidate commitments`);
+      throw new CutoverFenceError(`Extra source document '${key}' found in Firestore not partitioned into candidate commitments`);
     }
   }
   if (prepDoc.totalPhysicalRecords > 0) {
     if (prepDoc.projectorId !== APPROVED_GRAPH_PROJECTOR_ID || prepDoc.projectorVersion !== APPROVED_GRAPH_PROJECTOR_VERSION) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Projector identity mismatch: expected '${APPROVED_GRAPH_PROJECTOR_ID}' v${APPROVED_GRAPH_PROJECTOR_VERSION}, got '${prepDoc.projectorId}' v${prepDoc.projectorVersion}`
       );
     }
     if (prepDoc.projectorDigest !== prepDoc.protocolDigest) {
-      throw new CutoverFenceError2("prepDoc.projectorDigest must equal protocolDigest");
+      throw new CutoverFenceError("prepDoc.projectorDigest must equal protocolDigest");
     }
     const codec2 = createCodec(options.storeKey);
     for (const c of prepDoc.candidateCommitments) {
       const sourcesMap = /* @__PURE__ */ new Map();
       if (c.kind === "pr56Families") {
         const famDesc = c.sources.find((s) => s.collection === "families");
-        if (!famDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing families descriptor in sources`);
+        if (!famDesc) throw new CutoverFenceError(`Candidate ${c.id} missing families descriptor in sources`);
         const e = sourceKeyedMap.get(`${famDesc.collection}:${famDesc.id}`);
-        if (!e) throw new CutoverFenceError2(`Candidate ${c.id} missing families source document`);
+        if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing families source document`);
         const famData = { ...e.data || {}, id: e.rawId };
         sourcesMap.set("families", famData);
         const activeRefDesc = c.sources.find((s) => {
@@ -3179,10 +3146,10 @@ async function prepareMigrationInTransaction(transaction, db, options) {
           return entry && entry.rawId === famData.currentRefreshToken && entry.data?.status === "active";
         });
         if (!activeRefDesc) {
-          throw new CutoverFenceError2(`Candidate ${c.id} missing active refresh descriptor in sources matching currentRefreshToken`);
+          throw new CutoverFenceError(`Candidate ${c.id} missing active refresh descriptor in sources matching currentRefreshToken`);
         }
         const re = sourceKeyedMap.get(`refresh:${activeRefDesc.id}`);
-        if (!re) throw new CutoverFenceError2(`Candidate ${c.id} missing active refresh document in sourceKeyedMap`);
+        if (!re) throw new CutoverFenceError(`Candidate ${c.id} missing active refresh document in sourceKeyedMap`);
         sourcesMap.set("refresh", { ...re.data || {}, id: re.rawId });
         if (famData.previousRefreshToken) {
           const prevRefDesc = c.sources.find((s) => {
@@ -3191,19 +3158,19 @@ async function prepareMigrationInTransaction(transaction, db, options) {
             return entry && entry.rawId === famData.previousRefreshToken && entry.data?.status === "consumed";
           });
           if (!prevRefDesc) {
-            throw new CutoverFenceError2(`Candidate ${c.id} has previousRefreshToken but missing previous refresh descriptor in sources`);
+            throw new CutoverFenceError(`Candidate ${c.id} has previousRefreshToken but missing previous refresh descriptor in sources`);
           }
           const pe = sourceKeyedMap.get(`refresh:${prevRefDesc.id}`);
-          if (!pe) throw new CutoverFenceError2(`Candidate ${c.id} missing previous refresh document in sourceKeyedMap`);
+          if (!pe) throw new CutoverFenceError(`Candidate ${c.id} missing previous refresh document in sourceKeyedMap`);
           if (typeof pe.data?.consumedAt !== "number") {
-            throw new CutoverFenceError2(`Candidate ${c.id} previous refresh document missing numeric consumedAt`);
+            throw new CutoverFenceError(`Candidate ${c.id} previous refresh document missing numeric consumedAt`);
           }
           sourcesMap.set("prevRefresh", { ...pe.data || {}, id: pe.rawId });
         }
         const upDesc = c.sources.find((s) => s.collection === "upstream");
-        if (!upDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing upstream descriptor in sources`);
+        if (!upDesc) throw new CutoverFenceError(`Candidate ${c.id} missing upstream descriptor in sources`);
         const ue = sourceKeyedMap.get(`${upDesc.collection}:${upDesc.id}`);
-        if (!ue) throw new CutoverFenceError2(`Candidate ${c.id} missing upstream source document`);
+        if (!ue) throw new CutoverFenceError(`Candidate ${c.id} missing upstream source document`);
         sourcesMap.set("upstream", { ...ue.data || {}, id: ue.rawId });
         const tokDesc = c.sources.find((s) => s.collection === "tokens");
         if (tokDesc) {
@@ -3212,26 +3179,26 @@ async function prepareMigrationInTransaction(transaction, db, options) {
         }
       } else if (c.kind === "baseFormatTokens") {
         const tokDesc = c.sources.find((s) => s.collection === "tokens");
-        if (!tokDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing tokens descriptor in sources`);
+        if (!tokDesc) throw new CutoverFenceError(`Candidate ${c.id} missing tokens descriptor in sources`);
         const te = sourceKeyedMap.get(`${tokDesc.collection}:${tokDesc.id}`);
-        if (!te) throw new CutoverFenceError2(`Candidate ${c.id} missing tokens source document`);
+        if (!te) throw new CutoverFenceError(`Candidate ${c.id} missing tokens source document`);
         sourcesMap.set("tokens", { ...te.data || {}, id: te.rawId });
         const refDesc = c.sources.find((s) => s.collection === "refresh");
-        if (!refDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing refresh descriptor in sources`);
+        if (!refDesc) throw new CutoverFenceError(`Candidate ${c.id} missing refresh descriptor in sources`);
         const re = sourceKeyedMap.get(`${refDesc.collection}:${refDesc.id}`);
-        if (!re) throw new CutoverFenceError2(`Candidate ${c.id} missing refresh source document`);
+        if (!re) throw new CutoverFenceError(`Candidate ${c.id} missing refresh source document`);
         sourcesMap.set("refresh", { ...re.data || {}, id: re.rawId });
       } else if (c.kind === "authCodes") {
         const codeDesc = c.sources.find((s) => s.collection === "authCodes");
-        if (!codeDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing authCodes descriptor in sources`);
+        if (!codeDesc) throw new CutoverFenceError(`Candidate ${c.id} missing authCodes descriptor in sources`);
         const e = sourceKeyedMap.get(`${codeDesc.collection}:${codeDesc.id}`);
-        if (!e) throw new CutoverFenceError2(`Candidate ${c.id} missing authCodes source document`);
+        if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing authCodes source document`);
         sourcesMap.set("authCodes", { ...e.data || {}, id: e.rawId });
       } else if (c.kind === "resumeTokens") {
         const resDesc = c.sources.find((s) => s.collection === "resumeTokens");
-        if (!resDesc) throw new CutoverFenceError2(`Candidate ${c.id} missing resumeTokens descriptor in sources`);
+        if (!resDesc) throw new CutoverFenceError(`Candidate ${c.id} missing resumeTokens descriptor in sources`);
         const e = sourceKeyedMap.get(`${resDesc.collection}:${resDesc.id}`);
-        if (!e) throw new CutoverFenceError2(`Candidate ${c.id} missing resumeTokens source document`);
+        if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing resumeTokens source document`);
         sourcesMap.set("resumeTokens", { ...e.data || {}, id: e.rawId });
       } else if (c.kind === "clients") {
         const oauthDesc = c.sources.find((s) => s.collection === "oauthClients");
@@ -3242,7 +3209,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
           const oData = oauthEntry.data || {};
           const cData = clientEntry.data || {};
           if (C(oData.redirect_uris || []) !== C(cData.redirect_uris || []) || oData.token_endpoint_auth_method !== cData.token_endpoint_auth_method) {
-            throw new CutoverFenceError2(`Conflicting claims between clients and oauthClients for candidate ${c.id}`);
+            throw new CutoverFenceError(`Conflicting claims between clients and oauthClients for candidate ${c.id}`);
           }
           sourcesMap.set("clients", { ...cData, ...oData, id: clientEntry.rawId });
         } else if (oauthEntry) {
@@ -3255,7 +3222,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
       validateCandidateProjection(c.kind, c.id, sourceResult);
       const derivedSourceLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, sourceResult]);
       if (c.logicalDigest !== derivedSourceLogicalDigest) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Candidate ${c.id} logicalDigest mismatch with projector-derived source logical digest`
         );
       }
@@ -3294,17 +3261,17 @@ async function prepareMigrationInTransaction(transaction, db, options) {
             }
           }
           if (!targetsMap.has("activeRefresh")) {
-            throw new CutoverFenceError2(`Candidate ${c.id} missing active refresh target document matching activeRefreshId`);
+            throw new CutoverFenceError(`Candidate ${c.id} missing active refresh target document matching activeRefreshId`);
           }
           if (famData && famData.previousRefreshToken && !targetsMap.has("prevRefresh")) {
-            throw new CutoverFenceError2(`Candidate ${c.id} has previousRefreshToken but missing prevRefresh target document`);
+            throw new CutoverFenceError(`Candidate ${c.id} has previousRefreshToken but missing prevRefresh target document`);
           }
           const retiredTargets = c.targets.filter((t) => t.collection === "retiredRefreshTokens");
           const retiredIds = [];
           for (const t of retiredTargets) {
             const e = existingTargetKeyedMap.get(`retiredRefreshTokens:${t.id}`);
-            if (!e) throw new CutoverFenceError2(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
-            if (e.data?.familyId !== famData?.id) throw new CutoverFenceError2(`Candidate ${c.id} retired refresh token target familyId mismatch`);
+            if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
+            if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Candidate ${c.id} retired refresh token target familyId mismatch`);
             retiredIds.push(e.rawId);
           }
           targetsMap.set("retiredRefresh", { ids: retiredIds.sort(canonicalCompare) });
@@ -3352,7 +3319,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
         validateCandidateProjection(c.kind, c.id, targetResult);
         const derivedTargetLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, targetResult]);
         if (derivedTargetLogicalDigest !== c.logicalDigest) {
-          throw new CutoverFenceError2(
+          throw new CutoverFenceError(
             `Retained target graph for candidate ${c.id} is not logically equivalent to candidate commitment`
           );
         }
@@ -3361,12 +3328,12 @@ async function prepareMigrationInTransaction(transaction, db, options) {
   }
   const computedSourceInventory = computeSourceInventoryDigest(options.storeKey, namespace, control.epoch, sourceDescriptors);
   if (prepDoc.sourceInventoryDigest !== computedSourceInventory) {
-    throw new CutoverFenceError2("prepared manifest sourceInventoryDigest does not match computed source inventory");
+    throw new CutoverFenceError("prepared manifest sourceInventoryDigest does not match computed source inventory");
   }
   const sortedCandidateLogicalPairs = prepDoc.candidateCommitments.map((c) => [c.id, c.logicalDigest]).sort((a, b) => canonicalCompare(a[0], b[0]));
   const computedLogicalInventory = H(options.storeKey, "logical-inventory", namespace, control.epoch, sortedCandidateLogicalPairs);
   if (prepDoc.sourceLogicalDigest !== computedLogicalInventory) {
-    throw new CutoverFenceError2("prepared manifest sourceLogicalDigest does not match computed logical inventory");
+    throw new CutoverFenceError("prepared manifest sourceLogicalDigest does not match computed logical inventory");
   }
   const allDocs = Array.from(rawColSnaps.values()).flatMap((s) => s.docs.map((d) => d.data()));
   validateMigrationPreflightLimits(prepDoc, { fullReadset: allDocs, readDurationMs });
@@ -3375,7 +3342,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
   if (prepSnap.exists) {
     const existing = prepSnap.data();
     if (C(existing) !== C(prepDoc)) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         "Prepared manifest already exists for this epoch with different content; immutable retry violation"
       );
     }
@@ -3401,12 +3368,12 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
   const { namespace, finalDoc, markerDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
-    throw new CutoverFenceError2("storeKey is REQUIRED for finalizeMigrationInTransaction");
+    throw new CutoverFenceError("storeKey is REQUIRED for finalizeMigrationInTransaction");
   }
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   const FieldPath = options.FieldPath;
   if (!FieldPath || typeof FieldPath.documentId !== "function") {
-    throw new CutoverFenceError2("FieldPath with documentId() is REQUIRED for finalizeMigrationInTransaction");
+    throw new CutoverFenceError("FieldPath with documentId() is REQUIRED for finalizeMigrationInTransaction");
   }
   const docIdField = FieldPath.documentId();
   if (control.state === "v3_ready") {
@@ -3417,68 +3384,68 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
     if (finalSnap2.exists && markerSnap2.exists && C(finalSnap2.data()) === C(finalDoc) && C(markerSnap2.data()) === C(markerDoc) && control.migrationManifestDigest === markerDoc.migrationManifestDigest) {
       return control;
     }
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       "Already in v3_ready state with different manifests; immutable retry violation"
     );
   }
   if (control.state !== "migrating") {
-    throw new CutoverFenceError2(`Cannot finalize migration: state must be 'migrating', got '${control.state}'`);
+    throw new CutoverFenceError(`Cannot finalize migration: state must be 'migrating', got '${control.state}'`);
   }
   if (control.activeOperations !== 0) {
-    throw new CutoverFenceError2(`Cannot finalize migration: activeOperations must be 0, got ${control.activeOperations}`);
+    throw new CutoverFenceError(`Cannot finalize migration: activeOperations must be 0, got ${control.activeOperations}`);
   }
   if (markerDoc.emptyNamespace !== true && !control.irreversible) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot finalize migration for namespace ${namespace}: irreversible latch must be engaged before finalization`
     );
   }
   const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
   const prepSnap = await transaction.get(prepRef);
   if (!prepSnap.exists) {
-    throw new CutoverFenceError2(`Cannot finalize migration: prepared manifest missing for epoch ${control.epoch}`);
+    throw new CutoverFenceError(`Cannot finalize migration: prepared manifest missing for epoch ${control.epoch}`);
   }
   const prep = prepSnap.data();
   const expectedFinalKeys = finalDoc.totalPhysicalRecords > 0 ? [...REQUIRED_FINAL_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_FINAL_MANIFEST_KEYS;
   validateMapKeysExact(finalDoc, expectedFinalKeys, "final manifest");
   validateMigrationIdentityFields(finalDoc, namespace, control.epoch, control.migrationRunId);
   if (finalDoc.kind !== "final") {
-    throw new CutoverFenceError2(`final manifest kind must be 'final', got '${finalDoc.kind}'`);
+    throw new CutoverFenceError(`final manifest kind must be 'final', got '${finalDoc.kind}'`);
   }
   if (typeof finalDoc.completedAt !== "number" || !Number.isInteger(finalDoc.completedAt) || finalDoc.completedAt <= 0) {
-    throw new CutoverFenceError2("final manifest completedAt must be a positive integer timestamp");
+    throw new CutoverFenceError("final manifest completedAt must be a positive integer timestamp");
   }
   const expectedMarkerKeys = markerDoc.emptyNamespace !== true ? [...REQUIRED_OWNERSHIP_MARKER_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_OWNERSHIP_MARKER_KEYS;
   validateMapKeysExact(markerDoc, expectedMarkerKeys, "ownership marker");
   validateMigrationIdentityFields(markerDoc, namespace, control.epoch, control.migrationRunId);
   if (markerDoc.kind !== "ownership") {
-    throw new CutoverFenceError2(`ownership marker kind must be 'ownership', got '${markerDoc.kind}'`);
+    throw new CutoverFenceError(`ownership marker kind must be 'ownership', got '${markerDoc.kind}'`);
   }
   if (typeof markerDoc.adoptedAt !== "number" || !Number.isInteger(markerDoc.adoptedAt) || markerDoc.adoptedAt <= 0) {
-    throw new CutoverFenceError2("ownership marker adoptedAt must be a positive integer timestamp");
+    throw new CutoverFenceError("ownership marker adoptedAt must be a positive integer timestamp");
   }
   for (const k of REQUIRED_IDENTITY_KEYS) {
     if (finalDoc[k] !== prep[k] || markerDoc[k] !== prep[k]) {
-      throw new CutoverFenceError2(`Identity field '${k}' mismatch across prepared, final, and marker manifests`);
+      throw new CutoverFenceError(`Identity field '${k}' mismatch across prepared, final, and marker manifests`);
     }
   }
   const computedPlanDigest = computePlanDigest(namespace, control.epoch, prep.planSpec);
   if (prep.planDigest !== computedPlanDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${prep.planDigest}`
     );
   }
   const computedPreparedDigest = D("prepared", namespace, control.epoch, prep);
   if (finalDoc.preparedDigest !== computedPreparedDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `final manifest preparedDigest (${finalDoc.preparedDigest}) does not match computed prepared digest (${computedPreparedDigest})`
     );
   }
   if (markerDoc.preparedDigest !== computedPreparedDigest) {
-    throw new CutoverFenceError2("ownership marker preparedDigest does not match computed prepared digest");
+    throw new CutoverFenceError("ownership marker preparedDigest does not match computed prepared digest");
   }
   const computedFinalDigest = D("final", namespace, control.epoch, finalDoc);
   if (markerDoc.migrationManifestDigest !== computedFinalDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `ownership marker migrationManifestDigest (${markerDoc.migrationManifestDigest}) does not match computed final digest (${computedFinalDigest})`
     );
   }
@@ -3487,71 +3454,71 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
   validateMapKeysExact(finalDoc.classifications, CLASSIFICATION_KEYS, "final classifications");
   validateMapKeysExact(finalDoc.reasons, REASON_KEYS, "final reasons");
   if (finalDoc.errors !== 0) {
-    throw new CutoverFenceError2(`Cannot finalize migration: final errors must be 0, got ${finalDoc.errors}`);
+    throw new CutoverFenceError(`Cannot finalize migration: final errors must be 0, got ${finalDoc.errors}`);
   }
   for (const [rKey, rVal] of Object.entries(finalDoc.reasons)) {
     if (rVal !== 0) {
-      throw new CutoverFenceError2(`Cannot finalize migration: reason count '${rKey}' must be 0, got ${rVal}`);
+      throw new CutoverFenceError(`Cannot finalize migration: reason count '${rKey}' must be 0, got ${rVal}`);
     }
   }
   if (finalDoc.sourceLogicalDigest !== finalDoc.targetLogicalDigest) {
-    throw new CutoverFenceError2("Cannot finalize migration: sourceLogicalDigest must equal targetLogicalDigest");
+    throw new CutoverFenceError("Cannot finalize migration: sourceLogicalDigest must equal targetLogicalDigest");
   }
   if (finalDoc.sourceInventoryDigest !== prep.sourceInventoryDigest) {
-    throw new CutoverFenceError2("Cannot finalize migration: sourceInventoryDigest must match prepared");
+    throw new CutoverFenceError("Cannot finalize migration: sourceInventoryDigest must match prepared");
   }
   if (finalDoc.sourceLogicalDigest !== prep.sourceLogicalDigest) {
-    throw new CutoverFenceError2("Cannot finalize migration: sourceLogicalDigest must match prepared");
+    throw new CutoverFenceError("Cannot finalize migration: sourceLogicalDigest must match prepared");
   }
   if (C(finalDoc.physicalCounts) !== C(prep.physicalCounts)) {
-    throw new CutoverFenceError2("final physicalCounts do not match prepared physicalCounts");
+    throw new CutoverFenceError("final physicalCounts do not match prepared physicalCounts");
   }
   if (C(finalDoc.targetCounts) !== C(prep.expectedTargetCounts)) {
-    throw new CutoverFenceError2("final targetCounts do not match prepared expectedTargetCounts");
+    throw new CutoverFenceError("final targetCounts do not match prepared expectedTargetCounts");
   }
   if (C(finalDoc.classifications) !== C(prep.classifications)) {
-    throw new CutoverFenceError2("final classifications do not match prepared classifications");
+    throw new CutoverFenceError("final classifications do not match prepared classifications");
   }
   if (C(finalDoc.reasons) !== C(prep.reasons)) {
-    throw new CutoverFenceError2("final reasons do not match prepared reasons");
+    throw new CutoverFenceError("final reasons do not match prepared reasons");
   }
   const finalPhysicalSum = Object.values(finalDoc.physicalCounts).reduce((sum, n) => sum + n, 0);
   if (finalPhysicalSum !== finalDoc.totalPhysicalRecords) {
-    throw new CutoverFenceError2("final physicalCounts sum must equal totalPhysicalRecords");
+    throw new CutoverFenceError("final physicalCounts sum must equal totalPhysicalRecords");
   }
   const targetCountSum = Object.values(finalDoc.targetCounts).reduce((sum, n) => {
-    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError2("Invalid target count");
+    if (!Number.isSafeInteger(n) || n < 0) throw new CutoverFenceError("Invalid target count");
     return sum + n;
   }, 0);
   if (markerDoc.emptyNamespace === true) {
     if (finalDoc.totalPhysicalRecords !== 0 || finalDoc.scanned !== 0 || finalDoc.migrated !== 0 || finalDoc.skipped !== 0 || finalDoc.errors !== 0) {
-      throw new CutoverFenceError2("Counts must be 0 for emptyNamespace final manifest");
+      throw new CutoverFenceError("Counts must be 0 for emptyNamespace final manifest");
     }
     if (prep.candidateCommitments.length !== 0) {
-      throw new CutoverFenceError2("candidateCommitments must be empty for emptyNamespace");
+      throw new CutoverFenceError("candidateCommitments must be empty for emptyNamespace");
     }
     if (targetCountSum !== 0) {
-      throw new CutoverFenceError2("targetCounts sum must be 0 for emptyNamespace");
+      throw new CutoverFenceError("targetCounts sum must be 0 for emptyNamespace");
     }
     const emptySourceInventory = H(options.storeKey, "source-inventory", namespace, control.epoch, []);
     const emptyTargetInventory = H(options.storeKey, "target-inventory", namespace, control.epoch, []);
     const emptyLogicalInventory = H(options.storeKey, "logical-inventory", namespace, control.epoch, []);
     const emptyReceiptSet = D("receipt-set", namespace, control.epoch, []);
     if (prep.sourceInventoryDigest !== emptySourceInventory) {
-      throw new CutoverFenceError2("Empty namespace requires canonical empty sourceInventoryDigest");
+      throw new CutoverFenceError("Empty namespace requires canonical empty sourceInventoryDigest");
     }
     if (prep.sourceLogicalDigest !== emptyLogicalInventory) {
-      throw new CutoverFenceError2("Empty namespace requires canonical empty sourceLogicalDigest");
+      throw new CutoverFenceError("Empty namespace requires canonical empty sourceLogicalDigest");
     }
     if (finalDoc.targetInventoryDigest !== emptyTargetInventory) {
-      throw new CutoverFenceError2("Empty namespace requires canonical empty targetInventoryDigest");
+      throw new CutoverFenceError("Empty namespace requires canonical empty targetInventoryDigest");
     }
     if (finalDoc.receiptSetDigest !== emptyReceiptSet) {
-      throw new CutoverFenceError2("Empty namespace requires canonical empty receiptSetDigest");
+      throw new CutoverFenceError("Empty namespace requires canonical empty receiptSetDigest");
     }
   } else {
     if (targetCountSum <= 0 && finalDoc.migrated > 0) {
-      throw new CutoverFenceError2("targetCounts sum must be greater than 0 for non-empty namespace");
+      throw new CutoverFenceError("targetCounts sum must be greater than 0 for non-empty namespace");
     }
   }
   const distinctColNames = getCutoverDistinctCollectionNames(namespace).distinct;
@@ -3569,12 +3536,12 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
   const actualReceipts = receiptsSnap.docs.map((d) => {
     const expectedPrefix = `migration_receipt_${control.epoch}_`;
     if (!d.id.startsWith(expectedPrefix)) {
-      throw new CutoverFenceError2(`Invalid receipt document ID: ${d.id}`);
+      throw new CutoverFenceError(`Invalid receipt document ID: ${d.id}`);
     }
     const candidateIdSuffix = d.id.slice(expectedPrefix.length);
     const data = d.data();
     if (data.candidateId !== candidateIdSuffix) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Receipt document ID suffix mismatch: expected ${candidateIdSuffix}, got ${data.candidateId}`
       );
     }
@@ -3630,10 +3597,10 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
     for (const d of docs) {
       const data = d.data() || {};
       if ((colKey === "families" || colKey === "resumeTokens") && typeof data.id === "string" && data.id !== d.id) {
-        throw new CutoverFenceError2(`Document ID mismatch in ${colKey}: stored id does not match document key`);
+        throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
       }
       if ((colKey === "oauthClients" || colKey === "clients") && typeof data.client_id === "string" && data.client_id !== d.id) {
-        throw new CutoverFenceError2(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
+        throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
       }
       const sourceId = computeKeyedDocId(options.storeKey, "source-id", namespace, control.epoch, colKey, d.id);
       const recDigest = computeSourceRecordDigest(options.storeKey, namespace, control.epoch, colKey, sourceId, data);
@@ -3647,11 +3614,11 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== "oauthClients" && colKey !== "clients") {
         if (typeof data.id === "string" && data.id !== d.id) {
-          throw new CutoverFenceError2(`Document ID mismatch in ${colKey}: stored id does not match document key`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === "string" && data.client_id !== d.id) {
-          throw new CutoverFenceError2(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, "target-id", namespace, control.epoch, colKey, d.id);
@@ -3671,45 +3638,45 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
     if (r.disposition === "written") writtenCount++;
     if (r.disposition === "retained") retainedCount++;
     if (receiptCandidateIds.has(r.candidateId)) {
-      throw new CutoverFenceError2(`Duplicate candidate receipt in finalization: ${r.candidateId}`);
+      throw new CutoverFenceError(`Duplicate candidate receipt in finalization: ${r.candidateId}`);
     }
     receiptCandidateIds.add(r.candidateId);
     const c = candidateMap.get(r.candidateId);
     if (!c) {
-      throw new CutoverFenceError2(`Receipt candidateId '${r.candidateId}' does not match any committed candidate`);
+      throw new CutoverFenceError(`Receipt candidateId '${r.candidateId}' does not match any committed candidate`);
     }
     if (r.preparedDigest !== computedPreparedDigest) {
-      throw new CutoverFenceError2(`Receipt preparedDigest mismatch for candidate ${r.candidateId}`);
+      throw new CutoverFenceError(`Receipt preparedDigest mismatch for candidate ${r.candidateId}`);
     }
     const expectedCandDigest = D("candidate", namespace, control.epoch, c);
     if (r.candidateDigest !== expectedCandDigest) {
-      throw new CutoverFenceError2(`Receipt candidateDigest mismatch for candidate ${r.candidateId}`);
+      throw new CutoverFenceError(`Receipt candidateDigest mismatch for candidate ${r.candidateId}`);
     }
     if (r.logicalDigest !== c.logicalDigest) {
-      throw new CutoverFenceError2(`Receipt logicalDigest mismatch for candidate ${r.candidateId}`);
+      throw new CutoverFenceError(`Receipt logicalDigest mismatch for candidate ${r.candidateId}`);
     }
     const rSourceKeys = r.sourceAfter.map((s) => `${s.collection}:${s.id}`).sort(canonicalCompare);
     const cSourceKeys = c.sources.map((s) => `${s.collection}:${s.id}`).sort(canonicalCompare);
     if (rSourceKeys.length !== cSourceKeys.length || !rSourceKeys.every((k, idx) => k === cSourceKeys[idx])) {
-      throw new CutoverFenceError2(`Receipt sourceAfter reference set mismatch for candidate ${r.candidateId}`);
+      throw new CutoverFenceError(`Receipt sourceAfter reference set mismatch for candidate ${r.candidateId}`);
     }
     const rTargetKeys = r.targetAfter.map((t) => `${t.collection}:${t.id}`).sort(canonicalCompare);
     const cTargetKeys = c.targets.map((t) => `${t.collection}:${t.id}`).sort(canonicalCompare);
     if (rTargetKeys.length !== cTargetKeys.length || !rTargetKeys.every((k, idx) => k === cTargetKeys[idx])) {
-      throw new CutoverFenceError2(`Receipt targetAfter reference set mismatch for candidate ${r.candidateId}`);
+      throw new CutoverFenceError(`Receipt targetAfter reference set mismatch for candidate ${r.candidateId}`);
     }
     for (const s of r.sourceAfter) {
       const entry = currentSourceKeyedMap.get(`${s.collection}:${s.id}`);
       if (s.recordDigest === null) {
         if (entry) {
-          throw new CutoverFenceError2(`Source '${s.collection}:${s.id}' was marked deleted in receipt but still exists in Firestore`);
+          throw new CutoverFenceError(`Source '${s.collection}:${s.id}' was marked deleted in receipt but still exists in Firestore`);
         }
       } else {
         if (!entry) {
-          throw new CutoverFenceError2(`Source '${s.collection}:${s.id}' was marked retained in receipt but does not exist in Firestore`);
+          throw new CutoverFenceError(`Source '${s.collection}:${s.id}' was marked retained in receipt but does not exist in Firestore`);
         }
         if (entry.recordDigest !== s.recordDigest) {
-          throw new CutoverFenceError2(`Source '${s.collection}:${s.id}' recordDigest mismatch`);
+          throw new CutoverFenceError(`Source '${s.collection}:${s.id}' recordDigest mismatch`);
         }
         retainedSources.add(`${s.collection}:${s.id}`);
       }
@@ -3719,32 +3686,32 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
       expectedWrittenTargets.add(targetKey);
       const entry = currentTargetKeyedMap.get(targetKey);
       if (!entry) {
-        throw new CutoverFenceError2(`Missing target document '${targetKey}' in Firestore`);
+        throw new CutoverFenceError(`Missing target document '${targetKey}' in Firestore`);
       }
       if (entry.recordDigest !== t.recordDigest) {
-        throw new CutoverFenceError2(`Target document '${targetKey}' postimage recordDigest mismatch`);
+        throw new CutoverFenceError(`Target document '${targetKey}' postimage recordDigest mismatch`);
       }
     }
   }
   for (const sourceKey of currentSourceKeyedMap.keys()) {
     if (!retainedSources.has(sourceKey)) {
-      throw new CutoverFenceError2(`Extra source document '${sourceKey}' found in Firestore not accounted for as retained by receipts`);
+      throw new CutoverFenceError(`Extra source document '${sourceKey}' found in Firestore not accounted for as retained by receipts`);
     }
   }
   for (const targetKey of currentTargetKeyedMap.keys()) {
     if (!expectedWrittenTargets.has(targetKey)) {
-      throw new CutoverFenceError2(`Extra target document '${targetKey}' found in Firestore not accounted for by receipts`);
+      throw new CutoverFenceError(`Extra target document '${targetKey}' found in Firestore not accounted for by receipts`);
     }
   }
   if (finalDoc.totalPhysicalRecords > 0) {
     if (finalDoc.projectorId !== prep.projectorId || finalDoc.projectorVersion !== prep.projectorVersion || finalDoc.projectorDigest !== prep.projectorDigest) {
-      throw new CutoverFenceError2("Final manifest projector identity or digest does not match prepared manifest");
+      throw new CutoverFenceError("Final manifest projector identity or digest does not match prepared manifest");
     }
     if (markerDoc.projectorId !== finalDoc.projectorId || markerDoc.projectorVersion !== finalDoc.projectorVersion || markerDoc.projectorDigest !== finalDoc.projectorDigest) {
-      throw new CutoverFenceError2("Ownership marker projector identity or digest does not match final manifest");
+      throw new CutoverFenceError("Ownership marker projector identity or digest does not match final manifest");
     }
     if (finalDoc.projectorDigest !== finalDoc.protocolDigest) {
-      throw new CutoverFenceError2("finalDoc.projectorDigest must equal protocolDigest");
+      throw new CutoverFenceError("finalDoc.projectorDigest must equal protocolDigest");
     }
     const codec2 = createCodec(options.storeKey);
     for (const r of actualReceipts) {
@@ -3782,17 +3749,17 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
           }
         }
         if (!targetsMap.has("activeRefresh")) {
-          throw new CutoverFenceError2(`Candidate ${c.id} missing active refresh target document matching activeRefreshId`);
+          throw new CutoverFenceError(`Candidate ${c.id} missing active refresh target document matching activeRefreshId`);
         }
         if (famData && famData.previousRefreshToken && !targetsMap.has("prevRefresh")) {
-          throw new CutoverFenceError2(`Candidate ${c.id} has previousRefreshToken but missing prevRefresh target document`);
+          throw new CutoverFenceError(`Candidate ${c.id} has previousRefreshToken but missing prevRefresh target document`);
         }
         const retiredTargets = c.targets.filter((t) => t.collection === "retiredRefreshTokens");
         const retiredIds = [];
         for (const t of retiredTargets) {
           const e = currentTargetKeyedMap.get(`retiredRefreshTokens:${t.id}`);
-          if (!e) throw new CutoverFenceError2(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
-          if (e.data?.familyId !== famData?.id) throw new CutoverFenceError2(`Candidate ${c.id} retired refresh token target familyId mismatch`);
+          if (!e) throw new CutoverFenceError(`Candidate ${c.id} missing retiredRefreshTokens target document in Firestore`);
+          if (e.data?.familyId !== famData?.id) throw new CutoverFenceError(`Candidate ${c.id} retired refresh token target familyId mismatch`);
           retiredIds.push(e.rawId);
         }
         targetsMap.set("retiredRefresh", { ids: retiredIds.sort(canonicalCompare) });
@@ -3840,7 +3807,7 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
       validateCandidateProjection(c.kind, r.candidateId, targetResult);
       const derivedTargetLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, targetResult]);
       if (r.logicalDigest !== derivedTargetLogicalDigest) {
-        throw new CutoverFenceError2(
+        throw new CutoverFenceError(
           `Receipt ${r.candidateId} logicalDigest mismatch with projector-derived target logical digest`
         );
       }
@@ -3848,53 +3815,53 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
   }
   const computedTargetInventory = computeTargetInventoryDigest(options.storeKey, namespace, control.epoch, targetDescriptors);
   if (finalDoc.targetInventoryDigest !== computedTargetInventory) {
-    throw new CutoverFenceError2("final manifest targetInventoryDigest does not match computed target inventory");
+    throw new CutoverFenceError("final manifest targetInventoryDigest does not match computed target inventory");
   }
   const sortedReceiptLogicalPairs = actualReceipts.map((r) => [r.candidateId, r.logicalDigest]).sort((a, b) => canonicalCompare(a[0], b[0]));
   const computedTargetLogical = H(options.storeKey, "logical-inventory", namespace, control.epoch, sortedReceiptLogicalPairs);
   if (finalDoc.targetLogicalDigest !== computedTargetLogical) {
-    throw new CutoverFenceError2("final manifest targetLogicalDigest does not match computed logical inventory");
+    throw new CutoverFenceError("final manifest targetLogicalDigest does not match computed logical inventory");
   }
   for (const k of TARGET_COUNT_KEYS) {
     const actualCount = targetDocsByKey.get(k).length;
     if (actualCount !== finalDoc.targetCounts[k]) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Target count mismatch on finalization for '${k}': Firestore has ${actualCount}, finalDoc has ${finalDoc.targetCounts[k]}`
       );
     }
   }
   if (finalDoc.migrated !== writtenCount) {
-    throw new CutoverFenceError2(`migrated count mismatch: finalDoc has ${finalDoc.migrated}, receipts have ${writtenCount}`);
+    throw new CutoverFenceError(`migrated count mismatch: finalDoc has ${finalDoc.migrated}, receipts have ${writtenCount}`);
   }
   if (finalDoc.skipped !== retainedCount) {
-    throw new CutoverFenceError2(`skipped count mismatch: finalDoc has ${finalDoc.skipped}, receipts have ${retainedCount}`);
+    throw new CutoverFenceError(`skipped count mismatch: finalDoc has ${finalDoc.skipped}, receipts have ${retainedCount}`);
   }
   if (finalDoc.scanned !== finalDoc.migrated + finalDoc.skipped) {
-    throw new CutoverFenceError2("Cannot finalize migration: final scanned must equal migrated + skipped");
+    throw new CutoverFenceError("Cannot finalize migration: final scanned must equal migrated + skipped");
   }
   if (actualReceipts.length !== prep.scanned) {
-    throw new CutoverFenceError2(`receipts count (${actualReceipts.length}) does not equal scanned (${prep.scanned})`);
+    throw new CutoverFenceError(`receipts count (${actualReceipts.length}) does not equal scanned (${prep.scanned})`);
   }
   const computedReceiptSetDigest = computeReceiptSetDigest(actualReceipts, namespace, control.epoch);
   if (finalDoc.receiptSetDigest !== computedReceiptSetDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `receiptSetDigest mismatch: expected ${finalDoc.receiptSetDigest}, computed ${computedReceiptSetDigest}`
     );
   }
   for (const c of prep.candidateCommitments) {
     if (!receiptCandidateIds.has(c.id)) {
-      throw new CutoverFenceError2(`Missing receipt for committed candidate ${c.id}`);
+      throw new CutoverFenceError(`Missing receipt for committed candidate ${c.id}`);
     }
   }
   const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
   const markerRef = db.collection(`${namespace}_meta`).doc("v2_adopted");
   const finalSnap = await transaction.get(finalRef);
   if (finalSnap.exists && C(finalSnap.data()) !== C(finalDoc)) {
-    throw new CutoverFenceError2("Final manifest already exists with different content; immutable retry violation");
+    throw new CutoverFenceError("Final manifest already exists with different content; immutable retry violation");
   }
   const markerSnap = await transaction.get(markerRef);
   if (markerSnap.exists && C(markerSnap.data()) !== C(markerDoc)) {
-    throw new CutoverFenceError2("Ownership marker already exists with different content; immutable retry violation");
+    throw new CutoverFenceError("Ownership marker already exists with different content; immutable retry violation");
   }
   timer.assertUnderDeadline("finalizeMigrationInTransaction reads and verification");
   transaction.set(finalRef, stripUndefined(finalDoc));
@@ -3918,90 +3885,90 @@ async function activateMigrationInTransaction(transaction, db, options) {
   const { namespace, expectedEpoch, migrationRunId: migrationRunId2, migrationManifestDigest, codeArtifact, protocolDigest } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
-    throw new CutoverFenceError2("storeKey is REQUIRED for activateMigrationInTransaction");
+    throw new CutoverFenceError("storeKey is REQUIRED for activateMigrationInTransaction");
   }
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   const FieldPath = options.FieldPath;
   if (!FieldPath || typeof FieldPath.documentId !== "function") {
-    throw new CutoverFenceError2("FieldPath with documentId() is REQUIRED for activateMigrationInTransaction");
+    throw new CutoverFenceError("FieldPath with documentId() is REQUIRED for activateMigrationInTransaction");
   }
   const docIdField = FieldPath.documentId();
   if (control.state === "v3_active") {
     if (control.epoch !== expectedEpoch) {
-      throw new CutoverFenceError2(`Activation epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
+      throw new CutoverFenceError(`Activation epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
     }
     if (control.migrationRunId !== migrationRunId2) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Already active control migrationRunId mismatch: expected ${migrationRunId2}, got ${control.migrationRunId}`
       );
     }
     if (control.migrationManifestDigest !== migrationManifestDigest) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Already active control migrationManifestDigest mismatch: expected ${migrationManifestDigest}, got ${control.migrationManifestDigest}`
       );
     }
     if (control.codeArtifact !== codeArtifact) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Already active control codeArtifact mismatch: expected ${codeArtifact}, got ${control.codeArtifact}`
       );
     }
     const markerRef2 = db.collection(`${namespace}_meta`).doc("v2_adopted");
     const markerSnap2 = await transaction.get(markerRef2);
     if (!markerSnap2.exists) {
-      throw new CutoverFenceError2("Already active but immutable migration marker is missing at v2_adopted");
+      throw new CutoverFenceError("Already active but immutable migration marker is missing at v2_adopted");
     }
     const m2 = markerSnap2.data();
     const expectedMarkerKeys2 = m2.emptyNamespace !== true ? [...REQUIRED_OWNERSHIP_MARKER_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_OWNERSHIP_MARKER_KEYS;
     validateMapKeysExact(m2, expectedMarkerKeys2, "ownership marker");
     validateMigrationIdentityFields(m2, namespace, expectedEpoch, migrationRunId2);
     if (m2.kind !== "ownership") {
-      throw new CutoverFenceError2(`Already active marker kind must be 'ownership', got '${m2.kind}'`);
+      throw new CutoverFenceError(`Already active marker kind must be 'ownership', got '${m2.kind}'`);
     }
     if (m2.codeArtifact !== codeArtifact || m2.protocolDigest !== protocolDigest || m2.migrationManifestDigest !== migrationManifestDigest) {
-      throw new CutoverFenceError2("Already active immutable marker evidence mismatch");
+      throw new CutoverFenceError("Already active immutable marker evidence mismatch");
     }
     const finalRef2 = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
     const finalSnap2 = await transaction.get(finalRef2);
     if (!finalSnap2.exists) {
-      throw new CutoverFenceError2(`Already active but immutable final manifest missing at migration_manifest_${expectedEpoch}`);
+      throw new CutoverFenceError(`Already active but immutable final manifest missing at migration_manifest_${expectedEpoch}`);
     }
     const f2 = finalSnap2.data();
     const expectedFinalKeys2 = f2.totalPhysicalRecords > 0 ? [...REQUIRED_FINAL_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_FINAL_MANIFEST_KEYS;
     validateMapKeysExact(f2, expectedFinalKeys2, "final manifest");
     validateMigrationIdentityFields(f2, namespace, expectedEpoch, migrationRunId2);
     if (f2.kind !== "final") {
-      throw new CutoverFenceError2(`Already active final manifest kind must be 'final', got '${f2.kind}'`);
+      throw new CutoverFenceError(`Already active final manifest kind must be 'final', got '${f2.kind}'`);
     }
     if (f2.codeArtifact !== codeArtifact || f2.protocolDigest !== protocolDigest || D("final", namespace, expectedEpoch, f2) !== migrationManifestDigest) {
-      throw new CutoverFenceError2("Already active immutable final manifest evidence mismatch");
+      throw new CutoverFenceError("Already active immutable final manifest evidence mismatch");
     }
     const prepRef2 = db.collection(`${namespace}_meta`).doc(`migration_prepared_${expectedEpoch}`);
     const prepSnap2 = await transaction.get(prepRef2);
     if (!prepSnap2.exists) {
-      throw new CutoverFenceError2(`Already active but immutable prepared manifest missing at migration_prepared_${expectedEpoch}`);
+      throw new CutoverFenceError(`Already active but immutable prepared manifest missing at migration_prepared_${expectedEpoch}`);
     }
     const p2 = prepSnap2.data();
     const expectedPrepKeys2 = p2.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS;
     validateMapKeysExact(p2, expectedPrepKeys2, "prepared manifest");
     validateMigrationIdentityFields(p2, namespace, expectedEpoch, migrationRunId2);
     if (p2.kind !== "prepared") {
-      throw new CutoverFenceError2(`Already active prep manifest kind must be 'prepared', got '${p2.kind}'`);
+      throw new CutoverFenceError(`Already active prep manifest kind must be 'prepared', got '${p2.kind}'`);
     }
     for (const k of REQUIRED_IDENTITY_KEYS) {
       if (f2[k] !== p2[k] || m2[k] !== p2[k]) {
-        throw new CutoverFenceError2(`Already active identity field '${k}' mismatch across prepared, final, and marker manifests`);
+        throw new CutoverFenceError(`Already active identity field '${k}' mismatch across prepared, final, and marker manifests`);
       }
     }
     const computedPlanDigest2 = computePlanDigest(namespace, expectedEpoch, p2.planSpec);
     if (p2.planDigest !== computedPlanDigest2) {
-      throw new CutoverFenceError2(`Already active prep manifest planDigest mismatch: expected ${computedPlanDigest2}, got ${p2.planDigest}`);
+      throw new CutoverFenceError(`Already active prep manifest planDigest mismatch: expected ${computedPlanDigest2}, got ${p2.planDigest}`);
     }
     if (f2.totalPhysicalRecords > 0) {
       if (m2.projectorId !== f2.projectorId || m2.projectorVersion !== f2.projectorVersion || m2.projectorDigest !== f2.projectorDigest) {
-        throw new CutoverFenceError2("Already active marker projector evidence mismatch with final manifest");
+        throw new CutoverFenceError("Already active marker projector evidence mismatch with final manifest");
       }
       if (p2.projectorId !== f2.projectorId || p2.projectorVersion !== f2.projectorVersion || p2.projectorDigest !== f2.projectorDigest) {
-        throw new CutoverFenceError2("Already active prep projector evidence mismatch with final manifest");
+        throw new CutoverFenceError("Already active prep projector evidence mismatch with final manifest");
       }
     }
     const receiptsCol2 = db.collection(`${namespace}_meta`);
@@ -4009,7 +3976,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
     const upperBound2 = `migration_receipt_${expectedEpoch}\``;
     const receiptsSnap2 = await transaction.get(receiptsCol2.orderBy(docIdField).startAt(lowerBound2).endBefore(upperBound2));
     if (receiptsSnap2.size !== p2.scanned) {
-      throw new CutoverFenceError2(`Already active receipts count (${receiptsSnap2.size}) does not equal scanned count (${p2.scanned})`);
+      throw new CutoverFenceError(`Already active receipts count (${receiptsSnap2.size}) does not equal scanned count (${p2.scanned})`);
     }
     const receipts = receiptsSnap2.docs.map((d) => {
       const data = d.data();
@@ -4017,83 +3984,83 @@ async function activateMigrationInTransaction(transaction, db, options) {
       return data;
     });
     if (computeReceiptSetDigest(receipts, namespace, expectedEpoch) !== f2.receiptSetDigest) {
-      throw new CutoverFenceError2("Already active immutable receiptSetDigest mismatch");
+      throw new CutoverFenceError("Already active immutable receiptSetDigest mismatch");
     }
     return { status: "already_active", control };
   }
   const markerRef = db.collection(`${namespace}_meta`).doc("v2_adopted");
   const markerSnap = await transaction.get(markerRef);
   if (!markerSnap.exists) {
-    throw new CutoverFenceError2(`Cannot activate: marker missing at ${namespace}_meta/v2_adopted`);
+    throw new CutoverFenceError(`Cannot activate: marker missing at ${namespace}_meta/v2_adopted`);
   }
   const m = markerSnap.data();
   const expectedMarkerKeys = m.emptyNamespace !== true ? [...REQUIRED_OWNERSHIP_MARKER_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_OWNERSHIP_MARKER_KEYS;
   validateMapKeysExact(m, expectedMarkerKeys, "ownership marker");
   validateMigrationIdentityFields(m, namespace, expectedEpoch, migrationRunId2);
   if (m.kind !== "ownership") {
-    throw new CutoverFenceError2(`marker kind must be 'ownership', got '${m.kind}'`);
+    throw new CutoverFenceError(`marker kind must be 'ownership', got '${m.kind}'`);
   }
   if (m.codeArtifact !== codeArtifact) {
-    throw new CutoverFenceError2(`Cannot activate: marker codeArtifact mismatch: expected ${codeArtifact}, got ${m.codeArtifact}`);
+    throw new CutoverFenceError(`Cannot activate: marker codeArtifact mismatch: expected ${codeArtifact}, got ${m.codeArtifact}`);
   }
   if (m.protocolDigest !== protocolDigest) {
-    throw new CutoverFenceError2(`Cannot activate: marker protocolDigest mismatch: expected ${protocolDigest}, got ${m.protocolDigest}`);
+    throw new CutoverFenceError(`Cannot activate: marker protocolDigest mismatch: expected ${protocolDigest}, got ${m.protocolDigest}`);
   }
   if (m.migrationManifestDigest !== migrationManifestDigest) {
-    throw new CutoverFenceError2("Cannot activate: marker migrationManifestDigest mismatch");
+    throw new CutoverFenceError("Cannot activate: marker migrationManifestDigest mismatch");
   }
   const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
   const finalSnap = await transaction.get(finalRef);
   if (!finalSnap.exists) {
-    throw new CutoverFenceError2(`Cannot activate: final manifest missing at ${namespace}_meta/migration_manifest_${expectedEpoch}`);
+    throw new CutoverFenceError(`Cannot activate: final manifest missing at ${namespace}_meta/migration_manifest_${expectedEpoch}`);
   }
   const f = finalSnap.data();
   const expectedFinalKeys = f.totalPhysicalRecords > 0 ? [...REQUIRED_FINAL_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_FINAL_MANIFEST_KEYS;
   validateMapKeysExact(f, expectedFinalKeys, "final manifest");
   validateMigrationIdentityFields(f, namespace, expectedEpoch, migrationRunId2);
   if (f.kind !== "final") {
-    throw new CutoverFenceError2(`Final manifest kind must be 'final', got '${f.kind}'`);
+    throw new CutoverFenceError(`Final manifest kind must be 'final', got '${f.kind}'`);
   }
   if (f.codeArtifact !== codeArtifact || f.protocolDigest !== protocolDigest) {
-    throw new CutoverFenceError2("Cannot activate: final manifest codeArtifact or protocolDigest mismatch");
+    throw new CutoverFenceError("Cannot activate: final manifest codeArtifact or protocolDigest mismatch");
   }
   const computedFinalDigest = D("final", namespace, expectedEpoch, f);
   if (computedFinalDigest !== migrationManifestDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot activate: computed final digest (${computedFinalDigest}) does not match expected (${migrationManifestDigest})`
     );
   }
   const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${expectedEpoch}`);
   const prepSnap = await transaction.get(prepRef);
   if (!prepSnap.exists) {
-    throw new CutoverFenceError2(`Cannot activate: prepared manifest missing at ${namespace}_meta/migration_prepared_${expectedEpoch}`);
+    throw new CutoverFenceError(`Cannot activate: prepared manifest missing at ${namespace}_meta/migration_prepared_${expectedEpoch}`);
   }
   const p = prepSnap.data();
   const expectedPrepKeys = p.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS;
   validateMapKeysExact(p, expectedPrepKeys, "prepared manifest");
   validateMigrationIdentityFields(p, namespace, expectedEpoch, migrationRunId2);
   if (p.kind !== "prepared") {
-    throw new CutoverFenceError2(`Prepared manifest kind must be 'prepared', got '${p.kind}'`);
+    throw new CutoverFenceError(`Prepared manifest kind must be 'prepared', got '${p.kind}'`);
   }
   const computedPrepDigest = D("prepared", namespace, expectedEpoch, p);
   if (computedPrepDigest !== f.preparedDigest) {
-    throw new CutoverFenceError2("Cannot activate: prepared digest does not match final manifest preparedDigest");
+    throw new CutoverFenceError("Cannot activate: prepared digest does not match final manifest preparedDigest");
   }
   for (const k of REQUIRED_IDENTITY_KEYS) {
     if (f[k] !== p[k] || m[k] !== p[k]) {
-      throw new CutoverFenceError2(`Cannot activate: identity field '${k}' mismatch across prepared, final, and marker manifests`);
+      throw new CutoverFenceError(`Cannot activate: identity field '${k}' mismatch across prepared, final, and marker manifests`);
     }
   }
   const computedPlanDigest = computePlanDigest(namespace, expectedEpoch, p.planSpec);
   if (p.planDigest !== computedPlanDigest) {
-    throw new CutoverFenceError2(`Cannot activate: prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${p.planDigest}`);
+    throw new CutoverFenceError(`Cannot activate: prepared manifest planDigest mismatch: expected ${computedPlanDigest}, got ${p.planDigest}`);
   }
   if (f.totalPhysicalRecords > 0) {
     if (m.projectorId !== f.projectorId || m.projectorVersion !== f.projectorVersion || m.projectorDigest !== f.projectorDigest) {
-      throw new CutoverFenceError2("Marker projector evidence mismatch with final manifest");
+      throw new CutoverFenceError("Marker projector evidence mismatch with final manifest");
     }
     if (p.projectorId !== f.projectorId || p.projectorVersion !== f.projectorVersion || p.projectorDigest !== f.projectorDigest) {
-      throw new CutoverFenceError2("Prepared manifest projector evidence mismatch with final manifest");
+      throw new CutoverFenceError("Prepared manifest projector evidence mismatch with final manifest");
     }
   }
   const receiptsCol = db.collection(`${namespace}_meta`);
@@ -4102,7 +4069,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
   const receiptsQuery = receiptsCol.orderBy(docIdField).startAt(lowerBound).endBefore(upperBound);
   const receiptsSnap = await transaction.get(receiptsQuery);
   if (receiptsSnap.size !== p.scanned) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot activate: receipt count (${receiptsSnap.size}) does not equal prepared scanned count (${p.scanned})`
     );
   }
@@ -4113,7 +4080,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
   });
   const computedRSD = computeReceiptSetDigest(activateReceipts, namespace, expectedEpoch);
   if (f.receiptSetDigest !== computedRSD) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Cannot activate: receiptSetDigest mismatch in Firestore receipts`
     );
   }
@@ -4157,11 +4124,11 @@ async function activateMigrationInTransaction(transaction, db, options) {
       const data = d.data() || {};
       if (colKey !== "oauthClients" && colKey !== "clients") {
         if (typeof data.id === "string" && data.id !== d.id) {
-          throw new CutoverFenceError2(`Document ID mismatch in ${colKey}: stored id does not match document key`);
+          throw new CutoverFenceError(`Document ID mismatch in ${colKey}: stored id does not match document key`);
         }
       } else {
         if (typeof data.client_id === "string" && data.client_id !== d.id) {
-          throw new CutoverFenceError2(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
+          throw new CutoverFenceError(`client_id mismatch in ${colKey}: stored client_id does not match document key`);
         }
       }
       const targetId = computeKeyedDocId(options.storeKey, "target-id", namespace, expectedEpoch, colKey, d.id);
@@ -4176,57 +4143,57 @@ async function activateMigrationInTransaction(transaction, db, options) {
       expectedWrittenTargets.add(targetKey);
       const entry = currentTargetKeyedMap.get(targetKey);
       if (!entry) {
-        throw new CutoverFenceError2(`Cannot activate: target document '${targetKey}' missing from Firestore`);
+        throw new CutoverFenceError(`Cannot activate: target document '${targetKey}' missing from Firestore`);
       }
       if (entry.recordDigest !== t.recordDigest) {
-        throw new CutoverFenceError2(`Cannot activate: target document '${targetKey}' postimage recordDigest mismatch`);
+        throw new CutoverFenceError(`Cannot activate: target document '${targetKey}' postimage recordDigest mismatch`);
       }
     }
   }
   for (const targetKey of currentTargetKeyedMap.keys()) {
     if (!expectedWrittenTargets.has(targetKey)) {
-      throw new CutoverFenceError2(`Cannot activate: extra target document '${targetKey}' found in Firestore`);
+      throw new CutoverFenceError(`Cannot activate: extra target document '${targetKey}' found in Firestore`);
     }
   }
   for (const k of TARGET_COUNT_KEYS) {
     const actualCount = targetDocsByKey.get(k).length;
     if (actualCount !== f.targetCounts[k]) {
-      throw new CutoverFenceError2(
+      throw new CutoverFenceError(
         `Cannot activate: target count mismatch for '${k}': Firestore has ${actualCount}, finalDoc has ${f.targetCounts[k]}`
       );
     }
   }
   if (f.errors !== 0) {
-    throw new CutoverFenceError2("Cannot activate: final manifest errors must be 0");
+    throw new CutoverFenceError("Cannot activate: final manifest errors must be 0");
   }
   for (const [rK, rV] of Object.entries(f.reasons)) {
     if (rV !== 0) {
-      throw new CutoverFenceError2(`Cannot activate: final manifest reason '${rK}' must be 0, got ${rV}`);
+      throw new CutoverFenceError(`Cannot activate: final manifest reason '${rK}' must be 0, got ${rV}`);
     }
   }
   if (f.sourceLogicalDigest !== f.targetLogicalDigest) {
-    throw new CutoverFenceError2("Cannot activate: sourceLogicalDigest must equal targetLogicalDigest");
+    throw new CutoverFenceError("Cannot activate: sourceLogicalDigest must equal targetLogicalDigest");
   }
   if (C(f.targetCounts) !== C(p.expectedTargetCounts)) {
-    throw new CutoverFenceError2("Cannot activate: final targetCounts must match prepared expectedTargetCounts");
+    throw new CutoverFenceError("Cannot activate: final targetCounts must match prepared expectedTargetCounts");
   }
   if (control.state !== "v3_ready") {
-    throw new CutoverFenceError2(`Cannot activate migration: state must be 'v3_ready', got '${control.state}'`);
+    throw new CutoverFenceError(`Cannot activate migration: state must be 'v3_ready', got '${control.state}'`);
   }
   if (control.activeOperations !== 0) {
-    throw new CutoverFenceError2(`Cannot activate migration: activeOperations must be 0, got ${control.activeOperations}`);
+    throw new CutoverFenceError(`Cannot activate migration: activeOperations must be 0, got ${control.activeOperations}`);
   }
   if (control.emptyNamespace !== true && !control.irreversible) {
-    throw new CutoverFenceError2("Cannot activate migration: irreversible latch must be true for non-empty namespace");
+    throw new CutoverFenceError("Cannot activate migration: irreversible latch must be true for non-empty namespace");
   }
   if (control.epoch !== expectedEpoch) {
-    throw new CutoverFenceError2(`Activation epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
+    throw new CutoverFenceError(`Activation epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
   }
   if (control.migrationRunId !== migrationRunId2) {
-    throw new CutoverFenceError2(`Activation runId mismatch: expected ${migrationRunId2}, got ${control.migrationRunId}`);
+    throw new CutoverFenceError(`Activation runId mismatch: expected ${migrationRunId2}, got ${control.migrationRunId}`);
   }
   if (control.migrationManifestDigest !== migrationManifestDigest) {
-    throw new CutoverFenceError2(
+    throw new CutoverFenceError(
       `Activation digest mismatch: expected ${migrationManifestDigest}, got ${control.migrationManifestDigest}`
     );
   }
@@ -6239,124 +6206,32 @@ async function getFirestoreMigrationStatus(context) {
 }
 __name(getFirestoreMigrationStatus, "getFirestoreMigrationStatus");
 export {
-  ACCESS_RETENTION_MS,
-  ALLOWED_STATE_TRANSITIONS,
-  APPROVED_GRAPH_PROJECTOR_ID,
-  APPROVED_GRAPH_PROJECTOR_VERSION,
-  AUTH_CODE_TTL_MS,
-  C,
-  CLASSIFICATION_KEYS,
   CutoverFenceError,
   CutoverRefusedError,
-  D,
-  H,
-  LeaseLostError,
-  MAX_RETIRED_REFRESH_FINGERPRINTS,
-  NONEMPTY_PROJECTOR_KEYS,
-  PHYSICAL_COUNT_KEYS,
-  PROJECTOR_ID,
-  PROJECTOR_VERSION,
-  REASON_KEYS,
-  REFRESH_LEASE_MS,
-  REFRESH_POLL_MS,
-  REFRESH_RETRY_WINDOW_MS,
-  REFRESH_SKEW_MS,
-  REFRESH_WAIT_MS,
-  REQUIRED_CANDIDATE_KEYS,
-  REQUIRED_FINAL_MANIFEST_KEYS,
-  REQUIRED_IDENTITY_KEYS,
-  REQUIRED_OWNERSHIP_MARKER_KEYS,
-  REQUIRED_PREPARED_MANIFEST_KEYS,
-  REQUIRED_RECEIPT_KEYS,
-  RESUME_TOKEN_TTL_MS,
-  RetryableRefreshError,
-  SESSION_RETENTION_MS,
   SUPPORTED_CUTOVER_NAMESPACES,
-  StoreConfigError,
-  StoreLockedError,
-  StoreUnavailableError,
-  TARGET_COUNT_KEYS,
-  accessAad,
   activateFirestoreMigration,
-  activateMigrationInTransaction,
   adoptFirestoreLegacyTokens,
   assertSupportedCutoverNamespace,
   assertValidMigrationContext,
-  canonicalJsonStringify,
   checkMutationGuardInTransaction,
   claimUpstreamGrantInTransaction,
-  codeUnitCompare,
-  compareDescriptors,
-  computeEstimatedFirestoreDocSize,
-  computeKeyedDocId,
-  computeLogicalInventoryDigest,
-  computeManifestDigest,
-  computePlanDigest,
-  computeProtocolDigest,
-  computeReceiptDigest,
-  computeReceiptSetDigest,
-  computeSourceInventoryDigest,
-  computeSourceRecordDigest,
-  computeTargetInventoryDigest,
-  computeTargetRecordDigest,
-  createCodec,
-  decodeRefreshFamiliesRow,
-  decodeSessionsRow,
-  decodeUpstreamRow,
-  deriveKey,
-  deriveStoreKey,
-  encodeAuthCodesRow,
-  encodeOAuthClientsRow,
-  encodeRefreshFamiliesRow,
-  encodeRefreshRow,
-  encodeResumeTokensRow,
-  encodeSessionsRow,
-  encodeUpstreamRow,
-  extractCandidatesAndPlan,
-  familyAad,
-  finalizeMigrationInTransaction,
-  frame,
-  getCutoverDistinctCollectionNames,
   getCutoverFenceDocRef,
   getCutoverFenceRecord,
   getCutoverOperationDocRef,
   getCutoverOperationsColRef,
   getFirestoreMigrationStatus,
-  getSourceCollectionAllowlist,
-  getTargetCollectionAllowlist,
-  getTimestampMs,
   initializeCutoverFence,
   inspectFirestoreLegacyMigration,
   isCutoverFenceError,
   isCutoverRefusedError,
   isLegacyMutationPermittedInTransaction,
   isSupportedCutoverNamespace,
-  isTargetFormatRow,
   markIrreversibleInTransaction,
   markOperationAmbiguous,
-  normalizeValue,
   parseCutoverFenceRecord,
-  prepareMigrationInTransaction,
-  projectSourceLogical,
-  projectTargetLogical,
   readCutoverFenceInTransaction,
   reconcileUpstreamGrantInTransaction,
-  refreshAad,
   releaseLegacyOperation,
-  rfc8785CanonicalJson,
-  safeDocEntry,
-  sanitizeId,
-  sessionAad,
-  startMonotonicTimer,
-  stripUndefined,
   transitionCutoverFenceState,
-  upstreamAad,
-  validateCandidateCommitments,
-  validateCompleteMigrationPlan,
-  validateMigrationIdentityFields,
-  validateMigrationPreflightLimits,
-  validateProspectiveDocBudget,
-  validateReceipt,
-  validateTransactionBudgetPlan,
   withLegacyOperation
 };

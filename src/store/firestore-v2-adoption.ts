@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import {
   type MigrationContext,
   type SupportedNamespace,
@@ -13,9 +14,6 @@ import {
   isCutoverRefusedError,
 } from './errors.js';
 import {
-  computeKeyedDocId,
-  computeSourceRecordDigest,
-  computeSourceInventoryDigest as protoComputeSourceInventoryDigest,
   isSupportedCutoverNamespace,
   getCutoverFenceRecord,
 } from './cutover-protocol.mjs';
@@ -33,6 +31,13 @@ export {
   isCutoverFenceError,
   isCutoverRefusedError,
 };
+
+function H(storeKey: Uint8Array | Buffer, purpose: string, namespace: string, epoch: number, value: unknown): string {
+  const rawKey = typeof storeKey === 'string' ? Buffer.from(storeKey, 'utf8') : storeKey;
+  const K = createHmac('sha256', rawKey).update(Buffer.from('netsapiens-mcp/cutover/v2', 'utf8')).digest();
+  const payload = JSON.stringify(['netsapiens-mcp/cutover', 2, purpose, namespace, epoch, value]);
+  return createHmac('sha256', K).update(Buffer.from(payload, 'utf8')).digest('hex');
+}
 
 export async function computeSourceInventoryDigest(
   db: any,
@@ -65,12 +70,16 @@ export async function computeSourceInventoryDigest(
   for (const colKey of cols) {
     const snap = await db.collection(colNames[colKey]).get();
     for (const doc of snap.docs) {
-      const sourceId = computeKeyedDocId(key, 'source-id', namespace, epoch, colKey, doc.id);
-      const recDigest = computeSourceRecordDigest(key, namespace, epoch, colKey, sourceId, doc.data() || {});
+      const sourceId = H(key, 'source-id', namespace, epoch, [colKey, doc.id]);
+      const recDigest = H(key, 'source-record', namespace, epoch, [colKey, sourceId, doc.data() || {}]);
       descriptors.push({ collection: colKey, id: sourceId, recordDigest: recDigest });
     }
   }
-  return protoComputeSourceInventoryDigest(key, namespace, epoch, descriptors);
+  descriptors.sort((a, b) => {
+    if (a.collection !== b.collection) return a.collection < b.collection ? -1 : 1;
+    return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
+  });
+  return H(key, 'source-inventory', namespace, epoch, descriptors);
 }
 
 export async function ensureFirestoreAdopted(options: {
