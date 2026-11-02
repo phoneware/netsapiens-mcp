@@ -7,6 +7,7 @@ export {
   SUPPORTED_CUTOVER_NAMESPACES,
   isSupportedCutoverNamespace,
   assertSupportedCutoverNamespace,
+  startMonotonicTimer,
   parseCutoverFenceRecord,
   readCutoverFenceInTransaction,
   getCutoverFenceRecord,

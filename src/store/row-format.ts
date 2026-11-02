@@ -55,5 +55,3 @@ export function safeDocEntry(
     id: credentialId ?? (typeof d.id === 'string' && d.id ? d.id : physicalId),
   };
 }
-
-export { startMonotonicTimer } from '../cutover/canonical-core.mjs';

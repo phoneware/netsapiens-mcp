@@ -18,6 +18,11 @@ export class CutoverRefusedError extends Error {
   readonly epoch?: number;
   constructor(message: string, details?: { cutoverState?: string; epoch?: number });
 }
+export interface MonotonicTimer {
+  elapsedMs(): number;
+  assertUnderDeadline(limitMs?: number, label?: string): void;
+}
+export function startMonotonicTimer(): MonotonicTimer;
 
 export function isCutoverFenceError(err: unknown): err is CutoverFenceError;
 export function isCutoverRefusedError(err: unknown): err is CutoverRefusedError;
@@ -158,9 +163,10 @@ export function markOperationAmbiguous(
 export interface GuardMutationOptions {
   db: Firestore | FirestoreLike;
   namespace: SupportedCutoverNamespace;
-  operation?: LegacyOperationContext;
+  operation: LegacyOperationContext;
   completeOperation?: boolean;
   now?: () => number;
+  timer: MonotonicTimer;
 }
 
 export interface GuardMutationResult {
@@ -196,6 +202,7 @@ export interface ClaimUpstreamGrantOptions {
   collection?: string;
   familyCollection?: string;
   refreshCollection?: string;
+  timer: MonotonicTimer;
 }
 
 export function claimUpstreamGrantInTransaction(
@@ -227,6 +234,7 @@ export interface ReconcileUpstreamGrantOptions {
   collection?: string;
   familyCollection?: string;
   refreshCollection?: string;
+  timer: MonotonicTimer;
 }
 
 export function reconcileUpstreamGrantInTransaction(
@@ -246,6 +254,8 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
+  assemblyDigest: string;
+  indexSchemaDigest: string;
 }
 
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext;

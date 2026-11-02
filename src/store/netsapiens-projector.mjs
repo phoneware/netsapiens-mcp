@@ -104,13 +104,14 @@ export function projectSourceLogical(candidate, sources, codec) {
     const seenFp = new Set();
     const retiredFingerprints = [];
     for (const fp of rawRetired) {
-      if (typeof fp === 'string' && fp.length > 0) {
-        if (seenFp.has(fp)) {
-          throw new CutoverFenceError(`Duplicate retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
-        }
-        seenFp.add(fp);
-        retiredFingerprints.push(fp);
+      if (typeof fp !== 'string' || fp.length === 0) {
+        throw new CutoverFenceError(`Malformed retired refresh token fingerprint in family ${sanitizeId(familyId)}`);
       }
+      if (seenFp.has(fp)) {
+        throw new CutoverFenceError(`Duplicate retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
+      }
+      seenFp.add(fp);
+      retiredFingerprints.push(fp);
     }
     retiredFingerprints.sort(codeUnitCompare);
 

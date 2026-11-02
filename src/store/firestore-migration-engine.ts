@@ -8,7 +8,6 @@ import {
   codeUnitCompare,
   compareDescriptors,
   safeDocEntry,
-  startMonotonicTimer,
 } from './row-format.js';
 import {
   encodeSessionsRow,
@@ -31,11 +30,11 @@ import {
   CutoverRefusedError,
 } from './errors.js';
 import {
+  startMonotonicTimer,
   C,
   D,
   H,
   PHYSICAL_COUNT_KEYS,
-  TARGET_COUNT_KEYS,
   CLASSIFICATION_KEYS,
   REASON_KEYS,
   REQUIRED_IDENTITY_KEYS,
@@ -81,62 +80,10 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-}
-
-const PROTECTED_INDEX_SCHEMA_PATH = '/run/cutover/index-schema.json';
-
-interface BootstrapBindings {
   assemblyDigest: string;
   indexSchemaDigest: string;
 }
 
-function resolveBootstrapBindings(context?: {
-  assemblyDigest?: string;
-  indexSchemaDigest?: string;
-  protocolDigest?: string;
-  codeSha?: string;
-}): BootstrapBindings {
-  let indexSchemaDigest: string | undefined = context?.indexSchemaDigest;
-
-  if (existsSync(PROTECTED_INDEX_SCHEMA_PATH)) {
-    try {
-      const content = readFileSync(PROTECTED_INDEX_SCHEMA_PATH, 'utf8');
-      const parsed = JSON.parse(content);
-      if (!parsed || typeof parsed !== 'object') {
-        throw new CutoverFenceError('Malformed index schema in ' + PROTECTED_INDEX_SCHEMA_PATH);
-      }
-      const diskDigest = createHash('sha256').update(content).digest('hex');
-      if (indexSchemaDigest && indexSchemaDigest !== diskDigest) {
-        throw new CutoverFenceError(`Mismatched indexSchemaDigest: context specified ${indexSchemaDigest} but ${PROTECTED_INDEX_SCHEMA_PATH} has ${diskDigest}`);
-      }
-      indexSchemaDigest = diskDigest;
-    } catch (err: any) {
-      if (err instanceof CutoverFenceError) throw err;
-      throw new CutoverFenceError(`Failed to load index schema from ${PROTECTED_INDEX_SCHEMA_PATH}: ${err.message}`);
-    }
-  }
-
-  if (!indexSchemaDigest || !/^[0-9a-f]{64}$/.test(indexSchemaDigest)) {
-    throw new CutoverFenceError('Trusted bootstrap refused: missing or invalid indexSchemaDigest (64-char hex required)');
-  }
-
-  let assemblyDigest: string | undefined = context?.assemblyDigest;
-  if (!assemblyDigest && context?.codeSha && context?.protocolDigest) {
-    assemblyDigest = createHash('sha256')
-      .update(context.codeSha)
-      .update(context.protocolDigest)
-      .digest('hex');
-  }
-
-  if (!assemblyDigest || !/^[0-9a-f]{64}$/.test(assemblyDigest)) {
-    throw new CutoverFenceError('Trusted bootstrap refused: missing or invalid assemblyDigest (64-char hex required)');
-  }
-
-  return {
-    assemblyDigest,
-    indexSchemaDigest,
-  };
-}
 
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext {
   if (!options || typeof options !== 'object') {
@@ -154,6 +101,8 @@ export function assertValidMigrationContext(options: unknown): asserts options i
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
+    'assemblyDigest',
+    'indexSchemaDigest',
   ];
   for (const field of requiredFields) {
     if (opts[field] === undefined || opts[field] === null) {
@@ -190,6 +139,24 @@ export function assertValidMigrationContext(options: unknown): asserts options i
   }
   if (typeof opts.protocolDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.protocolDigest)) {
     throw new CutoverFenceError('MigrationContext protocolDigest must be a 64-character lowercase hex string');
+  }
+  if (typeof opts.assemblyDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.assemblyDigest)) {
+    throw new CutoverFenceError('MigrationContext assemblyDigest must be a 64-character lowercase hex string');
+  }
+  if (typeof opts.indexSchemaDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.indexSchemaDigest)) {
+    throw new CutoverFenceError('MigrationContext indexSchemaDigest must be a 64-character lowercase hex string');
+  }
+  if (existsSync('/run/cutover/index-schema.json')) {
+    try {
+      const content = readFileSync('/run/cutover/index-schema.json', 'utf8');
+      const diskDigest = createHash('sha256').update(content).digest('hex');
+      if (opts.indexSchemaDigest !== diskDigest) {
+        throw new CutoverFenceError(`Mismatched indexSchemaDigest: context specified ${opts.indexSchemaDigest} but /run/cutover/index-schema.json has ${diskDigest}`);
+      }
+    } catch (err: any) {
+      if (err instanceof CutoverFenceError) throw err;
+      throw new CutoverFenceError(`Failed to load index schema from /run/cutover/index-schema.json: ${err.message}`);
+    }
   }
 }
 
@@ -395,16 +362,19 @@ export function extractCandidatesAndPlan(params: {
     const retiredFingerprints = [];
     let retiredConflict = false;
     for (const fp of rawRetired) {
-      if (typeof fp === 'string' && fp.length > 0) {
-        if (seenFp.has(fp) || claimedRetiredFingerprints.has(fp)) {
-          reasons.conflictingClaims++;
-          retiredConflict = true;
-          break;
-        }
-        seenFp.add(fp);
-        claimedRetiredFingerprints.add(fp);
-        retiredFingerprints.push(fp);
+      if (typeof fp !== 'string' || fp.length === 0) {
+        reasons.malformedRecords++;
+        retiredConflict = true;
+        break;
       }
+      if (seenFp.has(fp) || claimedRetiredFingerprints.has(fp)) {
+        reasons.conflictingClaims++;
+        retiredConflict = true;
+        break;
+      }
+      seenFp.add(fp);
+      claimedRetiredFingerprints.add(fp);
+      retiredFingerprints.push(fp);
     }
     if (retiredConflict) continue;
     retiredFingerprints.sort(codeUnitCompare);
@@ -2165,11 +2135,35 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
   }
 
   const { db, namespace, expectedEpoch, migrationRunId, key } = context;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
-
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
+
+    if (control.state === 'v3_active') {
+      if (control.epoch !== expectedEpoch) {
+        throw new CutoverFenceError(`Epoch mismatch for namespace ${namespace}: expected ${expectedEpoch}, got ${control.epoch}`);
+      }
+      if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
+        throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
+      }
+      timer.assertUnderDeadline(16_000, 'Activation check');
+      const res = await activateMigrationInTransaction(transaction, db, {
+        ...context,
+        storeKey: key,
+        migrationManifestDigest: control.migrationManifestDigest,
+        timer,
+      });
+      timer.assertUnderDeadline(16_000, 'Activation check commit');
+      return {
+        status: 'already_active',
+        epoch: control.epoch,
+        migrationRunId: control.migrationRunId || migrationRunId,
+        migrationManifestDigest: control.migrationManifestDigest || '',
+        planDigest: '',
+      };
+    }
+
+    const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
 
     // Read final manifest internally per Section 6
     const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
@@ -2188,30 +2182,6 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
       }
       migrationManifestDigest = D('final', namespace, expectedEpoch, f);
       planDigest = (f.planDigest as string) || '';
-    }
-
-    if (control.state === 'v3_active') {
-      if (control.epoch !== expectedEpoch) {
-        throw new CutoverFenceError(`Epoch mismatch for namespace ${namespace}: expected ${expectedEpoch}, got ${control.epoch}`);
-      }
-      if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
-        throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
-      }
-      timer.assertUnderDeadline(16_000, 'Activation check');
-      const res = await activateMigrationInTransaction(transaction, db, {
-        ...context,
-        storeKey: key,
-        migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
-        timer,
-      });
-      timer.assertUnderDeadline(16_000, 'Activation check commit');
-      return {
-        status: 'already_active',
-        epoch: control.epoch,
-        migrationRunId: control.migrationRunId || migrationRunId,
-        migrationManifestDigest: control.migrationManifestDigest || migrationManifestDigest || '',
-        planDigest,
-      };
     }
 
     if (control.state !== 'v3_ready') {
