@@ -1472,10 +1472,154 @@ export async function adoptFirestoreLegacyTokens(
     report.migrated === 0 &&
     Object.values(targetCounts).every(n => n === 0);
 
-  const targetLogicalDigest = isActuallyEmpty
-    ? H(key, 'logical-inventory', namespace, currentEpoch, [])
-    : sourceLogicalDigest;
+  let targetLogicalDigest: string;
+  if (isActuallyEmpty) {
+    targetLogicalDigest = H(key, 'logical-inventory', namespace, currentEpoch, []);
+  } else if (dryRun) {
+    targetLogicalDigest = sourceLogicalDigest;
+  } else {
+    const targetLogicalDigests: string[] = [];
 
+    // 1. Families
+    for (const famDoc of tFam.docs) {
+      const famData = famDoc.data() || {};
+      const familyId = famDoc.id;
+      const generation = typeof famData.generation === 'number' ? famData.generation : 1;
+      const unsealedFam = famData.sealed ? (codec.unseal(famData.sealed, familyAad({ id: familyId, generation })) as any) : {};
+      const upDoc = tUp.docs.find(d => d.id === familyId);
+      const upData = upDoc ? (upDoc.data() || {}) : {};
+      const grantVersion = typeof upData.grantVersion === 'number' ? upData.grantVersion : 1;
+      const unsealedUp = upData.sealed ? (codec.unseal(upData.sealed, upstreamAad({ id: familyId, grantVersion })) as any) : {};
+      const sessDoc = tSess.docs.find(d => d.id === famData.currentAccessTokenId);
+      const sessData = sessDoc ? (sessDoc.data() || {}) : {};
+      const unsealedSess = sessData.sealed ? (codec.unseal(sessData.sealed, accessAad({ id: famData.currentAccessTokenId, familyId })) as any) : {};
+
+      const prevRefDoc = tRef.docs.find(d => (d.data()?.familyId === familyId && d.data()?.status === 'consumed'));
+      let previousRefresh: { rawRefreshToken: string | null } | null = null;
+      if (prevRefDoc) {
+        const prevRefData = prevRefDoc.data() || {};
+        const unsealedSuccessor = prevRefData.successorSealed
+          ? (codec.unseal(prevRefData.successorSealed, `successor:${prevRefDoc.id}`) as any)
+          : null;
+        previousRefresh = {
+          rawRefreshToken: unsealedSuccessor?.refreshToken ?? null,
+        };
+      }
+
+      const retiredFps = tRet.docs.filter(d => d.data()?.familyId === familyId).map(d => d.id).sort();
+
+      const reconstructedFamProjection = {
+        familyId,
+        generation,
+        status: famData.status === 'revoked' ? 'revoked' : 'active',
+        clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? '') as string,
+        serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null) as string | null,
+        extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}) as Record<string, string>,
+        activeRefreshId: famData.activeRefreshId,
+        currentAccessTokenId: famData.currentAccessTokenId,
+        previousRefresh,
+        retiredRefreshFingerprints: retiredFps,
+        upstream: {
+          grantVersion,
+          nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
+          nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
+          nsUsername: (unsealedUp.nsUsername ?? '') as string,
+          nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
+          nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
+          nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
+        },
+      };
+      targetLogicalDigests.push(
+        H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', normalizeValue(reconstructedFamProjection)]),
+      );
+    }
+
+    // 2. Base format tokens
+    for (const sessDoc of tSess.docs) {
+      const sessData = sessDoc.data() || {};
+      if (!sessData.familyId) {
+        const unsealed = sessData.sealed ? (codec.unseal(sessData.sealed, `session:${sessDoc.id}`) as any) : {};
+        const reconstructedBaseProjection = {
+          accessTokenId: sessDoc.id,
+          clientId: (unsealed.clientId ?? '') as string,
+          serverBaseUrl: (unsealed.serverBaseUrl ?? null) as string | null,
+          extra: (unsealed.extra ?? {}) as Record<string, string>,
+          expiresAt: sessData.expiresAt,
+          nsAccessToken: (unsealed.baseGrant?.nsAccessToken ?? unsealed.nsAccessToken ?? '') as string,
+          nsRefreshToken: (unsealed.baseGrant?.nsRefreshToken ?? unsealed.nsRefreshToken ?? null) as string | null,
+          nsUsername: (unsealed.baseGrant?.nsUsername ?? unsealed.nsUsername ?? '') as string,
+          nsUserRole: (unsealed.baseGrant?.nsUserRole ?? unsealed.nsUserRole ?? null) as string | null,
+          nsApiUrl: (unsealed.baseGrant?.nsApiUrl ?? unsealed.nsApiUrl ?? null) as string | null,
+        };
+        targetLogicalDigests.push(
+          H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', normalizeValue(reconstructedBaseProjection)]),
+        );
+      }
+    }
+
+    // 3. Auth codes
+    for (const codeDoc of tCodes.docs) {
+      const codeData = codeDoc.data() || {};
+      const unsealed = codeData.sealed ? (codec.unseal(codeData.sealed, `code:${codeDoc.id}`) as any) : {};
+      const reconstructedCodeProjection = {
+        codeId: codeDoc.id,
+        clientId: (unsealed.clientId ?? unsealed.pending?.clientId ?? '') as string,
+        codeChallenge: (unsealed.pending?.codeChallenge ?? '') as string,
+        redirectUri: (unsealed.pending?.redirectUri ?? '') as string,
+        createdAt: typeof unsealed.pending?.createdAt === 'number' ? unsealed.pending.createdAt : 0,
+        expiresAt: typeof codeData.expiresAt === 'number' ? codeData.expiresAt : 0,
+        nsAccessToken: (unsealed.nsTokens?.access_token ?? unsealed.nsTokens?.nsAccessToken ?? '') as string,
+        nsRefreshToken: (unsealed.nsTokens?.refresh_token ?? unsealed.nsTokens?.nsRefreshToken ?? null) as string | null,
+        nsUsername: (unsealed.nsTokens?.username ?? unsealed.nsTokens?.nsUsername ?? '') as string,
+      };
+      targetLogicalDigests.push(
+        H(key, 'logical-record', namespace, currentEpoch, ['authCodes', normalizeValue(reconstructedCodeProjection)]),
+      );
+    }
+
+    // 4. Resume tokens
+    for (const resDoc of tRes.docs) {
+      const resData = resDoc.data() || {};
+      const reconstructedResumeProjection = {
+        id: resDoc.id,
+        consumedAt: resData.consumedAt,
+        expiresAt: resData.expiresAt,
+      };
+      targetLogicalDigests.push(
+        H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', normalizeValue(reconstructedResumeProjection)]),
+      );
+    }
+
+    // 5. OAuth clients
+    for (const clientDoc of tClients.docs) {
+      const clientData = clientDoc.data() || {};
+      const reconstructedClientProjection = {
+        clientId: clientDoc.id,
+        client_name: (clientData.client_name ?? clientData.name ?? null) as string | null,
+        redirect_uris: [...(clientData.redirect_uris || [])].sort(),
+        token_endpoint_auth_method: (clientData.token_endpoint_auth_method ?? 'none') as string,
+        grant_types: [...(clientData.grant_types || [])].sort(),
+        response_types: [...(clientData.response_types || [])].sort(),
+        client_uri: (clientData.client_uri ?? null) as string | null,
+        logo_uri: (clientData.logo_uri ?? null) as string | null,
+        scope: (clientData.scope ?? null) as string | null,
+      };
+      targetLogicalDigests.push(
+        H(key, 'logical-record', namespace, currentEpoch, ['clients', normalizeValue(reconstructedClientProjection)]),
+      );
+    }
+
+    targetLogicalDigests.sort();
+    targetLogicalDigest = targetLogicalDigests.length === 0
+      ? H(key, 'logical-inventory', namespace, currentEpoch, [])
+      : H(key, 'logical-inventory', namespace, currentEpoch, targetLogicalDigests);
+
+    if (report.errors === 0 && targetLogicalDigest !== sourceLogicalDigest) {
+      throw new CutoverFenceError(
+        `Target logical digest (${targetLogicalDigest}) does not match source logical digest (${sourceLogicalDigest})`,
+      );
+    }
+  }
   const finalManifest = {
     schemaVersion: 2,
     namespace,
