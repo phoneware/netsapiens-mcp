@@ -273,11 +273,18 @@ export function projectSourceLogical(candidate, sources, codec) {
       serverBaseUrl: (codeDoc.serverBaseUrl ?? null),
       extra: (codeDoc.extra ?? {}),
       used: (() => {
-        const rawUsed = rawPending.used ?? codeDoc.used;
-        if (rawUsed !== undefined && typeof rawUsed !== 'boolean') {
-          throw new CutoverFenceError('authCodes invalid non-boolean used property');
+        const pUsed = rawPending.used;
+        const cUsed = codeDoc.used;
+        if (pUsed !== undefined && typeof pUsed !== 'boolean') {
+          throw new CutoverFenceError('authCodes invalid non-boolean pending.used property');
         }
-        return rawUsed === true;
+        if (cUsed !== undefined && typeof cUsed !== 'boolean') {
+          throw new CutoverFenceError('authCodes invalid non-boolean codeDoc.used property');
+        }
+        if (pUsed !== undefined && cUsed !== undefined && pUsed !== cUsed) {
+          throw new CutoverFenceError('authCodes conflicting used property between pending and codeDoc');
+        }
+        return pUsed ?? cUsed ?? false;
       })(),
       v: 2,
     };
