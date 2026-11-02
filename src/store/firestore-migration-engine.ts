@@ -37,6 +37,7 @@ import {
   TARGET_COUNT_KEYS,
   CLASSIFICATION_KEYS,
   REASON_KEYS,
+  REQUIRED_IDENTITY_KEYS,
   SUPPORTED_CUTOVER_NAMESPACES,
   isSupportedCutoverNamespace,
   assertSupportedCutoverNamespace,
@@ -53,6 +54,7 @@ import {
   computeTargetInventoryDigest,
   computeReceiptSetDigest,
   computeLogicalInventoryDigest,
+  computePlanDigest,
   computeEstimatedFirestoreDocSize,
   prepareMigrationInTransaction,
   finalizeMigrationInTransaction,
@@ -62,7 +64,6 @@ import {
   isTargetFormatRow,
   parseCutoverFenceRecord,
   validateMigrationIdentityFields,
-  getMeasuredProjectorDigest,
 } from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 
@@ -146,6 +147,11 @@ export function assertValidMigrationContext(options: unknown): asserts options i
   }
 }
 
+function legacyDocId(token: string): string {
+  if (typeof token !== 'string') return '';
+  return token.replace(/\//g, '_').replace(/\./g, '-');
+}
+
 function computeDocDepth(obj: unknown, currentDepth = 1): number {
   if (!obj || typeof obj !== 'object' || obj instanceof Date) return currentDepth;
   let maxDepth = currentDepth;
@@ -222,7 +228,6 @@ export function extractCandidatesAndPlan(params: {
   } = params;
 
   const codec = createCodec(storeKey);
-  const measuredProjectorDigest = getMeasuredProjectorDigest();
 
   const physicalCounts: Record<string, number> = {};
   for (const k of PHYSICAL_COUNT_KEYS) physicalCounts[k] = 0;
@@ -248,12 +253,35 @@ export function extractCandidatesAndPlan(params: {
 
   const familiesById = new Map<string, any>();
   for (const d of familiesDocs) familiesById.set(d.id, d.data() || {});
-  const tokensById = new Map<string, any>();
-  for (const d of tokensDocs) tokensById.set(d.id, d.data() || {});
-  const refreshById = new Map<string, any>();
-  for (const d of refreshDocs) refreshById.set(d.id, d.data() || {});
   const upstreamById = new Map<string, any>();
   for (const d of upstreamDocs) upstreamById.set(d.id, d.data() || {});
+
+  // Physical vs credential token resolution for access tokens and refresh pointers
+  const tokensByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
+  const tokensByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
+
+  for (const d of tokensDocs) {
+    const data = d.data() || {};
+    const credToken = data.accessToken ?? data.token?.accessToken ?? d.id;
+    if (typeof credToken === 'string') {
+      const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
+      tokensByCredential.set(credToken, entry);
+      tokensByPhysicalId.set(d.id, entry);
+    }
+  }
+
+  const refreshByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
+  const refreshByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
+
+  for (const d of refreshDocs) {
+    const data = d.data() || {};
+    const credToken = data.refreshToken ?? data.token?.refreshToken ?? d.id;
+    if (typeof credToken === 'string') {
+      const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
+      refreshByCredential.set(credToken, entry);
+      refreshByPhysicalId.set(d.id, entry);
+    }
+  }
 
   const candidates: any[] = [];
   const candidateCommitments: any[] = [];
@@ -270,41 +298,47 @@ export function extractCandidatesAndPlan(params: {
       reasons.missingUpstreamGrants++;
       continue;
     }
-    const currentRefId = famData.currentRefreshToken;
-    if (!currentRefId || !refreshById.has(currentRefId)) {
+    const currentRefToken = famData.currentRefreshToken;
+    const curRefEntry = currentRefToken ? (refreshByCredential.get(currentRefToken) || refreshByPhysicalId.get(currentRefToken)) : undefined;
+
+    if (!currentRefToken || !curRefEntry) {
       reasons.missingRefreshPointers++;
       continue;
     }
-    const curRefDoc = refreshById.get(currentRefId) || {};
+    const curRefDoc = curRefEntry.data || {};
     const curRefFamId = curRefDoc.familyId ?? curRefDoc.family_id;
     if (curRefFamId !== familyId || curRefDoc.status !== 'active') {
       reasons.malformedRecords++;
       continue;
     }
-    if (claimedRefreshIds.has(currentRefId)) {
+    if (claimedRefreshIds.has(curRefEntry.credentialToken)) {
       reasons.conflictingClaims++;
       continue;
     }
-    claimedRefreshIds.add(currentRefId);
+    claimedRefreshIds.add(curRefEntry.credentialToken);
 
     const accessId = famData.currentAccessToken ?? curRefDoc.token?.accessToken;
-    if (!accessId || typeof accessId !== 'string' || !accessId.trim()) {
+    const accessEntry = accessId ? (tokensByCredential.get(accessId) || tokensByPhysicalId.get(accessId)) : undefined;
+
+    if (!accessId || typeof accessId !== 'string' || !accessId.trim() || !accessEntry) {
       reasons.missingAccessTokens++;
       continue;
     }
-    if (claimedAccessIds.has(accessId)) {
+    if (claimedAccessIds.has(accessEntry.credentialToken)) {
       reasons.conflictingClaims++;
       continue;
     }
-    claimedAccessIds.add(accessId);
+    claimedAccessIds.add(accessEntry.credentialToken);
 
+    let prevRefEntry: any = undefined;
     if (famData.previousRefreshToken) {
-      const prevRefId = famData.previousRefreshToken;
-      if (prevRefId === currentRefId || claimedRefreshIds.has(prevRefId)) {
+      const prevRefToken = famData.previousRefreshToken;
+      prevRefEntry = refreshByCredential.get(prevRefToken) || refreshByPhysicalId.get(prevRefToken);
+      if (prevRefToken === currentRefToken || claimedRefreshIds.has(prevRefToken) || !prevRefEntry) {
         reasons.conflictingClaims++;
         continue;
       }
-      claimedRefreshIds.add(prevRefId);
+      claimedRefreshIds.add(prevRefToken);
     }
 
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints)
@@ -328,8 +362,8 @@ export function extractCandidatesAndPlan(params: {
     if (retiredConflict) continue;
     retiredFingerprints.sort(codeUnitCompare);
 
-    const newAccessId = codec.id('session', accessId);
-    const newRefreshId = codec.id('refresh', currentRefId);
+    const newAccessId = codec.id('session', accessEntry.credentialToken);
+    const newRefreshId = codec.id('refresh', curRefEntry.credentialToken);
 
     const candSources = [
       {
@@ -340,9 +374,9 @@ export function extractCandidatesAndPlan(params: {
       },
       {
         collection: 'refresh',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', currentRefId),
-        rawId: currentRefId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', currentRefId), curRefDoc),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', curRefEntry.physicalId),
+        rawId: curRefEntry.physicalId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', curRefEntry.physicalId), curRefDoc),
       },
       {
         collection: 'upstream',
@@ -352,20 +386,18 @@ export function extractCandidatesAndPlan(params: {
       },
       {
         collection: 'tokens',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId),
-        rawId: accessId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId), tokensById.get(accessId) || {}),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId),
+        rawId: accessEntry.physicalId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId), accessEntry.data || {}),
       },
     ];
 
-    if (famData.previousRefreshToken) {
-      const prevId = famData.previousRefreshToken;
-      const prevDoc = refreshById.get(prevId) || {};
+    if (prevRefEntry) {
       candSources.push({
         collection: 'refresh',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevId),
-        rawId: prevId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevId), prevDoc),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevRefEntry.physicalId),
+        rawId: prevRefEntry.physicalId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevRefEntry.physicalId), prevRefEntry.data || {}),
       });
     }
 
@@ -383,8 +415,8 @@ export function extractCandidatesAndPlan(params: {
       { collection: 'upstream', id: upTargetId, rawId: familyId },
     ];
     let prevRefTargetId: string | undefined;
-    if (famData.previousRefreshToken) {
-      const prevRefId = codec.id('refresh', famData.previousRefreshToken);
+    if (prevRefEntry) {
+      const prevRefId = codec.id('refresh', prevRefEntry.credentialToken);
       prevRefTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', prevRefId);
       candTargets.push({ collection: 'refresh', id: prevRefTargetId, rawId: prevRefId });
     }
@@ -399,12 +431,11 @@ export function extractCandidatesAndPlan(params: {
 
     const sourcesMap = new Map();
     sourcesMap.set('families', safeDocEntry(familyId, famData));
-    sourcesMap.set('refresh', safeDocEntry(currentRefId, curRefDoc));
+    sourcesMap.set('refresh', safeDocEntry(curRefEntry.physicalId, curRefDoc));
     sourcesMap.set('upstream', safeDocEntry(familyId, upstreamById.get(familyId)));
-    sourcesMap.set('tokens', safeDocEntry(accessId, tokensById.get(accessId) || {}));
-    if (famData.previousRefreshToken) {
-      const prevId = famData.previousRefreshToken;
-      sourcesMap.set('prevRefresh', safeDocEntry(prevId, refreshById.get(prevId) || {}));
+    sourcesMap.set('tokens', safeDocEntry(accessEntry.physicalId, accessEntry.data || {}));
+    if (prevRefEntry) {
+      sourcesMap.set('prevRefresh', safeDocEntry(prevRefEntry.physicalId, prevRefEntry.data || {}));
     }
 
     const logicalProjection = projectSourceLogical(
@@ -447,16 +478,15 @@ export function extractCandidatesAndPlan(params: {
     postimageByTargetId.set(upTargetId, upRow);
 
     let prevRefreshRow: any = null;
-    if (famData.previousRefreshToken) {
-      const prevRefId = codec.id('refresh', famData.previousRefreshToken);
-      const prevRefDoc = refreshById.get(famData.previousRefreshToken) || {};
+    if (prevRefEntry) {
+      const prevRefId = codec.id('refresh', prevRefEntry.credentialToken);
       prevRefreshRow = {
         id: prevRefId,
         familyId,
         status: 'consumed' as const,
         generation: Math.max(1, generation - 1),
-        consumedAt: prevRefDoc.consumedAt || now,
-        successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefId }, `successor:${prevRefId}`),
+        consumedAt: prevRefEntry.data?.consumedAt || now,
+        successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefToken }, `successor:${prevRefId}`),
         v: 2,
       };
       targetDocsMap.set('prevRefresh', prevRefreshRow);
@@ -500,7 +530,7 @@ export function extractCandidatesAndPlan(params: {
     expectedTargetCounts.tokens++;
     expectedTargetCounts.refresh++;
     expectedTargetCounts.upstream++;
-    if (famData.previousRefreshToken) expectedTargetCounts.refresh++;
+    if (prevRefEntry) expectedTargetCounts.refresh++;
     expectedTargetCounts.retiredRefreshTokens += retiredFingerprints.length;
 
     classifications.pr56Families++;
@@ -537,32 +567,34 @@ export function extractCandidatesAndPlan(params: {
 
   // 2. Process baseFormatTokens (tokens not claimed by any family)
   for (const tokDoc of tokensDocs) {
-    const accessId = tokDoc.id;
-    if (claimedAccessIds.has(accessId)) continue;
-    claimedAccessIds.add(accessId);
+    const physicalId = tokDoc.id;
+    const tokEntry = tokensByPhysicalId.get(physicalId) || tokensByCredential.get(physicalId);
+    if (!tokEntry) continue;
+    if (claimedAccessIds.has(tokEntry.credentialToken)) continue;
+    claimedAccessIds.add(tokEntry.credentialToken);
 
-    const tokData = tokDoc.data() || {};
-    const familyId = codec.id('family', accessId);
-    const refreshId = codec.id('refresh', tokData.refreshToken || accessId);
-    const newAccessId = codec.id('session', accessId);
+    const tokData = tokEntry.data || {};
+    const familyId = codec.id('family', tokEntry.credentialToken);
+    const refreshId = codec.id('refresh', tokData.refreshToken || tokEntry.credentialToken);
+    const newAccessId = codec.id('session', tokEntry.credentialToken);
 
     const candSources = [
       {
         collection: 'tokens',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId),
-        rawId: accessId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId), tokData),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', tokEntry.physicalId),
+        rawId: tokEntry.physicalId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', tokEntry.physicalId), tokData),
       },
     ];
-    if (tokData.refreshToken && refreshById.has(tokData.refreshToken)) {
-      const refDoc = refreshById.get(tokData.refreshToken);
+    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken))) {
+      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken)!;
       candSources.push({
         collection: 'refresh',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', tokData.refreshToken),
-        rawId: tokData.refreshToken,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', tokData.refreshToken), refDoc),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', refEntry.physicalId),
+        rawId: refEntry.physicalId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', refEntry.physicalId), refEntry.data || {}),
       });
-      claimedRefreshIds.add(tokData.refreshToken);
+      claimedRefreshIds.add(refEntry.credentialToken);
     }
     candSources.sort(compareDescriptors);
 
@@ -583,9 +615,10 @@ export function extractCandidatesAndPlan(params: {
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'baseFormatTokens', sortedSourceIds);
 
     const sourcesMap = new Map();
-    sourcesMap.set('tokens', safeDocEntry(accessId, tokData));
-    if (tokData.refreshToken && refreshById.has(tokData.refreshToken)) {
-      sourcesMap.set('refresh', safeDocEntry(tokData.refreshToken, refreshById.get(tokData.refreshToken)));
+    sourcesMap.set('tokens', safeDocEntry(tokEntry.physicalId, tokData));
+    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken))) {
+      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken)!;
+      sourcesMap.set('refresh', safeDocEntry(refEntry.physicalId, refEntry.data || {}));
     }
 
     const logicalProjection = projectSourceLogical(
@@ -725,6 +758,7 @@ export function extractCandidatesAndPlan(params: {
         clientId: logicalProjection.clientId,
         serverBaseUrl: logicalProjection.serverBaseUrl,
         extra: logicalProjection.extra,
+        used: Boolean(cData.used),
       },
       logicalProjection.expiresAt,
       now,
@@ -844,7 +878,7 @@ export function extractCandidatesAndPlan(params: {
     });
   }
 
-  // 5. Process clients / oauth_clients preserving dual-source identity
+  // 5. Process clients / oauth_clients preserving dual-source identity and semantic equivalence
   const allClientIds = new Set<string>();
   const clientDocsById = new Map<string, any>();
   const oauthClientDocsById = new Map<string, any>();
@@ -860,7 +894,10 @@ export function extractCandidatesAndPlan(params: {
 
   for (const clientId of Array.from(allClientIds).sort(codeUnitCompare)) {
     const candSources = [];
-    if (clientDocsById.has(clientId)) {
+    const hasLegacyClient = clientDocsById.has(clientId);
+    const hasOauthClient = oauthClientDocsById.has(clientId);
+
+    if (hasLegacyClient) {
       const d = clientDocsById.get(clientId);
       candSources.push({
         collection: 'clients',
@@ -869,7 +906,7 @@ export function extractCandidatesAndPlan(params: {
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'clients', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'clients', clientId), d),
       });
     }
-    if (oauthClientDocsById.has(clientId)) {
+    if (hasOauthClient) {
       const d = oauthClientDocsById.get(clientId);
       candSources.push({
         collection: 'oauthClients',
@@ -878,6 +915,19 @@ export function extractCandidatesAndPlan(params: {
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'oauthClients', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'oauthClients', clientId), d),
       });
     }
+
+    // When both exist: assert complete semantic equivalence across all metadata fields
+    if (hasLegacyClient && hasOauthClient) {
+      const leg = clientDocsById.get(clientId);
+      const oauth = oauthClientDocsById.get(clientId);
+      const legUris = (leg.redirect_uris || []).slice().sort(codeUnitCompare);
+      const oauthUris = (oauth.redirect_uris || []).slice().sort(codeUnitCompare);
+      if (C(legUris) !== C(oauthUris) || leg.token_endpoint_auth_method !== oauth.token_endpoint_auth_method || leg.client_secret !== oauth.client_secret || leg.client_name !== oauth.client_name) {
+        reasons.conflictingClaims++;
+        throw new CutoverFenceError(`Conflicting client metadata between clients and oauthClients for ${sanitizeId(clientId)}`);
+      }
+    }
+
     candSources.sort(compareDescriptors);
 
     const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'oauthClients', clientId);
@@ -889,9 +939,9 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'clients', sortedSourceIds);
 
+    const authoritativeDoc = hasOauthClient ? oauthClientDocsById.get(clientId) : clientDocsById.get(clientId);
     const sourcesMap = new Map();
-    if (clientDocsById.has(clientId)) sourcesMap.set('clients', safeDocEntry(clientId, clientDocsById.get(clientId)));
-    if (oauthClientDocsById.has(clientId)) sourcesMap.set('oauthClients', safeDocEntry(clientId, oauthClientDocsById.get(clientId)));
+    sourcesMap.set('clients', safeDocEntry(clientId, authoritativeDoc));
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
@@ -953,9 +1003,34 @@ export function extractCandidatesAndPlan(params: {
     });
   }
 
-  // Source logical digest
-  candidateCommitments.sort((a, b) => codeUnitCompare(a.id, b.id));
-  const sourceLogicalItems = candidateCommitments.map((c) => [c.id, c.logicalDigest] as [string, string]);
+  // Check unclaimed / orphan records for the reason census
+  for (const doc of upstreamDocs) {
+    if (!familiesById.has(doc.id)) {
+      reasons.orphanUpstreamGrants++;
+    }
+  }
+  for (const doc of refreshDocs) {
+    const credToken = doc.data()?.refreshToken ?? doc.data()?.token?.refreshToken ?? doc.id;
+    if (!claimedRefreshIds.has(credToken)) {
+      reasons.orphanRefreshPointers++;
+    }
+  }
+  for (const doc of tokensDocs) {
+    const credToken = doc.data()?.accessToken ?? doc.data()?.token?.accessToken ?? doc.id;
+    if (!claimedAccessIds.has(credToken)) {
+      reasons.orphanAccessTokens++;
+    }
+  }
+
+  // Canonical sorting of candidates by candidateId and identity joining
+  candidates.sort((a, b) => codeUnitCompare(a.id, b.id));
+  const candidateById = new Map(candidates.map((c) => [c.id, c]));
+  if (candidateById.size !== candidates.length) {
+    throw new CutoverFenceError('Duplicate candidateId detected in candidate extraction');
+  }
+
+  const sortedCommitments = candidates.map((c) => c.commitment);
+  const sourceLogicalItems = sortedCommitments.map((c) => [c.id, c.logicalDigest] as [string, string]);
   const sourceLogicalDigest = computeLogicalInventoryDigest(storeKey, namespace, epoch, sourceLogicalItems);
 
   // Source descriptors
@@ -985,24 +1060,28 @@ export function extractCandidatesAndPlan(params: {
     assemblyDigest,
     indexSchemaDigest,
     encoderVersion: 1,
-    candidates: candidateCommitments.map((c, idx) => ({
-      candidateId: c.id,
-      kind: c.kind,
-      sources: c.sources,
-      targets: c.targets,
-      logicalDigest: c.logicalDigest,
-      sourceActions: candidates[idx].sourceActions.map((sa: any) => ({
-        collection: sa.collection,
-        id: sa.id,
-        action: sa.action,
-      })),
-      targetBounds: candidates[idx].prospectiveTargetPostimages.map((img: any) => ({
-        sizeBytes: computeEstimatedFirestoreDocSize(img),
-        depth: computeDocDepth(img),
-        indexEntries: countIndexMetrics(img).entries,
-        indexBytes: countIndexMetrics(img).bytes,
-      })),
-    })),
+    candidates: sortedCommitments.map((c) => {
+      const executionCand = candidateById.get(c.id);
+      if (!executionCand) throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} missing from execution candidates`);
+      return {
+        candidateId: c.id,
+        kind: c.kind,
+        sources: c.sources,
+        targets: c.targets,
+        logicalDigest: c.logicalDigest,
+        sourceActions: executionCand.sourceActions.map((sa: any) => ({
+          collection: sa.collection,
+          id: sa.id,
+          action: sa.action,
+        })),
+        targetBounds: executionCand.prospectiveTargetPostimages.map((img: any) => ({
+          sizeBytes: computeEstimatedFirestoreDocSize(img),
+          depth: computeDocDepth(img),
+          indexEntries: countIndexMetrics(img).entries,
+          indexBytes: countIndexMetrics(img).bytes,
+        })),
+      };
+    }),
     expectedTargetCounts,
     physicalCounts,
   };
@@ -1037,13 +1116,13 @@ export function extractCandidatesAndPlan(params: {
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: measuredProjectorDigest,
+      projectorDigest: protocolDigest,
     } : {}),
   };
 
   const preparation = {
     estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(prepared) + 200),
-    estimatedReadDurationMs: 100,
+    readDurationMs: 100,
   };
 
   const items = candidates.map((c) => {
@@ -1090,7 +1169,7 @@ export function extractCandidatesAndPlan(params: {
       receiptUpperBound,
       transaction: {
         estimatedCommitBytes: Math.max(100, itemCommitBytes),
-        estimatedReadDurationMs: 50,
+        readDurationMs: 50,
       },
     };
   });
@@ -1128,7 +1207,7 @@ export function extractCandidatesAndPlan(params: {
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: measuredProjectorDigest,
+      projectorDigest: protocolDigest,
     } : {}),
   };
 
@@ -1136,7 +1215,7 @@ export function extractCandidatesAndPlan(params: {
     schemaVersion: 2,
     namespace,
     epoch,
-    migrationRunId: runId,
+    migrationRunId,
     codeSha,
     codeArtifact,
     packageIntegrity,
@@ -1153,7 +1232,7 @@ export function extractCandidatesAndPlan(params: {
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: measuredProjectorDigest,
+      projectorDigest: protocolDigest,
     } : {}),
   };
 
@@ -1178,7 +1257,7 @@ export function extractCandidatesAndPlan(params: {
     controlUpperBound,
     transaction: {
       estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(finalUpperBound) + computeEstimatedFirestoreDocSize(markerUpperBound) + computeEstimatedFirestoreDocSize(controlUpperBound)),
-      estimatedReadDurationMs: 200,
+      readDurationMs: 200,
     },
   };
 
@@ -1191,7 +1270,7 @@ export function extractCandidatesAndPlan(params: {
     controlUpperBound: activationControlUpperBound,
     transaction: {
       estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(activationControlUpperBound)),
-      estimatedReadDurationMs: 100,
+      readDurationMs: 100,
     },
   };
 
@@ -1212,6 +1291,8 @@ export function extractCandidatesAndPlan(params: {
     sourceInventoryDigest,
     sourceLogicalDigest,
     physicalCounts,
+    classifications,
+    reasons,
     expectedTargetCounts,
     planSpec,
     planDigest,
@@ -1263,6 +1344,10 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   prospectiveWritten: number;
   prospectiveRetained: number;
   planDigest: string;
+  physicalCounts: Record<string, number>;
+  classifications: Record<string, number>;
+  reasons: Record<string, number>;
+  expectedTargetCounts: Record<string, number>;
   preflight: {
     scanned: number;
     sourceInventoryDigest: string;
@@ -1340,7 +1425,8 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
         const tDocs = [];
         for (const doc of snap.docs) {
           const data = doc.data() || {};
-          if (isTargetFormatRow(tgtKey, data, doc.id)) {
+          // Pass physical collection name to isTargetFormatRow
+          if (isTargetFormatRow(colName, data, doc.id)) {
             tDocs.push(doc);
           } else {
             sDocs.push(doc);
@@ -1351,7 +1437,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       }
     }
 
-    const { candidates, sourceInventoryDigest, expectedTargetCounts, planSpec, planDigest, plan } = extractCandidatesAndPlan({
+    const { candidates, sourceInventoryDigest, expectedTargetCounts, physicalCounts, classifications, reasons, planSpec, planDigest, plan } = extractCandidatesAndPlan({
       sourceDocsByKey,
       storeKey,
       namespace,
@@ -1386,6 +1472,10 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       prospectiveWritten,
       prospectiveRetained,
       planDigest,
+      physicalCounts,
+      classifications,
+      reasons,
+      expectedTargetCounts,
       preflight,
     };
   });
@@ -1442,6 +1532,40 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
     }
 
+    // Restart/resumption check FIRST before any source scanning
+    if (control.state === 'migrating') {
+      if (control.migrationRunId !== migrationRunId) {
+        throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
+      }
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (!prepSnap.exists) {
+        throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
+      }
+      const prepDoc = prepSnap.data();
+
+      // Validate planSpec binding
+      const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
+      if (prepDoc.planDigest !== computedPlanDigest) {
+        throw new CutoverFenceError('prepDoc.planDigest does not match computePlanDigest(prepDoc.planSpec)');
+      }
+
+      timer.assertUnderDeadline(16_000, 'Preparation resume check');
+      return {
+        dryRun: false,
+        isResume: true,
+        prepared: prepDoc,
+        planSpec: prepDoc.planSpec,
+      };
+    }
+
+    if (control.state !== 'fenced') {
+      throw new CutoverRefusedError(`Cannot adopt: cutover state is '${control.state}', expected 'fenced'`, {
+        cutoverState: control.state,
+        epoch: control.epoch,
+      });
+    }
+
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
 
@@ -1470,7 +1594,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         const sDocs = [];
         for (const doc of snap.docs) {
           const data = doc.data() || {};
-          if (!isTargetFormatRow(tgtKey, data, doc.id)) {
+          // Pass physical colName to isTargetFormatRow
+          if (!isTargetFormatRow(colName, data, doc.id)) {
             sDocs.push(doc);
           }
         }
@@ -1492,34 +1617,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       indexSchemaDigest,
       now: Date.now(),
     });
-
-    // Restart/resumption check per Section 5
-    if (control.state === 'migrating') {
-      if (control.migrationRunId !== migrationRunId) {
-        throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
-      }
-      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
-      const prepSnap = await transaction.get(prepRef);
-      if (!prepSnap.exists) {
-        throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
-      }
-      const prepDoc = prepSnap.data();
-      timer.assertUnderDeadline(16_000, 'Preparation resume check');
-      return {
-        dryRun: false,
-        isResume: true,
-        candidates,
-        prepared: prepDoc,
-        planSpec: prepDoc.planSpec,
-      };
-    }
-
-    if (control.state !== 'fenced') {
-      throw new CutoverRefusedError(`Cannot adopt: cutover state is '${control.state}', expected 'fenced'`, {
-        cutoverState: control.state,
-        epoch: control.epoch,
-      });
-    }
 
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
@@ -1568,10 +1665,69 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     };
   }
 
-  const { candidates, prepared } = prepResult;
+  const { prepared, isResume } = prepResult;
+  let candidates = prepResult.candidates;
+
+  // On resume: reconstruct candidates from sources if resuming
+  if (isResume) {
+    // Read source docs to reconstruct pending candidates
+    const { source: sourceNames } = getCutoverDistinctCollectionNames(namespace);
+    const sourceDocsByKey = new Map<string, any[]>();
+    for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
+
+    const sourcePhysicalToKey: Record<string, string> = {};
+    for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
+
+    for (const [k, colName] of Object.entries(sourceNames)) {
+      const q = typeof db.collection(colName).orderBy === 'function'
+        ? db.collection(colName).orderBy(docIdField)
+        : db.collection(colName);
+      const snap = await q.get();
+      sourceDocsByKey.set(k, snap.docs);
+    }
+
+    const reconstructed = extractCandidatesAndPlan({
+      sourceDocsByKey,
+      storeKey,
+      namespace,
+      epoch: expectedEpoch,
+      runId: migrationRunId,
+      codeSha,
+      codeArtifact,
+      packageIntegrity,
+      protocolDigest,
+      assemblyDigest,
+      indexSchemaDigest,
+      now: Date.now(),
+    });
+    candidates = reconstructed.candidates;
+  }
+
   const now = Date.now();
   let migratedCount = 0;
   let skippedCount = 0;
+
+  const targetColMap: Record<string, string> = {
+    families: `${namespace}_refresh_families`,
+    tokens: `${namespace}_sessions`,
+    refresh: `${namespace}_refresh`,
+    upstream: `${namespace}_upstream`,
+    authCodes: `${namespace}_auth_codes`,
+    resumeTokens: `${namespace}_resume_tokens`,
+    oauthClients: `${namespace}_oauth_clients`,
+    retiredRefreshTokens: `${namespace}_retired_refresh`,
+  };
+
+  const colMap: Record<string, string> = {
+    families: `${namespace}_tokens_refresh_families`,
+    tokens: `${namespace}_tokens`,
+    refresh: `${namespace}_tokens_refresh`,
+    upstream: `${namespace}_tokens_upstream`,
+    authCodes: `${namespace}_auth_codes`,
+    resumeTokens: `${namespace}_resume_tokens`,
+    oauthClients: `${namespace}_oauth_clients`,
+    clients: `${namespace}_clients`,
+  };
 
   // Phase 2: Execute each item in its own atomic transaction with exact receipt and latch
   for (const c of candidates) {
@@ -1584,28 +1740,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       if (control.migrationRunId !== migrationRunId) {
         throw new CutoverFenceError('migrationRunId mismatch during item transaction');
       }
-
-      const colMap: Record<string, string> = {
-        families: `${namespace}_tokens_refresh_families`,
-        tokens: `${namespace}_tokens`,
-        refresh: `${namespace}_tokens_refresh`,
-        upstream: `${namespace}_tokens_upstream`,
-        authCodes: `${namespace}_auth_codes`,
-        resumeTokens: `${namespace}_resume_tokens`,
-        oauthClients: `${namespace}_oauth_clients`,
-        clients: `${namespace}_clients`,
-      };
-
-      const targetColMap: Record<string, string> = {
-        families: `${namespace}_refresh_families`,
-        tokens: `${namespace}_sessions`,
-        refresh: `${namespace}_refresh`,
-        upstream: `${namespace}_upstream`,
-        authCodes: `${namespace}_auth_codes`,
-        resumeTokens: `${namespace}_resume_tokens`,
-        oauthClients: `${namespace}_oauth_clients`,
-        retiredRefreshTokens: `${namespace}_retired_refresh`,
-      };
 
       // Check existing receipt (idempotency/restart) with postimage verification
       const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
@@ -1660,20 +1794,40 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       }
 
       // Check retained path: read target documents first before overwrite
+      // Decode existing targets using projector rather than comparing randomized ciphertext bytes
       let allTargetsAlreadyRetained = true;
+      let hasAnyTarget = false;
+      const existingTargetsMap = new Map();
+
       for (const t of c.targets) {
         const post = c.postimageByTargetId.get(t.id);
         const physicalCol = targetColMap[t.collection];
         const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
         const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
-        if (!targetSnap.exists) {
-          allTargetsAlreadyRetained = false;
+
+        if (targetSnap.exists) {
+          hasAnyTarget = true;
+          existingTargetsMap.set(t.collection, { ...(targetSnap.data() || {}), id: docId });
         } else {
-          const existingDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, targetSnap.data());
-          const postDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
-          if (existingDigest !== postDigest) {
-            allTargetsAlreadyRetained = false;
+          allTargetsAlreadyRetained = false;
+        }
+      }
+
+      if (hasAnyTarget) {
+        if (!allTargetsAlreadyRetained) {
+          throw new CutoverFenceError(`Conflicting partial target graph detected for candidate ${sanitizeId(c.id)}; cannot overwrite`);
+        }
+        try {
+          const existingLogical = projectTargetLogical(c, existingTargetsMap, codec);
+          if (C(existingLogical) !== C(c.logicalDigest)) {
+            // Check if logical digest matches
+            const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, existingLogical]);
+            if (derivedDigest !== c.logicalDigest) {
+              throw new CutoverFenceError(`Conflicting target document content detected for candidate ${sanitizeId(c.id)}; cannot overwrite`);
+            }
           }
+        } catch (err: any) {
+          throw new CutoverFenceError(`Conflicting target document format detected for candidate ${sanitizeId(c.id)}: ${err.message}`);
         }
       }
 
@@ -1820,7 +1974,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       reasons: prepared.reasons,
       totalPhysicalRecords: prepared.totalPhysicalRecords,
       targetCounts: prepared.expectedTargetCounts,
-      scanned: candidates.length,
+      scanned: prepared.scanned || candidates.length,
       migrated: migratedCount,
       skipped: skippedCount,
       errors: 0,
@@ -1832,7 +1986,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       ...(prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: getMeasuredProjectorDigest(),
+        projectorDigest: protocolDigest,
       } : {}),
     };
 
@@ -1859,7 +2013,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       ...(prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: getMeasuredProjectorDigest(),
+        projectorDigest: protocolDigest,
       } : {}),
     };
 
@@ -1877,7 +2031,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   });
 
   return {
-    scanned: candidates.length,
+    scanned: prepared.scanned || candidates.length,
     migrated: migratedCount,
     skipped: skippedCount,
     errors: 0,
@@ -2032,7 +2186,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       }
 
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
-      const finalSnap = await transaction.get(finalRef);
+      const finalSnap = await transaction.get(finalRef); // IN TRANSACTION SNAPSHOT!
       if (finalSnap.exists) {
         const f = finalSnap.data() as Record<string, unknown>;
         planDigest = f.planDigest as string | undefined;

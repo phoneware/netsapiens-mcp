@@ -191,10 +191,11 @@ export function encodeAuthCodesRow(
     clientId: string;
     serverBaseUrl?: string | null;
     extra?: Record<string, unknown>;
+    used?: boolean;
   },
   expiresAt: number,
   now: number,
-): AuthCodeRow & { v: 2; ttlAt: Date } {
+): AuthCodeRow & { v: 2; ttlAt: Date; used: boolean } {
   const id = codec.id('code', code);
   const sealed = codec.seal(data, `code:${id}`);
   return {
@@ -202,6 +203,7 @@ export function encodeAuthCodesRow(
     expiresAt,
     ttlAt: new Date(expiresAt),
     sealed,
+    used: data.used ?? false,
     v: 2,
   };
 }
