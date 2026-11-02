@@ -374,7 +374,17 @@ export function extractCandidatesAndPlan(params: {
 
   for (const d of refreshDocs) {
     const data = d.data() || {};
-    const credToken = data.refreshToken ?? data.token?.refreshToken;
+    let credToken = data.refreshToken ?? data.token?.refreshToken;
+    if (!credToken && data.accessToken) {
+      const tok = tokensByCredential.get(data.accessToken);
+      const rawRef = tok?.data?.refreshToken;
+      if (rawRef && legacyDocId(rawRef) === d.id) {
+        credToken = rawRef;
+      } else {
+        reasons.orphanRefreshPointers++;
+        continue;
+      }
+    }
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
       if (d.id !== expId) {
@@ -724,17 +734,28 @@ export function extractCandidatesAndPlan(params: {
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', tokEntry.physicalId), tokData),
       },
     ];
-    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken) || refreshByPhysicalId.has(legacyDocId(tokData.refreshToken)))) {
-      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken) || refreshByPhysicalId.get(legacyDocId(tokData.refreshToken))!;
-      const expRefId = legacyDocId(refEntry.credentialToken);
-      if (refEntry.physicalId === expRefId || refEntry.physicalId === refEntry.credentialToken) {
+    let baseRefEntry: any = undefined;
+    if (tokData.refreshToken) {
+      const rawRef = tokData.refreshToken;
+      baseRefEntry = refreshByCredential.get(rawRef);
+      if (!baseRefEntry) {
+        const byPhys = refreshByPhysicalId.get(legacyDocId(rawRef));
+        if (byPhys && byPhys.credentialToken === rawRef) {
+          baseRefEntry = byPhys;
+        }
+      }
+      if (baseRefEntry) {
+        if (baseRefEntry.credentialToken !== rawRef) {
+          reasons.conflictingClaims++;
+          continue;
+        }
         candSources.push({
           collection: 'refresh',
-          id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', refEntry.physicalId),
-          rawId: refEntry.physicalId,
-          recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', refEntry.physicalId), refEntry.data || {}),
+          id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', baseRefEntry.physicalId),
+          rawId: baseRefEntry.physicalId,
+          recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', baseRefEntry.physicalId), baseRefEntry.data || {}),
         });
-        claimedRefreshIds.add(refEntry.credentialToken);
+        claimedRefreshIds.add(baseRefEntry.credentialToken);
       }
     }
     candSources.sort(compareDescriptors);
@@ -757,9 +778,8 @@ export function extractCandidatesAndPlan(params: {
 
     const sourcesMap = new Map();
     sourcesMap.set('tokens', safeDocEntry(tokEntry.physicalId, tokData, tokEntry.credentialToken));
-    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken) || refreshByPhysicalId.has(legacyDocId(tokData.refreshToken)))) {
-      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken) || refreshByPhysicalId.get(legacyDocId(tokData.refreshToken))!;
-      sourcesMap.set('refresh', safeDocEntry(refEntry.physicalId, refEntry.data || {}, refEntry.credentialToken));
+    if (baseRefEntry) {
+      sourcesMap.set('refresh', safeDocEntry(baseRefEntry.physicalId, baseRefEntry.data || {}, baseRefEntry.credentialToken));
     }
 
     const logicalProjection = projectSourceLogical(
@@ -1807,9 +1827,9 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       };
     }
 
-    if (plan.prepared.reasons && (plan.prepared.reasons.malformedRecords > 0 || plan.prepared.reasons.conflictingClaims > 0)) {
+    if (totalErrors > 0) {
       throw new CutoverFenceError(
-        `Cannot prepare migration for namespace ${namespace}: detected ${plan.prepared.reasons.malformedRecords} malformed record(s) and ${plan.prepared.reasons.conflictingClaims} conflicting claim(s)`,
+        `Cannot prepare migration for namespace ${namespace}: detected ${totalErrors} error(s) in source inventory (${JSON.stringify(plan.prepared.reasons)})`,
       );
     }
 
