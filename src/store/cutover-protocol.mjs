@@ -5738,6 +5738,7 @@ async function adoptFirestoreLegacyTokens2(options) {
   const now = Date.now();
   for (const c of candidates) {
     await db.runTransaction(async (transaction) => {
+      const itemStart = Date.now();
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== "migrating") {
         throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
@@ -5749,6 +5750,9 @@ async function adoptFirestoreLegacyTokens2(options) {
       const receiptSnap = await transaction.get(receiptRef);
       if (receiptSnap.exists) {
         return;
+      }
+      if (Date.now() - itemStart > 16e3) {
+        throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
       }
       if (control.emptyNamespace !== true) {
         await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
@@ -5827,6 +5831,7 @@ async function adoptFirestoreLegacyTokens2(options) {
     });
   }
   await db.runTransaction(async (transaction) => {
+    const finalStart = Date.now();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.state !== "migrating") {
       throw new CutoverFenceError(`Cannot finalize: state must be 'migrating', got '${control.state}'`);
@@ -5921,6 +5926,9 @@ async function adoptFirestoreLegacyTokens2(options) {
         projectorDigest: protocolDigest
       } : {}
     };
+    if (Date.now() - finalStart > 16e3) {
+      throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
+    }
     await finalizeMigrationInTransaction(transaction, db, {
       namespace,
       finalDoc,
@@ -5960,6 +5968,7 @@ async function activateFirestoreMigration2(context) {
   }
   const { db, namespace, expectedEpoch, migrationRunId, key } = context;
   return await db.runTransaction(async (transaction) => {
+    const actStart = Date.now();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
     const finalSnap = await transaction.get(finalRef);
@@ -5987,6 +5996,9 @@ async function activateFirestoreMigration2(context) {
     }
     if (control.state !== "v3_ready") {
       throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
+    }
+    if (Date.now() - actStart > 16e3) {
+      throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
     }
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
