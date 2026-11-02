@@ -3,9 +3,8 @@ import { createCodec } from './codec.js';
 import { accessAad, familyAad, upstreamAad, codeUnitCompare } from './row-format.js';
 import { CutoverFenceError } from './errors.js';
 
-export function sanitizeId(id) {
-  if (typeof id !== 'string' || !id) return '[sanitized]';
-  return createHash('sha256').update(id).digest('hex').slice(0, 12);
+export function sanitizeId(_id) {
+  return '[redacted]';
 }
 
 export { createCodec, accessAad, familyAad, upstreamAad, codeUnitCompare, CutoverFenceError };
@@ -68,7 +67,7 @@ export function projectSourceLogical(candidate, sources, codec) {
 
     const tokDoc = sources.get('tokens');
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
-    const accessId = (tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken);
+    const accessId = (tokDoc.accessToken ?? famData.currentAccessToken ?? tokDoc.id);
     if (!accessId || typeof accessId !== 'string') throw new CutoverFenceError('pr56Families missing accessId');
 
     const newAccessId = codec.id('session', accessId);
@@ -167,8 +166,8 @@ export function projectSourceLogical(candidate, sources, codec) {
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const refDoc = sources.get('refresh');
 
-    const accessToken = tokDoc.id;
-    const refreshToken = (tokDoc.refreshToken ?? refDoc?.id ?? accessToken);
+    const accessToken = tokDoc.accessToken ?? tokDoc.id;
+    const refreshToken = (tokDoc.refreshToken ?? refDoc?.refreshToken ?? refDoc?.id ?? accessToken);
     const familyId = codec.id('family', accessToken);
     const accessId = codec.id('session', accessToken);
     const refreshId = codec.id('refresh', refreshToken);
@@ -221,7 +220,7 @@ export function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === 'authCodes') {
     const codeDoc = sources.get('authCodes');
     if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes source`);
-    const rawCode = codeDoc.id;
+    const rawCode = codeDoc.code ?? codeDoc.rawCode ?? codeDoc.id;
     const hmacId = codec.id('code', rawCode);
 
     const rawPending = (codeDoc.pending && typeof codeDoc.pending === 'object')
@@ -293,7 +292,7 @@ export function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === 'resumeTokens') {
     const resDoc = sources.get('resumeTokens');
     if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens source`);
-    const resumeId = resDoc.id;
+    const resumeId = resDoc.token ?? resDoc.resumeToken ?? resDoc.id;
     if (!resumeId || typeof resumeId !== 'string') throw new CutoverFenceError('resumeTokens missing required id');
     if (typeof resDoc.consumedAt !== 'number') throw new CutoverFenceError('resumeTokens missing required consumedAt');
     if (typeof resDoc.expiresAt !== 'number' || resDoc.expiresAt <= 0) throw new CutoverFenceError('resumeTokens missing required positive expiresAt');

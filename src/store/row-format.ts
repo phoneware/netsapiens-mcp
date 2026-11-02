@@ -43,21 +43,17 @@ export function compareDescriptors(
   return codeUnitCompare(a.id, b.id);
 }
 
-export function safeDocEntry(id: string, data: Record<string, unknown> | null | undefined): Record<string, unknown> {
-  return { ...(data || {}), id };
-}
-
-export function startMonotonicTimer() {
-  const start = performance.now();
+export function safeDocEntry(
+  physicalId: string,
+  data: Record<string, unknown> | null | undefined,
+  credentialId?: string,
+): Record<string, unknown> {
+  const d = data || {};
   return {
-    elapsedMs() {
-      return performance.now() - start;
-    },
-    assertUnderDeadline(limitMs = 16_000, label = 'Transaction attempt') {
-      const elapsed = performance.now() - start;
-      if (elapsed > limitMs) {
-        throw new CutoverFenceError(`${label} exceeded ${limitMs} ms lock deadline (${Math.round(elapsed)} ms)`);
-      }
-    },
+    ...d,
+    physicalId,
+    id: credentialId ?? (typeof d.id === 'string' && d.id ? d.id : physicalId),
   };
 }
+
+export { startMonotonicTimer } from '../cutover/canonical-core.mjs';

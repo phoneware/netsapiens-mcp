@@ -1,11 +1,5 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
 
 // src/store/errors.ts
 var StoreConfigError = class extends Error {
@@ -176,31 +170,20 @@ function compareDescriptors(a, b) {
   return codeUnitCompare(a.id, b.id);
 }
 __name(compareDescriptors, "compareDescriptors");
-function safeDocEntry(id, data) {
-  return { ...data || {}, id };
-}
-__name(safeDocEntry, "safeDocEntry");
-function startMonotonicTimer() {
-  const start = performance.now();
+function safeDocEntry(physicalId, data, credentialId) {
+  const d = data || {};
   return {
-    elapsedMs() {
-      return performance.now() - start;
-    },
-    assertUnderDeadline(limitMs = 16e3, label = "Transaction attempt") {
-      const elapsed = performance.now() - start;
-      if (elapsed > limitMs) {
-        throw new CutoverFenceError(`${label} exceeded ${limitMs} ms lock deadline (${Math.round(elapsed)} ms)`);
-      }
-    }
+    ...d,
+    physicalId,
+    id: credentialId ?? (typeof d.id === "string" && d.id ? d.id : physicalId)
   };
 }
-__name(startMonotonicTimer, "startMonotonicTimer");
+__name(safeDocEntry, "safeDocEntry");
 
 // src/store/netsapiens-projector.mjs
 import { createHash } from "node:crypto";
-function sanitizeId(id) {
-  if (typeof id !== "string" || !id) return "[sanitized]";
-  return createHash("sha256").update(id).digest("hex").slice(0, 12);
+function sanitizeId(_id) {
+  return "[redacted]";
 }
 __name(sanitizeId, "sanitizeId");
 var PROJECTOR_ID = "netsapiens-mcp/v2-v3-projector";
@@ -250,7 +233,7 @@ function projectSourceLogical(candidate, sources, codec2) {
     const grant = upDoc.grant && typeof upDoc.grant === "object" ? upDoc.grant : upDoc;
     const tokDoc = sources.get("tokens");
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
-    const accessId = tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken;
+    const accessId = tokDoc.accessToken ?? famData.currentAccessToken ?? tokDoc.id;
     if (!accessId || typeof accessId !== "string") throw new CutoverFenceError("pr56Families missing accessId");
     const newAccessId = codec2.id("session", accessId);
     const newRefreshId = codec2.id("refresh", currentRefId);
@@ -335,8 +318,8 @@ function projectSourceLogical(candidate, sources, codec2) {
     const tokDoc = sources.get("tokens");
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const refDoc = sources.get("refresh");
-    const accessToken = tokDoc.id;
-    const refreshToken = tokDoc.refreshToken ?? refDoc?.id ?? accessToken;
+    const accessToken = tokDoc.accessToken ?? tokDoc.id;
+    const refreshToken = tokDoc.refreshToken ?? refDoc?.refreshToken ?? refDoc?.id ?? accessToken;
     const familyId = codec2.id("family", accessToken);
     const accessId = codec2.id("session", accessToken);
     const refreshId = codec2.id("refresh", refreshToken);
@@ -383,7 +366,7 @@ function projectSourceLogical(candidate, sources, codec2) {
   if (candidate.kind === "authCodes") {
     const codeDoc = sources.get("authCodes");
     if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes source`);
-    const rawCode = codeDoc.id;
+    const rawCode = codeDoc.code ?? codeDoc.rawCode ?? codeDoc.id;
     const hmacId = codec2.id("code", rawCode);
     const rawPending = codeDoc.pending && typeof codeDoc.pending === "object" ? codeDoc.pending : codeDoc;
     const rawNsTokens = codeDoc.nsTokens && typeof codeDoc.nsTokens === "object" ? codeDoc.nsTokens : void 0;
@@ -447,7 +430,7 @@ function projectSourceLogical(candidate, sources, codec2) {
   if (candidate.kind === "resumeTokens") {
     const resDoc = sources.get("resumeTokens");
     if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens source`);
-    const resumeId = resDoc.id;
+    const resumeId = resDoc.token ?? resDoc.resumeToken ?? resDoc.id;
     if (!resumeId || typeof resumeId !== "string") throw new CutoverFenceError("resumeTokens missing required id");
     if (typeof resDoc.consumedAt !== "number") throw new CutoverFenceError("resumeTokens missing required consumedAt");
     if (typeof resDoc.expiresAt !== "number" || resDoc.expiresAt <= 0) throw new CutoverFenceError("resumeTokens missing required positive expiresAt");
@@ -1369,7 +1352,7 @@ var FIRESTORE_MAX_NESTING_DEPTH = 20;
 var FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
 var FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16e3;
 var TIMER_BRAND = /* @__PURE__ */ Symbol.for("phoneware.cutover.monotonicTimer");
-function startMonotonicTimer2() {
+function startMonotonicTimer() {
   const start = process.hrtime.bigint();
   return {
     [TIMER_BRAND]: true,
@@ -1386,7 +1369,7 @@ function startMonotonicTimer2() {
     }
   };
 }
-__name(startMonotonicTimer2, "startMonotonicTimer");
+__name(startMonotonicTimer, "startMonotonicTimer");
 function isMonotonicTimer(t) {
   return Boolean(t && typeof t === "object" && t[TIMER_BRAND] === true && typeof t.assertUnderDeadline === "function");
 }
@@ -2069,7 +2052,7 @@ async function initializeCutoverFence(db, namespace, options = {}) {
   }
   const markerRef = db.collection(`${namespace}_meta`).doc("v2_adopted");
   return await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer2();
+    const timer = startMonotonicTimer();
     const markerSnap = await transaction.get(markerRef);
     if (markerSnap.exists) {
       throw new CutoverFenceError(
@@ -2114,7 +2097,7 @@ async function transitionCutoverFenceState(db, namespace, params) {
     );
   }
   return await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer2();
+    const timer = startMonotonicTimer();
     const snap = await transaction.get(docRef);
     if (!snap.exists) {
       throw new CutoverFenceError(
@@ -2276,7 +2259,7 @@ async function withLegacyOperation(options, fn) {
   const opRef = getCutoverOperationDocRef(options.db, options.namespace, opId);
   const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
   const opRecord = await options.db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer2();
+    const timer = startMonotonicTimer();
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError(
@@ -2396,7 +2379,7 @@ async function withLegacyOperation(options, fn) {
     if (ctx.isAmbiguousRemoteOutcome()) {
       try {
         await options.db.runTransaction(async (transaction) => {
-          const timer = startMonotonicTimer2();
+          const timer = startMonotonicTimer();
           timer.assertUnderDeadline("withLegacyOperation ambiguity preWrite");
           const currentTime = now();
           transaction.set(
@@ -2438,7 +2421,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer2();
+    const timer = startMonotonicTimer();
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
     if (!controlSnap.exists) {
@@ -2503,7 +2486,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer2();
+    const timer = startMonotonicTimer();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
       throw new CutoverFenceError("Operation record missing on mark ambiguous");
@@ -2645,7 +2628,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
 }
 __name(checkMutationGuardInTransaction, "checkMutationGuardInTransaction");
 async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation) {
-  const timer = startMonotonicTimer2();
+  const timer = startMonotonicTimer();
   assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -4440,20 +4423,39 @@ __name(encodeOAuthClientsRow, "encodeOAuthClientsRow");
 
 // src/store/firestore-migration-engine.ts
 import { createHash as createHash3 } from "node:crypto";
-var APPROVED_ASSEMBLY_DIGEST = "a".repeat(64);
-var APPROVED_INDEX_SCHEMA_DIGEST = "b".repeat(64);
-function resolveBootstrapBindings() {
-  let indexSchemaDigest = APPROVED_INDEX_SCHEMA_DIGEST;
-  try {
-    const fs = __require("node:fs");
-    if (fs.existsSync("/run/cutover/index-manifest.json")) {
-      const content = fs.readFileSync("/run/cutover/index-manifest.json", "utf8");
-      indexSchemaDigest = createHash3("sha256").update(content).digest("hex");
+import { readFileSync, existsSync } from "node:fs";
+var PROTECTED_INDEX_SCHEMA_PATH = "/run/cutover/index-schema.json";
+function resolveBootstrapBindings(context) {
+  let indexSchemaDigest = context?.indexSchemaDigest;
+  if (existsSync(PROTECTED_INDEX_SCHEMA_PATH)) {
+    try {
+      const content = readFileSync(PROTECTED_INDEX_SCHEMA_PATH, "utf8");
+      const parsed = JSON.parse(content);
+      if (!parsed || typeof parsed !== "object") {
+        throw new CutoverFenceError("Malformed index schema in " + PROTECTED_INDEX_SCHEMA_PATH);
+      }
+      const diskDigest = createHash3("sha256").update(content).digest("hex");
+      if (indexSchemaDigest && indexSchemaDigest !== diskDigest) {
+        throw new CutoverFenceError(`Mismatched indexSchemaDigest: context specified ${indexSchemaDigest} but ${PROTECTED_INDEX_SCHEMA_PATH} has ${diskDigest}`);
+      }
+      indexSchemaDigest = diskDigest;
+    } catch (err) {
+      if (err instanceof CutoverFenceError) throw err;
+      throw new CutoverFenceError(`Failed to load index schema from ${PROTECTED_INDEX_SCHEMA_PATH}: ${err.message}`);
     }
-  } catch {
+  }
+  if (!indexSchemaDigest || !/^[0-9a-f]{64}$/.test(indexSchemaDigest)) {
+    throw new CutoverFenceError("Trusted bootstrap refused: missing or invalid indexSchemaDigest (64-char hex required)");
+  }
+  let assemblyDigest = context?.assemblyDigest;
+  if (!assemblyDigest && context?.codeSha && context?.protocolDigest) {
+    assemblyDigest = createHash3("sha256").update(context.codeSha).update(context.protocolDigest).digest("hex");
+  }
+  if (!assemblyDigest || !/^[0-9a-f]{64}$/.test(assemblyDigest)) {
+    throw new CutoverFenceError("Trusted bootstrap refused: missing or invalid assemblyDigest (64-char hex required)");
   }
   return {
-    assemblyDigest: APPROVED_ASSEMBLY_DIGEST,
+    assemblyDigest,
     indexSchemaDigest
   };
 }
@@ -4515,7 +4517,7 @@ function assertValidMigrationContext(options) {
 __name(assertValidMigrationContext, "assertValidMigrationContext");
 function legacyDocId(token) {
   if (typeof token !== "string") return "";
-  return token.replace(/\//g, "_").replace(/\./g, "-");
+  return token.replace(/\//g, "_").replace(/\./g, "_");
 }
 __name(legacyDocId, "legacyDocId");
 function computeDocDepth(obj, currentDepth = 1) {
@@ -4613,6 +4615,7 @@ function extractCandidatesAndPlan(params) {
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       tokensByCredential.set(credToken, entry);
       tokensByPhysicalId.set(d.id, entry);
+      tokensByPhysicalId.set(legacyDocId(credToken), entry);
     }
   }
   const refreshByCredential = /* @__PURE__ */ new Map();
@@ -4624,6 +4627,7 @@ function extractCandidatesAndPlan(params) {
       const entry = { doc: d, data, physicalId: d.id, credentialToken: credToken };
       refreshByCredential.set(credToken, entry);
       refreshByPhysicalId.set(d.id, entry);
+      refreshByPhysicalId.set(legacyDocId(credToken), entry);
     }
   }
   const candidates = [];
@@ -4639,7 +4643,7 @@ function extractCandidatesAndPlan(params) {
       continue;
     }
     const currentRefToken = famData.currentRefreshToken;
-    const curRefEntry = currentRefToken ? refreshByCredential.get(currentRefToken) || refreshByPhysicalId.get(currentRefToken) : void 0;
+    const curRefEntry = currentRefToken ? refreshByCredential.get(currentRefToken) || refreshByPhysicalId.get(currentRefToken) || refreshByPhysicalId.get(legacyDocId(currentRefToken)) : void 0;
     if (!currentRefToken || !curRefEntry) {
       reasons.missingRefreshPointers++;
       continue;
@@ -4655,8 +4659,8 @@ function extractCandidatesAndPlan(params) {
       continue;
     }
     claimedRefreshIds.add(curRefEntry.credentialToken);
-    const accessId = famData.currentAccessToken ?? curRefDoc.token?.accessToken;
-    const accessEntry = accessId ? tokensByCredential.get(accessId) || tokensByPhysicalId.get(accessId) : void 0;
+    const accessId = famData.currentAccessToken ?? curRefDoc.accessToken ?? curRefDoc.token?.accessToken;
+    const accessEntry = accessId ? tokensByCredential.get(accessId) || tokensByPhysicalId.get(accessId) || tokensByPhysicalId.get(legacyDocId(accessId)) : void 0;
     if (!accessId || typeof accessId !== "string" || !accessId.trim() || !accessEntry) {
       reasons.missingAccessTokens++;
       continue;
@@ -4755,12 +4759,12 @@ function extractCandidatesAndPlan(params) {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, "pr56Families", sortedSourceIds);
     const sourcesMap = /* @__PURE__ */ new Map();
-    sourcesMap.set("families", safeDocEntry(familyId, famData));
-    sourcesMap.set("refresh", safeDocEntry(curRefEntry.physicalId, curRefDoc));
-    sourcesMap.set("upstream", safeDocEntry(familyId, upstreamById.get(familyId)));
-    sourcesMap.set("tokens", safeDocEntry(accessEntry.physicalId, accessEntry.data || {}));
+    sourcesMap.set("families", safeDocEntry(familyId, famData, familyId));
+    sourcesMap.set("refresh", safeDocEntry(curRefEntry.physicalId, curRefDoc, curRefEntry.credentialToken));
+    sourcesMap.set("upstream", safeDocEntry(familyId, upstreamById.get(familyId), familyId));
+    sourcesMap.set("tokens", safeDocEntry(accessEntry.physicalId, accessEntry.data || {}, accessEntry.credentialToken));
     if (prevRefEntry) {
-      sourcesMap.set("prevRefresh", safeDocEntry(prevRefEntry.physicalId, prevRefEntry.data || {}));
+      sourcesMap.set("prevRefresh", safeDocEntry(prevRefEntry.physicalId, prevRefEntry.data || {}, prevRefEntry.credentialToken));
     }
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: "pr56Families", sources: candSources, targets: candTargets, logicalDigest: "" },
@@ -4917,10 +4921,10 @@ function extractCandidatesAndPlan(params) {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, "baseFormatTokens", sortedSourceIds);
     const sourcesMap = /* @__PURE__ */ new Map();
-    sourcesMap.set("tokens", safeDocEntry(tokEntry.physicalId, tokData));
-    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken))) {
-      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken);
-      sourcesMap.set("refresh", safeDocEntry(refEntry.physicalId, refEntry.data || {}));
+    sourcesMap.set("tokens", safeDocEntry(tokEntry.physicalId, tokData, tokEntry.credentialToken));
+    if (tokData.refreshToken && (refreshByCredential.has(tokData.refreshToken) || refreshByPhysicalId.has(tokData.refreshToken) || refreshByPhysicalId.has(legacyDocId(tokData.refreshToken)))) {
+      const refEntry = refreshByCredential.get(tokData.refreshToken) || refreshByPhysicalId.get(tokData.refreshToken) || refreshByPhysicalId.get(legacyDocId(tokData.refreshToken));
+      sourcesMap.set("refresh", safeDocEntry(refEntry.physicalId, refEntry.data || {}, refEntry.credentialToken));
     }
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: "baseFormatTokens", sources: candSources, targets: candTargets, logicalDigest: "" },
@@ -5185,7 +5189,12 @@ function extractCandidatesAndPlan(params) {
       const oauth = oauthClientDocsById.get(clientId);
       const legUris = (leg.redirect_uris || []).slice().sort(codeUnitCompare);
       const oauthUris = (oauth.redirect_uris || []).slice().sort(codeUnitCompare);
-      if (C(legUris) !== C(oauthUris) || leg.token_endpoint_auth_method !== oauth.token_endpoint_auth_method || leg.client_secret !== oauth.client_secret || leg.client_name !== oauth.client_name) {
+      const legGrants = (leg.grant_types || []).slice().sort(codeUnitCompare);
+      const oauthGrants = (oauth.grant_types || []).slice().sort(codeUnitCompare);
+      const legResp = (leg.response_types || []).slice().sort(codeUnitCompare);
+      const oauthResp = (oauth.response_types || []).slice().sort(codeUnitCompare);
+      const conflicts = C(legUris) !== C(oauthUris) || C(legGrants) !== C(oauthGrants) || C(legResp) !== C(oauthResp) || (leg.token_endpoint_auth_method ?? (leg.client_secret ? "client_secret_basic" : "none")) !== (oauth.token_endpoint_auth_method ?? (oauth.client_secret ? "client_secret_basic" : "none")) || (leg.client_secret ?? null) !== (oauth.client_secret ?? null) || (leg.client_name ?? null) !== (oauth.client_name ?? null) || (leg.client_uri ?? null) !== (oauth.client_uri ?? null) || (leg.logo_uri ?? null) !== (oauth.logo_uri ?? null) || (leg.scope ?? null) !== (oauth.scope ?? null) || (leg.client_id_issued_at ?? null) !== (oauth.client_id_issued_at ?? null);
+      if (conflicts) {
         reasons.conflictingClaims++;
         throw new CutoverFenceError(`Conflicting client metadata between clients and oauthClients for ${sanitizeId(clientId)}`);
       }
@@ -5580,7 +5589,7 @@ async function inspectFirestoreLegacyMigration(options) {
     }
   }
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(options);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   return await db.runTransaction(async (transaction) => {
@@ -5643,11 +5652,24 @@ async function inspectFirestoreLegacyMigration(options) {
     });
     timer.assertUnderDeadline(16e3, "Preflight scan");
     let prospectiveRetained = 0;
+    const existingTargetIdSet = /* @__PURE__ */ new Set();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
         if (isTargetFormatRow(colKey, d.data(), d.id)) {
           prospectiveRetained++;
+          existingTargetIdSet.add(`${colKey}:${d.id}`);
         }
+      }
+    }
+    for (const c of candidates) {
+      let existingCount = 0;
+      for (const t of c.targets) {
+        if (existingTargetIdSet.has(`${t.collection}:${t.rawId}`)) {
+          existingCount++;
+        }
+      }
+      if (existingCount > 0 && existingCount < c.targets.length) {
+        reasons.partialTargets++;
       }
     }
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
@@ -5695,7 +5717,7 @@ async function adoptFirestoreLegacyTokens(options) {
     throw new CutoverFenceError("adoptFirestoreLegacyTokens requires 64-character lowercase hex expectedSourceInventoryDigest");
   }
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(options);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   const prepResult = await db.runTransaction(async (transaction) => {
@@ -6163,7 +6185,9 @@ async function activateFirestoreMigration(context) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest"
+    "protocolDigest",
+    "assemblyDigest",
+    "indexSchemaDigest"
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -6171,7 +6195,7 @@ async function activateFirestoreMigration(context) {
     }
   }
   const { db, namespace, expectedEpoch, migrationRunId: migrationRunId2, key } = context;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
   return await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
@@ -6181,6 +6205,12 @@ async function activateFirestoreMigration(context) {
     let planDigest = "";
     if (finalSnap.exists) {
       const f = finalSnap.data();
+      if (f.assemblyDigest !== assemblyDigest) {
+        throw new CutoverFenceError(`final manifest assemblyDigest mismatch: expected ${assemblyDigest}, got ${f.assemblyDigest}`);
+      }
+      if (f.indexSchemaDigest !== indexSchemaDigest) {
+        throw new CutoverFenceError(`final manifest indexSchemaDigest mismatch: expected ${indexSchemaDigest}, got ${f.indexSchemaDigest}`);
+      }
       migrationManifestDigest = D("final", namespace, expectedEpoch, f);
       planDigest = f.planDigest || "";
     }
@@ -6240,7 +6270,9 @@ async function getFirestoreMigrationStatus(context) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest"
+    "protocolDigest",
+    "assemblyDigest",
+    "indexSchemaDigest"
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -6248,7 +6280,7 @@ async function getFirestoreMigrationStatus(context) {
     }
   }
   const { db, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeArtifact, protocolDigest } = context;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
   return await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
@@ -6268,10 +6300,16 @@ async function getFirestoreMigrationStatus(context) {
       if (marker.codeArtifact !== codeArtifact || marker.protocolDigest !== protocolDigest) {
         throw new CutoverFenceError("Immutable migration marker artifact/protocolDigest mismatch");
       }
+      if (marker.assemblyDigest !== assemblyDigest || marker.indexSchemaDigest !== indexSchemaDigest) {
+        throw new CutoverFenceError("Immutable migration marker bootstrap bindings mismatch");
+      }
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
       const finalSnap = await transaction.get(finalRef);
       if (finalSnap.exists) {
         const f = finalSnap.data();
+        if (f.assemblyDigest !== assemblyDigest || f.indexSchemaDigest !== indexSchemaDigest) {
+          throw new CutoverFenceError("Final migration manifest bootstrap bindings mismatch");
+        }
         planDigest = f.planDigest;
         sourceInventoryDigest = f.sourceInventoryDigest;
       }

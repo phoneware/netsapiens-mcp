@@ -48,17 +48,17 @@ interface DocumentReferenceLike {
 interface QueryLike {
   get(): Promise<QuerySnapshotLike>;
   limit(count: number): QueryLike;
-  orderBy?(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt?(...fieldValues: any[]): QueryLike;
-  endBefore?(...fieldValues: any[]): QueryLike;
-  where?(field: string, op: any, value: any): QueryLike;
+  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
+  startAt(...fieldValues: any[]): QueryLike;
+  endBefore(...fieldValues: any[]): QueryLike;
+  where(field: string, op: any, value: any): QueryLike;
 }
 interface CollectionLike extends QueryLike {
   doc(id: string): DocumentReferenceLike;
   where(field: string, op: any, value: any): QueryLike;
-  orderBy?(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt?(...fieldValues: any[]): QueryLike;
-  endBefore?(...fieldValues: any[]): QueryLike;
+  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
+  startAt(...fieldValues: any[]): QueryLike;
+  endBefore(...fieldValues: any[]): QueryLike;
 }
 interface TransactionLike {
   get(ref: DocumentReferenceLike | QueryLike): Promise<any>;
