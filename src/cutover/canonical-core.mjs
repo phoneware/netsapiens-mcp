@@ -651,6 +651,23 @@ export const FIRESTORE_MAX_NESTING_DEPTH = 20;
 export const FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
 export const FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16_000;
 
+export function startMonotonicTimer() {
+  const start = process.hrtime.bigint();
+  return {
+    elapsedMs() {
+      return Number(process.hrtime.bigint() - start) / 1_000_000;
+    },
+    assertUnderDeadline(label = 'Transaction callback') {
+      const ms = Number(process.hrtime.bigint() - start) / 1_000_000;
+      if (ms > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
+        throw new CutoverFenceError(
+          `${label} elapsed duration (${Math.round(ms)} ms) exceeds 16,000 ms lock deadline`,
+        );
+      }
+    },
+  };
+}
+
 export const PREFLIGHT_MAX_DOC_BYTES = Math.floor((4 * FIRESTORE_MAX_DOCUMENT_SIZE_BYTES) / 5);
 export const PREFLIGHT_MAX_REQUEST_BYTES = Math.floor((4 * FIRESTORE_MAX_REQUEST_SIZE_BYTES) / 5);
 export const PREFLIGHT_MAX_INDEX_ENTRIES = Math.floor((4 * FIRESTORE_MAX_INDEX_ENTRIES) / 5);
@@ -1595,6 +1612,7 @@ export async function withLegacyOperation(options, fn) {
   const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
 
   const opRecord = await options.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError(
@@ -1671,7 +1689,7 @@ export async function withLegacyOperation(options, fn) {
       updatedAt: currentTime,
       metadata: options.metadata,
     };
-
+    timer.assertUnderDeadline('withLegacyOperation admission reads');
     transaction.set(opRef, stripUndefined(createdRecord));
     transaction.set(
       controlRef,
@@ -1682,6 +1700,7 @@ export async function withLegacyOperation(options, fn) {
       { merge: true },
     );
 
+    timer.assertUnderDeadline('withLegacyOperation complete');
     return createdRecord;
   });
 
@@ -1760,6 +1779,7 @@ export async function releaseLegacyOperation(db, ctx, outcome = 'completed', now
   const currentTime = nowProvider();
 
   await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
 
@@ -1806,7 +1826,7 @@ export async function releaseLegacyOperation(db, ctx, outcome = 'completed', now
         `Active operations underflow in namespace ${ctx.namespace}: recorded count is ${control.activeOperations}`,
       );
     }
-
+    timer.assertUnderDeadline('releaseLegacyOperation reads');
     transaction.set(
       controlRef,
       {
@@ -1821,6 +1841,7 @@ export async function releaseLegacyOperation(db, ctx, outcome = 'completed', now
       stripUndefined({ phase: outcome, ambiguousRemoteOutcome: false, updatedAt: currentTime }),
       { merge: true },
     );
+    timer.assertUnderDeadline('releaseLegacyOperation complete');
   });
 
   ctx.markCompleted();
@@ -1832,6 +1853,7 @@ export async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
   const currentTime = nowProvider();
 
   await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
       throw new CutoverFenceError(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
@@ -1854,6 +1876,7 @@ export async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
         `Epoch mismatch on mark ambiguous: context epoch ${ctx.epoch} != recorded epoch ${opData.epoch}`,
       );
     }
+    timer.assertUnderDeadline('markOperationAmbiguous reads');
     transaction.set(
       opRef,
       stripUndefined({
@@ -1863,10 +1886,12 @@ export async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
       }),
       { merge: true },
     );
+    timer.assertUnderDeadline('markOperationAmbiguous complete');
   });
 }
 
 export async function checkMutationGuardInTransaction(transaction, options) {
+  const timer = startMonotonicTimer();
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
 
@@ -1927,6 +1952,7 @@ export async function checkMutationGuardInTransaction(transaction, options) {
     control,
     operation: opRecord,
     bufferCompletion: (now = (options.now ?? Date.now)()) => {
+      timer.assertUnderDeadline('checkMutationGuardInTransaction bufferCompletion');
       if (!options.operation || !completeOperation) {
         return;
       }
@@ -1965,6 +1991,7 @@ export async function checkMutationGuardInTransaction(transaction, options) {
 }
 
 export async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation) {
+  const timer = startMonotonicTimer();
   assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (['fenced', 'migrating', 'v3_ready', 'v3_active'].includes(control.state)) {
@@ -1991,10 +2018,12 @@ export async function isLegacyMutationPermittedInTransaction(transaction, db, na
   if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
     return { permitted: false, control };
   }
+  timer.assertUnderDeadline('isLegacyMutationPermittedInTransaction');
   return { permitted: true, control };
 }
 
 export async function claimUpstreamGrantInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const {
     namespace,
     epoch,
@@ -2157,6 +2186,7 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
     }
   }
 
+  timer.assertUnderDeadline('claimUpstreamGrantInTransaction reads');
   transaction.set(
     opRef,
     stripUndefined({ phase: 'upstream_pending', familyId, updatedAt: now }),
@@ -2178,6 +2208,7 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
     { merge: true },
   );
 
+  timer.assertUnderDeadline('claimUpstreamGrantInTransaction complete');
   return {
     status: 'claimed',
     familyId,
@@ -2191,6 +2222,7 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
 }
 
 export async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const {
     namespace,
     familyId,
@@ -2266,7 +2298,7 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
     const safeReason = typeof evidence?.reason === 'string' && ALLOWED_AMBIGUOUS_REASONS.includes(evidence.reason)
       ? evidence.reason
       : 'upstream_timeout';
-
+    timer.assertUnderDeadline('reconcileUpstreamGrantInTransaction reads');
     transaction.set(
       opRef,
       stripUndefined({
@@ -2290,6 +2322,7 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
       }),
       { merge: true },
     );
+    timer.assertUnderDeadline('reconcileUpstreamGrantInTransaction complete');
     return { status: 'ambiguous_pending', operationId, familyId };
   }
 
@@ -2300,6 +2333,7 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
 }
 
 export async function prepareMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, prepDoc } = options;
   assertSupportedCutoverNamespace(namespace);
 
@@ -2810,6 +2844,7 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
     return control;
   }
 
+  timer.assertUnderDeadline('prepareMigrationInTransaction reads and verification');
   transaction.set(prepRef, stripUndefined(prepDoc));
 
   const controlRef = getCutoverFenceDocRef(db, namespace);
@@ -2821,10 +2856,12 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
     updatedAt: prepDoc.preparedAt,
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline('prepareMigrationInTransaction complete');
   return updatedControl;
 }
 
 export async function finalizeMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, finalDoc, markerDoc } = options;
   assertSupportedCutoverNamespace(namespace);
 
@@ -3417,6 +3454,7 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
     throw new CutoverFenceError('Ownership marker already exists with different content; immutable retry violation');
   }
 
+  timer.assertUnderDeadline('finalizeMigrationInTransaction reads and verification');
   transaction.set(finalRef, stripUndefined(finalDoc));
   transaction.set(markerRef, stripUndefined(markerDoc));
 
@@ -3430,10 +3468,12 @@ export async function finalizeMigrationInTransaction(transaction, db, options) {
     updatedAt: markerDoc.adoptedAt,
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline('finalizeMigrationInTransaction complete');
   return updatedControl;
 }
 
 export async function activateMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, expectedEpoch, migrationRunId, migrationManifestDigest, codeArtifact, protocolDigest } = options;
   assertSupportedCutoverNamespace(namespace);
 
@@ -3785,6 +3825,7 @@ export async function activateMigrationInTransaction(transaction, db, options) {
     );
   }
 
+  timer.assertUnderDeadline('activateMigrationInTransaction reads and verification');
   const controlRef = getCutoverFenceDocRef(db, namespace);
   const updatedControl = {
     ...control,
@@ -3797,6 +3838,7 @@ export async function activateMigrationInTransaction(transaction, db, options) {
     updatedAt: Date.now(),
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline('activateMigrationInTransaction complete');
   return { status: 'activated', control: updatedControl };
 }
 

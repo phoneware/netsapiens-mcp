@@ -1473,6 +1473,23 @@ var FIRESTORE_MAX_INDEX_BYTES = 8388608;
 var FIRESTORE_MAX_NESTING_DEPTH = 20;
 var FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
 var FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16e3;
+function startMonotonicTimer() {
+  const start = process.hrtime.bigint();
+  return {
+    elapsedMs() {
+      return Number(process.hrtime.bigint() - start) / 1e6;
+    },
+    assertUnderDeadline(label = "Transaction callback") {
+      const ms = Number(process.hrtime.bigint() - start) / 1e6;
+      if (ms > FIRESTORE_TRANSACTION_READ_DEADLINE_MS) {
+        throw new CutoverFenceError2(
+          `${label} elapsed duration (${Math.round(ms)} ms) exceeds 16,000 ms lock deadline`
+        );
+      }
+    }
+  };
+}
+__name(startMonotonicTimer, "startMonotonicTimer");
 var PREFLIGHT_MAX_DOC_BYTES = Math.floor(4 * FIRESTORE_MAX_DOCUMENT_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_REQUEST_BYTES = Math.floor(4 * FIRESTORE_MAX_REQUEST_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_INDEX_ENTRIES = Math.floor(4 * FIRESTORE_MAX_INDEX_ENTRIES / 5);
@@ -2337,6 +2354,7 @@ async function withLegacyOperation(options, fn) {
   const opRef = getCutoverOperationDocRef(options.db, options.namespace, opId);
   const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
   const opRecord = await options.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError2(
@@ -2410,6 +2428,7 @@ async function withLegacyOperation(options, fn) {
       updatedAt: currentTime,
       metadata: options.metadata
     };
+    timer.assertUnderDeadline("withLegacyOperation admission reads");
     transaction.set(opRef, stripUndefined(createdRecord));
     transaction.set(
       controlRef,
@@ -2419,6 +2438,7 @@ async function withLegacyOperation(options, fn) {
       },
       { merge: true }
     );
+    timer.assertUnderDeadline("withLegacyOperation complete");
     return createdRecord;
   });
   let completedLocally = false;
@@ -2493,6 +2513,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
     if (!controlSnap.exists) {
@@ -2533,6 +2554,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
         `Active operations underflow in namespace ${ctx.namespace}: recorded count is ${control.activeOperations}`
       );
     }
+    timer.assertUnderDeadline("releaseLegacyOperation reads");
     transaction.set(
       controlRef,
       {
@@ -2546,6 +2568,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
       stripUndefined({ phase: outcome, ambiguousRemoteOutcome: false, updatedAt: currentTime }),
       { merge: true }
     );
+    timer.assertUnderDeadline("releaseLegacyOperation complete");
   });
   ctx.markCompleted();
 }
@@ -2555,6 +2578,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
       throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
@@ -2577,6 +2601,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
         `Epoch mismatch on mark ambiguous: context epoch ${ctx.epoch} != recorded epoch ${opData.epoch}`
       );
     }
+    timer.assertUnderDeadline("markOperationAmbiguous reads");
     transaction.set(
       opRef,
       stripUndefined({
@@ -2586,10 +2611,12 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
       }),
       { merge: true }
     );
+    timer.assertUnderDeadline("markOperationAmbiguous complete");
   });
 }
 __name(markOperationAmbiguous, "markOperationAmbiguous");
 async function checkMutationGuardInTransaction(transaction, options) {
+  const timer = startMonotonicTimer();
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2644,6 +2671,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
     control,
     operation: opRecord,
     bufferCompletion: /* @__PURE__ */ __name((now = (options.now ?? Date.now)()) => {
+      timer.assertUnderDeadline("checkMutationGuardInTransaction bufferCompletion");
       if (!options.operation || !completeOperation) {
         return;
       }
@@ -2681,6 +2709,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
 }
 __name(checkMutationGuardInTransaction, "checkMutationGuardInTransaction");
 async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation) {
+  const timer = startMonotonicTimer();
   assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2707,10 +2736,12 @@ async function isLegacyMutationPermittedInTransaction(transaction, db, namespace
   if (opRecord.phase !== "admitted" && opRecord.phase !== "upstream_pending") {
     return { permitted: false, control };
   }
+  timer.assertUnderDeadline("isLegacyMutationPermittedInTransaction");
   return { permitted: true, control };
 }
 __name(isLegacyMutationPermittedInTransaction, "isLegacyMutationPermittedInTransaction");
 async function claimUpstreamGrantInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const {
     namespace,
     epoch,
@@ -2858,6 +2889,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
       throw new CutoverFenceError2(`Upstream grant lease held by another claimant: ${current.leaseOwner}`);
     }
   }
+  timer.assertUnderDeadline("claimUpstreamGrantInTransaction reads");
   transaction.set(
     opRef,
     stripUndefined({ phase: "upstream_pending", familyId, updatedAt: now }),
@@ -2878,6 +2910,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
     }),
     { merge: true }
   );
+  timer.assertUnderDeadline("claimUpstreamGrantInTransaction complete");
   return {
     status: "claimed",
     familyId,
@@ -2891,6 +2924,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
 }
 __name(claimUpstreamGrantInTransaction, "claimUpstreamGrantInTransaction");
 async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const {
     namespace,
     familyId,
@@ -2958,6 +2992,7 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
   if (outcome === "transient_timeout") {
     const ALLOWED_AMBIGUOUS_REASONS = ["upstream_timeout", "upstream_gateway_timeout", "upstream_disconnect", "transport_error"];
     const safeReason = typeof evidence?.reason === "string" && ALLOWED_AMBIGUOUS_REASONS.includes(evidence.reason) ? evidence.reason : "upstream_timeout";
+    timer.assertUnderDeadline("reconcileUpstreamGrantInTransaction reads");
     transaction.set(
       opRef,
       stripUndefined({
@@ -2981,6 +3016,7 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
       }),
       { merge: true }
     );
+    timer.assertUnderDeadline("reconcileUpstreamGrantInTransaction complete");
     return { status: "ambiguous_pending", operationId, familyId };
   }
   throw new CutoverFenceError2(
@@ -2989,6 +3025,7 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
 }
 __name(reconcileUpstreamGrantInTransaction, "reconcileUpstreamGrantInTransaction");
 async function prepareMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, prepDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3432,6 +3469,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     }
     return control;
   }
+  timer.assertUnderDeadline("prepareMigrationInTransaction reads and verification");
   transaction.set(prepRef, stripUndefined(prepDoc));
   const controlRef = getCutoverFenceDocRef(db, namespace);
   const updatedControl = {
@@ -3442,10 +3480,12 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     updatedAt: prepDoc.preparedAt
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline("prepareMigrationInTransaction complete");
   return updatedControl;
 }
 __name(prepareMigrationInTransaction, "prepareMigrationInTransaction");
 async function finalizeMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, finalDoc, markerDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3939,6 +3979,7 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
   if (markerSnap.exists && C(markerSnap.data()) !== C(markerDoc)) {
     throw new CutoverFenceError2("Ownership marker already exists with different content; immutable retry violation");
   }
+  timer.assertUnderDeadline("finalizeMigrationInTransaction reads and verification");
   transaction.set(finalRef, stripUndefined(finalDoc));
   transaction.set(markerRef, stripUndefined(markerDoc));
   const controlRef = getCutoverFenceDocRef(db, namespace);
@@ -3951,10 +3992,12 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
     updatedAt: markerDoc.adoptedAt
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline("finalizeMigrationInTransaction complete");
   return updatedControl;
 }
 __name(finalizeMigrationInTransaction, "finalizeMigrationInTransaction");
 async function activateMigrationInTransaction(transaction, db, options) {
+  const timer = startMonotonicTimer();
   const { namespace, expectedEpoch, migrationRunId, migrationManifestDigest, codeArtifact, protocolDigest } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -4255,6 +4298,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
       `Activation digest mismatch: expected ${migrationManifestDigest}, got ${control.migrationManifestDigest}`
     );
   }
+  timer.assertUnderDeadline("activateMigrationInTransaction reads and verification");
   const controlRef = getCutoverFenceDocRef(db, namespace);
   const updatedControl = {
     ...control,
@@ -4267,6 +4311,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
     updatedAt: Date.now()
   };
   transaction.set(controlRef, stripUndefined(updatedControl));
+  timer.assertUnderDeadline("activateMigrationInTransaction complete");
   return { status: "activated", control: updatedControl };
 }
 __name(activateMigrationInTransaction, "activateMigrationInTransaction");
