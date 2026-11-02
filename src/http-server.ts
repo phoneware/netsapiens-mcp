@@ -42,28 +42,52 @@ import type { UserRole } from './auth/roles.js';
 import type { NetSapiensConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-let installedMcpSdkVersion = 'unknown';
-try {
- const sdkPkg = require('@modelcontextprotocol/sdk/package.json');
- installedMcpSdkVersion = sdkPkg?.version ?? 'unknown';
-} catch {
- // Ignored if package.json cannot be resolved
+
+function detectInstalledMcpSdkVersion(): string {
+ try {
+  const exportedModule = require.resolve('@modelcontextprotocol/sdk/server/auth/router.js');
+  let dir = path.dirname(exportedModule);
+  while (dir && dir !== path.dirname(dir)) {
+   const candidate = path.join(dir, 'package.json');
+   if (fs.existsSync(candidate)) {
+    const raw = fs.readFileSync(candidate, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.name === '@modelcontextprotocol/sdk' && typeof parsed.version === 'string') {
+     return parsed.version;
+    }
+   }
+   dir = path.dirname(dir);
+  }
+ } catch {
+  // Fail closed below
+ }
+ throw new CutoverFenceError('Failed to resolve @modelcontextprotocol/sdk package root; fail closed');
 }
 
 /**
  * SDK Version Gate:
- * Verified for @modelcontextprotocol/sdk ^1.32.1 (pinned runtime 1.32.2).
+ * Pinned to exact supported @modelcontextprotocol/sdk versions.
  * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
  * async work before calling response.end().
  */
-export const INSTALLED_MCP_SDK_VERSION = installedMcpSdkVersion;
 export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1', '1.32.2'];
 
+let installedVersion = 'unresolved';
+try {
+ installedVersion = detectInstalledMcpSdkVersion();
+} catch {
+ installedVersion = 'unresolved';
+}
+
+export const INSTALLED_MCP_SDK_VERSION = installedVersion;
+
 export function assertSupportedMcpSdkVersion(): void {
- if (INSTALLED_MCP_SDK_VERSION !== 'unknown' && !SUPPORTED_MCP_SDK_VERSIONS.includes(INSTALLED_MCP_SDK_VERSION)) {
+ if (!SUPPORTED_MCP_SDK_VERSIONS.includes(INSTALLED_MCP_SDK_VERSION)) {
   throw new CutoverFenceError(
    `Unsupported @modelcontextprotocol/sdk version: ${INSTALLED_MCP_SDK_VERSION}; bridge requires one of: ${SUPPORTED_MCP_SDK_VERSIONS.join(', ')}`,
   );
