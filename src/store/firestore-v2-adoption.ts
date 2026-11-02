@@ -5,21 +5,27 @@ import type { AccessRow, FamilyRow, RefreshPointerRow, UpstreamGrantRow, AuthCod
 import type { PendingAuthorization, NsTokenResponse } from '../auth/types.js';
 import { ACCESS_RETENTION_MS, accessAad, familyAad, refreshAad, upstreamAad } from './store.js';
 import {
-  createGraphProjector,
-  GRAPH_PROJECTOR_ID,
-  GRAPH_PROJECTOR_VERSION,
-  type GraphProjectorAdapter,
-  type CandidateCommitment,
+  PROJECTOR_ID,
+  PROJECTOR_VERSION,
+  projectSourceLogical,
+  projectTargetLogical,
   codeUnitCompare,
-} from './graph-projector.js';
+} from './netsapiens-projector.mjs';
 
 export {
-  createGraphProjector,
-  GRAPH_PROJECTOR_ID,
-  GRAPH_PROJECTOR_VERSION,
-  type GraphProjectorAdapter,
-  type CandidateCommitment,
+  PROJECTOR_ID,
+  PROJECTOR_VERSION,
+  projectSourceLogical,
+  projectTargetLogical,
 };
+
+export interface CandidateCommitment {
+  id: string;
+  kind: string;
+  sources: Array<{ collection: string; id: string; recordDigest: string }>;
+  targets: Array<{ collection: string; id: string }>;
+  logicalDigest: string;
+}
 import {
   C,
   D,
@@ -284,7 +290,7 @@ export async function adoptFirestoreLegacyTokens(
       const fsModule = await import('node:fs');
       const urlModule = await import('node:url');
       const pathModule = await import('node:path');
-      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './graph-projector.ts');
+      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './netsapiens-projector.mjs');
       if (fsModule.existsSync(modulePath)) {
         projectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
       }
@@ -635,49 +641,23 @@ export async function adoptFirestoreLegacyTokens(
 
     const sortedSourceIds = candSources.map(s => s.id).sort(codeUnitCompare);
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['pr56Families', sortedSourceIds]);
-
-    const upData = upstreamById.get(familyId)!;
-    const grant = (upData.grant as Record<string, unknown> | undefined) ?? upData;
-    const accData = tokensByAccessId.get(accessId) || {};
-
-    let previousRefresh: any = null;
+    const sourcesMap = new Map<string, Record<string, unknown>>();
+    sourcesMap.set('families', { id: familyId, ...famData });
+    sourcesMap.set('refresh', { id: currentRefId, ...curRefDoc });
+    sourcesMap.set('upstream', { id: familyId, ...upstreamById.get(familyId)! });
+    sourcesMap.set('tokens', { id: accessId, ...(tokensByAccessId.get(accessId) || {}) });
     if (famData.previousRefreshToken) {
       const prevId = famData.previousRefreshToken as string;
-      const prevDoc = refreshPointersById.get(prevId) || {};
-      const prevRefreshId = codec.id('refresh', prevId);
-      previousRefresh = {
-        id: prevRefreshId,
-        consumedAt: prevDoc.consumedAt,
-        generation: Math.max(1, ((typeof famData.generation === 'number' ? famData.generation : 1) - 1)),
-        successor: {
-          accessToken: newAccessId,
-          refreshToken: newRefreshId,
-        },
-      };
+      sourcesMap.set('prevRefresh', { id: prevId, ...(refreshPointersById.get(prevId) || {}) });
     }
 
-    const logicalProjection = {
-      familyId,
-      generation: typeof famData.generation === 'number' ? famData.generation : 1,
-      status: famData.status === 'revoked' ? 'revoked' : 'active',
-      clientId: ((curRefDoc.token as any)?.clientId ?? accData.clientId ?? famData.clientId) as string,
-      serverBaseUrl: ((curRefDoc.token as any)?.serverBaseUrl ?? accData.serverBaseUrl ?? famData.serverBaseUrl ?? null) as string | null,
-      extra: ((curRefDoc.token as any)?.extra ?? accData.extra ?? {}) as Record<string, string>,
-      activeRefreshId: newRefreshId,
-      currentAccessTokenId: newAccessId,
-      previousRefresh,
-      retiredRefreshFingerprints: [...retiredFingerprints].sort(codeUnitCompare),
-      upstream: {
-        grantVersion: typeof upData.grantVersion === 'number' ? upData.grantVersion : 1,
-        nsAccessToken: (grant.nsAccessToken ?? grant.access_token ?? accData.nsAccessToken) as string,
-        nsRefreshToken: (grant.nsRefreshToken ?? grant.refresh_token ?? accData.nsRefreshToken ?? null) as string | null,
-        nsUsername: (grant.nsUsername ?? grant.username ?? accData.nsUsername) as string,
-        nsUserRole: (grant.nsUserRole ?? grant.user_role ?? accData.nsUserRole ?? null) as string | null,
-        nsApiUrl: (grant.nsApiUrl ?? grant.api_url ?? accData.nsApiUrl ?? null) as string | null,
-        nsExpiresAt: typeof upData.expiresAt === 'number' ? upData.expiresAt : (typeof accData.nsExpiresAt === 'number' ? accData.nsExpiresAt : null),
-      },
-    };
-
+    const logicalProjection = projectSourceLogical({
+      id: candidateId,
+      kind: 'pr56Families',
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest: '',
+    }, sourcesMap, codec);
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['pr56Families', logicalProjection]);
 
     expectedTargetCounts.families++;
@@ -949,25 +929,17 @@ export async function adoptFirestoreLegacyTokens(
     candTargets.sort(compareDescriptors);
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['baseFormatTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
-    const logicalProjection = {
-      familyId,
-      generation: 1,
-      status: 'active',
-      clientId,
-      serverBaseUrl: (tokData.serverBaseUrl ?? null) as string | null,
-      extra: (tokData.extra ?? (tokData.seatId ? { seatId: String(tokData.seatId) } : {})) as Record<string, string>,
-      activeRefreshId: refreshId,
-      currentAccessTokenId: accessId,
-      upstream: {
-        grantVersion: 1,
-        nsAccessToken,
-        nsRefreshToken: (tokData.nsRefreshToken ?? null) as string | null,
-        nsUsername,
-        nsUserRole: (tokData.nsUserRole ?? null) as string | null,
-        nsApiUrl: (tokData.nsApiUrl ?? null) as string | null,
-        nsExpiresAt: typeof tokData.nsExpiresAt === 'number' ? tokData.nsExpiresAt : null,
-      },
-    };
+    const sourcesMap = new Map<string, Record<string, unknown>>();
+    sourcesMap.set('tokens', { id: accessToken, ...tokData });
+    sourcesMap.set('refresh', { id: refreshToken, ...refDoc });
+
+    const logicalProjection = projectSourceLogical({
+      id: candidateId,
+      kind: 'baseFormatTokens',
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest: '',
+    }, sourcesMap, codec);
 
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['baseFormatTokens', logicalProjection]);
 
@@ -1158,23 +1130,16 @@ export async function adoptFirestoreLegacyTokens(
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['authCodes', candSources.map(s => s.id).sort(codeUnitCompare)]);
 
-    const logicalProjection = {
-      codeId: hmacId,
-      clientId,
-      codeChallenge,
-      redirectUri,
-      createdAt,
-      expiresAt,
-      state: typeof rawPending.state === 'string' ? rawPending.state : null,
-      scopes: Array.isArray(rawPending.scopes) ? [...rawPending.scopes].sort(codeUnitCompare) : [],
-      nsAccessToken,
-      nsRefreshToken: (rawNsTokens?.refresh_token ?? rawNsTokens?.nsRefreshToken ?? codeData.nsRefreshToken ?? null) as string | null,
-      nsUsername: (rawNsTokens?.username ?? rawNsTokens?.nsUsername ?? codeData.nsUsername ?? null) as string | null,
-      nsUserRole: (rawNsTokens?.nsUserRole ?? codeData.nsUserRole ?? null) as string | null,
-      nsApiUrl: (rawNsTokens?.nsApiUrl ?? codeData.nsApiUrl ?? null) as string | null,
-      serverBaseUrl: (codeData.serverBaseUrl ?? null) as string | null,
-      extra: (codeData.extra ?? {}) as Record<string, string>,
-    };
+    const sourcesMap = new Map<string, Record<string, unknown>>();
+    sourcesMap.set('authCodes', { id: rawCode, ...codeData });
+
+    const logicalProjection = projectSourceLogical({
+      id: candidateId,
+      kind: 'authCodes',
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest: '',
+    }, sourcesMap, codec);
 
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['authCodes', logicalProjection]);
 
@@ -1292,11 +1257,17 @@ export async function adoptFirestoreLegacyTokens(
     }];
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['resumeTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
-    const logicalProjection = {
-      resumeId,
-      consumedAt: rData.consumedAt,
-      expiresAt: rData.expiresAt,
-    };
+    const sourcesMap = new Map<string, Record<string, unknown>>();
+    sourcesMap.set('resumeTokens', { id: rDoc.id, ...rData });
+
+    const logicalProjection = projectSourceLogical({
+      id: candidateId,
+      kind: 'resumeTokens',
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest: '',
+    }, sourcesMap, codec);
+
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['resumeTokens', logicalProjection]);
 
     expectedTargetCounts.resumeTokens++;
@@ -1413,19 +1384,17 @@ export async function adoptFirestoreLegacyTokens(
     }];
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['clients', candSources.map(s => s.id).sort(codeUnitCompare)]);
-    const logicalProjection = {
-      clientId,
-      clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
-      clientSecret: typeof clientData.client_secret === 'string' ? clientData.client_secret : null,
-      redirectUris: [...clientData.redirect_uris].sort(codeUnitCompare),
-      tokenEndpointAuthMethod: clientData.token_endpoint_auth_method as string,
-      grantTypes: Array.isArray(clientData.grant_types) ? [...clientData.grant_types].sort(codeUnitCompare) : [],
-      responseTypes: Array.isArray(clientData.response_types) ? [...clientData.response_types].sort(codeUnitCompare) : [],
-      clientUri: (clientData.client_uri ?? null) as string | null,
-      logoUri: (clientData.logo_uri ?? null) as string | null,
-      scope: (clientData.scope ?? null) as string | null,
-      clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
-    };
+    const sourcesMap = new Map<string, Record<string, unknown>>();
+    sourcesMap.set('clients', { id: clientId, ...clientData });
+
+    const logicalProjection = projectSourceLogical({
+      id: candidateId,
+      kind: 'clients',
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest: '',
+    }, sourcesMap, codec);
+
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['clients', logicalProjection]);
 
     expectedTargetCounts.oauthClients++;
@@ -1854,7 +1823,6 @@ export async function adoptFirestoreLegacyTokens(
     }
 
     const targetLogicalPairs: Array<[string, string]> = [];
-    const projector = options.projector ?? createGraphProjector(codec);
 
     for (const cand of candidateCommitments) {
       const targetDocs = new Map<string, Record<string, unknown>>();
@@ -1866,20 +1834,22 @@ export async function adoptFirestoreLegacyTokens(
         const data = doc.data() || {};
         if (t.collection === 'refresh') {
           if (data.status === 'active') {
-            targetDocs.set('activeRefresh', data);
+            targetDocs.set('activeRefresh', { id: doc.id, ...data });
           } else if (data.status === 'consumed') {
-            targetDocs.set('prevRefresh', data);
+            targetDocs.set('prevRefresh', { id: doc.id, ...data });
           }
         } else if (t.collection === 'retiredRefreshTokens') {
           const retObj = targetDocs.get('retiredRefresh') as { ids: string[] } | undefined;
           if (retObj) retObj.ids.push(doc.id);
           else targetDocs.set('retiredRefresh', { ids: [doc.id] });
+        } else if (t.collection === 'oauthClients') {
+          targetDocs.set('clients', { id: doc.id, ...data });
         } else {
-          targetDocs.set(t.collection, data);
+          targetDocs.set(t.collection, { id: doc.id, ...data });
         }
       }
 
-      const proj = projector.projectTargetLogical(cand, targetDocs);
+      const proj = projectTargetLogical(cand, targetDocs, codec);
       const digest = H(key, 'logical-record', namespace, currentEpoch, [cand.kind, proj]);
       targetLogicalPairs.push([cand.id, digest]);
     }

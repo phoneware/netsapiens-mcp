@@ -1,66 +1,77 @@
-import type { Codec } from './codec.js';
-import { accessAad, familyAad, upstreamAad } from './store.js';
-import { CutoverFenceError } from '../auth/kit/cutover-fence.js';
-import type { AuthCodeData } from './types.js';
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync } from 'node:crypto';
 
-export const GRAPH_PROJECTOR_ID = 'netsapiens-mcp/v2-v3-projector' as const;
-export const GRAPH_PROJECTOR_VERSION = 1 as const;
+export const PROJECTOR_ID = 'netsapiens-mcp/v2-v3-projector';
+export const PROJECTOR_VERSION = 1;
 
-export function codeUnitCompare(a: string, b: string): number {
-  return a < b ? -1 : (a > b ? 1 : 0);
+export class CutoverFenceError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CutoverFenceError';
+    this.kitCode = 'cutover_fence_error';
+  }
 }
 
-export interface CandidateCommitment {
-  id: string;
-  kind: string;
-  sources: Array<{ collection: string; id: string; recordDigest: string }>;
-  targets: Array<{ collection: string; id: string }>;
-  logicalDigest: string;
+export function codeUnitCompare(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
-export interface GraphProjectorAdapter {
-  readonly id: typeof GRAPH_PROJECTOR_ID;
-  readonly version: typeof GRAPH_PROJECTOR_VERSION;
-  projectSourceLogical(
-    candidate: CandidateCommitment,
-    sources: Map<string, Record<string, unknown>>,
-  ): Record<string, unknown>;
-  projectTargetLogical(
-    candidate: CandidateCommitment,
-    targets: Map<string, Record<string, unknown>>,
-  ): Record<string, unknown>;
+export function createCodec(root) {
+  const rootBuf = typeof root === 'string' ? Buffer.from(root, 'utf8') : root;
+  const idKey = Buffer.from(hkdfSync('sha256', rootBuf, '', 'id', 32));
+  const encKey = Buffer.from(hkdfSync('sha256', rootBuf, '', 'enc', 32));
+  return {
+    id(purpose, value) {
+      return createHmac('sha256', idKey).update(`${purpose}\0${value}`).digest('hex');
+    },
+    open(sealed, aad) {
+      if (typeof sealed !== 'string') return null;
+      const parts = sealed.split('.');
+      if (parts.length !== 4 || parts[0] !== 'v1') return null;
+      try {
+        const iv = Buffer.from(parts[1], 'base64url');
+        const tag = Buffer.from(parts[3], 'base64url');
+        if (iv.length !== 12 || tag.length !== 16) return null;
+        const decipher = createDecipheriv('aes-256-gcm', encKey, iv);
+        decipher.setAAD(Buffer.from(aad, 'utf8'));
+        decipher.setAuthTag(tag);
+        return JSON.parse(Buffer.concat([decipher.update(Buffer.from(parts[2], 'base64url')), decipher.final()]).toString('utf8'));
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 
-export function projectSourceLogical(
-  candidate: CandidateCommitment,
-  sources: Map<string, Record<string, unknown>>,
-  codec: Codec,
-): Record<string, unknown> {
+export const familyAad = ({ id, generation }) => `family:${id}:${generation}`;
+export const upstreamAad = ({ id, grantVersion }) => `upstream:${id}:${grantVersion}`;
+export const accessAad = ({ id, familyId }) => `access:${id}:${familyId}`;
+
+export function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === 'pr56Families') {
     const famDoc = sources.get('families');
     if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families source`);
     const famData = famDoc;
-    const familyId = famData.id as string;
+    const familyId = famData.id;
     const generation = typeof famData.generation === 'number' ? famData.generation : 1;
 
     const refDoc = sources.get('refresh');
     if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh source`);
     const curRefDoc = refDoc;
-    const currentRefId = (curRefDoc.id ?? curRefDoc.refreshToken) as string;
+    const currentRefId = (curRefDoc.id ?? curRefDoc.refreshToken);
 
     const upDoc = sources.get('upstream');
     if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream source`);
-    const grant = ((upDoc.grant as Record<string, unknown> | undefined) ?? upDoc) as Record<string, unknown>;
+    const grant = ((upDoc.grant && typeof upDoc.grant === 'object') ? upDoc.grant : upDoc);
 
     const tokDoc = sources.get('tokens') || {};
-    const accessId = (tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken) as string;
+    const accessId = (tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken);
 
     const newAccessId = codec.id('session', accessId);
     const newRefreshId = codec.id('refresh', currentRefId);
 
-    let previousRefresh: Record<string, unknown> | null = null;
+    let previousRefresh = null;
     if (famData.previousRefreshToken) {
-      const prevId = famData.previousRefreshToken as string;
+      const prevId = famData.previousRefreshToken;
       const prevDoc = sources.get('prevRefresh') || {};
       const prevRefreshId = codec.id('refresh', prevId);
       previousRefresh = {
@@ -75,32 +86,32 @@ export function projectSourceLogical(
     }
 
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints)
-      ? (famData.retiredRefreshFingerprints as string[])
-      : (Array.isArray(famData.retiredTokens) ? (famData.retiredTokens as string[]) : []);
-    const retiredFingerprints = Array.from(new Set(rawRetired.filter(fp => typeof fp === 'string' && fp.length > 0))).sort(codeUnitCompare);
+      ? famData.retiredRefreshFingerprints
+      : (Array.isArray(famData.retiredTokens) ? famData.retiredTokens : []);
+    const retiredFingerprints = Array.from(new Set(rawRetired.filter((fp) => typeof fp === 'string' && fp.length > 0))).sort(codeUnitCompare);
 
     const expiresAt = typeof tokDoc.expiresAt === 'number'
       ? tokDoc.expiresAt
-      : (typeof (curRefDoc.token as any)?.expiresAt === 'number' ? (curRefDoc.token as any).expiresAt : (famData.expiresAt ?? 0));
+      : (typeof curRefDoc.token?.expiresAt === 'number' ? curRefDoc.token.expiresAt : (famData.expiresAt ?? 0));
 
     return {
       familyId,
       generation,
       status: famData.status === 'revoked' ? 'revoked' : 'active',
-      clientId: ((curRefDoc.token as any)?.clientId ?? tokDoc.clientId ?? famData.clientId ?? '') as string,
-      serverBaseUrl: ((curRefDoc.token as any)?.serverBaseUrl ?? tokDoc.serverBaseUrl ?? famData.serverBaseUrl ?? null) as string | null,
-      extra: ((curRefDoc.token as any)?.extra ?? tokDoc.extra ?? {}) as Record<string, string>,
+      clientId: (curRefDoc.token?.clientId ?? tokDoc.clientId ?? famData.clientId ?? ''),
+      serverBaseUrl: (curRefDoc.token?.serverBaseUrl ?? tokDoc.serverBaseUrl ?? famData.serverBaseUrl ?? null),
+      extra: (curRefDoc.token?.extra ?? tokDoc.extra ?? {}),
       activeRefreshId: newRefreshId,
       currentAccessTokenId: newAccessId,
       previousRefresh,
       retiredRefreshFingerprints,
       upstream: {
         grantVersion: typeof upDoc.grantVersion === 'number' ? upDoc.grantVersion : 1,
-        nsAccessToken: (grant.nsAccessToken ?? grant.access_token ?? tokDoc.nsAccessToken ?? '') as string,
-        nsRefreshToken: (grant.nsRefreshToken ?? grant.refresh_token ?? tokDoc.nsRefreshToken ?? null) as string | null,
-        nsUsername: (grant.nsUsername ?? grant.username ?? tokDoc.nsUsername ?? '') as string,
-        nsUserRole: (grant.nsUserRole ?? grant.user_role ?? tokDoc.nsUserRole ?? null) as string | null,
-        nsApiUrl: (grant.nsApiUrl ?? grant.api_url ?? tokDoc.nsApiUrl ?? null) as string | null,
+        nsAccessToken: (grant.nsAccessToken ?? grant.access_token ?? tokDoc.nsAccessToken ?? ''),
+        nsRefreshToken: (grant.nsRefreshToken ?? grant.refresh_token ?? tokDoc.nsRefreshToken ?? null),
+        nsUsername: (grant.nsUsername ?? grant.username ?? tokDoc.nsUsername ?? ''),
+        nsUserRole: (grant.nsUserRole ?? grant.user_role ?? tokDoc.nsUserRole ?? null),
+        nsApiUrl: (grant.nsApiUrl ?? grant.api_url ?? tokDoc.nsApiUrl ?? null),
         nsExpiresAt: typeof upDoc.expiresAt === 'number' ? upDoc.expiresAt : (typeof tokDoc.nsExpiresAt === 'number' ? tokDoc.nsExpiresAt : null),
       },
       expiresAt,
@@ -114,8 +125,8 @@ export function projectSourceLogical(
     const refDoc = sources.get('refresh');
     if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing refresh source`);
 
-    const accessToken = tokDoc.id as string;
-    const refreshToken = (tokDoc.refreshToken ?? refDoc.id) as string;
+    const accessToken = tokDoc.id;
+    const refreshToken = (tokDoc.refreshToken ?? refDoc.id);
     const familyId = codec.id('family', accessToken);
     const accessId = codec.id('session', accessToken);
     const refreshId = codec.id('refresh', refreshToken);
@@ -126,18 +137,18 @@ export function projectSourceLogical(
       familyId,
       generation: 1,
       status: 'active',
-      clientId: (tokDoc.clientId ?? '') as string,
-      serverBaseUrl: (tokDoc.serverBaseUrl ?? null) as string | null,
-      extra: (tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {})) as Record<string, string>,
+      clientId: (tokDoc.clientId ?? ''),
+      serverBaseUrl: (tokDoc.serverBaseUrl ?? null),
+      extra: (tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {})),
       activeRefreshId: refreshId,
       currentAccessTokenId: accessId,
       upstream: {
         grantVersion: 1,
-        nsAccessToken: (tokDoc.nsAccessToken ?? '') as string,
-        nsRefreshToken: (tokDoc.nsRefreshToken ?? null) as string | null,
-        nsUsername: (tokDoc.nsUsername ?? '') as string,
-        nsUserRole: (tokDoc.nsUserRole ?? null) as string | null,
-        nsApiUrl: (tokDoc.nsApiUrl ?? null) as string | null,
+        nsAccessToken: (tokDoc.nsAccessToken ?? ''),
+        nsRefreshToken: (tokDoc.nsRefreshToken ?? null),
+        nsUsername: (tokDoc.nsUsername ?? ''),
+        nsUserRole: (tokDoc.nsUserRole ?? null),
+        nsApiUrl: (tokDoc.nsApiUrl ?? null),
         nsExpiresAt: typeof tokDoc.nsExpiresAt === 'number' ? tokDoc.nsExpiresAt : null,
       },
       expiresAt,
@@ -148,32 +159,32 @@ export function projectSourceLogical(
   if (candidate.kind === 'authCodes') {
     const codeDoc = sources.get('authCodes');
     if (!codeDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing authCodes source`);
-    const rawCode = codeDoc.id as string;
+    const rawCode = codeDoc.id;
     const hmacId = codec.id('code', rawCode);
 
     const rawPending = (codeDoc.pending && typeof codeDoc.pending === 'object')
-      ? (codeDoc.pending as Record<string, unknown>)
+      ? codeDoc.pending
       : codeDoc;
     const rawNsTokens = (codeDoc.nsTokens && typeof codeDoc.nsTokens === 'object')
-      ? (codeDoc.nsTokens as Record<string, unknown>)
+      ? codeDoc.nsTokens
       : undefined;
 
     return {
       codeId: hmacId,
-      clientId: (rawPending.clientId ?? rawPending.client_id ?? codeDoc.clientId ?? codeDoc.client_id ?? '') as string,
-      codeChallenge: (rawPending.codeChallenge ?? rawPending.code_challenge ?? '') as string,
-      redirectUri: (rawPending.redirectUri ?? rawPending.redirect_uri ?? '') as string,
+      clientId: (rawPending.clientId ?? rawPending.client_id ?? codeDoc.clientId ?? codeDoc.client_id ?? ''),
+      codeChallenge: (rawPending.codeChallenge ?? rawPending.code_challenge ?? ''),
+      redirectUri: (rawPending.redirectUri ?? rawPending.redirect_uri ?? ''),
       createdAt: typeof rawPending.createdAt === 'number' ? rawPending.createdAt : (typeof rawPending.created_at === 'number' ? rawPending.created_at : 0),
       expiresAt: typeof codeDoc.expiresAt === 'number' ? codeDoc.expiresAt : (typeof codeDoc.expires_at === 'number' ? codeDoc.expires_at : 0),
       state: typeof rawPending.state === 'string' ? rawPending.state : null,
       scopes: Array.isArray(rawPending.scopes) ? [...rawPending.scopes].sort(codeUnitCompare) : [],
-      nsAccessToken: (rawNsTokens?.access_token ?? rawNsTokens?.nsAccessToken ?? codeDoc.nsAccessToken ?? '') as string,
-      nsRefreshToken: (rawNsTokens?.refresh_token ?? rawNsTokens?.nsRefreshToken ?? codeDoc.nsRefreshToken ?? null) as string | null,
-      nsUsername: (rawNsTokens?.username ?? rawNsTokens?.nsUsername ?? codeDoc.nsUsername ?? null) as string | null,
-      nsUserRole: (rawNsTokens?.nsUserRole ?? codeDoc.nsUserRole ?? null) as string | null,
-      nsApiUrl: (rawNsTokens?.nsApiUrl ?? codeDoc.nsApiUrl ?? null) as string | null,
-      serverBaseUrl: (codeDoc.serverBaseUrl ?? null) as string | null,
-      extra: (codeDoc.extra ?? {}) as Record<string, string>,
+      nsAccessToken: (rawNsTokens?.access_token ?? rawNsTokens?.nsAccessToken ?? codeDoc.nsAccessToken ?? ''),
+      nsRefreshToken: (rawNsTokens?.refresh_token ?? rawNsTokens?.nsRefreshToken ?? codeDoc.nsRefreshToken ?? null),
+      nsUsername: (rawNsTokens?.username ?? rawNsTokens?.nsUsername ?? codeDoc.nsUsername ?? null),
+      nsUserRole: (rawNsTokens?.nsUserRole ?? codeDoc.nsUserRole ?? null),
+      nsApiUrl: (rawNsTokens?.nsApiUrl ?? codeDoc.nsApiUrl ?? null),
+      serverBaseUrl: (codeDoc.serverBaseUrl ?? null),
+      extra: (codeDoc.extra ?? {}),
       v: 2,
     };
   }
@@ -181,7 +192,7 @@ export function projectSourceLogical(
   if (candidate.kind === 'resumeTokens') {
     const resDoc = sources.get('resumeTokens');
     if (!resDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing resumeTokens source`);
-    const resumeId = (resDoc.id as string) ?? '';
+    const resumeId = (resDoc.id ?? '');
     return {
       resumeId,
       consumedAt: typeof resDoc.consumedAt === 'number' ? resDoc.consumedAt : 0,
@@ -193,18 +204,18 @@ export function projectSourceLogical(
   if (candidate.kind === 'clients') {
     const clientDoc = sources.get('clients');
     if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients source`);
-    const clientId = clientDoc.id as string;
+    const clientId = clientDoc.client_id ?? clientDoc.id;
     return {
       clientId,
       clientName: typeof clientDoc.client_name === 'string' ? clientDoc.client_name : null,
       clientSecret: typeof clientDoc.client_secret === 'string' ? clientDoc.client_secret : null,
       redirectUris: Array.isArray(clientDoc.redirect_uris) ? [...clientDoc.redirect_uris].sort(codeUnitCompare) : [],
-      tokenEndpointAuthMethod: (clientDoc.token_endpoint_auth_method ?? 'none') as string,
+      tokenEndpointAuthMethod: (clientDoc.token_endpoint_auth_method ?? 'none'),
       grantTypes: Array.isArray(clientDoc.grant_types) ? [...clientDoc.grant_types].sort(codeUnitCompare) : [],
       responseTypes: Array.isArray(clientDoc.response_types) ? [...clientDoc.response_types].sort(codeUnitCompare) : [],
-      clientUri: (clientDoc.client_uri ?? null) as string | null,
-      logoUri: (clientDoc.logo_uri ?? null) as string | null,
-      scope: (clientDoc.scope ?? null) as string | null,
+      clientUri: (clientDoc.client_uri ?? null),
+      logoUri: (clientDoc.logo_uri ?? null),
+      scope: (clientDoc.scope ?? null),
       clientIdIssuedAt: typeof clientDoc.client_id_issued_at === 'number' ? clientDoc.client_id_issued_at : null,
       v: 2,
     };
@@ -213,22 +224,18 @@ export function projectSourceLogical(
   throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${candidate.kind}`);
 }
 
-export function projectTargetLogical(
-  candidate: CandidateCommitment,
-  targets: Map<string, Record<string, unknown>>,
-  codec: Codec,
-): Record<string, unknown> {
+export function projectTargetLogical(candidate, targets, codec) {
   if (candidate.kind === 'pr56Families') {
     const famDoc = targets.get('families');
     if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
     const famData = famDoc;
-    const familyId = famData.id as string;
+    const familyId = famData.id;
     const generation = famData.generation;
     if (typeof generation !== 'number' || generation < 1) {
       throw new CutoverFenceError(`Target family ${familyId} malformed generation`);
     }
     const unsealedFam = famData.sealed
-      ? codec.open<Record<string, unknown>>(famData.sealed as string, familyAad({ id: familyId, generation }))
+      ? codec.open(famData.sealed, familyAad({ id: familyId, generation }))
       : null;
     if (!unsealedFam) {
       throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${familyId}`);
@@ -242,7 +249,7 @@ export function projectTargetLogical(
       throw new CutoverFenceError(`Target upstream ${familyId} malformed grantVersion`);
     }
     const unsealedUp = upData.sealed
-      ? codec.open<Record<string, unknown>>(upData.sealed as string, upstreamAad({ id: familyId, grantVersion }))
+      ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion }))
       : null;
     if (!unsealedUp) {
       throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${familyId}`);
@@ -251,11 +258,11 @@ export function projectTargetLogical(
     const sessDoc = targets.get('tokens');
     if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
     const sessData = sessDoc;
-    if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number') {
+    if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number') {
       throw new CutoverFenceError(`Target session invalid for family ${familyId}`);
     }
     const unsealedSess = sessData.sealed
-      ? codec.open<Record<string, unknown>>(sessData.sealed as string, accessAad({ id: sessData.id as string, familyId }))
+      ? codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }))
       : null;
     if (!unsealedSess) {
       throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${familyId}`);
@@ -273,7 +280,7 @@ export function projectTargetLogical(
       throw new CutoverFenceError(`Target active refresh token invalid for family ${familyId}`);
     }
 
-    let previousRefresh: Record<string, unknown> | null = null;
+    let previousRefresh = null;
     const prevRefDoc = targets.get('prevRefresh');
     if (prevRefDoc) {
       const prevRefData = prevRefDoc;
@@ -285,8 +292,8 @@ export function projectTargetLogical(
       ) {
         throw new CutoverFenceError(`Target consumed refresh token invalid for family ${familyId}`);
       }
-      const unsealedSuccessor = codec.open<{ accessToken: string; refreshToken: string }>(
-        prevRefData.successorSealed as string,
+      const unsealedSuccessor = codec.open(
+        prevRefData.successorSealed,
         `successor:${prevRefData.id}`,
       );
       if (!unsealedSuccessor || typeof unsealedSuccessor.accessToken !== 'string' || typeof unsealedSuccessor.refreshToken !== 'string') {
@@ -303,30 +310,30 @@ export function projectTargetLogical(
       };
     }
 
-    const rawRetired = targets.get('retiredRefresh') as { ids: string[] } | undefined;
+    const rawRetired = targets.get('retiredRefresh');
     const retiredRefreshFingerprints = (rawRetired?.ids || []).sort(codeUnitCompare);
 
     return {
       familyId,
       generation,
-      status: famData.status as string,
-      clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? '') as string,
-      serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null) as string | null,
-      extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}) as Record<string, string>,
-      activeRefreshId: famData.activeRefreshId as string,
-      currentAccessTokenId: famData.currentAccessTokenId as string,
+      status: famData.status,
+      clientId: (unsealedFam.clientId ?? unsealedSess.clientId ?? ''),
+      serverBaseUrl: (unsealedFam.serverBaseUrl ?? unsealedSess.serverBaseUrl ?? null),
+      extra: (unsealedFam.extra ?? unsealedSess.extra ?? {}),
+      activeRefreshId: famData.activeRefreshId,
+      currentAccessTokenId: famData.currentAccessTokenId,
       previousRefresh,
       retiredRefreshFingerprints,
       upstream: {
         grantVersion,
-        nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
-        nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
-        nsUsername: (unsealedUp.nsUsername ?? '') as string,
-        nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
-        nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
+        nsAccessToken: (unsealedUp.nsAccessToken ?? ''),
+        nsRefreshToken: (unsealedUp.nsRefreshToken ?? null),
+        nsUsername: (unsealedUp.nsUsername ?? ''),
+        nsUserRole: (unsealedUp.nsUserRole ?? null),
+        nsApiUrl: (unsealedUp.nsApiUrl ?? null),
         nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
       },
-      expiresAt: sessData.expiresAt as number,
+      expiresAt: sessData.expiresAt,
       v: 2,
     };
   }
@@ -335,9 +342,9 @@ export function projectTargetLogical(
     const famDoc = targets.get('families');
     if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
     const famData = famDoc;
-    const familyId = famData.id as string;
+    const familyId = famData.id;
     const unsealedFam = famData.sealed
-      ? codec.open<Record<string, unknown>>(famData.sealed as string, familyAad({ id: familyId, generation: 1 }))
+      ? codec.open(famData.sealed, familyAad({ id: familyId, generation: 1 }))
       : null;
     if (!unsealedFam) throw new CutoverFenceError(`Target base family decrypt failed for ${familyId}`);
 
@@ -345,18 +352,18 @@ export function projectTargetLogical(
     if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream target document`);
     const upData = upDoc;
     const unsealedUp = upData.sealed
-      ? codec.open<Record<string, unknown>>(upData.sealed as string, upstreamAad({ id: familyId, grantVersion: 1 }))
+      ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }))
       : null;
     if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
 
     const sessDoc = targets.get('tokens');
     if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
     const sessData = sessDoc;
-    if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number') {
+    if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number') {
       throw new CutoverFenceError(`Target base session invalid for ${sessData.id}`);
     }
     const unsealedSess = sessData.sealed
-      ? codec.open<Record<string, unknown>>(sessData.sealed as string, accessAad({ id: sessData.id as string, familyId }))
+      ? codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }))
       : null;
     if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessData.id}`);
 
@@ -376,21 +383,21 @@ export function projectTargetLogical(
       familyId,
       generation: 1,
       status: 'active',
-      clientId: (unsealedFam.clientId ?? '') as string,
-      serverBaseUrl: (unsealedFam.serverBaseUrl ?? null) as string | null,
-      extra: (unsealedFam.extra ?? {}) as Record<string, string>,
-      activeRefreshId: famData.activeRefreshId as string,
-      currentAccessTokenId: famData.currentAccessTokenId as string,
+      clientId: (unsealedFam.clientId ?? ''),
+      serverBaseUrl: (unsealedFam.serverBaseUrl ?? null),
+      extra: (unsealedFam.extra ?? {}),
+      activeRefreshId: famData.activeRefreshId,
+      currentAccessTokenId: famData.currentAccessTokenId,
       upstream: {
         grantVersion: 1,
-        nsAccessToken: (unsealedUp.nsAccessToken ?? '') as string,
-        nsRefreshToken: (unsealedUp.nsRefreshToken ?? null) as string | null,
-        nsUsername: (unsealedUp.nsUsername ?? '') as string,
-        nsUserRole: (unsealedUp.nsUserRole ?? null) as string | null,
-        nsApiUrl: (unsealedUp.nsApiUrl ?? null) as string | null,
+        nsAccessToken: (unsealedUp.nsAccessToken ?? ''),
+        nsRefreshToken: (unsealedUp.nsRefreshToken ?? null),
+        nsUsername: (unsealedUp.nsUsername ?? ''),
+        nsUserRole: (unsealedUp.nsUserRole ?? null),
+        nsApiUrl: (unsealedUp.nsApiUrl ?? null),
         nsExpiresAt: typeof upData.nsExpiresAt === 'number' ? upData.nsExpiresAt : null,
       },
-      expiresAt: sessData.expiresAt as number,
+      expiresAt: sessData.expiresAt,
       v: 2,
     };
   }
@@ -403,24 +410,27 @@ export function projectTargetLogical(
       throw new CutoverFenceError(`Target auth code ${codeData.id} missing v: 2 or valid expiresAt`);
     }
     const unsealed = codeData.sealed
-      ? codec.open<AuthCodeData>(codeData.sealed as string, `code:${codeData.id}`)
+      ? codec.open(codeData.sealed, `code:${codeData.id}`)
       : null;
     if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${codeData.id}`);
 
+    const rawPending = unsealed.pending || {};
+    const rawNsTokens = unsealed.nsTokens || {};
+
     return {
-      codeId: codeData.id as string,
+      codeId: codeData.id,
       clientId: unsealed.clientId,
-      codeChallenge: unsealed.pending.codeChallenge,
-      redirectUri: unsealed.pending.redirectUri,
-      createdAt: unsealed.pending.createdAt,
+      codeChallenge: rawPending.codeChallenge,
+      redirectUri: rawPending.redirectUri,
+      createdAt: rawPending.createdAt,
       expiresAt: codeData.expiresAt,
-      state: unsealed.pending.state ?? null,
-      scopes: Array.isArray(unsealed.pending.scopes) ? [...unsealed.pending.scopes].sort(codeUnitCompare) : [],
-      nsAccessToken: unsealed.nsTokens.access_token,
-      nsRefreshToken: unsealed.nsTokens.refresh_token ?? null,
-      nsUsername: unsealed.nsTokens.username ?? null,
-      nsUserRole: unsealed.nsTokens.nsUserRole ?? null,
-      nsApiUrl: unsealed.nsTokens.nsApiUrl ?? null,
+      state: rawPending.state ?? null,
+      scopes: Array.isArray(rawPending.scopes) ? [...rawPending.scopes].sort(codeUnitCompare) : [],
+      nsAccessToken: rawNsTokens.access_token,
+      nsRefreshToken: rawNsTokens.refresh_token ?? null,
+      nsUsername: rawNsTokens.username ?? null,
+      nsUserRole: rawNsTokens.nsUserRole ?? null,
+      nsApiUrl: rawNsTokens.nsApiUrl ?? null,
       serverBaseUrl: unsealed.serverBaseUrl ?? null,
       extra: unsealed.extra ?? {},
       v: 2,
@@ -435,7 +445,7 @@ export function projectTargetLogical(
       throw new CutoverFenceError(`Target resume token ${resData.id} missing _mcp_format v3_target`);
     }
     return {
-      resumeId: resData.id as string,
+      resumeId: resData.id,
       consumedAt: typeof resData.consumedAt === 'number' ? resData.consumedAt : 0,
       expiresAt: typeof resData.expiresAt === 'number' ? resData.expiresAt : 0,
       v: 2,
@@ -447,36 +457,23 @@ export function projectTargetLogical(
     if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients target document`);
     const clientData = clientDoc;
     if (clientData._mcp_format !== 'v3_target' || clientData.v !== 2) {
-      throw new CutoverFenceError(`Target oauth client ${clientData.client_id} missing _mcp_format v3_target`);
+      throw new CutoverFenceError(`Target oauth client ${clientData.client_id ?? clientData.id} missing _mcp_format v3_target`);
     }
     return {
-      clientId: clientData.client_id as string,
+      clientId: clientData.client_id ?? clientData.id,
       clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
       clientSecret: typeof clientData.client_secret === 'string' ? clientData.client_secret : null,
       redirectUris: Array.isArray(clientData.redirect_uris) ? [...clientData.redirect_uris].sort(codeUnitCompare) : [],
-      tokenEndpointAuthMethod: (clientData.token_endpoint_auth_method ?? 'none') as string,
+      tokenEndpointAuthMethod: (clientData.token_endpoint_auth_method ?? 'none'),
       grantTypes: Array.isArray(clientData.grant_types) ? [...clientData.grant_types].sort(codeUnitCompare) : [],
       responseTypes: Array.isArray(clientData.response_types) ? [...clientData.response_types].sort(codeUnitCompare) : [],
-      clientUri: (clientData.client_uri ?? null) as string | null,
-      logoUri: (clientData.logo_uri ?? null) as string | null,
-      scope: (clientData.scope ?? null) as string | null,
+      clientUri: (clientData.client_uri ?? null),
+      logoUri: (clientData.logo_uri ?? null),
+      scope: (clientData.scope ?? null),
       clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
       v: 2,
     };
   }
 
   throw new CutoverFenceError(`Unsupported candidate kind for target projection: ${candidate.kind}`);
-}
-
-export function createGraphProjector(codec: Codec): GraphProjectorAdapter {
-  return {
-    id: GRAPH_PROJECTOR_ID,
-    version: GRAPH_PROJECTOR_VERSION,
-    projectSourceLogical(candidate, sources) {
-      return projectSourceLogical(candidate, sources, codec);
-    },
-    projectTargetLogical(candidate, targets) {
-      return projectTargetLogical(candidate, targets, codec);
-    },
-  };
 }
