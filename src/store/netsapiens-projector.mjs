@@ -272,6 +272,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       nsApiUrl: (rawNsTokens?.nsApiUrl ?? codeDoc.nsApiUrl ?? null),
       serverBaseUrl: (codeDoc.serverBaseUrl ?? null),
       extra: (codeDoc.extra ?? {}),
+      used: Boolean(rawPending.used ?? codeDoc.used),
       v: 2,
     };
   }
@@ -612,6 +613,7 @@ export function projectTargetLogical(candidate, targets, codec) {
       nsApiUrl: rawNsTokens.nsApiUrl ?? null,
       serverBaseUrl: unsealed.serverBaseUrl ?? null,
       extra: unsealed.extra ?? {},
+      used: Boolean(codeData.used ?? unsealed.used),
       v: 2,
     };
   }

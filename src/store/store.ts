@@ -117,10 +117,10 @@ async function decodeCurrentSession(
 export function createStore(backend: StoreBackend, { namespace, key }: { namespace: string; key: Uint8Array }): McpStore {
   const codec = createCodec(key);
 
-  const decodeCode = (row: { id: string; expiresAt: number; sealed: string } | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
-    if (!row || row.expiresAt <= Date.now()) return undefined;
-    const data = codec.open<AuthCodeData>(row.sealed, `code:${row.id}`);
-    if (!data) return undefined;
+  const decodeCode = (row: AuthCodeRow | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
+    if (!row || row.expiresAt <= Date.now() || row.used) return undefined;
+    const data = codec.open<AuthCodeData & { used?: boolean }>(row.sealed, `code:${row.id}`);
+    if (!data || data.used) return undefined;
     if ((data.serverBaseUrl || expected.serverBaseUrl) && (!data.serverBaseUrl || !expected.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase())) return undefined;
     if (expected.clientId && (data.clientId ?? data.pending.clientId) !== expected.clientId) return undefined;
     return data;

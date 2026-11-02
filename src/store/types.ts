@@ -206,7 +206,7 @@ export interface SessionRow {
   leaseUntil?: number;
   sealed: string;
 }
-export interface AuthCodeRow { id: string; expiresAt: number; sealed: string; }
+export interface AuthCodeRow { id: string; expiresAt: number; sealed: string; used?: boolean; }
 export interface ResumeRow { id: string; consumedAt: number; expiresAt: number; }
 export interface StoreBackend {
   readonly name: string;
