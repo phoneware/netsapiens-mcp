@@ -37,6 +37,9 @@ export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 
   if ('_mcp_format' in (client as Record<string, unknown>)) {
     throw new Error("Invalid client metadata: reserved field '_mcp_format' cannot be set by client");
   }
+  if ('_targetFormat' in (client as Record<string, unknown>)) {
+    throw new Error("Invalid client metadata: reserved field '_targetFormat' cannot be set by client");
+  }
   if ('v' in (client as Record<string, unknown>)) {
     throw new Error("Invalid client metadata: reserved field 'v' cannot be set by client");
   }

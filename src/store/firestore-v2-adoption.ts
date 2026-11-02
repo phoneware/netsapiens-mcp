@@ -1407,8 +1407,14 @@ export async function adoptFirestoreLegacyTokens(
     const logicalProjection = {
       clientId,
       clientName: typeof clientData.client_name === 'string' ? clientData.client_name : null,
+      clientSecret: typeof clientData.client_secret === 'string' ? clientData.client_secret : null,
       redirectUris: [...clientData.redirect_uris].sort(codeUnitCompare),
       tokenEndpointAuthMethod: clientData.token_endpoint_auth_method as string,
+      grantTypes: Array.isArray(clientData.grant_types) ? [...clientData.grant_types].sort(codeUnitCompare) : [],
+      responseTypes: Array.isArray(clientData.response_types) ? [...clientData.response_types].sort(codeUnitCompare) : [],
+      clientUri: (clientData.client_uri ?? null) as string | null,
+      logoUri: (clientData.logo_uri ?? null) as string | null,
+      scope: (clientData.scope ?? null) as string | null,
       clientIdIssuedAt: typeof clientData.client_id_issued_at === 'number' ? clientData.client_id_issued_at : null,
     };
     const logicalDigest = H(key, 'logical-record', namespace, currentEpoch, ['clients', logicalProjection]);
@@ -1522,6 +1528,11 @@ export async function adoptFirestoreLegacyTokens(
     sourceInventoryDigest,
     sourceLogicalDigest,
     candidateCommitments,
+    ...(totalPhysicalRecords > 0 ? {
+      projectorId: 'netsapiens-mcp/v2-v3-projector',
+      projectorVersion: 1,
+      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+    } : {}),
   };
 
   validateMigrationPreflightLimits(preparedManifest);
@@ -1585,13 +1596,84 @@ export async function adoptFirestoreLegacyTokens(
             rData?.namespace !== namespace ||
             rData?.epoch !== currentEpoch ||
             rData?.migrationRunId !== runId ||
+            rData?.codeSha !== codeSha ||
+            rData?.codeArtifact !== codeArtifact ||
+            rData?.packageIntegrity !== packageIntegrity ||
+            rData?.protocolDigest !== protocolDigest ||
+            rData?.kind !== 'receipt' ||
+            (rData?.disposition !== 'written' && rData?.disposition !== 'retained') ||
             rData?.candidateId !== cand.id ||
             rData?.preparedDigest !== preparedDigest ||
             rData?.candidateDigest !== candDigest ||
-            rData?.logicalDigest !== cand.logicalDigest
+            rData?.logicalDigest !== cand.logicalDigest ||
+            !Array.isArray(rData?.sourceAfter) ||
+            !Array.isArray(rData?.targetAfter)
           ) {
             throw new CutoverFenceError(`Invalid or corrupt receipt for candidate ${cand.id}`);
           }
+
+          if (rData.targetAfter.length !== cand.targets.length) {
+            throw new CutoverFenceError(`Receipt targetAfter length mismatch for candidate ${cand.id}`);
+          }
+          for (let i = 0; i < cand.targets.length; i++) {
+            const t = cand.targets[i];
+            const rT = rData.targetAfter[i];
+            if (rT.collection !== t.collection || rT.id !== t.id) {
+              throw new CutoverFenceError(`Receipt target descriptor mismatch for candidate ${cand.id}`);
+            }
+            const targetPhysicalCol = `${namespace}_${COLLECTION_SUFFIX_MAP[t.collection]?.target || t.collection}`;
+            const tColSnap = await tx.get(db.collection(targetPhysicalCol));
+            let foundDoc: any = null;
+            for (const d of tColSnap.docs) {
+              if (H(key, 'target-id', namespace, currentEpoch, [t.collection, d.id]) === t.id) {
+                foundDoc = d;
+                break;
+              }
+            }
+            if (!foundDoc) {
+              throw new CutoverFenceError(`Target document missing for committed receipt ${cand.id}: ${t.collection}/${t.id}`);
+            }
+            const expectedDigest = H(key, 'target-record', namespace, currentEpoch, [t.collection, t.id, foundDoc.data() || {}]);
+            if (rT.recordDigest !== expectedDigest) {
+              throw new CutoverFenceError(`Target postimage digest mismatch for committed receipt ${cand.id}`);
+            }
+          }
+
+          if (rData.sourceAfter.length !== cand.sources.length) {
+            throw new CutoverFenceError(`Receipt sourceAfter length mismatch for candidate ${cand.id}`);
+          }
+          for (let i = 0; i < cand.sources.length; i++) {
+            const s = cand.sources[i];
+            const rS = rData.sourceAfter[i];
+            if (rS.collection !== s.collection || rS.id !== s.id) {
+              throw new CutoverFenceError(`Receipt source descriptor mismatch for candidate ${cand.id}`);
+            }
+            const srcPhysicalCol = `${namespace}_${COLLECTION_SUFFIX_MAP[s.collection]?.source || s.collection}`;
+            const sColSnap = await tx.get(db.collection(srcPhysicalCol));
+            if (rS.recordDigest === null) {
+              for (const d of sColSnap.docs) {
+                if (H(key, 'source-id', namespace, currentEpoch, [s.collection, d.id]) === s.id) {
+                  throw new CutoverFenceError(`Deleted source document unexpectedly exists for candidate ${cand.id}`);
+                }
+              }
+            } else {
+              let foundSrcDoc: any = null;
+              for (const d of sColSnap.docs) {
+                if (H(key, 'source-id', namespace, currentEpoch, [s.collection, d.id]) === s.id) {
+                  foundSrcDoc = d;
+                  break;
+                }
+              }
+              if (!foundSrcDoc) {
+                throw new CutoverFenceError(`Retained source document missing for candidate ${cand.id}`);
+              }
+              const expectedSrcDigest = H(key, 'source-record', namespace, currentEpoch, [s.collection, s.id, foundSrcDoc.data() || {}]);
+              if (rS.recordDigest !== expectedSrcDigest) {
+                throw new CutoverFenceError(`Source postimage digest mismatch for candidate ${cand.id}`);
+              }
+            }
+          }
+
           const rDig = D('receipt', namespace, currentEpoch, rData);
           return {
             disposition: rData.disposition === 'retained' ? ('skipped' as const) : ('migrated' as const),
@@ -1903,17 +1985,31 @@ export async function adoptFirestoreLegacyTokens(
           ? codec.open<any>(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }))
           : null;
         if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
+        const activeRefTargetId = H(key, 'target-id', namespace, currentEpoch, ['refresh', famData.activeRefreshId]);
+        const activeRefDoc = targetDocsByColAndTargetId.get(`refresh:${activeRefTargetId}`);
+        if (!activeRefDoc) throw new CutoverFenceError(`Target active refresh token missing for base family ${familyId}`);
+        const activeRefData = activeRefDoc.data() || {};
+        if (
+          activeRefData.familyId !== familyId ||
+          activeRefData.status !== 'active' ||
+          activeRefData.generation !== 1 ||
+          activeRefData.v !== 2
+        ) {
+          throw new CutoverFenceError(`Target active refresh token invalid for base family ${familyId}`);
+        }
 
         const sessTarget = cand.targets.find((t: any) => t.collection === 'tokens');
         if (!sessTarget) throw new CutoverFenceError(`Candidate ${cand.id} missing tokens target descriptor`);
         const sessDoc = targetDocsByColAndTargetId.get(`tokens:${sessTarget.id}`);
         if (!sessDoc) throw new CutoverFenceError(`Target base session ${sessTarget.id} missing`);
         const sessData = sessDoc.data() || {};
+        if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number') {
+          throw new CutoverFenceError(`Target base session invalid for ${sessDoc.id}`);
+        }
         const unsealedSess = sessData.sealed
           ? codec.open<any>(sessData.sealed, accessAad({ id: sessDoc.id, familyId }))
           : null;
         if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessDoc.id}`);
-
         const reconstructedBaseProjection = {
           familyId,
           generation: 1,
@@ -2049,6 +2145,11 @@ export async function adoptFirestoreLegacyTokens(
     sourceLogicalDigest,
     targetLogicalDigest,
     receiptSetDigest,
+    ...(totalPhysicalRecords > 0 ? {
+      projectorId: 'netsapiens-mcp/v2-v3-projector',
+      projectorVersion: 1,
+      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+    } : {}),
   };
 
   const migrationManifestDigest = computeManifestDigest(finalManifest);
@@ -2066,6 +2167,11 @@ export async function adoptFirestoreLegacyTokens(
     preparedDigest,
     migrationManifestDigest,
     emptyNamespace: isActuallyEmpty,
+    ...(totalPhysicalRecords > 0 ? {
+      projectorId: 'netsapiens-mcp/v2-v3-projector',
+      projectorVersion: 1,
+      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+    } : {}),
     adoptedAt: nowProvider(),
   };
   if (!dryRun && report.errors === 0) {
