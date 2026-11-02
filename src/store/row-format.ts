@@ -1,3 +1,5 @@
+import { CutoverFenceError } from './errors.js';
+
 export const ACCESS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const SESSION_RETENTION_MS = ACCESS_RETENTION_MS;
 export const REFRESH_RETRY_WINDOW_MS = 30_000;
@@ -43,4 +45,19 @@ export function compareDescriptors(
 
 export function safeDocEntry(id: string, data: Record<string, unknown> | null | undefined): Record<string, unknown> {
   return { ...(data || {}), id };
+}
+
+export function startMonotonicTimer() {
+  const start = performance.now();
+  return {
+    elapsedMs() {
+      return performance.now() - start;
+    },
+    assertUnderDeadline(limitMs = 16_000, label = 'Transaction attempt') {
+      const elapsed = performance.now() - start;
+      if (elapsed > limitMs) {
+        throw new CutoverFenceError(`${label} exceeded ${limitMs} ms lock deadline (${Math.round(elapsed)} ms)`);
+      }
+    },
+  };
 }

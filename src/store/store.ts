@@ -21,6 +21,15 @@ import type {
   UpstreamTokens,
 } from './types.js';
 import { logger } from '../utils/logger.js';
+import {
+  encodeSessionsRow,
+  encodeRefreshFamiliesRow,
+  encodeUpstreamRow,
+  encodeRefreshRow,
+  encodeAuthCodesRow,
+  encodeResumeTokensRow,
+  encodeOAuthClientsRow,
+} from './row-codec.js';
 
 export {
   ACCESS_RETENTION_MS,
@@ -130,55 +139,10 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         const grantVersion = 1;
         const now = Date.now();
 
-        const accessRow: AccessRow = {
-          id: accessId,
-          familyId,
-          expiresAt: session.expiresAt,
-          retainUntil: session.expiresAt + ACCESS_RETENTION_MS,
-          sealed: codec.seal({
-            familyId,
-            clientId: session.clientId,
-            serverBaseUrl: session.serverBaseUrl,
-            extra: session.extra,
-          } satisfies AccessSealedData, accessAad({ id: accessId, familyId })),
-        };
-
-        const refreshRow: RefreshPointerRow = {
-          id: refreshId,
-          familyId,
-          status: 'active',
-          generation,
-        };
-
-        const familyRow: FamilyRow = {
-          id: familyId,
-          generation,
-          status: 'active',
-          activeRefreshId: refreshId,
-          currentAccessTokenId: accessId,
-          updatedAt: now,
-          sealed: codec.seal({
-            clientId: session.clientId,
-            serverBaseUrl: session.serverBaseUrl,
-            extra: session.extra,
-            retiredRefreshIds: [],
-          } satisfies FamilySealedData, familyAad({ id: familyId, generation })),
-        };
-
-        const upstreamRow: UpstreamGrantRow = {
-          id: familyId,
-          grantVersion,
-          nsExpiresAt: session.nsExpiresAt,
-          updatedAt: now,
-          sealed: codec.seal({
-            nsAccessToken: session.nsAccessToken,
-            nsRefreshToken: session.nsRefreshToken,
-            nsUsername: session.nsUsername,
-            nsUserRole: session.nsUserRole,
-            nsApiUrl: session.nsApiUrl,
-          } satisfies UpstreamSealedData, upstreamAad({ id: familyId, grantVersion })),
-        };
-
+        const accessRow = encodeSessionsRow(codec, accessId, familyId, session, now);
+        const refreshRow = encodeRefreshRow(refreshId, familyId, generation, now);
+        const familyRow = encodeRefreshFamiliesRow(codec, familyId, generation, refreshId, accessId, session, [], 'active', now);
+        const upstreamRow = encodeUpstreamRow(codec, familyId, grantVersion, session, now);
         await backend.atomicIssue({ accessRow, refreshRow, familyRow, upstreamRow });
         return {
           ...session,
@@ -633,8 +597,34 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
 
     authCodes: {
       async put(code: string, data: AuthCodeData): Promise<void> {
-        const id = codec.id('code', code);
-        await backend.putAuthCode({ id, expiresAt: Date.now() + AUTH_CODE_TTL_MS, sealed: codec.seal(data, `code:${id}`) });
+        const expiresAt = Date.now() + AUTH_CODE_TTL_MS;
+        const row = encodeAuthCodesRow(
+          codec,
+          code,
+          {
+            pending: {
+              clientId: data.clientId,
+              codeChallenge: data.codeChallenge,
+              redirectUri: data.redirectUri,
+              createdAt: data.createdAt,
+              state: (data as any).state,
+              scopes: (data as any).scopes,
+            },
+            nsTokens: {
+              access_token: (data as any).nsAccessToken || '',
+              refresh_token: (data as any).nsRefreshToken,
+              username: (data as any).nsUsername,
+              nsUserRole: (data as any).nsUserRole,
+              nsApiUrl: (data as any).nsApiUrl,
+            },
+            clientId: data.clientId,
+            serverBaseUrl: (data as any).serverBaseUrl,
+            extra: (data as any).extra,
+          },
+          expiresAt,
+          Date.now(),
+        );
+        await backend.putAuthCode(row);
       },
       async getChallenge(code: string, expected: { serverBaseUrl?: string; clientId?: string }): Promise<string | undefined> {
         return decodeCode(await backend.getAuthCode(codec.id('code', code)), expected)?.pending.codeChallenge;
@@ -739,7 +729,8 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     resumeTokens: {
       async consume(id: string): Promise<boolean> {
         const now = Date.now();
-        return backend.insertResumeIfAbsent({ id, consumedAt: now, expiresAt: now + RESUME_TOKEN_TTL_MS }, now);
+        const row = encodeResumeTokensRow(id, now, now + RESUME_TOKEN_TTL_MS, now);
+        return backend.insertResumeIfAbsent(row as any, now);
       },
     },
 
@@ -767,7 +758,8 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       },
       async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
         const full = createRegisteredClient(client);
-        await backend.putClient(full);
+        const row = encodeOAuthClientsRow(full.client_id, full, Date.now());
+        await backend.putClient(row as any);
         return full;
       },
     },

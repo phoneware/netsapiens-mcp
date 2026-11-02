@@ -210,7 +210,7 @@ export const APPROVED_GRAPH_PROJECTOR_ID = PROJECTOR_ID;
 export const APPROVED_GRAPH_PROJECTOR_VERSION = PROJECTOR_VERSION;
 export const NONEMPTY_PROJECTOR_KEYS = ['projectorId', 'projectorVersion', 'projectorDigest'];
 
-const APPROVED_PROJECTOR_SHA256 = '51892d399b95546bdc247cd5e07a20db90677353e208b6124763ea57549a8da0';
+const APPROVED_PROJECTOR_SHA256 = 'e69f431c65d84a762bae204dc888bb8d579e52e8b7f283cfbc62dce91b61397c';
 
 export function getMeasuredProjectorDigest() {
   return APPROVED_PROJECTOR_SHA256;

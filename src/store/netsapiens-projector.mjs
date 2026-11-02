@@ -1,6 +1,12 @@
+import { createHash } from 'node:crypto';
 import { createCodec } from './codec.js';
 import { accessAad, familyAad, upstreamAad, codeUnitCompare } from './row-format.js';
 import { CutoverFenceError } from './errors.js';
+
+export function sanitizeId(id) {
+  if (typeof id !== 'string' || !id) return '[sanitized]';
+  return createHash('sha256').update(id).digest('hex').slice(0, 12);
+}
 
 export { createCodec, accessAad, familyAad, upstreamAad, codeUnitCompare, CutoverFenceError };
 
@@ -42,27 +48,26 @@ export function getTimestampMs(val) {
 export function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === 'pr56Families') {
     const famDoc = sources.get('families');
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families source`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families source`);
     const famData = famDoc;
     const familyId = famData.id;
     if (!familyId || typeof familyId !== 'string') throw new CutoverFenceError('pr56Families missing required familyId');
-    // Legacy PR56 source omits generation; default to 1 as documented in legacy schema
     const generation = typeof famData.generation === 'number' ? famData.generation : 1;
 
     const refDoc = sources.get('refresh');
-    if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh source`);
+    if (!refDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh source`);
     const curRefDoc = refDoc;
     if (curRefDoc.id !== famData.currentRefreshToken || curRefDoc.status !== 'active') {
-      throw new CutoverFenceError(`Active refresh token '${curRefDoc.id}' mismatch with currentRefreshToken '${famData.currentRefreshToken}' or not active`);
+      throw new CutoverFenceError(`Active refresh token mismatch or not active for family ${sanitizeId(familyId)}`);
     }
     const currentRefId = curRefDoc.id;
 
     const upDoc = sources.get('upstream');
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream source`);
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream source`);
     const grant = ((upDoc.grant && typeof upDoc.grant === 'object') ? upDoc.grant : upDoc);
 
     const tokDoc = sources.get('tokens');
-    if (!tokDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens source`);
+    if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const accessId = (tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken);
     if (!accessId || typeof accessId !== 'string') throw new CutoverFenceError('pr56Families missing accessId');
 
@@ -74,13 +79,13 @@ export function projectSourceLogical(candidate, sources, codec) {
       const prevId = famData.previousRefreshToken;
       const prevDoc = sources.get('prevRefresh');
       if (!prevDoc) {
-        throw new CutoverFenceError(`Candidate ${candidate.id} has previousRefreshToken '${prevId}' but missing prevRefresh source`);
+        throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing prevRefresh source`);
       }
       if (prevDoc.id !== prevId || prevDoc.status !== 'consumed') {
-        throw new CutoverFenceError(`Previous refresh token '${prevDoc.id}' mismatch with previousRefreshToken '${prevId}' or not consumed`);
+        throw new CutoverFenceError(`Previous refresh token mismatch or not consumed for family ${sanitizeId(familyId)}`);
       }
       if (typeof prevDoc.consumedAt !== 'number') {
-        throw new CutoverFenceError(`Candidate ${candidate.id} previous refresh missing numeric consumedAt`);
+        throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} previous refresh missing numeric consumedAt`);
       }
       const prevRefreshId = codec.id('refresh', prevId);
       previousRefresh = {
@@ -97,7 +102,18 @@ export function projectSourceLogical(candidate, sources, codec) {
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints)
       ? famData.retiredRefreshFingerprints
       : (Array.isArray(famData.retiredTokens) ? famData.retiredTokens : []);
-    const retiredFingerprints = Array.from(new Set(rawRetired.filter((fp) => typeof fp === 'string' && fp.length > 0))).sort(codeUnitCompare);
+    const seenFp = new Set();
+    const retiredFingerprints = [];
+    for (const fp of rawRetired) {
+      if (typeof fp === 'string' && fp.length > 0) {
+        if (seenFp.has(fp)) {
+          throw new CutoverFenceError(`Duplicate retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
+        }
+        seenFp.add(fp);
+        retiredFingerprints.push(fp);
+      }
+    }
+    retiredFingerprints.sort(codeUnitCompare);
 
     const expiresAt = typeof tokDoc.expiresAt === 'number'
       ? tokDoc.expiresAt
@@ -148,12 +164,11 @@ export function projectSourceLogical(candidate, sources, codec) {
 
   if (candidate.kind === 'baseFormatTokens') {
     const tokDoc = sources.get('tokens');
-    if (!tokDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens source`);
+    if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const refDoc = sources.get('refresh');
-    if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing refresh source`);
 
     const accessToken = tokDoc.id;
-    const refreshToken = (tokDoc.refreshToken ?? refDoc.id);
+    const refreshToken = (tokDoc.refreshToken ?? refDoc?.id ?? accessToken);
     const familyId = codec.id('family', accessToken);
     const accessId = codec.id('session', accessToken);
     const refreshId = codec.id('refresh', refreshToken);
@@ -187,6 +202,8 @@ export function projectSourceLogical(candidate, sources, codec) {
       extra: (tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {})),
       activeRefreshId: refreshId,
       currentAccessTokenId: accessId,
+      previousRefresh: null,
+      retiredRefreshFingerprints: [],
       upstream: {
         grantVersion: 1,
         nsAccessToken,
@@ -203,7 +220,7 @@ export function projectSourceLogical(candidate, sources, codec) {
 
   if (candidate.kind === 'authCodes') {
     const codeDoc = sources.get('authCodes');
-    if (!codeDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing authCodes source`);
+    if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes source`);
     const rawCode = codeDoc.id;
     const hmacId = codec.id('code', rawCode);
 
@@ -261,7 +278,7 @@ export function projectSourceLogical(candidate, sources, codec) {
 
   if (candidate.kind === 'resumeTokens') {
     const resDoc = sources.get('resumeTokens');
-    if (!resDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing resumeTokens source`);
+    if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens source`);
     const resumeId = resDoc.id;
     if (!resumeId || typeof resumeId !== 'string') throw new CutoverFenceError('resumeTokens missing required id');
     if (typeof resDoc.consumedAt !== 'number') throw new CutoverFenceError('resumeTokens missing required consumedAt');
@@ -277,13 +294,12 @@ export function projectSourceLogical(candidate, sources, codec) {
 
   if (candidate.kind === 'clients') {
     const clientDoc = sources.get('clients');
-    if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients source`);
+    if (!clientDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing clients source`);
     const clientId = clientDoc.client_id ?? clientDoc.id;
     if (!clientId || typeof clientId !== 'string') throw new CutoverFenceError('clients missing required clientId');
     if (!Array.isArray(clientDoc.redirect_uris) || clientDoc.redirect_uris.length === 0) {
       throw new CutoverFenceError('clients missing required non-empty redirect_uris');
     }
-    // In legacy DCR, token_endpoint_auth_method may be omitted by public clients, defaulting to 'none' or 'client_secret_basic'
     const tokenEndpointAuthMethod = typeof clientDoc.token_endpoint_auth_method === 'string'
       ? clientDoc.token_endpoint_auth_method
       : (clientDoc.client_secret ? 'client_secret_basic' : 'none');
@@ -304,81 +320,81 @@ export function projectSourceLogical(candidate, sources, codec) {
     };
   }
 
-  throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${kind}`);
+  throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${candidate.kind}`);
 }
 
 export function projectTargetLogical(candidate, targets, codec) {
   if (candidate.kind === 'pr56Families') {
     const famDoc = targets.get('families');
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
     const famData = famDoc;
     const familyId = famData.id;
     if (!familyId || typeof familyId !== 'string') throw new CutoverFenceError('Target family missing id');
     const generation = famData.generation;
     if (typeof generation !== 'number' || generation < 1) {
-      throw new CutoverFenceError(`Target family ${familyId} malformed generation`);
+      throw new CutoverFenceError(`Target family ${sanitizeId(familyId)} malformed generation`);
     }
     const unsealedFam = famData.sealed
       ? codec.open(famData.sealed, familyAad({ id: familyId, generation }))
       : null;
     if (!unsealedFam) {
-      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${familyId}`);
+      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
 
     const upDoc = targets.get('upstream');
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream target document`);
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream target document`);
     const upData = upDoc;
     const grantVersion = upData.grantVersion;
     if (typeof grantVersion !== 'number' || grantVersion < 1) {
-      throw new CutoverFenceError(`Target upstream ${familyId} malformed grantVersion`);
+      throw new CutoverFenceError(`Target upstream ${sanitizeId(familyId)} malformed grantVersion`);
     }
     if (upData.familyId !== familyId && upData.id !== familyId) {
-      throw new CutoverFenceError(`Target upstream family binding mismatch for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream family binding mismatch for ${sanitizeId(familyId)}`);
     }
     const unsealedUp = upData.sealed
       ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion }))
       : null;
     if (!unsealedUp) {
-      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
 
     const sessDoc = targets.get('tokens');
-    if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
+    if (!sessDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens target document`);
     const sessData = sessDoc;
     if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number' || !sessData.ttlAt) {
-      throw new CutoverFenceError(`Target session invalid for family ${familyId}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
+      throw new CutoverFenceError(`Target session invalid for family ${sanitizeId(familyId)}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
     }
     if (sessData.familyId !== familyId) {
-      throw new CutoverFenceError(`Target session family binding mismatch: expected ${familyId}, got ${sessData.familyId}`);
+      throw new CutoverFenceError(`Target session family binding mismatch: expected ${sanitizeId(familyId)}, got ${sanitizeId(sessData.familyId)}`);
     }
     if (sessData.retainUntil !== sessData.expiresAt + 30 * 24 * 60 * 60 * 1000) {
-      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for family ${familyId}`);
+      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for family ${sanitizeId(familyId)}`);
     }
     const ttlMs = getTimestampMs(sessData.ttlAt);
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
-      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for family ${familyId}`);
+      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for family ${sanitizeId(familyId)}`);
     }
 
     const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
     if (!unsealedSess) {
-      throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${familyId}`);
+      throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${sanitizeId(familyId)}`);
     }
 
     const clientId = unsealedFam.clientId ?? unsealedSess.clientId;
     if (!clientId || typeof clientId !== 'string') {
-      throw new CutoverFenceError(`Target family missing decrypted clientId for ${familyId}`);
+      throw new CutoverFenceError(`Target family missing decrypted clientId for ${sanitizeId(familyId)}`);
     }
     const nsAccessToken = unsealedUp.nsAccessToken;
     if (!nsAccessToken || typeof nsAccessToken !== 'string') {
-      throw new CutoverFenceError(`Target upstream missing decrypted nsAccessToken for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream missing decrypted nsAccessToken for ${sanitizeId(familyId)}`);
     }
     const nsUsername = unsealedUp.nsUsername;
     if (!nsUsername || typeof nsUsername !== 'string') {
-      throw new CutoverFenceError(`Target upstream missing decrypted nsUsername for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream missing decrypted nsUsername for ${sanitizeId(familyId)}`);
     }
 
     const activeRefDoc = targets.get('activeRefresh');
-    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh target document`);
+    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh target document`);
     const activeRefData = activeRefDoc;
     if (
       activeRefData.id !== famData.activeRefreshId ||
@@ -387,7 +403,7 @@ export function projectTargetLogical(candidate, targets, codec) {
       activeRefData.generation !== generation ||
       activeRefData.v !== 2
     ) {
-      throw new CutoverFenceError(`Target active refresh token invalid for family ${familyId}`);
+      throw new CutoverFenceError(`Target active refresh token invalid for family ${sanitizeId(familyId)}`);
     }
 
     let previousRefresh = null;
@@ -400,14 +416,14 @@ export function projectTargetLogical(candidate, targets, codec) {
         typeof prevRefData.consumedAt !== 'number' ||
         prevRefData.v !== 2
       ) {
-        throw new CutoverFenceError(`Target consumed refresh token invalid for family ${familyId}`);
+        throw new CutoverFenceError(`Target consumed refresh token invalid for family ${sanitizeId(familyId)}`);
       }
       const unsealedSuccessor = codec.open(
         prevRefData.successorSealed,
         `successor:${prevRefData.id}`,
       );
       if (!unsealedSuccessor || typeof unsealedSuccessor.accessToken !== 'string' || typeof unsealedSuccessor.refreshToken !== 'string') {
-        throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${prevRefData.id}`);
+        throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${sanitizeId(prevRefData.id)}`);
       }
       previousRefresh = {
         id: prevRefData.id,
@@ -450,56 +466,72 @@ export function projectTargetLogical(candidate, targets, codec) {
 
   if (candidate.kind === 'baseFormatTokens') {
     const famDoc = targets.get('families');
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
     const famData = famDoc;
     const familyId = famData.id;
-    const unsealedFam = codec.open(famData.sealed, familyAad({ id: familyId, generation: 1 }));
-    if (!unsealedFam) throw new CutoverFenceError(`Target base family decrypt failed for ${familyId}`);
+    if (!familyId || typeof familyId !== 'string') throw new CutoverFenceError('Target family missing id');
+    const generation = famData.generation;
+    if (typeof generation !== 'number' || generation !== 1) {
+      throw new CutoverFenceError(`Target base family ${sanitizeId(familyId)} malformed generation`);
+    }
+    const unsealedFam = famData.sealed
+      ? codec.open(famData.sealed, familyAad({ id: familyId, generation }))
+      : null;
+    if (!unsealedFam) {
+      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
+    }
 
     const upDoc = targets.get('upstream');
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream target document`);
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream target document`);
     const upData = upDoc;
-    if (upData.familyId !== familyId && upData.id !== familyId) {
-      throw new CutoverFenceError(`Target base upstream family binding mismatch for ${familyId}`);
+    const grantVersion = upData.grantVersion;
+    if (typeof grantVersion !== 'number' || grantVersion !== 1) {
+      throw new CutoverFenceError(`Target base upstream ${sanitizeId(familyId)} malformed grantVersion`);
     }
-    const unsealedUp = codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }));
-    if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
+    const unsealedUp = upData.sealed
+      ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion }))
+      : null;
+    if (!unsealedUp) {
+      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
+    }
 
     const sessDoc = targets.get('tokens');
-    if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
+    if (!sessDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens target document`);
     const sessData = sessDoc;
     if (sessData.v !== 2 || typeof sessData.expiresAt !== 'number' || typeof sessData.retainUntil !== 'number' || !sessData.ttlAt) {
-      throw new CutoverFenceError(`Target base session invalid for ${sessData.id}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
+      throw new CutoverFenceError(`Target session invalid for base session ${sanitizeId(sessData.id)}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
     }
     if (sessData.familyId !== familyId) {
-      throw new CutoverFenceError(`Target base session family binding mismatch for ${sessData.id}`);
+      throw new CutoverFenceError(`Target base session family binding mismatch for ${sanitizeId(sessData.id)}`);
     }
     if (sessData.retainUntil !== sessData.expiresAt + 30 * 24 * 60 * 60 * 1000) {
-      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for base session ${sessData.id}`);
+      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for base session ${sanitizeId(sessData.id)}`);
     }
     const ttlMs = getTimestampMs(sessData.ttlAt);
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
-      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for base session ${sessData.id}`);
+      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for base session ${sanitizeId(sessData.id)}`);
     }
 
     const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
-    if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessData.id}`);
+    if (!unsealedSess) {
+      throw new CutoverFenceError(`Target base session decrypt failed for ${sanitizeId(sessData.id)}`);
+    }
 
-    const clientId = unsealedFam.clientId;
+    const clientId = unsealedFam.clientId ?? unsealedSess.clientId;
     if (!clientId || typeof clientId !== 'string') {
-      throw new CutoverFenceError(`Target base family missing decrypted clientId for ${familyId}`);
+      throw new CutoverFenceError(`Target base family missing decrypted clientId for ${sanitizeId(familyId)}`);
     }
     const nsAccessToken = unsealedUp.nsAccessToken;
     if (!nsAccessToken || typeof nsAccessToken !== 'string') {
-      throw new CutoverFenceError(`Target base upstream missing decrypted nsAccessToken for ${familyId}`);
+      throw new CutoverFenceError(`Target base upstream missing decrypted nsAccessToken for ${sanitizeId(familyId)}`);
     }
     const nsUsername = unsealedUp.nsUsername;
     if (!nsUsername || typeof nsUsername !== 'string') {
-      throw new CutoverFenceError(`Target base upstream missing decrypted nsUsername for ${familyId}`);
+      throw new CutoverFenceError(`Target base upstream missing decrypted nsUsername for ${sanitizeId(familyId)}`);
     }
 
     const activeRefDoc = targets.get('activeRefresh');
-    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh target document`);
+    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh target document`);
     const activeRefData = activeRefDoc;
     if (
       activeRefData.familyId !== familyId ||
@@ -507,7 +539,7 @@ export function projectTargetLogical(candidate, targets, codec) {
       activeRefData.generation !== 1 ||
       activeRefData.v !== 2
     ) {
-      throw new CutoverFenceError(`Target active refresh token invalid for base family ${familyId}`);
+      throw new CutoverFenceError(`Target active refresh token invalid for base family ${sanitizeId(familyId)}`);
     }
 
     return {
@@ -519,6 +551,8 @@ export function projectTargetLogical(candidate, targets, codec) {
       extra: (unsealedFam.extra ?? {}),
       activeRefreshId: famData.activeRefreshId,
       currentAccessTokenId: famData.currentAccessTokenId,
+      previousRefresh: null,
+      retiredRefreshFingerprints: [],
       upstream: {
         grantVersion: 1,
         nsAccessToken,
@@ -535,31 +569,31 @@ export function projectTargetLogical(candidate, targets, codec) {
 
   if (candidate.kind === 'authCodes') {
     const codeDoc = targets.get('authCodes');
-    if (!codeDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing authCodes target document`);
+    if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes target document`);
     const codeData = codeDoc;
     if (codeData.v !== 2 || typeof codeData.expiresAt !== 'number' || codeData.expiresAt <= 0 || !codeData.ttlAt) {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing v: 2, valid positive expiresAt, or ttlAt`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing v: 2, valid positive expiresAt, or ttlAt`);
     }
     const ttlMs = getTimestampMs(codeData.ttlAt);
     if (ttlMs === null || ttlMs !== codeData.expiresAt) {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} ttlAt must equal expiresAt`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} ttlAt must equal expiresAt`);
     }
 
     const unsealed = codeData.sealed
       ? codec.open(codeData.sealed, `code:${codeData.id}`)
       : null;
-    if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${codeData.id}`);
+    if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${sanitizeId(codeData.id)}`);
 
     const rawPending = unsealed.pending || {};
     const rawNsTokens = unsealed.nsTokens || {};
 
     const clientId = unsealed.clientId;
     if (!clientId || typeof clientId !== 'string') {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing decrypted clientId`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing decrypted clientId`);
     }
     const nsAccessToken = rawNsTokens.access_token;
     if (!nsAccessToken || typeof nsAccessToken !== 'string') {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing decrypted nsTokens.access_token`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing decrypted nsTokens.access_token`);
     }
 
     return {
@@ -584,17 +618,17 @@ export function projectTargetLogical(candidate, targets, codec) {
 
   if (candidate.kind === 'resumeTokens') {
     const resDoc = targets.get('resumeTokens');
-    if (!resDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing resumeTokens target document`);
+    if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens target document`);
     const resData = resDoc;
     if (resData._mcp_format !== 'v3_target' || resData.v !== 2 || typeof resData.expiresAt !== 'number' || resData.expiresAt <= 0 || !resData.ttlAt) {
-      throw new CutoverFenceError(`Target resume token ${resData.id} missing _mcp_format v3_target, v: 2, positive expiresAt, or ttlAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} missing _mcp_format v3_target, v: 2, positive expiresAt, or ttlAt`);
     }
     if (typeof resData.consumedAt !== 'number') {
-      throw new CutoverFenceError(`Target resume token ${resData.id} missing numeric consumedAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} missing numeric consumedAt`);
     }
     const ttlMs = getTimestampMs(resData.ttlAt);
     if (ttlMs === null || ttlMs !== resData.expiresAt) {
-      throw new CutoverFenceError(`Target resume token ${resData.id} ttlAt must equal expiresAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} ttlAt must equal expiresAt`);
     }
 
     return {
@@ -607,10 +641,10 @@ export function projectTargetLogical(candidate, targets, codec) {
 
   if (candidate.kind === 'clients') {
     const clientDoc = targets.get('clients');
-    if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients target document`);
+    if (!clientDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing clients target document`);
     const clientData = clientDoc;
     if (clientData._mcp_format !== 'v3_target' || clientData.v !== 2) {
-      throw new CutoverFenceError(`Target oauth client ${clientData.client_id ?? clientData.id} missing _mcp_format v3_target`);
+      throw new CutoverFenceError(`Target oauth client ${sanitizeId(clientData.client_id ?? clientData.id)} missing _mcp_format v3_target`);
     }
     const clientId = clientData.client_id ?? clientData.id;
     if (!clientId || typeof clientId !== 'string') {
@@ -639,5 +673,5 @@ export function projectTargetLogical(candidate, targets, codec) {
     };
   }
 
-  throw new CutoverFenceError(`Unsupported candidate kind for target projection: ${kind}`);
+  throw new CutoverFenceError(`Unsupported candidate kind for target projection: ${candidate.kind}`);
 }

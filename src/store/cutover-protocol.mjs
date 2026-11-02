@@ -86,6 +86,48 @@ function isCutoverRefusedError(err) {
 }
 __name(isCutoverRefusedError, "isCutoverRefusedError");
 
+// src/store/codec.ts
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
+function deriveStoreKey(sessionSecret) {
+  if (sessionSecret.length < 32) throw new StoreConfigError("MCP_SESSION_SECRET must be at least 32 characters");
+  return Buffer.from(hkdfSync("sha256", Buffer.from(sessionSecret), Buffer.from("netsapiens-mcp/store/v1"), Buffer.from("root"), 32));
+}
+__name(deriveStoreKey, "deriveStoreKey");
+function createCodec(root) {
+  const rootBuf = typeof root === "string" ? Buffer.from(root, "utf8") : root;
+  const idKey = Buffer.from(hkdfSync("sha256", rootBuf, "", "id", 32));
+  const encKey = Buffer.from(hkdfSync("sha256", rootBuf, "", "enc", 32));
+  return {
+    id(purpose, value) {
+      return createHmac("sha256", idKey).update(`${purpose}\0${value}`).digest("hex");
+    },
+    seal(value, aad) {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", encKey, iv);
+      cipher.setAAD(Buffer.from(aad, "utf8"));
+      const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
+      return ["v1", iv.toString("base64url"), ciphertext.toString("base64url"), cipher.getAuthTag().toString("base64url")].join(".");
+    },
+    open(sealed, aad) {
+      if (typeof sealed !== "string") return void 0;
+      const parts = sealed.split(".");
+      if (parts.length !== 4 || parts[0] !== "v1") return void 0;
+      try {
+        const iv = Buffer.from(parts[1], "base64url");
+        const tag = Buffer.from(parts[3], "base64url");
+        if (iv.length !== 12 || tag.length !== 16) return void 0;
+        const decipher = createDecipheriv("aes-256-gcm", encKey, iv);
+        decipher.setAAD(Buffer.from(aad, "utf8"));
+        decipher.setAuthTag(tag);
+        return JSON.parse(Buffer.concat([decipher.update(Buffer.from(parts[2], "base64url")), decipher.final()]).toString("utf8"));
+      } catch {
+        return void 0;
+      }
+    }
+  };
+}
+__name(createCodec, "createCodec");
+
 // src/store/row-format.ts
 var ACCESS_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var SESSION_RETENTION_MS = ACCESS_RETENTION_MS;
@@ -130,193 +172,29 @@ function safeDocEntry(id, data) {
   return { ...data || {}, id };
 }
 __name(safeDocEntry, "safeDocEntry");
-
-// src/store/codec.ts
-import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
-function deriveStoreKey(sessionSecret) {
-  if (sessionSecret.length < 32) throw new StoreConfigError("MCP_SESSION_SECRET must be at least 32 characters");
-  return Buffer.from(hkdfSync("sha256", Buffer.from(sessionSecret), Buffer.from("netsapiens-mcp/store/v1"), Buffer.from("root"), 32));
-}
-__name(deriveStoreKey, "deriveStoreKey");
-function createCodec(root) {
-  const rootBuf = typeof root === "string" ? Buffer.from(root, "utf8") : root;
-  const idKey = Buffer.from(hkdfSync("sha256", rootBuf, "", "id", 32));
-  const encKey = Buffer.from(hkdfSync("sha256", rootBuf, "", "enc", 32));
+function startMonotonicTimer() {
+  const start = performance.now();
   return {
-    id(purpose, value) {
-      return createHmac("sha256", idKey).update(`${purpose}\0${value}`).digest("hex");
+    elapsedMs() {
+      return performance.now() - start;
     },
-    seal(value, aad) {
-      const iv = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", encKey, iv);
-      cipher.setAAD(Buffer.from(aad, "utf8"));
-      const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-      return ["v1", iv.toString("base64url"), ciphertext.toString("base64url"), cipher.getAuthTag().toString("base64url")].join(".");
-    },
-    open(sealed, aad) {
-      if (typeof sealed !== "string") return void 0;
-      const parts = sealed.split(".");
-      if (parts.length !== 4 || parts[0] !== "v1") return void 0;
-      try {
-        const iv = Buffer.from(parts[1], "base64url");
-        const tag = Buffer.from(parts[3], "base64url");
-        if (iv.length !== 12 || tag.length !== 16) return void 0;
-        const decipher = createDecipheriv("aes-256-gcm", encKey, iv);
-        decipher.setAAD(Buffer.from(aad, "utf8"));
-        decipher.setAuthTag(tag);
-        return JSON.parse(Buffer.concat([decipher.update(Buffer.from(parts[2], "base64url")), decipher.final()]).toString("utf8"));
-      } catch {
-        return void 0;
+    assertUnderDeadline(limitMs = 16e3, label = "Transaction attempt") {
+      const elapsed = performance.now() - start;
+      if (elapsed > limitMs) {
+        throw new CutoverFenceError(`${label} exceeded ${limitMs} ms lock deadline (${Math.round(elapsed)} ms)`);
       }
     }
   };
 }
-__name(createCodec, "createCodec");
-
-// src/store/row-codec.ts
-function encodeSessionsRow(codec, accessId, familyId, session, now) {
-  const expiresAt = session.expiresAt;
-  const retainUntil = expiresAt + ACCESS_RETENTION_MS;
-  const sealed = codec.seal(
-    {
-      familyId,
-      clientId: session.clientId,
-      serverBaseUrl: session.serverBaseUrl,
-      extra: session.extra
-    },
-    accessAad({ id: accessId, familyId })
-  );
-  return {
-    id: accessId,
-    familyId,
-    expiresAt,
-    retainUntil,
-    ttlAt: new Date(retainUntil),
-    sealed,
-    v: 2,
-    updatedAt: now
-  };
-}
-__name(encodeSessionsRow, "encodeSessionsRow");
-function decodeSessionsRow(codec, row) {
-  return codec.open(
-    row.sealed,
-    accessAad({ id: row.id, familyId: row.familyId })
-  );
-}
-__name(decodeSessionsRow, "decodeSessionsRow");
-function encodeRefreshFamiliesRow(codec, familyId, generation, activeRefreshId, currentAccessTokenId, session, retiredFingerprints, status, now) {
-  const sealed = codec.seal(
-    {
-      clientId: session.clientId,
-      serverBaseUrl: session.serverBaseUrl,
-      extra: session.extra,
-      retiredRefreshIds: retiredFingerprints
-    },
-    familyAad({ id: familyId, generation })
-  );
-  return {
-    id: familyId,
-    generation,
-    status: status === "revoked" ? "revoked" : "active",
-    activeRefreshId,
-    currentAccessTokenId,
-    updatedAt: now,
-    sealed,
-    v: 2
-  };
-}
-__name(encodeRefreshFamiliesRow, "encodeRefreshFamiliesRow");
-function decodeRefreshFamiliesRow(codec, row) {
-  return codec.open(
-    row.sealed,
-    familyAad({ id: row.id, generation: row.generation })
-  );
-}
-__name(decodeRefreshFamiliesRow, "decodeRefreshFamiliesRow");
-function encodeUpstreamRow(codec, familyId, grantVersion, upstream, now) {
-  const sealed = codec.seal(
-    {
-      nsAccessToken: upstream.nsAccessToken,
-      nsRefreshToken: upstream.nsRefreshToken,
-      nsUsername: upstream.nsUsername,
-      nsUserRole: upstream.nsUserRole,
-      nsApiUrl: upstream.nsApiUrl
-    },
-    upstreamAad({ id: familyId, grantVersion })
-  );
-  return {
-    id: familyId,
-    grantVersion,
-    nsExpiresAt: upstream.nsExpiresAt,
-    updatedAt: now,
-    sealed,
-    v: 2
-  };
-}
-__name(encodeUpstreamRow, "encodeUpstreamRow");
-function decodeUpstreamRow(codec, row) {
-  return codec.open(
-    row.sealed,
-    upstreamAad({ id: row.id, grantVersion: row.grantVersion })
-  );
-}
-__name(decodeUpstreamRow, "decodeUpstreamRow");
-function encodeRefreshRow(refreshId, familyId, generation, now) {
-  return {
-    id: refreshId,
-    familyId,
-    generation,
-    status: "active",
-    v: 2,
-    createdAt: now,
-    updatedAt: now
-  };
-}
-__name(encodeRefreshRow, "encodeRefreshRow");
-function encodeAuthCodesRow(codec, code, data, expiresAt, now) {
-  const id = codec.id("code", code);
-  const sealed = codec.seal(data, `code:${id}`);
-  return {
-    id,
-    expiresAt,
-    ttlAt: new Date(expiresAt),
-    sealed,
-    v: 2
-  };
-}
-__name(encodeAuthCodesRow, "encodeAuthCodesRow");
-function encodeResumeTokensRow(id, consumedAt, expiresAt, now) {
-  return {
-    id,
-    consumedAt,
-    expiresAt,
-    ttlAt: new Date(expiresAt),
-    _mcp_format: "v3_target",
-    v: 2
-  };
-}
-__name(encodeResumeTokensRow, "encodeResumeTokensRow");
-function encodeOAuthClientsRow(clientId, clientData, now) {
-  return {
-    client_id: clientId,
-    client_name: clientData.client_name ?? null,
-    redirect_uris: clientData.redirect_uris,
-    token_endpoint_auth_method: clientData.token_endpoint_auth_method ?? "client_secret_basic",
-    client_secret: clientData.client_secret ?? null,
-    grant_types: clientData.grant_types ?? ["authorization_code", "refresh_token"],
-    response_types: clientData.response_types ?? ["code"],
-    client_uri: clientData.client_uri ?? null,
-    logo_uri: clientData.logo_uri ?? null,
-    scope: clientData.scope ?? null,
-    client_id_issued_at: clientData.client_id_issued_at ?? Math.floor(now / 1e3),
-    _mcp_format: "v3_target",
-    v: 2
-  };
-}
-__name(encodeOAuthClientsRow, "encodeOAuthClientsRow");
+__name(startMonotonicTimer, "startMonotonicTimer");
 
 // src/store/netsapiens-projector.mjs
+import { createHash } from "node:crypto";
+function sanitizeId(id) {
+  if (typeof id !== "string" || !id) return "[sanitized]";
+  return createHash("sha256").update(id).digest("hex").slice(0, 12);
+}
+__name(sanitizeId, "sanitizeId");
 var PROJECTOR_ID = "netsapiens-mcp/v2-v3-projector";
 var PROJECTOR_VERSION = 1;
 function getTimestampMs(val) {
@@ -347,23 +225,23 @@ __name(getTimestampMs, "getTimestampMs");
 function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === "pr56Families") {
     const famDoc = sources.get("families");
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families source`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families source`);
     const famData = famDoc;
     const familyId = famData.id;
     if (!familyId || typeof familyId !== "string") throw new CutoverFenceError("pr56Families missing required familyId");
     const generation = typeof famData.generation === "number" ? famData.generation : 1;
     const refDoc = sources.get("refresh");
-    if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh source`);
+    if (!refDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh source`);
     const curRefDoc = refDoc;
     if (curRefDoc.id !== famData.currentRefreshToken || curRefDoc.status !== "active") {
-      throw new CutoverFenceError(`Active refresh token '${curRefDoc.id}' mismatch with currentRefreshToken '${famData.currentRefreshToken}' or not active`);
+      throw new CutoverFenceError(`Active refresh token mismatch or not active for family ${sanitizeId(familyId)}`);
     }
     const currentRefId = curRefDoc.id;
     const upDoc = sources.get("upstream");
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream source`);
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream source`);
     const grant = upDoc.grant && typeof upDoc.grant === "object" ? upDoc.grant : upDoc;
     const tokDoc = sources.get("tokens");
-    if (!tokDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens source`);
+    if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const accessId = tokDoc.id ?? tokDoc.accessToken ?? famData.currentAccessToken;
     if (!accessId || typeof accessId !== "string") throw new CutoverFenceError("pr56Families missing accessId");
     const newAccessId = codec.id("session", accessId);
@@ -373,13 +251,13 @@ function projectSourceLogical(candidate, sources, codec) {
       const prevId = famData.previousRefreshToken;
       const prevDoc = sources.get("prevRefresh");
       if (!prevDoc) {
-        throw new CutoverFenceError(`Candidate ${candidate.id} has previousRefreshToken '${prevId}' but missing prevRefresh source`);
+        throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing prevRefresh source`);
       }
       if (prevDoc.id !== prevId || prevDoc.status !== "consumed") {
-        throw new CutoverFenceError(`Previous refresh token '${prevDoc.id}' mismatch with previousRefreshToken '${prevId}' or not consumed`);
+        throw new CutoverFenceError(`Previous refresh token mismatch or not consumed for family ${sanitizeId(familyId)}`);
       }
       if (typeof prevDoc.consumedAt !== "number") {
-        throw new CutoverFenceError(`Candidate ${candidate.id} previous refresh missing numeric consumedAt`);
+        throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} previous refresh missing numeric consumedAt`);
       }
       const prevRefreshId = codec.id("refresh", prevId);
       previousRefresh = {
@@ -393,7 +271,18 @@ function projectSourceLogical(candidate, sources, codec) {
       };
     }
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints) ? famData.retiredRefreshFingerprints : Array.isArray(famData.retiredTokens) ? famData.retiredTokens : [];
-    const retiredFingerprints = Array.from(new Set(rawRetired.filter((fp) => typeof fp === "string" && fp.length > 0))).sort(codeUnitCompare);
+    const seenFp = /* @__PURE__ */ new Set();
+    const retiredFingerprints = [];
+    for (const fp of rawRetired) {
+      if (typeof fp === "string" && fp.length > 0) {
+        if (seenFp.has(fp)) {
+          throw new CutoverFenceError(`Duplicate retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
+        }
+        seenFp.add(fp);
+        retiredFingerprints.push(fp);
+      }
+    }
+    retiredFingerprints.sort(codeUnitCompare);
     const expiresAt = typeof tokDoc.expiresAt === "number" ? tokDoc.expiresAt : typeof curRefDoc.token?.expiresAt === "number" ? curRefDoc.token.expiresAt : famData.expiresAt;
     if (typeof expiresAt !== "number" || expiresAt <= 0) {
       throw new CutoverFenceError("pr56Families missing required positive expiresAt");
@@ -436,11 +325,10 @@ function projectSourceLogical(candidate, sources, codec) {
   }
   if (candidate.kind === "baseFormatTokens") {
     const tokDoc = sources.get("tokens");
-    if (!tokDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens source`);
+    if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const refDoc = sources.get("refresh");
-    if (!refDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing refresh source`);
     const accessToken = tokDoc.id;
-    const refreshToken = tokDoc.refreshToken ?? refDoc.id;
+    const refreshToken = tokDoc.refreshToken ?? refDoc?.id ?? accessToken;
     const familyId = codec.id("family", accessToken);
     const accessId = codec.id("session", accessToken);
     const refreshId = codec.id("refresh", refreshToken);
@@ -469,6 +357,8 @@ function projectSourceLogical(candidate, sources, codec) {
       extra: tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {}),
       activeRefreshId: refreshId,
       currentAccessTokenId: accessId,
+      previousRefresh: null,
+      retiredRefreshFingerprints: [],
       upstream: {
         grantVersion: 1,
         nsAccessToken,
@@ -484,7 +374,7 @@ function projectSourceLogical(candidate, sources, codec) {
   }
   if (candidate.kind === "authCodes") {
     const codeDoc = sources.get("authCodes");
-    if (!codeDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing authCodes source`);
+    if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes source`);
     const rawCode = codeDoc.id;
     const hmacId = codec.id("code", rawCode);
     const rawPending = codeDoc.pending && typeof codeDoc.pending === "object" ? codeDoc.pending : codeDoc;
@@ -534,7 +424,7 @@ function projectSourceLogical(candidate, sources, codec) {
   }
   if (candidate.kind === "resumeTokens") {
     const resDoc = sources.get("resumeTokens");
-    if (!resDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing resumeTokens source`);
+    if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens source`);
     const resumeId = resDoc.id;
     if (!resumeId || typeof resumeId !== "string") throw new CutoverFenceError("resumeTokens missing required id");
     if (typeof resDoc.consumedAt !== "number") throw new CutoverFenceError("resumeTokens missing required consumedAt");
@@ -548,7 +438,7 @@ function projectSourceLogical(candidate, sources, codec) {
   }
   if (candidate.kind === "clients") {
     const clientDoc = sources.get("clients");
-    if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients source`);
+    if (!clientDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing clients source`);
     const clientId = clientDoc.client_id ?? clientDoc.id;
     if (!clientId || typeof clientId !== "string") throw new CutoverFenceError("clients missing required clientId");
     if (!Array.isArray(clientDoc.redirect_uris) || clientDoc.redirect_uris.length === 0) {
@@ -570,89 +460,89 @@ function projectSourceLogical(candidate, sources, codec) {
       v: 2
     };
   }
-  throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${kind}`);
+  throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${candidate.kind}`);
 }
 __name(projectSourceLogical, "projectSourceLogical");
 function projectTargetLogical(candidate, targets, codec) {
   if (candidate.kind === "pr56Families") {
     const famDoc = targets.get("families");
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
     const famData = famDoc;
     const familyId = famData.id;
     if (!familyId || typeof familyId !== "string") throw new CutoverFenceError("Target family missing id");
     const generation = famData.generation;
     if (typeof generation !== "number" || generation < 1) {
-      throw new CutoverFenceError(`Target family ${familyId} malformed generation`);
+      throw new CutoverFenceError(`Target family ${sanitizeId(familyId)} malformed generation`);
     }
     const unsealedFam = famData.sealed ? codec.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
     if (!unsealedFam) {
-      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${familyId}`);
+      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
     const upDoc = targets.get("upstream");
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream target document`);
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream target document`);
     const upData = upDoc;
     const grantVersion = upData.grantVersion;
     if (typeof grantVersion !== "number" || grantVersion < 1) {
-      throw new CutoverFenceError(`Target upstream ${familyId} malformed grantVersion`);
+      throw new CutoverFenceError(`Target upstream ${sanitizeId(familyId)} malformed grantVersion`);
     }
     if (upData.familyId !== familyId && upData.id !== familyId) {
-      throw new CutoverFenceError(`Target upstream family binding mismatch for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream family binding mismatch for ${sanitizeId(familyId)}`);
     }
     const unsealedUp = upData.sealed ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
     if (!unsealedUp) {
-      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
     const sessDoc = targets.get("tokens");
-    if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
+    if (!sessDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens target document`);
     const sessData = sessDoc;
     if (sessData.v !== 2 || typeof sessData.expiresAt !== "number" || typeof sessData.retainUntil !== "number" || !sessData.ttlAt) {
-      throw new CutoverFenceError(`Target session invalid for family ${familyId}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
+      throw new CutoverFenceError(`Target session invalid for family ${sanitizeId(familyId)}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
     }
     if (sessData.familyId !== familyId) {
-      throw new CutoverFenceError(`Target session family binding mismatch: expected ${familyId}, got ${sessData.familyId}`);
+      throw new CutoverFenceError(`Target session family binding mismatch: expected ${sanitizeId(familyId)}, got ${sanitizeId(sessData.familyId)}`);
     }
     if (sessData.retainUntil !== sessData.expiresAt + 30 * 24 * 60 * 60 * 1e3) {
-      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for family ${familyId}`);
+      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for family ${sanitizeId(familyId)}`);
     }
     const ttlMs = getTimestampMs(sessData.ttlAt);
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
-      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for family ${familyId}`);
+      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for family ${sanitizeId(familyId)}`);
     }
     const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
     if (!unsealedSess) {
-      throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${familyId}`);
+      throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${sanitizeId(familyId)}`);
     }
     const clientId = unsealedFam.clientId ?? unsealedSess.clientId;
     if (!clientId || typeof clientId !== "string") {
-      throw new CutoverFenceError(`Target family missing decrypted clientId for ${familyId}`);
+      throw new CutoverFenceError(`Target family missing decrypted clientId for ${sanitizeId(familyId)}`);
     }
     const nsAccessToken = unsealedUp.nsAccessToken;
     if (!nsAccessToken || typeof nsAccessToken !== "string") {
-      throw new CutoverFenceError(`Target upstream missing decrypted nsAccessToken for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream missing decrypted nsAccessToken for ${sanitizeId(familyId)}`);
     }
     const nsUsername = unsealedUp.nsUsername;
     if (!nsUsername || typeof nsUsername !== "string") {
-      throw new CutoverFenceError(`Target upstream missing decrypted nsUsername for ${familyId}`);
+      throw new CutoverFenceError(`Target upstream missing decrypted nsUsername for ${sanitizeId(familyId)}`);
     }
     const activeRefDoc = targets.get("activeRefresh");
-    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh target document`);
+    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh target document`);
     const activeRefData = activeRefDoc;
     if (activeRefData.id !== famData.activeRefreshId || activeRefData.familyId !== familyId || activeRefData.status !== "active" || activeRefData.generation !== generation || activeRefData.v !== 2) {
-      throw new CutoverFenceError(`Target active refresh token invalid for family ${familyId}`);
+      throw new CutoverFenceError(`Target active refresh token invalid for family ${sanitizeId(familyId)}`);
     }
     let previousRefresh = null;
     const prevRefDoc = targets.get("prevRefresh");
     if (prevRefDoc) {
       const prevRefData = prevRefDoc;
       if (prevRefData.familyId !== familyId || prevRefData.status !== "consumed" || typeof prevRefData.consumedAt !== "number" || prevRefData.v !== 2) {
-        throw new CutoverFenceError(`Target consumed refresh token invalid for family ${familyId}`);
+        throw new CutoverFenceError(`Target consumed refresh token invalid for family ${sanitizeId(familyId)}`);
       }
       const unsealedSuccessor = codec.open(
         prevRefData.successorSealed,
         `successor:${prevRefData.id}`
       );
       if (!unsealedSuccessor || typeof unsealedSuccessor.accessToken !== "string" || typeof unsealedSuccessor.refreshToken !== "string") {
-        throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${prevRefData.id}`);
+        throw new CutoverFenceError(`Target successor sealed invalid for previous refresh ${sanitizeId(prevRefData.id)}`);
       }
       previousRefresh = {
         id: prevRefData.id,
@@ -692,54 +582,66 @@ function projectTargetLogical(candidate, targets, codec) {
   }
   if (candidate.kind === "baseFormatTokens") {
     const famDoc = targets.get("families");
-    if (!famDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing families target document`);
+    if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
     const famData = famDoc;
     const familyId = famData.id;
-    const unsealedFam = codec.open(famData.sealed, familyAad({ id: familyId, generation: 1 }));
-    if (!unsealedFam) throw new CutoverFenceError(`Target base family decrypt failed for ${familyId}`);
-    const upDoc = targets.get("upstream");
-    if (!upDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing upstream target document`);
-    const upData = upDoc;
-    if (upData.familyId !== familyId && upData.id !== familyId) {
-      throw new CutoverFenceError(`Target base upstream family binding mismatch for ${familyId}`);
+    if (!familyId || typeof familyId !== "string") throw new CutoverFenceError("Target family missing id");
+    const generation = famData.generation;
+    if (typeof generation !== "number" || generation !== 1) {
+      throw new CutoverFenceError(`Target base family ${sanitizeId(familyId)} malformed generation`);
     }
-    const unsealedUp = codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion: 1 }));
-    if (!unsealedUp) throw new CutoverFenceError(`Target base upstream decrypt failed for ${familyId}`);
+    const unsealedFam = famData.sealed ? codec.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
+    if (!unsealedFam) {
+      throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
+    }
+    const upDoc = targets.get("upstream");
+    if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream target document`);
+    const upData = upDoc;
+    const grantVersion = upData.grantVersion;
+    if (typeof grantVersion !== "number" || grantVersion !== 1) {
+      throw new CutoverFenceError(`Target base upstream ${sanitizeId(familyId)} malformed grantVersion`);
+    }
+    const unsealedUp = upData.sealed ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
+    if (!unsealedUp) {
+      throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
+    }
     const sessDoc = targets.get("tokens");
-    if (!sessDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing tokens target document`);
+    if (!sessDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens target document`);
     const sessData = sessDoc;
     if (sessData.v !== 2 || typeof sessData.expiresAt !== "number" || typeof sessData.retainUntil !== "number" || !sessData.ttlAt) {
-      throw new CutoverFenceError(`Target base session invalid for ${sessData.id}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
+      throw new CutoverFenceError(`Target session invalid for base session ${sanitizeId(sessData.id)}: missing v: 2, expiresAt, retainUntil, or ttlAt`);
     }
     if (sessData.familyId !== familyId) {
-      throw new CutoverFenceError(`Target base session family binding mismatch for ${sessData.id}`);
+      throw new CutoverFenceError(`Target base session family binding mismatch for ${sanitizeId(sessData.id)}`);
     }
     if (sessData.retainUntil !== sessData.expiresAt + 30 * 24 * 60 * 60 * 1e3) {
-      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for base session ${sessData.id}`);
+      throw new CutoverFenceError(`Target session retainUntil must equal expiresAt + 30 days for base session ${sanitizeId(sessData.id)}`);
     }
     const ttlMs = getTimestampMs(sessData.ttlAt);
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
-      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for base session ${sessData.id}`);
+      throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for base session ${sanitizeId(sessData.id)}`);
     }
     const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
-    if (!unsealedSess) throw new CutoverFenceError(`Target base session decrypt failed for ${sessData.id}`);
-    const clientId = unsealedFam.clientId;
+    if (!unsealedSess) {
+      throw new CutoverFenceError(`Target base session decrypt failed for ${sanitizeId(sessData.id)}`);
+    }
+    const clientId = unsealedFam.clientId ?? unsealedSess.clientId;
     if (!clientId || typeof clientId !== "string") {
-      throw new CutoverFenceError(`Target base family missing decrypted clientId for ${familyId}`);
+      throw new CutoverFenceError(`Target base family missing decrypted clientId for ${sanitizeId(familyId)}`);
     }
     const nsAccessToken = unsealedUp.nsAccessToken;
     if (!nsAccessToken || typeof nsAccessToken !== "string") {
-      throw new CutoverFenceError(`Target base upstream missing decrypted nsAccessToken for ${familyId}`);
+      throw new CutoverFenceError(`Target base upstream missing decrypted nsAccessToken for ${sanitizeId(familyId)}`);
     }
     const nsUsername = unsealedUp.nsUsername;
     if (!nsUsername || typeof nsUsername !== "string") {
-      throw new CutoverFenceError(`Target base upstream missing decrypted nsUsername for ${familyId}`);
+      throw new CutoverFenceError(`Target base upstream missing decrypted nsUsername for ${sanitizeId(familyId)}`);
     }
     const activeRefDoc = targets.get("activeRefresh");
-    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing active refresh target document`);
+    if (!activeRefDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing active refresh target document`);
     const activeRefData = activeRefDoc;
     if (activeRefData.familyId !== familyId || activeRefData.status !== "active" || activeRefData.generation !== 1 || activeRefData.v !== 2) {
-      throw new CutoverFenceError(`Target active refresh token invalid for base family ${familyId}`);
+      throw new CutoverFenceError(`Target active refresh token invalid for base family ${sanitizeId(familyId)}`);
     }
     return {
       familyId,
@@ -750,6 +652,8 @@ function projectTargetLogical(candidate, targets, codec) {
       extra: unsealedFam.extra ?? {},
       activeRefreshId: famData.activeRefreshId,
       currentAccessTokenId: famData.currentAccessTokenId,
+      previousRefresh: null,
+      retiredRefreshFingerprints: [],
       upstream: {
         grantVersion: 1,
         nsAccessToken,
@@ -765,26 +669,26 @@ function projectTargetLogical(candidate, targets, codec) {
   }
   if (candidate.kind === "authCodes") {
     const codeDoc = targets.get("authCodes");
-    if (!codeDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing authCodes target document`);
+    if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes target document`);
     const codeData = codeDoc;
     if (codeData.v !== 2 || typeof codeData.expiresAt !== "number" || codeData.expiresAt <= 0 || !codeData.ttlAt) {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing v: 2, valid positive expiresAt, or ttlAt`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing v: 2, valid positive expiresAt, or ttlAt`);
     }
     const ttlMs = getTimestampMs(codeData.ttlAt);
     if (ttlMs === null || ttlMs !== codeData.expiresAt) {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} ttlAt must equal expiresAt`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} ttlAt must equal expiresAt`);
     }
     const unsealed = codeData.sealed ? codec.open(codeData.sealed, `code:${codeData.id}`) : null;
-    if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${codeData.id}`);
+    if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${sanitizeId(codeData.id)}`);
     const rawPending = unsealed.pending || {};
     const rawNsTokens = unsealed.nsTokens || {};
     const clientId = unsealed.clientId;
     if (!clientId || typeof clientId !== "string") {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing decrypted clientId`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing decrypted clientId`);
     }
     const nsAccessToken = rawNsTokens.access_token;
     if (!nsAccessToken || typeof nsAccessToken !== "string") {
-      throw new CutoverFenceError(`Target auth code ${codeData.id} missing decrypted nsTokens.access_token`);
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing decrypted nsTokens.access_token`);
     }
     return {
       codeId: codeData.id,
@@ -807,17 +711,17 @@ function projectTargetLogical(candidate, targets, codec) {
   }
   if (candidate.kind === "resumeTokens") {
     const resDoc = targets.get("resumeTokens");
-    if (!resDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing resumeTokens target document`);
+    if (!resDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing resumeTokens target document`);
     const resData = resDoc;
     if (resData._mcp_format !== "v3_target" || resData.v !== 2 || typeof resData.expiresAt !== "number" || resData.expiresAt <= 0 || !resData.ttlAt) {
-      throw new CutoverFenceError(`Target resume token ${resData.id} missing _mcp_format v3_target, v: 2, positive expiresAt, or ttlAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} missing _mcp_format v3_target, v: 2, positive expiresAt, or ttlAt`);
     }
     if (typeof resData.consumedAt !== "number") {
-      throw new CutoverFenceError(`Target resume token ${resData.id} missing numeric consumedAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} missing numeric consumedAt`);
     }
     const ttlMs = getTimestampMs(resData.ttlAt);
     if (ttlMs === null || ttlMs !== resData.expiresAt) {
-      throw new CutoverFenceError(`Target resume token ${resData.id} ttlAt must equal expiresAt`);
+      throw new CutoverFenceError(`Target resume token ${sanitizeId(resData.id)} ttlAt must equal expiresAt`);
     }
     return {
       resumeId: resData.id,
@@ -828,10 +732,10 @@ function projectTargetLogical(candidate, targets, codec) {
   }
   if (candidate.kind === "clients") {
     const clientDoc = targets.get("clients");
-    if (!clientDoc) throw new CutoverFenceError(`Candidate ${candidate.id} missing clients target document`);
+    if (!clientDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing clients target document`);
     const clientData = clientDoc;
     if (clientData._mcp_format !== "v3_target" || clientData.v !== 2) {
-      throw new CutoverFenceError(`Target oauth client ${clientData.client_id ?? clientData.id} missing _mcp_format v3_target`);
+      throw new CutoverFenceError(`Target oauth client ${sanitizeId(clientData.client_id ?? clientData.id)} missing _mcp_format v3_target`);
     }
     const clientId = clientData.client_id ?? clientData.id;
     if (!clientId || typeof clientId !== "string") {
@@ -856,12 +760,12 @@ function projectTargetLogical(candidate, targets, codec) {
       v: 2
     };
   }
-  throw new CutoverFenceError(`Unsupported candidate kind for target projection: ${kind}`);
+  throw new CutoverFenceError(`Unsupported candidate kind for target projection: ${candidate.kind}`);
 }
 __name(projectTargetLogical, "projectTargetLogical");
 
 // src/cutover/canonical-core.mjs
-import { createHash, createHmac as createHmac2, randomUUID } from "node:crypto";
+import { createHash as createHash2, createHmac as createHmac2, randomUUID } from "node:crypto";
 var SUPPORTED_CUTOVER_NAMESPACES = ["mcp", "pwmcp", "readonly_mcp"];
 function isSupportedCutoverNamespace(namespace) {
   return SUPPORTED_CUTOVER_NAMESPACES.includes(namespace);
@@ -910,11 +814,11 @@ function isCutoverRefusedError2(err) {
   );
 }
 __name(isCutoverRefusedError2, "isCutoverRefusedError");
-function sanitizeId(id) {
+function sanitizeId2(id) {
   if (typeof id !== "string" || !id) return "[sanitized]";
-  return createHash("sha256").update(id).digest("hex").slice(0, 12);
+  return createHash2("sha256").update(id).digest("hex").slice(0, 12);
 }
-__name(sanitizeId, "sanitizeId");
+__name(sanitizeId2, "sanitizeId");
 var PHYSICAL_COUNT_KEYS = [
   "families",
   "tokens",
@@ -1052,7 +956,7 @@ var REQUIRED_RECEIPT_KEYS = [
 var APPROVED_GRAPH_PROJECTOR_ID = PROJECTOR_ID;
 var APPROVED_GRAPH_PROJECTOR_VERSION = PROJECTOR_VERSION;
 var NONEMPTY_PROJECTOR_KEYS = ["projectorId", "projectorVersion", "projectorDigest"];
-var APPROVED_PROJECTOR_SHA256 = "51892d399b95546bdc247cd5e07a20db90677353e208b6124763ea57549a8da0";
+var APPROVED_PROJECTOR_SHA256 = "e69f431c65d84a762bae204dc888bb8d579e52e8b7f283cfbc62dce91b61397c";
 function getMeasuredProjectorDigest() {
   return APPROVED_PROJECTOR_SHA256;
 }
@@ -1121,7 +1025,7 @@ function validateMigrationIdentityFields(doc, expectedNamespace, expectedEpoch, 
   }
 }
 __name(validateMigrationIdentityFields, "validateMigrationIdentityFields");
-function validateCandidateProjection(kind2, candidateId, proj) {
+function validateCandidateProjection(kind, candidateId, proj) {
   if (!proj || typeof proj !== "object" || Array.isArray(proj)) {
     throw new CutoverFenceError2(`Projector must return a plain non-null object for candidate ${candidateId}`);
   }
@@ -1129,25 +1033,25 @@ function validateCandidateProjection(kind2, candidateId, proj) {
   if (keys.length === 0) {
     throw new CutoverFenceError2(`Projector returned empty projection for candidate ${candidateId}`);
   }
-  if (kind2 === "clients" || kind2 === "client") {
+  if (kind === "clients" || kind === "client") {
     if (typeof proj.clientId !== "string" || !proj.clientId) {
-      throw new CutoverFenceError2(`Projector projection for ${kind2} candidate ${candidateId} missing required clientId`);
+      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required clientId`);
     }
-  } else if (kind2 === "pr56Families" || kind2 === "family") {
+  } else if (kind === "pr56Families" || kind === "family") {
     if (typeof proj.familyId !== "string" || typeof proj.generation !== "number") {
-      throw new CutoverFenceError2(`Projector projection for ${kind2} candidate ${candidateId} missing required familyId or generation`);
+      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or generation`);
     }
-  } else if (kind2 === "baseFormatTokens" || kind2 === "base") {
+  } else if (kind === "baseFormatTokens" || kind === "base") {
     if (typeof proj.familyId !== "string" && typeof proj.accessTokenId !== "string" && typeof proj.accessToken !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind2} candidate ${candidateId} missing required familyId or accessTokenId`);
+      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required familyId or accessTokenId`);
     }
-  } else if (kind2 === "authCodes" || kind2 === "code") {
+  } else if (kind === "authCodes" || kind === "code") {
     if (typeof proj.codeId !== "string" && typeof proj.code !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind2} candidate ${candidateId} missing required codeId`);
+      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required codeId`);
     }
-  } else if (kind2 === "resumeTokens" || kind2 === "resume") {
+  } else if (kind === "resumeTokens" || kind === "resume") {
     if (typeof proj.resumeId !== "string" && typeof proj.resumeTokenId !== "string" && typeof proj.token !== "string") {
-      throw new CutoverFenceError2(`Projector projection for ${kind2} candidate ${candidateId} missing required resumeId`);
+      throw new CutoverFenceError2(`Projector projection for ${kind} candidate ${candidateId} missing required resumeId`);
     }
   }
 }
@@ -1398,7 +1302,7 @@ __name(frame, "frame");
 var F = frame;
 function D(purpose, namespace, epoch, value) {
   const payload = frame(purpose, namespace, epoch, value);
-  return createHash("sha256").update(Buffer.from(payload, "utf8")).digest("hex");
+  return createHash2("sha256").update(Buffer.from(payload, "utf8")).digest("hex");
 }
 __name(D, "D");
 function H(storeKey, purpose, namespace, epoch, value) {
@@ -1463,7 +1367,7 @@ function computeManifestDigest(manifest, namespace, epoch) {
 __name(computeManifestDigest, "computeManifestDigest");
 function computeProtocolDigest(moduleSource) {
   const buf = typeof moduleSource === "string" ? Buffer.from(moduleSource, "utf8") : moduleSource;
-  return createHash("sha256").update(buf).digest("hex");
+  return createHash2("sha256").update(buf).digest("hex");
 }
 __name(computeProtocolDigest, "computeProtocolDigest");
 var FIRESTORE_MAX_DOCUMENT_SIZE_BYTES = 1048576;
@@ -1473,7 +1377,7 @@ var FIRESTORE_MAX_INDEX_BYTES = 8388608;
 var FIRESTORE_MAX_NESTING_DEPTH = 20;
 var FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
 var FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16e3;
-function startMonotonicTimer() {
+function startMonotonicTimer2() {
   const start = process.hrtime.bigint();
   return {
     elapsedMs() {
@@ -1489,7 +1393,7 @@ function startMonotonicTimer() {
     }
   };
 }
-__name(startMonotonicTimer, "startMonotonicTimer");
+__name(startMonotonicTimer2, "startMonotonicTimer");
 var PREFLIGHT_MAX_DOC_BYTES = Math.floor(4 * FIRESTORE_MAX_DOCUMENT_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_REQUEST_BYTES = Math.floor(4 * FIRESTORE_MAX_REQUEST_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_INDEX_ENTRIES = Math.floor(4 * FIRESTORE_MAX_INDEX_ENTRIES / 5);
@@ -2354,11 +2258,11 @@ async function withLegacyOperation(options, fn) {
   const opRef = getCutoverOperationDocRef(options.db, options.namespace, opId);
   const controlRef = getCutoverFenceDocRef(options.db, options.namespace);
   const opRecord = await options.db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer();
+    const timer = startMonotonicTimer2();
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError2(
-        `Operation with id '${sanitizeId(opId)}' already exists in namespace ${options.namespace}`
+        `Operation with id '${sanitizeId2(opId)}' already exists in namespace ${options.namespace}`
       );
     }
     const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
@@ -2513,14 +2417,14 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer();
+    const timer = startMonotonicTimer2();
     const controlSnap = await transaction.get(controlRef);
     const opSnap = await transaction.get(opRef);
     if (!controlSnap.exists) {
       throw new CutoverFenceError2(`Control record missing for namespace ${ctx.namespace}`);
     }
     if (!opSnap.exists) {
-      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
+      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId2(ctx.id)}`);
     }
     const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
     const opData = opSnap.data();
@@ -2546,7 +2450,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
     }
     if (opData.phase === "upstream_pending" || opData.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError2(
-        `Cannot release operation ${sanitizeId(ctx.id)} in phase ${opData.phase}; pending or ambiguous claims must be resolved`
+        `Cannot release operation ${sanitizeId2(ctx.id)} in phase ${opData.phase}; pending or ambiguous claims must be resolved`
       );
     }
     if (control.activeOperations <= 0) {
@@ -2578,10 +2482,10 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
   const opRef = getCutoverOperationDocRef(db, ctx.namespace, ctx.id);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
-    const timer = startMonotonicTimer();
+    const timer = startMonotonicTimer2();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
-      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
+      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId2(ctx.id)}`);
     }
     const opData = opSnap.data();
     if (opData.schemaVersion !== 1) {
@@ -2616,7 +2520,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
 }
 __name(markOperationAmbiguous, "markOperationAmbiguous");
 async function checkMutationGuardInTransaction(transaction, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2634,7 +2538,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
     throw new CutoverFenceError2(
-      `Durable operation record missing for ${sanitizeId(options.operation.id)} in namespace ${options.namespace}`
+      `Durable operation record missing for ${sanitizeId2(options.operation.id)} in namespace ${options.namespace}`
     );
   }
   const opRecord = opSnap.data();
@@ -2657,12 +2561,12 @@ async function checkMutationGuardInTransaction(transaction, options) {
   }
   if (opRecord.phase !== "admitted" && opRecord.phase !== "upstream_pending") {
     throw new CutoverFenceError2(
-      `Operation ${sanitizeId(options.operation.id)} is already in phase ${opRecord.phase}; cannot be reused`
+      `Operation ${sanitizeId2(options.operation.id)} is already in phase ${opRecord.phase}; cannot be reused`
     );
   }
   if (options.operation.isCompleted()) {
     throw new CutoverFenceError2(
-      `Operation ${sanitizeId(options.operation.id)} was marked completed locally; cannot be reused`
+      `Operation ${sanitizeId2(options.operation.id)} was marked completed locally; cannot be reused`
     );
   }
   const completeOperation = options.completeOperation ?? true;
@@ -2709,7 +2613,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
 }
 __name(checkMutationGuardInTransaction, "checkMutationGuardInTransaction");
 async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2741,7 +2645,7 @@ async function isLegacyMutationPermittedInTransaction(transaction, db, namespace
 }
 __name(isLegacyMutationPermittedInTransaction, "isLegacyMutationPermittedInTransaction");
 async function claimUpstreamGrantInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   const {
     namespace,
     epoch,
@@ -2808,7 +2712,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2(`Durable operation record missing for upstream claim: ${sanitizeId(operationId)}`);
+    throw new CutoverFenceError2(`Durable operation record missing for upstream claim: ${sanitizeId2(operationId)}`);
   }
   const opData = opSnap.data();
   if (opData.schemaVersion !== 1 || opData.id !== operationId || opData.operationId !== operationId) {
@@ -2824,12 +2728,12 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
     throw new CutoverFenceError2(`Operation record epoch mismatch: expected ${control.epoch}, got ${opData.epoch}`);
   }
   if (opData.phase !== "admitted") {
-    throw new CutoverFenceError2(`Operation ${sanitizeId(operationId)} is in phase ${opData.phase}; claim refused`);
+    throw new CutoverFenceError2(`Operation ${sanitizeId2(operationId)} is in phase ${opData.phase}; claim refused`);
   }
   const familyRef = db.collection(familyCollection).doc(familyId);
   const familySnap = await transaction.get(familyRef);
   if (!familySnap.exists) {
-    throw new CutoverFenceError2(`Family record missing for claim: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError2(`Family record missing for claim: ${sanitizeId2(familyId)}`);
   }
   const family = familySnap.data();
   const actualFamilyGen = typeof family.generation === "number" ? family.generation : 1;
@@ -2840,12 +2744,12 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
   }
   const activePointerId = family.currentRefreshToken;
   if (typeof activePointerId !== "string" || !activePointerId.trim()) {
-    throw new CutoverFenceError2(`Family missing active refresh pointer: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError2(`Family missing active refresh pointer: ${sanitizeId2(familyId)}`);
   }
   const pointerRef = db.collection(refreshCollection).doc(activePointerId);
   const pointerSnap = await transaction.get(pointerRef);
   if (!pointerSnap.exists) {
-    throw new CutoverFenceError2(`Active refresh pointer missing: ${sanitizeId(activePointerId)}`);
+    throw new CutoverFenceError2(`Active refresh pointer missing: ${sanitizeId2(activePointerId)}`);
   }
   const pointer = pointerSnap.data();
   if (typeof pointer.familyId !== "string" || pointer.familyId !== familyId) {
@@ -2857,7 +2761,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
   const grantRef = db.collection(collection).doc(familyId);
   const grantSnap = await transaction.get(grantRef);
   if (!grantSnap.exists) {
-    throw new CutoverFenceError2(`Upstream grant missing for family: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError2(`Upstream grant missing for family: ${sanitizeId2(familyId)}`);
   }
   const current = grantSnap.data();
   const actualGrantVersion = current.grantVersion ?? current.version ?? 1;
@@ -2870,18 +2774,18 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
     const priorOpSnap = await transaction.get(priorOpRef);
     if (!priorOpSnap.exists) {
       throw new CutoverFenceError2(
-        `Upstream grant is held by unknown operation ${sanitizeId(holdingOpId)}; fail closed`
+        `Upstream grant is held by unknown operation ${sanitizeId2(holdingOpId)}; fail closed`
       );
     }
     const priorOp = priorOpSnap.data();
     if (priorOp.phase === "upstream_pending" || priorOp.phase === "admitted" || priorOp.ambiguousRemoteOutcome) {
       throw new CutoverFenceError2(
-        `Upstream grant is held by nonterminal operation ${sanitizeId(holdingOpId)} in phase ${priorOp.phase}; lease expiry cannot release nonterminal claims`
+        `Upstream grant is held by nonterminal operation ${sanitizeId2(holdingOpId)} in phase ${priorOp.phase}; lease expiry cannot release nonterminal claims`
       );
     }
   }
   if (current.ambiguousRemoteOutcome || current.ambiguousOutcome) {
-    throw new CutoverFenceError2(`Upstream grant for family ${sanitizeId(familyId)} has unresolved ambiguous outcome`);
+    throw new CutoverFenceError2(`Upstream grant for family ${sanitizeId2(familyId)} has unresolved ambiguous outcome`);
   }
   const isLeaseActive = typeof current.leaseExpiresAt === "number" && current.leaseExpiresAt > now || typeof current.leaseUntil === "number" && current.leaseUntil > now;
   if (current.leaseOwner && isLeaseActive) {
@@ -2924,7 +2828,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
 }
 __name(claimUpstreamGrantInTransaction, "claimUpstreamGrantInTransaction");
 async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   const {
     namespace,
     familyId,
@@ -2968,19 +2872,19 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2(`Operation record missing: ${sanitizeId(operationId)}`);
+    throw new CutoverFenceError2(`Operation record missing: ${sanitizeId2(operationId)}`);
   }
   const opData = opSnap.data();
   if (opData.phase !== "upstream_pending") {
-    throw new CutoverFenceError2(`Operation ${sanitizeId(operationId)} is in phase ${opData.phase}; expected upstream_pending`);
+    throw new CutoverFenceError2(`Operation ${sanitizeId2(operationId)} is in phase ${opData.phase}; expected upstream_pending`);
   }
   if (opData.familyId && opData.familyId !== familyId) {
-    throw new CutoverFenceError2(`Operation family mismatch: expected ${sanitizeId(familyId)}, got ${sanitizeId(opData.familyId)}`);
+    throw new CutoverFenceError2(`Operation family mismatch: expected ${sanitizeId2(familyId)}, got ${sanitizeId2(opData.familyId)}`);
   }
   const docRef = db.collection(collection).doc(familyId);
   const snap = await transaction.get(docRef);
   if (!snap.exists) {
-    throw new CutoverFenceError2(`Upstream grant missing for family: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError2(`Upstream grant missing for family: ${sanitizeId2(familyId)}`);
   }
   const current = snap.data();
   if (current.leaseOwner && current.leaseOwner !== claimOwner) {
@@ -3020,12 +2924,12 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
     return { status: "ambiguous_pending", operationId, familyId };
   }
   throw new CutoverFenceError2(
-    `Upstream grant reconciliation refused: trusted provider recovery mechanism is not established; operation ${sanitizeId(operationId)} remains held in upstream_pending`
+    `Upstream grant reconciliation refused: trusted provider recovery mechanism is not established; operation ${sanitizeId2(operationId)} remains held in upstream_pending`
   );
 }
 __name(reconcileUpstreamGrantInTransaction, "reconcileUpstreamGrantInTransaction");
 async function prepareMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   const { namespace, prepDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3485,7 +3389,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
 }
 __name(prepareMigrationInTransaction, "prepareMigrationInTransaction");
 async function finalizeMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   const { namespace, finalDoc, markerDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3997,7 +3901,7 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
 }
 __name(finalizeMigrationInTransaction, "finalizeMigrationInTransaction");
 async function activateMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer();
+  const timer = startMonotonicTimer2();
   const { namespace, expectedEpoch, migrationRunId, migrationManifestDigest, codeArtifact, protocolDigest } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -4502,6 +4406,149 @@ async function getFirestoreMigrationStatus(options) {
 }
 __name(getFirestoreMigrationStatus, "getFirestoreMigrationStatus");
 
+// src/store/row-codec.ts
+function encodeSessionsRow(codec, accessId, familyId, session, now) {
+  const expiresAt = session.expiresAt;
+  const retainUntil = expiresAt + ACCESS_RETENTION_MS;
+  const sealed = codec.seal(
+    {
+      familyId,
+      clientId: session.clientId,
+      serverBaseUrl: session.serverBaseUrl,
+      extra: session.extra
+    },
+    accessAad({ id: accessId, familyId })
+  );
+  return {
+    id: accessId,
+    familyId,
+    expiresAt,
+    retainUntil,
+    ttlAt: new Date(retainUntil),
+    sealed,
+    v: 2,
+    updatedAt: now
+  };
+}
+__name(encodeSessionsRow, "encodeSessionsRow");
+function decodeSessionsRow(codec, row) {
+  return codec.open(
+    row.sealed,
+    accessAad({ id: row.id, familyId: row.familyId })
+  );
+}
+__name(decodeSessionsRow, "decodeSessionsRow");
+function encodeRefreshFamiliesRow(codec, familyId, generation, activeRefreshId, currentAccessTokenId, session, retiredFingerprints, status, now) {
+  const sealed = codec.seal(
+    {
+      clientId: session.clientId,
+      serverBaseUrl: session.serverBaseUrl,
+      extra: session.extra,
+      retiredRefreshIds: retiredFingerprints
+    },
+    familyAad({ id: familyId, generation })
+  );
+  return {
+    id: familyId,
+    generation,
+    status: status === "revoked" ? "revoked" : "active",
+    activeRefreshId,
+    currentAccessTokenId,
+    updatedAt: now,
+    sealed,
+    v: 2
+  };
+}
+__name(encodeRefreshFamiliesRow, "encodeRefreshFamiliesRow");
+function decodeRefreshFamiliesRow(codec, row) {
+  return codec.open(
+    row.sealed,
+    familyAad({ id: row.id, generation: row.generation })
+  );
+}
+__name(decodeRefreshFamiliesRow, "decodeRefreshFamiliesRow");
+function encodeUpstreamRow(codec, familyId, grantVersion, upstream, now) {
+  const sealed = codec.seal(
+    {
+      nsAccessToken: upstream.nsAccessToken,
+      nsRefreshToken: upstream.nsRefreshToken,
+      nsUsername: upstream.nsUsername,
+      nsUserRole: upstream.nsUserRole,
+      nsApiUrl: upstream.nsApiUrl
+    },
+    upstreamAad({ id: familyId, grantVersion })
+  );
+  return {
+    id: familyId,
+    grantVersion,
+    nsExpiresAt: upstream.nsExpiresAt,
+    updatedAt: now,
+    sealed,
+    v: 2
+  };
+}
+__name(encodeUpstreamRow, "encodeUpstreamRow");
+function decodeUpstreamRow(codec, row) {
+  return codec.open(
+    row.sealed,
+    upstreamAad({ id: row.id, grantVersion: row.grantVersion })
+  );
+}
+__name(decodeUpstreamRow, "decodeUpstreamRow");
+function encodeRefreshRow(refreshId, familyId, generation, now) {
+  return {
+    id: refreshId,
+    familyId,
+    generation,
+    status: "active",
+    v: 2,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+__name(encodeRefreshRow, "encodeRefreshRow");
+function encodeAuthCodesRow(codec, code, data, expiresAt, now) {
+  const id = codec.id("code", code);
+  const sealed = codec.seal(data, `code:${id}`);
+  return {
+    id,
+    expiresAt,
+    ttlAt: new Date(expiresAt),
+    sealed,
+    v: 2
+  };
+}
+__name(encodeAuthCodesRow, "encodeAuthCodesRow");
+function encodeResumeTokensRow(id, consumedAt, expiresAt, now) {
+  return {
+    id,
+    consumedAt,
+    expiresAt,
+    ttlAt: new Date(expiresAt),
+    _mcp_format: "v3_target",
+    v: 2
+  };
+}
+__name(encodeResumeTokensRow, "encodeResumeTokensRow");
+function encodeOAuthClientsRow(clientId, clientData, now) {
+  return {
+    client_id: clientId,
+    client_name: clientData.client_name ?? null,
+    redirect_uris: clientData.redirect_uris,
+    token_endpoint_auth_method: clientData.token_endpoint_auth_method ?? "client_secret_basic",
+    client_secret: clientData.client_secret ?? null,
+    grant_types: clientData.grant_types ?? ["authorization_code", "refresh_token"],
+    response_types: clientData.response_types ?? ["code"],
+    client_uri: clientData.client_uri ?? null,
+    logo_uri: clientData.logo_uri ?? null,
+    scope: clientData.scope ?? null,
+    client_id_issued_at: clientData.client_id_issued_at ?? Math.floor(now / 1e3),
+    _mcp_format: "v3_target",
+    v: 2
+  };
+}
+__name(encodeOAuthClientsRow, "encodeOAuthClientsRow");
+
 // src/store/firestore-migration-engine.ts
 function assertValidMigrationContext2(options) {
   if (!options || typeof options !== "object") {
@@ -4605,12 +4652,12 @@ function countIndexMetrics2(val) {
   return { entries, bytes };
 }
 __name(countIndexMetrics2, "countIndexMetrics");
-function computeCandidateId(storeKey, namespace, epoch, kind2, sortedSourceIds) {
-  return H(storeKey, "candidate-id", namespace, epoch, [kind2, sortedSourceIds]);
+function computeCandidateId(storeKey, namespace, epoch, kind, sortedSourceIds) {
+  return H(storeKey, "candidate-id", namespace, epoch, [kind, sortedSourceIds]);
 }
 __name(computeCandidateId, "computeCandidateId");
-function computeCandidateLogicalDigest(storeKey, namespace, epoch, kind2, logicalProjection) {
-  return H(storeKey, "logical-record", namespace, epoch, [kind2, logicalProjection]);
+function computeCandidateLogicalDigest(storeKey, namespace, epoch, kind, logicalProjection) {
+  return H(storeKey, "logical-record", namespace, epoch, [kind, logicalProjection]);
 }
 __name(computeCandidateLogicalDigest, "computeCandidateLogicalDigest");
 function extractCandidatesAndPlan(params) {
@@ -4629,6 +4676,7 @@ function extractCandidatesAndPlan(params) {
     now
   } = params;
   const codec = createCodec(storeKey);
+  const measuredProjectorDigest = getMeasuredProjectorDigest();
   const physicalCounts = {};
   for (const k of PHYSICAL_COUNT_KEYS) physicalCounts[k] = 0;
   const classifications = {};
@@ -4703,17 +4751,23 @@ function extractCandidatesAndPlan(params) {
       claimedRefreshIds.add(prevRefId);
     }
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints) ? famData.retiredRefreshFingerprints : Array.isArray(famData.retiredTokens) ? famData.retiredTokens : [];
-    const retiredFingerprints = Array.from(new Set(rawRetired.filter((fp) => typeof fp === "string" && fp.length > 0)));
+    const seenFp = /* @__PURE__ */ new Set();
+    const retiredFingerprints = [];
     let retiredConflict = false;
-    for (const fp of retiredFingerprints) {
-      if (claimedRetiredFingerprints.has(fp)) {
-        reasons.conflictingClaims++;
-        retiredConflict = true;
-        break;
+    for (const fp of rawRetired) {
+      if (typeof fp === "string" && fp.length > 0) {
+        if (seenFp.has(fp) || claimedRetiredFingerprints.has(fp)) {
+          reasons.conflictingClaims++;
+          retiredConflict = true;
+          break;
+        }
+        seenFp.add(fp);
+        claimedRetiredFingerprints.add(fp);
+        retiredFingerprints.push(fp);
       }
-      claimedRetiredFingerprints.add(fp);
     }
     if (retiredConflict) continue;
+    retiredFingerprints.sort(codeUnitCompare);
     const newAccessId = codec.id("session", accessId);
     const newRefreshId = codec.id("refresh", currentRefId);
     const candSources = [
@@ -5334,7 +5388,7 @@ function extractCandidatesAndPlan(params) {
     ...totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest
+      projectorDigest: measuredProjectorDigest
     } : {}
   };
   const preparation = {
@@ -5356,7 +5410,7 @@ function extractCandidatesAndPlan(params) {
       encoderVersion: 1,
       planDigest,
       kind: "receipt",
-      preparedDigest: D("manifest", namespace, epoch, prepared),
+      preparedDigest: D("prepared", namespace, epoch, prepared),
       candidateId: c.id,
       candidateDigest: D("candidate", namespace, epoch, c.commitment),
       disposition: "written",
@@ -5401,7 +5455,7 @@ function extractCandidatesAndPlan(params) {
     encoderVersion: 1,
     planDigest,
     kind: "final",
-    preparedDigest: D("manifest", namespace, epoch, prepared),
+    preparedDigest: D("prepared", namespace, epoch, prepared),
     completedAt: now,
     physicalCounts,
     classifications,
@@ -5420,7 +5474,7 @@ function extractCandidatesAndPlan(params) {
     ...totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest
+      projectorDigest: measuredProjectorDigest
     } : {}
   };
   const markerUpperBound = {
@@ -5437,14 +5491,14 @@ function extractCandidatesAndPlan(params) {
     encoderVersion: 1,
     planDigest,
     kind: "ownership",
-    preparedDigest: D("manifest", namespace, epoch, prepared),
+    preparedDigest: D("prepared", namespace, epoch, prepared),
     migrationManifestDigest: "0".repeat(64),
     emptyNamespace: totalPhysicalRecords === 0,
     adoptedAt: now,
     ...totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest
+      projectorDigest: measuredProjectorDigest
     } : {}
   };
   const controlUpperBound = {
@@ -5561,7 +5615,7 @@ async function inspectFirestoreLegacyMigration2(options) {
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   return await db.runTransaction(async (transaction) => {
-    const startTime = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in inspect: expected ${expectedEpoch}, got ${control.epoch}`);
@@ -5604,10 +5658,6 @@ async function inspectFirestoreLegacyMigration2(options) {
         targetDocsByKey.set(tgtKey, tDocs);
       }
     }
-    const duration = Date.now() - startTime;
-    if (duration > 16e3) {
-      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
-    }
     const { candidates, sourceInventoryDigest, expectedTargetCounts, planSpec, planDigest, plan } = extractCandidatesAndPlan({
       sourceDocsByKey,
       storeKey,
@@ -5622,13 +5672,22 @@ async function inspectFirestoreLegacyMigration2(options) {
       indexSchemaDigest,
       now: Date.now()
     });
+    timer.assertUnderDeadline(16e3, "Preflight scan");
+    let prospectiveRetained = 0;
+    for (const [colKey, docs] of targetDocsByKey.entries()) {
+      for (const d of docs) {
+        if (isTargetFormatRow(colKey, d.data(), d.id)) {
+          prospectiveRetained++;
+        }
+      }
+    }
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
     const prospectiveWritten = Object.values(expectedTargetCounts).reduce((a, b) => a + b, 0);
     return {
       sourceInventoryDigest,
       scanned: candidates.length,
       prospectiveWritten,
-      prospectiveRetained: 0,
+      prospectiveRetained,
       planDigest,
       preflight
     };
@@ -5668,7 +5727,7 @@ async function adoptFirestoreLegacyTokens2(options) {
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   const prepResult = await db.runTransaction(async (transaction) => {
-    const startTime = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
@@ -5683,9 +5742,11 @@ async function adoptFirestoreLegacyTokens2(options) {
         throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
       }
       const prepDoc = prepSnap.data();
+      timer.assertUnderDeadline(16e3, "Preparation resume check");
       return {
         dryRun: false,
         isResume: true,
+        candidates: prepDoc.candidateCommitments || [],
         prepared: prepDoc,
         planSpec: prepDoc.planSpec
       };
@@ -5725,10 +5786,6 @@ async function adoptFirestoreLegacyTokens2(options) {
         sourceDocsByKey.set(srcKey, sDocs);
       }
     }
-    const duration = Date.now() - startTime;
-    if (duration > 16e3) {
-      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
-    }
     const { candidates: candidates2, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
       sourceDocsByKey,
       storeKey,
@@ -5749,6 +5806,7 @@ async function adoptFirestoreLegacyTokens2(options) {
       );
     }
     if (dryRun) {
+      timer.assertUnderDeadline(16e3, "Dry run inspection");
       return {
         dryRun: true,
         scanned: candidates2.length,
@@ -5757,12 +5815,14 @@ async function adoptFirestoreLegacyTokens2(options) {
         errors: 0
       };
     }
+    timer.assertUnderDeadline(16e3, "Preparation attempt");
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
       prepDoc: plan.prepared,
       storeKey,
       FieldPath
     });
+    timer.assertUnderDeadline(16e3, "Preparation commit");
     return {
       dryRun: false,
       isResume: false,
@@ -5783,7 +5843,7 @@ async function adoptFirestoreLegacyTokens2(options) {
   const now = Date.now();
   for (const c of candidates) {
     await db.runTransaction(async (transaction) => {
-      const itemStart = Date.now();
+      const timer = startMonotonicTimer();
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== "migrating") {
         throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
@@ -5794,27 +5854,43 @@ async function adoptFirestoreLegacyTokens2(options) {
       const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
       const receiptSnap = await transaction.get(receiptRef);
       if (receiptSnap.exists) {
-        return;
+        const rData = receiptSnap.data();
+        if (rData && rData.candidateId === c.id && rData.kind === "receipt") {
+          validateReceipt(rData, namespace, control.epoch, control.migrationRunId);
+          timer.assertUnderDeadline(16e3, "Item retry check");
+          return;
+        }
       }
-      if (Date.now() - itemStart > 16e3) {
-        throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
+      const colMap = {
+        families: `${namespace}_tokens_refresh_families`,
+        tokens: `${namespace}_tokens`,
+        refresh: `${namespace}_tokens_refresh`,
+        upstream: `${namespace}_tokens_upstream`,
+        authCodes: `${namespace}_auth_codes`,
+        resumeTokens: `${namespace}_resume_tokens`,
+        oauthClients: `${namespace}_oauth_clients`,
+        clients: `${namespace}_clients`
+      };
+      for (const s of c.sources) {
+        const physicalCol = colMap[s.collection];
+        if (physicalCol && s.rawId) {
+          const docSnap = await transaction.get(db.collection(physicalCol).doc(s.rawId));
+          if (!docSnap.exists) {
+            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' disappeared concurrently`);
+          }
+          const recDigest = computeSourceRecordDigest(storeKey, namespace, control.epoch, s.collection, s.id, docSnap.data() || {});
+          if (recDigest !== s.recordDigest) {
+            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
+          }
+        }
       }
+      timer.assertUnderDeadline(16e3, "Item transaction attempt");
       if (control.emptyNamespace !== true) {
         await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
       }
       for (const sa of c.sourceActions) {
-        const colMap = {
-          families: `${namespace}_tokens_refresh_families`,
-          tokens: `${namespace}_tokens`,
-          refresh: `${namespace}_tokens_refresh`,
-          upstream: `${namespace}_tokens_upstream`,
-          authCodes: `${namespace}_auth_codes`,
-          resumeTokens: `${namespace}_resume_tokens`,
-          oauthClients: `${namespace}_oauth_clients`,
-          clients: `${namespace}_clients`
-        };
         const physicalCol = colMap[sa.collection];
-        if (physicalCol && sa.action === "delete") {
+        if (physicalCol && sa.rawId && sa.action === "delete") {
           transaction.delete(db.collection(physicalCol).doc(sa.rawId));
         }
       }
@@ -5829,7 +5905,7 @@ async function adoptFirestoreLegacyTokens2(options) {
         retiredRefreshTokens: `${namespace}_retired_refresh`
       };
       for (const t of c.targets) {
-        const post = c.postimageByTargetId.get(t.id);
+        const post = c.postimageByTargetId?.get(t.id);
         const physicalCol = targetColMap[t.collection];
         if (physicalCol && post) {
           const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
@@ -5837,16 +5913,16 @@ async function adoptFirestoreLegacyTokens2(options) {
         }
       }
       const targetAfter = c.targets.map((t) => {
-        const post = c.postimageByTargetId.get(t.id);
-        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
+        const post = c.postimageByTargetId?.get(t.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post || {});
         return { collection: t.collection, id: t.id, recordDigest: recDigest };
       });
       const sourceAfter = c.sources.map((s) => {
-        const sa = c.sourceActions.find((a) => a.collection === s.collection && a.id === s.id);
+        const sa = c.sourceActions?.find((a) => a.collection === s.collection && a.id === s.id);
         return {
           collection: s.collection,
           id: s.id,
-          recordDigest: sa?.action === "delete" ? null : s.recordDigest
+          recordDigest: sa?.action === "delete" || sa?.action === "replace" ? null : s.recordDigest
         };
       });
       const receiptDoc = {
@@ -5863,9 +5939,9 @@ async function adoptFirestoreLegacyTokens2(options) {
         encoderVersion: 1,
         planDigest: prepared.planDigest,
         kind: "receipt",
-        preparedDigest: D("manifest", namespace, control.epoch, prepared),
+        preparedDigest: D("prepared", namespace, control.epoch, prepared),
         candidateId: c.id,
-        candidateDigest: D("candidate", namespace, control.epoch, c.commitment),
+        candidateDigest: D("candidate", namespace, control.epoch, c.commitment || c),
         disposition: "written",
         sourceAfter,
         targetAfter,
@@ -5873,10 +5949,11 @@ async function adoptFirestoreLegacyTokens2(options) {
         completedAt: now
       };
       transaction.set(receiptRef, receiptDoc);
+      timer.assertUnderDeadline(16e3, "Item transaction commit");
     });
   }
   await db.runTransaction(async (transaction) => {
-    const finalStart = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.state !== "migrating") {
       throw new CutoverFenceError(`Cannot finalize: state must be 'migrating', got '${control.state}'`);
@@ -5886,7 +5963,6 @@ async function adoptFirestoreLegacyTokens2(options) {
     const upperBound = `migration_receipt_${control.epoch}\``;
     const receiptsSnap = await transaction.get(receiptsCol.orderBy(docIdField).startAt(lowerBound).endBefore(upperBound));
     const actualReceipts = receiptsSnap.docs.map((d) => d.data());
-    const { target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const targetDescriptors = [];
     const targetPhysicalToKey = {
       [`${namespace}_refresh_families`]: "families",
@@ -5924,7 +6000,7 @@ async function adoptFirestoreLegacyTokens2(options) {
       encoderVersion: 1,
       planDigest: prepared.planDigest,
       kind: "final",
-      preparedDigest: D("manifest", namespace, control.epoch, prepared),
+      preparedDigest: D("prepared", namespace, control.epoch, prepared),
       completedAt: Date.now(),
       physicalCounts: prepared.physicalCounts,
       classifications: prepared.classifications,
@@ -5943,10 +6019,10 @@ async function adoptFirestoreLegacyTokens2(options) {
       ...prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest
+        projectorDigest: getMeasuredProjectorDigest()
       } : {}
     };
-    const finalManifestDigest = D("manifest", namespace, control.epoch, finalDoc);
+    const finalManifestDigest = D("final", namespace, control.epoch, finalDoc);
     const markerDoc = {
       schemaVersion: 2,
       namespace,
@@ -5961,19 +6037,17 @@ async function adoptFirestoreLegacyTokens2(options) {
       encoderVersion: 1,
       planDigest: prepared.planDigest,
       kind: "ownership",
-      preparedDigest: D("manifest", namespace, control.epoch, prepared),
+      preparedDigest: D("prepared", namespace, control.epoch, prepared),
       migrationManifestDigest: finalManifestDigest,
       emptyNamespace: prepared.totalPhysicalRecords === 0,
       adoptedAt: Date.now(),
       ...prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest
+        projectorDigest: getMeasuredProjectorDigest()
       } : {}
     };
-    if (Date.now() - finalStart > 16e3) {
-      throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
-    }
+    timer.assertUnderDeadline(16e3, "Finalization attempt");
     await finalizeMigrationInTransaction(transaction, db, {
       namespace,
       finalDoc,
@@ -5981,6 +6055,7 @@ async function adoptFirestoreLegacyTokens2(options) {
       storeKey,
       FieldPath
     });
+    timer.assertUnderDeadline(16e3, "Finalization commit");
   });
   return {
     scanned: candidates.length,
@@ -6013,7 +6088,7 @@ async function activateFirestoreMigration2(context) {
   }
   const { db, namespace, expectedEpoch, migrationRunId, key } = context;
   return await db.runTransaction(async (transaction) => {
-    const actStart = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
     const finalSnap = await transaction.get(finalRef);
@@ -6021,7 +6096,7 @@ async function activateFirestoreMigration2(context) {
     let planDigest = "";
     if (finalSnap.exists) {
       const f = finalSnap.data();
-      migrationManifestDigest = D("manifest", namespace, expectedEpoch, f);
+      migrationManifestDigest = D("final", namespace, expectedEpoch, f);
       planDigest = f.planDigest || "";
     }
     if (control.state === "v3_active") {
@@ -6031,6 +6106,7 @@ async function activateFirestoreMigration2(context) {
       if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
         throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
       }
+      timer.assertUnderDeadline(16e3, "Activation check");
       return {
         status: "already_active",
         epoch: control.epoch,
@@ -6042,14 +6118,13 @@ async function activateFirestoreMigration2(context) {
     if (control.state !== "v3_ready") {
       throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
     }
-    if (Date.now() - actStart > 16e3) {
-      throw new CutoverFenceError("Transaction attempt exceeded 16,000 ms lock deadline");
-    }
+    timer.assertUnderDeadline(16e3, "Activation attempt");
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
       storeKey: key,
       migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest
     });
+    timer.assertUnderDeadline(16e3, "Activation commit");
     return {
       status: "activated",
       epoch: control.epoch,
@@ -6083,6 +6158,7 @@ async function getFirestoreMigrationStatus2(context) {
   }
   const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
   return await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     let planDigest;
     let sourceInventoryDigest;
@@ -6101,13 +6177,14 @@ async function getFirestoreMigrationStatus2(context) {
         throw new CutoverFenceError("Immutable migration marker artifact/protocolDigest mismatch");
       }
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
-      const finalSnap = await transaction.get(finalRef);
+      const finalSnap = await finalRef.get();
       if (finalSnap.exists) {
         const f = finalSnap.data();
         planDigest = f.planDigest;
         sourceInventoryDigest = f.sourceInventoryDigest;
       }
     }
+    timer.assertUnderDeadline(16e3, "Status check");
     return {
       state: control.state,
       epoch: control.epoch,
@@ -6121,34 +6198,81 @@ async function getFirestoreMigrationStatus2(context) {
 __name(getFirestoreMigrationStatus2, "getFirestoreMigrationStatus");
 export {
   ACCESS_RETENTION_MS,
+  ALLOWED_STATE_TRANSITIONS,
+  APPROVED_GRAPH_PROJECTOR_ID,
+  APPROVED_GRAPH_PROJECTOR_VERSION,
   AUTH_CODE_TTL_MS,
-  CutoverFenceError,
-  CutoverRefusedError,
+  C,
+  CANDIDATE_KIND_TO_CLASSIFICATION,
+  CLASSIFICATION_KEYS,
+  D,
+  F,
+  FIRESTORE_MAX_DOCUMENT_SIZE_BYTES,
+  FIRESTORE_MAX_FIELD_TRANSFORMS,
+  FIRESTORE_MAX_INDEX_BYTES,
+  FIRESTORE_MAX_INDEX_ENTRIES,
+  FIRESTORE_MAX_NESTING_DEPTH,
+  FIRESTORE_MAX_REQUEST_SIZE_BYTES,
+  FIRESTORE_TRANSACTION_READ_DEADLINE_MS,
+  H,
   LeaseLostError,
   MAX_RETIRED_REFRESH_FINGERPRINTS,
+  NONEMPTY_PROJECTOR_KEYS,
+  PHYSICAL_COUNT_KEYS,
+  PREFLIGHT_MAX_DOC_BYTES,
+  PREFLIGHT_MAX_FIELD_TRANSFORMS,
+  PREFLIGHT_MAX_INDEX_BYTES,
+  PREFLIGHT_MAX_INDEX_ENTRIES,
+  PREFLIGHT_MAX_NESTING_DEPTH,
+  PREFLIGHT_MAX_REQUEST_BYTES,
   PROJECTOR_ID,
   PROJECTOR_VERSION,
+  REASON_KEYS,
   REFRESH_LEASE_MS,
   REFRESH_POLL_MS,
   REFRESH_RETRY_WINDOW_MS,
   REFRESH_SKEW_MS,
   REFRESH_WAIT_MS,
+  REQUIRED_CANDIDATE_KEYS,
+  REQUIRED_FINAL_MANIFEST_KEYS,
+  REQUIRED_IDENTITY_KEYS,
+  REQUIRED_OWNERSHIP_MARKER_KEYS,
+  REQUIRED_PREPARED_MANIFEST_KEYS,
+  REQUIRED_RECEIPT_KEYS,
   RESUME_TOKEN_TTL_MS,
   RetryableRefreshError,
   SESSION_RETENTION_MS,
+  SUPPORTED_CUTOVER_NAMESPACES,
   StoreConfigError,
   StoreLockedError,
   StoreUnavailableError,
+  TARGET_COUNT_KEYS,
   accessAad,
-  activateFirestoreMigration2 as activateFirestoreMigration,
-  adoptFirestoreLegacyTokens2 as adoptFirestoreLegacyTokens,
-  assertValidMigrationContext2 as assertValidMigrationContext,
+  activateMigrationInTransaction,
+  assertSupportedCutoverNamespace,
+  canonicalCompare,
+  canonicalJsonStringify,
+  checkMutationGuardInTransaction,
+  claimUpstreamGrantInTransaction,
   codeUnitCompare,
   compareDescriptors,
+  computeEstimatedFirestoreDocSize,
+  computeKeyedDocId,
+  computeLogicalInventoryDigest,
+  computeManifestDigest,
+  computePlanDigest,
+  computeProtocolDigest,
+  computeReceiptDigest,
+  computeReceiptSetDigest,
+  computeSourceInventoryDigest,
+  computeSourceRecordDigest,
+  computeTargetInventoryDigest,
+  computeTargetRecordDigest,
   createCodec,
   decodeRefreshFamiliesRow,
   decodeSessionsRow,
   decodeUpstreamRow,
+  deriveKey,
   deriveStoreKey,
   encodeAuthCodesRow,
   encodeOAuthClientsRow,
@@ -6159,15 +6283,45 @@ export {
   encodeUpstreamRow,
   extractCandidatesAndPlan,
   familyAad,
-  getFirestoreMigrationStatus2 as getFirestoreMigrationStatus,
+  finalizeMigrationInTransaction,
+  frame,
+  getCutoverDistinctCollectionNames,
+  getCutoverFenceDocRef,
+  getCutoverFenceRecord,
+  getCutoverOperationDocRef,
+  getCutoverOperationsColRef,
+  getMeasuredProjectorDigest,
+  getSourceCollectionAllowlist,
+  getTargetCollectionAllowlist,
   getTimestampMs,
-  inspectFirestoreLegacyMigration2 as inspectFirestoreLegacyMigration,
-  isCutoverFenceError,
-  isCutoverRefusedError,
+  initializeCutoverFence,
+  isLegacyMutationPermittedInTransaction,
+  isSupportedCutoverNamespace,
+  isTargetFormatRow,
+  markIrreversibleInTransaction,
+  markOperationAmbiguous,
+  normalizeValue,
+  parseCutoverFenceRecord,
+  prepareMigrationInTransaction,
   projectSourceLogical,
   projectTargetLogical,
+  readCutoverFenceInTransaction,
+  reconcileUpstreamGrantInTransaction,
   refreshAad,
+  releaseLegacyOperation,
+  rfc8785CanonicalJson,
   safeDocEntry,
   sessionAad,
-  upstreamAad
+  stripUndefined,
+  transitionCutoverFenceState,
+  upstreamAad,
+  validateCandidateCommitments,
+  validateCompleteMigrationPlan,
+  validateMapKeysExact,
+  validateMigrationIdentityFields,
+  validateMigrationPreflightLimits,
+  validateProspectiveDocBudget,
+  validateReceipt,
+  validateTransactionBudgetPlan,
+  withLegacyOperation
 };

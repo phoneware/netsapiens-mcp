@@ -7,6 +7,7 @@ import {
   codeUnitCompare,
   compareDescriptors,
   safeDocEntry,
+  startMonotonicTimer,
 } from './row-format.js';
 import {
   encodeSessionsRow,
@@ -22,6 +23,7 @@ import {
   PROJECTOR_VERSION,
   projectSourceLogical,
   projectTargetLogical,
+  sanitizeId,
 } from './netsapiens-projector.mjs';
 import {
   CutoverFenceError,
@@ -43,6 +45,7 @@ import {
   readCutoverFenceInTransaction,
   transitionCutoverFenceState,
   validateCompleteMigrationPlan,
+  validateReceipt,
   computeKeyedDocId,
   computeSourceRecordDigest,
   computeTargetRecordDigest,
@@ -59,7 +62,7 @@ import {
   isTargetFormatRow,
   parseCutoverFenceRecord,
   validateMigrationIdentityFields,
-  sanitizeId,
+  getMeasuredProjectorDigest,
 } from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 
@@ -219,6 +222,7 @@ export function extractCandidatesAndPlan(params: {
   } = params;
 
   const codec = createCodec(storeKey);
+  const measuredProjectorDigest = getMeasuredProjectorDigest();
 
   const physicalCounts: Record<string, number> = {};
   for (const k of PHYSICAL_COUNT_KEYS) physicalCounts[k] = 0;
@@ -306,18 +310,23 @@ export function extractCandidatesAndPlan(params: {
     const rawRetired = Array.isArray(famData.retiredRefreshFingerprints)
       ? famData.retiredRefreshFingerprints
       : (Array.isArray(famData.retiredTokens) ? famData.retiredTokens : []);
-    const retiredFingerprints = Array.from(new Set(rawRetired.filter((fp: unknown) => typeof fp === 'string' && fp.length > 0)));
-
+    const seenFp = new Set();
+    const retiredFingerprints = [];
     let retiredConflict = false;
-    for (const fp of retiredFingerprints) {
-      if (claimedRetiredFingerprints.has(fp)) {
-        reasons.conflictingClaims++;
-        retiredConflict = true;
-        break;
+    for (const fp of rawRetired) {
+      if (typeof fp === 'string' && fp.length > 0) {
+        if (seenFp.has(fp) || claimedRetiredFingerprints.has(fp)) {
+          reasons.conflictingClaims++;
+          retiredConflict = true;
+          break;
+        }
+        seenFp.add(fp);
+        claimedRetiredFingerprints.add(fp);
+        retiredFingerprints.push(fp);
       }
-      claimedRetiredFingerprints.add(fp);
     }
     if (retiredConflict) continue;
+    retiredFingerprints.sort(codeUnitCompare);
 
     const newAccessId = codec.id('session', accessId);
     const newRefreshId = codec.id('refresh', currentRefId);
@@ -1024,7 +1033,7 @@ export function extractCandidatesAndPlan(params: {
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
+      projectorDigest: measuredProjectorDigest,
     } : {}),
   };
 
@@ -1048,7 +1057,7 @@ export function extractCandidatesAndPlan(params: {
       encoderVersion: 1,
       planDigest,
       kind: 'receipt',
-      preparedDigest: D('manifest', namespace, epoch, prepared),
+      preparedDigest: D('prepared', namespace, epoch, prepared),
       candidateId: c.id,
       candidateDigest: D('candidate', namespace, epoch, c.commitment),
       disposition: 'written',
@@ -1096,7 +1105,7 @@ export function extractCandidatesAndPlan(params: {
     encoderVersion: 1,
     planDigest,
     kind: 'final',
-    preparedDigest: D('manifest', namespace, epoch, prepared),
+    preparedDigest: D('prepared', namespace, epoch, prepared),
     completedAt: now,
     physicalCounts,
     classifications,
@@ -1115,7 +1124,7 @@ export function extractCandidatesAndPlan(params: {
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
+      projectorDigest: measuredProjectorDigest,
     } : {}),
   };
 
@@ -1133,14 +1142,14 @@ export function extractCandidatesAndPlan(params: {
     encoderVersion: 1,
     planDigest,
     kind: 'ownership',
-    preparedDigest: D('manifest', namespace, epoch, prepared),
+    preparedDigest: D('prepared', namespace, epoch, prepared),
     migrationManifestDigest: '0'.repeat(64),
     emptyNamespace: totalPhysicalRecords === 0,
     adoptedAt: now,
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
+      projectorDigest: measuredProjectorDigest,
     } : {}),
   };
 
@@ -1287,7 +1296,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   const docIdField = FieldPath.documentId();
 
   return await db.runTransaction(async (transaction: any) => {
-    const startTime = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in inspect: expected ${expectedEpoch}, got ${control.epoch}`);
@@ -1338,11 +1347,6 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       }
     }
 
-    const duration = Date.now() - startTime;
-    if (duration > 16_000) {
-      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
-    }
-
     const { candidates, sourceInventoryDigest, expectedTargetCounts, planSpec, planDigest, plan } = extractCandidatesAndPlan({
       sourceDocsByKey,
       storeKey,
@@ -1358,6 +1362,17 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       now: Date.now(),
     });
 
+    timer.assertUnderDeadline(16_000, 'Preflight scan');
+
+    let prospectiveRetained = 0;
+    for (const [colKey, docs] of targetDocsByKey.entries()) {
+      for (const d of docs) {
+        if (isTargetFormatRow(colKey, d.data(), d.id)) {
+          prospectiveRetained++;
+        }
+      }
+    }
+
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
     const prospectiveWritten = Object.values(expectedTargetCounts).reduce((a, b) => a + b, 0);
 
@@ -1365,7 +1380,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       sourceInventoryDigest,
       scanned: candidates.length,
       prospectiveWritten,
-      prospectiveRetained: 0,
+      prospectiveRetained,
       planDigest,
       preflight,
     };
@@ -1417,7 +1432,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
   // Phase 1: Preparation in transaction (supporting restart per Section 5)
   const prepResult = await db.runTransaction(async (transaction: any) => {
-    const startTime = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
@@ -1434,9 +1449,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
       }
       const prepDoc = prepSnap.data();
+      timer.assertUnderDeadline(16_000, 'Preparation resume check');
       return {
         dryRun: false,
         isResume: true,
+        candidates: prepDoc.candidateCommitments || [],
         prepared: prepDoc,
         planSpec: prepDoc.planSpec,
       };
@@ -1485,11 +1502,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       }
     }
 
-    const duration = Date.now() - startTime;
-    if (duration > 16_000) {
-      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
-    }
-
     const { candidates, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
       sourceDocsByKey,
       storeKey,
@@ -1512,6 +1524,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     }
 
     if (dryRun) {
+      timer.assertUnderDeadline(16_000, 'Dry run inspection');
       return {
         dryRun: true,
         scanned: candidates.length,
@@ -1521,6 +1534,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       };
     }
 
+    timer.assertUnderDeadline(16_000, 'Preparation attempt');
+
     // Write prepared manifest + transition control to migrating
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
@@ -1528,6 +1543,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       storeKey,
       FieldPath,
     });
+
+    timer.assertUnderDeadline(16_000, 'Preparation commit');
 
     return {
       dryRun: false,
@@ -1553,7 +1570,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   // Phase 2: Execute each item in its own atomic transaction with exact receipt and latch
   for (const c of candidates) {
     await db.runTransaction(async (transaction: any) => {
-      const itemStart = Date.now();
+      const timer = startMonotonicTimer();
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== 'migrating') {
         throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
@@ -1566,12 +1583,42 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
       const receiptSnap = await transaction.get(receiptRef);
       if (receiptSnap.exists) {
-        return; // Already executed in previous attempt
+        const rData = receiptSnap.data();
+        if (rData && rData.candidateId === c.id && rData.kind === 'receipt') {
+          validateReceipt(rData, namespace, control.epoch, control.migrationRunId);
+          timer.assertUnderDeadline(16_000, 'Item retry check');
+          return; // Already executed in previous attempt
+        }
       }
 
-      if (Date.now() - itemStart > 16_000) {
-        throw new CutoverFenceError('Transaction attempt exceeded 16,000 ms lock deadline');
+      // Read source documents and verify preimages
+      const colMap: Record<string, string> = {
+        families: `${namespace}_tokens_refresh_families`,
+        tokens: `${namespace}_tokens`,
+        refresh: `${namespace}_tokens_refresh`,
+        upstream: `${namespace}_tokens_upstream`,
+        authCodes: `${namespace}_auth_codes`,
+        resumeTokens: `${namespace}_resume_tokens`,
+        oauthClients: `${namespace}_oauth_clients`,
+        clients: `${namespace}_clients`,
+      };
+
+      for (const s of c.sources) {
+        const physicalCol = colMap[s.collection];
+        if (physicalCol && s.rawId) {
+          const docSnap = await transaction.get(db.collection(physicalCol).doc(s.rawId));
+          if (!docSnap.exists) {
+            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' disappeared concurrently`);
+          }
+          const recDigest = computeSourceRecordDigest(storeKey, namespace, control.epoch, s.collection, s.id, docSnap.data() || {});
+          if (recDigest !== s.recordDigest) {
+            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
+          }
+        }
       }
+
+      timer.assertUnderDeadline(16_000, 'Item transaction attempt');
+
       // Call irreversible latch before first v3 target write
       if (control.emptyNamespace !== true) {
         await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
@@ -1579,18 +1626,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // Execute source actions (deletions / replacements)
       for (const sa of c.sourceActions) {
-        const colMap: Record<string, string> = {
-          families: `${namespace}_tokens_refresh_families`,
-          tokens: `${namespace}_tokens`,
-          refresh: `${namespace}_tokens_refresh`,
-          upstream: `${namespace}_tokens_upstream`,
-          authCodes: `${namespace}_auth_codes`,
-          resumeTokens: `${namespace}_resume_tokens`,
-          oauthClients: `${namespace}_oauth_clients`,
-          clients: `${namespace}_clients`,
-        };
         const physicalCol = colMap[sa.collection];
-        if (physicalCol && sa.action === 'delete') {
+        if (physicalCol && sa.rawId && sa.action === 'delete') {
           transaction.delete(db.collection(physicalCol).doc(sa.rawId));
         }
       }
@@ -1608,7 +1645,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       };
 
       for (const t of c.targets) {
-        const post = c.postimageByTargetId.get(t.id);
+        const post = c.postimageByTargetId?.get(t.id);
         const physicalCol = targetColMap[t.collection];
         if (physicalCol && post) {
           const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
@@ -1618,17 +1655,17 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // Write exact receipt
       const targetAfter = c.targets.map((t: any) => {
-        const post = c.postimageByTargetId.get(t.id);
-        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
+        const post = c.postimageByTargetId?.get(t.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post || {});
         return { collection: t.collection, id: t.id, recordDigest: recDigest };
       });
 
       const sourceAfter = c.sources.map((s: any) => {
-        const sa = c.sourceActions.find((a: any) => a.collection === s.collection && a.id === s.id);
+        const sa = c.sourceActions?.find((a: any) => a.collection === s.collection && a.id === s.id);
         return {
           collection: s.collection,
           id: s.id,
-          recordDigest: sa?.action === 'delete' ? null : s.recordDigest,
+          recordDigest: (sa?.action === 'delete' || sa?.action === 'replace') ? null : s.recordDigest,
         };
       });
 
@@ -1646,9 +1683,9 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         encoderVersion: 1,
         planDigest: prepared.planDigest,
         kind: 'receipt',
-        preparedDigest: D('manifest', namespace, control.epoch, prepared),
+        preparedDigest: D('prepared', namespace, control.epoch, prepared),
         candidateId: c.id,
-        candidateDigest: D('candidate', namespace, control.epoch, c.commitment),
+        candidateDigest: D('candidate', namespace, control.epoch, c.commitment || c),
         disposition: 'written',
         sourceAfter,
         targetAfter,
@@ -1657,12 +1694,13 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       };
 
       transaction.set(receiptRef, receiptDoc);
+      timer.assertUnderDeadline(16_000, 'Item transaction commit');
     });
   }
 
   // Phase 3: Finalization transaction (reads actual targets and receipts, writes final & marker, transitions to v3_ready)
   await db.runTransaction(async (transaction: any) => {
-    const finalStart = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.state !== 'migrating') {
       throw new CutoverFenceError(`Cannot finalize: state must be 'migrating', got '${control.state}'`);
@@ -1676,7 +1714,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     const actualReceipts = receiptsSnap.docs.map((d: any) => d.data());
 
     // Read all target collections to compute targetInventoryDigest
-    const { target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const targetDescriptors: Array<{ collection: string; id: string; recordDigest: string }> = [];
 
     const targetPhysicalToKey: Record<string, string> = {
@@ -1718,7 +1755,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       encoderVersion: 1,
       planDigest: prepared.planDigest,
       kind: 'final',
-      preparedDigest: D('manifest', namespace, control.epoch, prepared),
+      preparedDigest: D('prepared', namespace, control.epoch, prepared),
       completedAt: Date.now(),
       physicalCounts: prepared.physicalCounts,
       classifications: prepared.classifications,
@@ -1737,11 +1774,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       ...(prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest,
+        projectorDigest: getMeasuredProjectorDigest(),
       } : {}),
     };
 
-    const finalManifestDigest = D('manifest', namespace, control.epoch, finalDoc);
+    const finalManifestDigest = D('final', namespace, control.epoch, finalDoc);
 
     const markerDoc = {
       schemaVersion: 2,
@@ -1757,19 +1794,18 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       encoderVersion: 1,
       planDigest: prepared.planDigest,
       kind: 'ownership',
-      preparedDigest: D('manifest', namespace, control.epoch, prepared),
+      preparedDigest: D('prepared', namespace, control.epoch, prepared),
       migrationManifestDigest: finalManifestDigest,
       emptyNamespace: prepared.totalPhysicalRecords === 0,
       adoptedAt: Date.now(),
       ...(prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest,
+        projectorDigest: getMeasuredProjectorDigest(),
       } : {}),
     };
-    if (Date.now() - finalStart > 16_000) {
-      throw new CutoverFenceError('Transaction attempt exceeded 16,000 ms lock deadline');
-    }
+
+    timer.assertUnderDeadline(16_000, 'Finalization attempt');
 
     await finalizeMigrationInTransaction(transaction, db, {
       namespace,
@@ -1778,6 +1814,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       storeKey,
       FieldPath,
     });
+
+    timer.assertUnderDeadline(16_000, 'Finalization commit');
   });
 
   return {
@@ -1819,8 +1857,10 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
   const { db, namespace, expectedEpoch, migrationRunId, key } = context;
 
   return await db.runTransaction(async (transaction: any) => {
-    const actStart = Date.now();
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
+
+    // Read final manifest internally per Section 6
     const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
     const finalSnap = await transaction.get(finalRef);
 
@@ -1829,7 +1869,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
 
     if (finalSnap.exists) {
       const f = finalSnap.data();
-      migrationManifestDigest = D('manifest', namespace, expectedEpoch, f);
+      migrationManifestDigest = D('final', namespace, expectedEpoch, f);
       planDigest = f.planDigest || '';
     }
 
@@ -1840,6 +1880,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
       if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
         throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
       }
+      timer.assertUnderDeadline(16_000, 'Activation check');
       return {
         status: 'already_active',
         epoch: control.epoch,
@@ -1852,15 +1893,16 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     if (control.state !== 'v3_ready') {
       throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
     }
-    if (Date.now() - actStart > 16_000) {
-      throw new CutoverFenceError('Transaction attempt exceeded 16,000 ms lock deadline');
-    }
+
+    timer.assertUnderDeadline(16_000, 'Activation attempt');
 
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
       storeKey: key,
       migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
     });
+
+    timer.assertUnderDeadline(16_000, 'Activation commit');
 
     return {
       status: 'activated',
@@ -1904,6 +1946,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
 
   return await db.runTransaction(async (transaction: any) => {
+    const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
 
     let planDigest: string | undefined;
@@ -1925,13 +1968,15 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       }
 
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
-      const finalSnap = await transaction.get(finalRef);
+      const finalSnap = await finalRef.get();
       if (finalSnap.exists) {
         const f = finalSnap.data() as Record<string, unknown>;
         planDigest = f.planDigest as string | undefined;
         sourceInventoryDigest = f.sourceInventoryDigest as string | undefined;
       }
     }
+
+    timer.assertUnderDeadline(16_000, 'Status check');
 
     return {
       state: control.state,
