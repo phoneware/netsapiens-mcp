@@ -484,5 +484,5 @@ export function activateFirestoreMigration(
 }>;
 
 export function getFirestoreMigrationStatus(
-  options: Pick<MigrationContext, 'db' | 'namespace'>,
+  options: MigrationContext,
 ): Promise<CutoverFenceControlRecord>;

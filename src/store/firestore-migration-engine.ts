@@ -1433,16 +1433,53 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   sourceInventoryDigest?: string;
 }> {
   assertValidMigrationContext(context);
-  const { db, namespace, expectedEpoch } = context;
-  const control = await getCutoverFenceRecord(db, namespace);
-  if (!control) {
-    return { state: 'uninitialized', epoch: expectedEpoch };
+  const allowedKeys = new Set([
+    'db',
+    'FieldPath',
+    'key',
+    'namespace',
+    'expectedEpoch',
+    'migrationRunId',
+    'codeSha',
+    'codeArtifact',
+    'packageIntegrity',
+    'protocolDigest',
+    'assemblyDigest',
+    'indexSchemaDigest',
+  ]);
+  for (const k of Object.keys(context)) {
+    if (!allowedKeys.has(k)) {
+      throw new CutoverFenceError(`Unknown option '${k}' passed to getFirestoreMigrationStatus`);
+    }
+  }
+
+  const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
+  const docRef = getCutoverFenceDocRef(db, namespace);
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new CutoverFenceError(`Cutover fence control record missing for namespace '${namespace}'`);
+  }
+  const control = (await import('./cutover-protocol.mjs')).parseCutoverFenceRecord(snap.data(), namespace);
+
+  if (control.state === 'v3_ready' || control.state === 'v3_active') {
+    if (control.epoch !== expectedEpoch) {
+      throw new CutoverFenceError(`Status epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
+    }
+    const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+    const markerSnap = await markerRef.get();
+    if (!markerSnap.exists) {
+      throw new CutoverFenceError('Immutable migration marker missing at v2_adopted');
+    }
+    const marker = markerSnap.data();
+    (await import('./cutover-protocol.mjs')).validateMigrationIdentityFields(marker, namespace, expectedEpoch, migrationRunId);
+    if (marker.codeArtifact !== codeArtifact || marker.protocolDigest !== protocolDigest) {
+      throw new CutoverFenceError('Immutable migration marker artifact/protocolDigest mismatch');
+    }
   }
 
   let planDigest: string | undefined;
   let sourceInventoryDigest: string | undefined;
-
-  const finalRef = db.collection(\`\${namespace}_meta\`).doc(\`migration_manifest_\${control.epoch}\`);
+  const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
   const finalSnap = await finalRef.get();
   if (finalSnap.exists) {
     const f = finalSnap.data() as Record<string, unknown>;
