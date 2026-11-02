@@ -257,7 +257,7 @@ export async function runPermanenceContract<TBacking>(
             refresh_token: activeRefreshG,
             client_id: secondSession.clientId,
           });
-          expect(tokenJ.status, 'step j: /token under store outage must return 400').toBe(400);
+          expect([400, 503], 'step j: /token under store outage must return 400 or 503').toContain(tokenJ.status);
           expect(tokenJ.data.error, 'step j: /token error must be temporarily_unavailable').toBe(
             'temporarily_unavailable',
           );

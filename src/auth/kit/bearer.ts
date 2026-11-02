@@ -127,7 +127,12 @@ export function requireBearer(opts: RequireBearerOptions): RequestHandler {
    next();
   } catch (err: unknown) {
    const code = kitCodeOf(err);
-   if (code === 'store_unavailable' || code === 'upstream_unavailable') {
+   if (
+    code === 'store_unavailable' ||
+    code === 'upstream_unavailable' ||
+    code === 'cutover_refused' ||
+    code === 'cutover_fence_error'
+   ) {
     const message = err instanceof Error ? err.message : 'Temporarily unavailable';
     res.set('Retry-After', '5');
     res.status(503).json({

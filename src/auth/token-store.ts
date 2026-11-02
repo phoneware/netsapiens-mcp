@@ -45,6 +45,8 @@ export interface StoredToken extends BaseStoredToken {
  ttlAt?: Date;
   /** Refresh family id */
   refreshFamilyId?: string;
+  /** Whether an ambiguous remote refresh outcome is pending */
+  ambiguousRemoteOutcome?: boolean;
 }
 
 export interface TokenStoreLike {

@@ -26,14 +26,25 @@ import axios from 'axios';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { InvalidTokenError, InvalidGrantError, ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidTokenError, InvalidGrantError, ServerError, TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import {
+  type CutoverFenceConfig,
+  type LegacyOperationContext,
+  type SupportedCutoverNamespace,
+  withLegacyOperation,
+  checkMutationGuardInTransaction,
+  type GuardMutationResult,
+  requestOperationContext,
+} from './kit/cutover-fence.js';
 import {
  UpstreamRevokedError,
  UpstreamUnavailableError,
+ CutoverRefusedError,
  classifyUpstreamTokenResponse,
  toTokenEndpointError,
  kitCodeOf,
 } from './kit/errors.js';
+import { stripUndefined } from './kit/strip-undefined.js';
 import { DEFAULT_ACCESS_TOKEN_TTL_MS } from './kit/ledger.js';
 import type { TokenLedger } from './kit/ledger.js';
 import type {
@@ -236,12 +247,26 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
  private clients = new Map<string, OAuthClientInformationFull>();
 
  getClient(clientId: string): OAuthClientInformationFull | undefined {
-  return this.clients.get(clientId);
+  const hit = this.clients.get(clientId);
+  if (!hit) return undefined;
+  const rawData = hit as Record<string, unknown>;
+  if (rawData._mcp_format !== undefined || rawData._targetFormat !== undefined) {
+   throw new CutoverFenceError(
+    'Client record contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous',
+   );
+  }
+  return hit;
  }
 
  registerClient(
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
  ): OAuthClientInformationFull {
+  const rawMetadata = client as Record<string, unknown>;
+  if (rawMetadata._mcp_format !== undefined || rawMetadata._targetFormat !== undefined) {
+   throw new CutoverFenceError(
+    'Reserved format fields (_mcp_format, _targetFormat) are forbidden in legacy client registration',
+   );
+  }
   const clientId = client.client_id ?? randomUUID();
   // Honor the client's requested authentication method. Public clients
   // (token_endpoint_auth_method=none) get no secret: they rely on PKCE
@@ -491,6 +516,7 @@ export interface NetSapiensAuthProviderOptions {
  authCodeStore?: FirestoreAuthCodeStore;
  /** Optional now provider for testing */
  now?: () => number;
+ fence?: CutoverFenceConfig;
 }
 
 interface MfaChallenge {
@@ -524,6 +550,38 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // one presents an already-consumed refresh token and fails: concurrent
  // verifies must share a single refresh instead.
  private nsRefreshInflight = new Map<string, Promise<void>>();
+ readonly fenceConfig?: CutoverFenceConfig;
+ private readonly authCodesCollection: string;
+
+ get dbInstance(): Firestore | undefined {
+  return this.db;
+ }
+
+ get fenceNamespace(): SupportedCutoverNamespace {
+  const ns = this.fenceConfig?.namespace;
+  if (ns === 'readonly_mcp' || ns === 'pwmcp') return ns;
+  return 'mcp';
+ }
+
+ async withOperation<R>(
+  kind: string,
+  fn: (opCtx?: LegacyOperationContext) => Promise<R>,
+ ): Promise<R> {
+  const existing = requestOperationContext.getStore();
+  if (existing && !existing.isCompleted()) {
+   if (typeof (existing as any).trackWriter === 'function') {
+    return await (existing as any).trackWriter(() => fn(existing));
+   }
+   return await fn(existing);
+  }
+  if (this.db && this.fenceConfig?.enforce) {
+   return await withLegacyOperation(
+    { db: this.db, namespace: this.fenceNamespace, kind, now: this.nowProvider },
+    async (opCtx) => fn(opCtx),
+   );
+  }
+  return fn(undefined);
+ }
 
  constructor(options: NetSapiensAuthProviderOptions) {
   this.nsApiUrl = options.nsApiUrl;
@@ -545,6 +603,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const authCodesCollection = options.collections?.authCodes
    ?? process.env.FIRESTORE_AUTH_CODES_COLLECTION
    ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_auth_codes' : 'mcp_auth_codes');
+  this.authCodesCollection = authCodesCollection;
   this.resumeTokensCollection = options.collections?.resumeTokens
    ?? process.env.FIRESTORE_RESUME_TOKENS_COLLECTION
    ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp_resume_tokens' : 'mcp_resume_tokens');
@@ -552,10 +611,17 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    this.db = db ?? new Firestore({ projectId, ignoreUndefinedProperties: true });
   }
 
+  const detectedNs = tokensCollection.startsWith('readonly_mcp')
+   ? 'readonly_mcp'
+   : tokensCollection.startsWith('pwmcp')
+   ? 'pwmcp'
+   : 'mcp';
+  this.fenceConfig = options.fence ?? (process.env.MCP_FENCE_ENFORCE === 'true' ? { namespace: detectedNs, enforce: true } : undefined);
+
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
   } else if (useFirestore) {
-   this.tokenStore = new FirestoreTokenStore({ collection: tokensCollection, projectId, db: this.db });
+   this.tokenStore = new FirestoreTokenStore({ collection: tokensCollection, projectId, db: this.db, fence: this.fenceConfig });
   } else {
    this.tokenStore = new TokenStore(options.tokenStorePath);
   }
@@ -564,7 +630,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    this._clientsStore = options.clientsStore;
   } else if (useFirestore) {
    this._clientsStore = new LoopbackTolerantClientsStore(
-    new FirestoreClientsStore({ collection: clientsCollection, projectId, db: this.db }),
+    new FirestoreClientsStore({ collection: clientsCollection, projectId, db: this.db, fence: this.fenceConfig }),
    );
   } else {
    this._clientsStore = new LoopbackTolerantClientsStore(new InMemoryClientsStore());
@@ -573,9 +639,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (options.authCodeStore) {
    this.authCodeStore = options.authCodeStore;
   } else if (useFirestore) {
-   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db: this.db });
+   this.authCodeStore = new FirestoreAuthCodeStore({ collection: authCodesCollection, projectId, db: this.db, fence: this.fenceConfig, now: this.nowProvider });
   }
-
   if (useFirestore) {
    logger.info('Auth provider using Firestore persistence');
   } else {
@@ -684,46 +749,52 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   const { pending, reason } = this.resolvePending(req);
   if (!pending) {
-   // No state on the form, a page older than the TTL, or a state we didn't
-   // sign: a rotated MCP_SESSION_SECRET, or a POST that never came from
-   // one of our login pages.
    logger.warn('Login rejected: no usable pending-auth state', { reason });
    sendPage(res, 440, this.renderErrorPage('Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
 
-  // Re-mint the state so a retry on this page (wrong password, MFA bounce)
-  // starts a fresh window instead of inheriting the original deadline.
   const refreshedState = signValue(pending, PENDING_AUTH_TTL_SEC);
 
-  // Run NS password grant: may return final tokens OR an MFA challenge
-  let grantResult: NsGrantResult;
   try {
-   grantResult = await this.nsPasswordGrant(username, password);
-  } catch (err: any) {
-   const msg = err.message?.includes('401')
-    ? 'Invalid username or password.'
-    : `Authentication failed: ${err.message}`;
-   sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState));
-   return;
-  }
+   await this.withOperation('login', async (opCtx) => {
+    let grantResult: NsGrantResult;
+    try {
+     grantResult = await this.nsPasswordGrant(username, password);
+    } catch (err: unknown) {
+     const e = err as { message?: string };
+     const msg = e?.message?.includes('401')
+      ? 'Invalid username or password.'
+      : 'Authentication failed: Invalid credentials or server error.';
+     sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState));
+     return;
+    }
 
-  if (grantResult.kind === 'mfa_required') {
-   const challenge: MfaChallenge = {
-    pending,
-    username,
-    password,
-    partialAccessToken: grantResult.partialAccessToken,
-    mfaType: grantResult.mfaType,
-    mfaVendor: grantResult.mfaVendor,
-    nsIdType: grantResult.nsIdType,
-   };
-   const sealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
-   sendPage(res, 200, this.renderMfaPage('/mfa', grantResult.mfaVendor, undefined, sealed));
-   return;
-  }
+    if (grantResult.kind === 'mfa_required') {
+     const challenge: MfaChallenge = {
+      pending,
+      username,
+      password,
+      partialAccessToken: grantResult.partialAccessToken,
+      mfaType: grantResult.mfaType,
+      mfaVendor: grantResult.mfaVendor,
+      nsIdType: grantResult.nsIdType,
+     };
+     const sealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
+     sendPage(res, 200, this.renderMfaPage('/mfa', grantResult.mfaVendor, undefined, sealed));
+     return;
+    }
 
-  await this.completeLogin(pending, { ...grantResult.tokens, nsApiUrl: this.nsApiUrl }, username, res);
+    await this.completeLogin(pending, { ...grantResult.tokens, nsApiUrl: this.nsApiUrl }, username, res, undefined, false, { operation: opCtx, completeOperation: true });
+   });
+  } catch (err: unknown) {
+   if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+    res.setHeader('Retry-After', '5');
+    sendPage(res, 503, this.renderErrorPage('Cutover in progress; sign-in temporarily unavailable', 503));
+    return;
+   }
+   throw err;
+  }
  }
 
  /**
@@ -749,33 +820,43 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   const resolvedPlatform = getPlatform(platform);
   if (!resolvedPlatform) {
-   logger.warn('Token login rejected: unknown or forbidden platform', { platform });
+   logger.warn('Token login rejected: unknown or forbidden platform');
    sendPage(res, 200, this.renderLoginPage('/login', 'Selected platform is not recognized or not allowed.', refreshedState, 'token'));
    return;
   }
 
-  let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string };
   try {
-   validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
+   await this.withOperation('token_login', async (opCtx) => {
+    let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string };
+    try {
+     validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
+    } catch (err: unknown) {
+     const errMsg = (err as Error).message || '';
+     const msg = errMsg.includes('401')
+      ? 'Invalid NetSapiens token or API key.'
+      : 'Authentication failed: Invalid token or connection error.';
+     sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState, 'token'));
+    }
+
+    const nsTokens: NsTokenResponse = {
+     access_token: token,
+     expires_in: validated.expiresIn,
+     username: validated.username,
+     nsUserRole: validated.userRole,
+     scope: validated.scope,
+     nsApiUrl: resolvedPlatform.apiUrl,
+    };
+
+    await this.completeLogin(pending, nsTokens, validated.username, res, undefined, false, { operation: opCtx, completeOperation: true });
+   });
   } catch (err: unknown) {
-   const errMsg = (err as Error).message || String(err);
-   const msg = errMsg.includes('401')
-    ? 'Invalid NetSapiens token or API key.'
-    : `Authentication failed: ${errMsg}`;
-   sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState, 'token'));
-   return;
+   if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+    res.setHeader('Retry-After', '5');
+    sendPage(res, 503, this.renderErrorPage('Cutover in progress; sign-in temporarily unavailable', 503));
+    return;
+   }
+   throw err;
   }
-
-  const nsTokens: NsTokenResponse = {
-   access_token: token,
-   expires_in: validated.expiresIn,
-   username: validated.username,
-   nsUserRole: validated.userRole,
-   scope: validated.scope,
-   nsApiUrl: resolvedPlatform.apiUrl,
-  };
-
-  await this.completeLogin(pending, nsTokens, validated.username, res);
  }
 
  /**
@@ -870,8 +951,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const sealed = typeof formState === 'string' ? formState : undefined;
   const challenge = sealed ? openSealed<MfaChallenge>(sealed) : null;
   if (!challenge) {
-   // Stale or missing MFA state: show a sign-in failure page; the OAuth
-   // client will retry from the start.
    logger.warn('MFA rejected: no usable challenge state', {
     hadFormState: typeof formState === 'string',
    });
@@ -879,20 +958,30 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
-  let nsTokens: NsTokenResponse;
   try {
-   nsTokens = await this.nsMfaGrant(challenge, passcode);
-  } catch (err: any) {
-   const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
-    ? 'Invalid or expired passcode. Try again.'
-    : `MFA failed: ${err.message}`;
-   // Re-seal so "try again" has state to work with.
-   const resealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
-   sendPage(res, 200, this.renderMfaPage('/mfa', challenge.mfaVendor, msg, resealed));
-   return;
-  }
+   await this.withOperation('mfa', async (opCtx) => {
+    let nsTokens: NsTokenResponse;
+    try {
+     nsTokens = await this.nsMfaGrant(challenge, passcode);
+    } catch (err: any) {
+     const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
+      ? 'Invalid or expired passcode. Try again.'
+      : `MFA failed: ${err.message}`;
+     const resealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
+     sendPage(res, 200, this.renderMfaPage('/mfa', challenge.mfaVendor, msg, resealed));
+     return;
+    }
 
-  await this.completeLogin(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, res);
+    await this.completeLogin(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, res, undefined, false, { operation: opCtx, completeOperation: true });
+   });
+  } catch (err: unknown) {
+   if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+    res.setHeader('Retry-After', '5');
+    sendPage(res, 503, this.renderErrorPage('Cutover in progress; sign-in temporarily unavailable', 503));
+    return;
+   }
+   throw err;
+  }
  }
 
  /**
@@ -905,6 +994,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   res: Response,
   tokenExtra?: Record<string, string>,
   skipHooks = false,
+  options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
  ): Promise<void> {
   let nsUserRole = nsTokens.nsUserRole;
   let whoUser = username;
@@ -923,7 +1013,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (!displayName || displayName === username) displayName = detected.displayName;
     if (!email) email = detected.email;
    } catch (err) {
-    logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
+    logger.warn('Failed to detect user role, defaulting to user', { error: (err as Error).name || 'UnknownError' });
    }
   } else {
    if (username.includes('@')) {
@@ -989,7 +1079,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   };
 
   if (this.authCodeStore) {
-   await this.authCodeStore.set(code, authCodeData);
+   if (options?.operation) {
+    await this.authCodeStore.set(code, authCodeData, options);
+   } else {
+    await this.withOperation('auth_code', async (opCtx) => {
+     await this.authCodeStore!.set(code, authCodeData, { operation: opCtx, completeOperation: true });
+    });
+   }
   } else {
    this.authCodes.set(code, authCodeData);
    setTimeout(() => this.authCodes.delete(code), 5 * 60 * 1000);
@@ -1025,49 +1121,128 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
-  // Atomically consume continuation before minting a code.
-  // Key by the canonical authenticated payload nonce, or the hash of decoded envelope
-  // bytes for fallback, so equivalent base64/base64url re-encodings cannot replay.
-  const parts = resumeToken.split('.');
-  const canonicalDecodedBytes = Buffer.concat(parts.map((p) => Buffer.from(p, 'base64url')));
-  const resumeId = payload.nonce
-   ? createHash('sha256').update(`nonce:${payload.nonce}`).digest('hex')
-   : createHash('sha256').update(canonicalDecodedBytes).digest('hex');
-  const consumed = await this.consumeResumeToken(resumeId);
-  if (!consumed) {
-   sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));
-   return;
-  }
+  try {
+   await this.withOperation('resume', async (opCtx) => {
+    const parts = resumeToken.split('.');
+    const canonicalDecodedBytes = Buffer.concat(parts.map((p) => Buffer.from(p, 'base64url')));
+    const resumeId = payload.nonce
+     ? createHash('sha256').update(`nonce:${payload.nonce}`).digest('hex')
+     : createHash('sha256').update(canonicalDecodedBytes).digest('hex');
 
-  await this.completeLogin(
-   payload.pending,
-   payload.nsTokens,
-   payload.username,
-   res,
-   extra,
-   true,
-  );
+    if (this.db) {
+     const resumeRef = this.db.collection(this.resumeTokensCollection).doc(resumeId);
+     const code = randomBytes(32).toString('hex');
+     const now = this.nowProvider();
+     const expiresAt = now + 5 * 60 * 1000;
+     const authCodeData = {
+      pending: payload.pending,
+      nsTokens: { ...payload.nsTokens, username: payload.username },
+      extra,
+      expiresAt,
+      ttlAt: new Date(expiresAt),
+      used: false,
+      serverBaseUrl: this.serverBaseUrl,
+      clientId: payload.pending.clientId,
+     };
+     const codeRef = this.db.collection(this.authCodesCollection).doc(code);
+     const success = await this.db.runTransaction(async (transaction) => {
+      let guard: GuardMutationResult | undefined;
+      if (this.fenceConfig?.enforce) {
+       guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db!,
+        namespace: this.fenceNamespace,
+        operation: opCtx,
+        completeOperation: true,
+        now: this.nowProvider,
+       });
+      }
+      const resumeSnap = await transaction.get(resumeRef);
+      if (resumeSnap.exists) {
+       return false;
+      }
+      guard?.bufferCompletion(now);
+      transaction.set(resumeRef, {
+       consumedAt: now,
+       expiresAt: now + 2 * 60 * 60 * 1000,
+       ttlAt: new Date(now + 2 * 60 * 60 * 1000),
+      });
+      transaction.set(codeRef, stripUndefined(authCodeData as unknown as Record<string, unknown>));
+      return true;
+     });
+
+     if (!success) {
+      sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));
+      return;
+     }
+
+     const redirectUrl = new URL(payload.pending.redirectUri);
+     redirectUrl.searchParams.set('code', code);
+     if (payload.pending.state) {
+      redirectUrl.searchParams.set('state', payload.pending.state);
+     }
+     res.redirect(redirectUrl.toString());
+     return;
+    }
+
+    const consumed = await this.consumeResumeToken(resumeId, { operation: opCtx, completeOperation: false });
+    if (!consumed) {
+     sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));
+     return;
+    }
+
+    await this.completeLogin(
+     payload.pending,
+     payload.nsTokens,
+     payload.username,
+     res,
+     extra,
+     true,
+     { operation: opCtx, completeOperation: true },
+    );
+   });
+  } catch (err: unknown) {
+   if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+    res.setHeader('Retry-After', '5');
+    sendPage(res, 503, this.renderErrorPage('Cutover in progress; sign-in temporarily unavailable', 503));
+    return;
+   }
+   throw err;
+  }
  }
 
- private async consumeResumeToken(resumeId: string): Promise<boolean> {
+ private async consumeResumeToken(
+  resumeId: string,
+  options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
+ ): Promise<boolean> {
   if (this.db) {
    const docRef = this.db.collection(this.resumeTokensCollection).doc(resumeId);
    return await this.db.runTransaction(async (transaction) => {
-    const snap = await transaction.get(docRef);
-    if (snap.exists) {
-     return false;
+    let guard: GuardMutationResult | undefined;
+    if (this.fenceConfig?.enforce) {
+     guard = await checkMutationGuardInTransaction(transaction, {
+      db: this.db!,
+      namespace: this.fenceNamespace,
+      operation: options?.operation,
+      completeOperation: options?.completeOperation !== false,
+      now: this.nowProvider,
+     });
     }
-    const now = Date.now();
-    const expiresAt = now + 2 * 60 * 60 * 1000;
-    transaction.set(docRef, {
-     consumedAt: now,
-     expiresAt,
-     ttlAt: new Date(expiresAt),
+    const snap = await transaction.get(docRef);
+     if (snap.exists) {
+      guard?.bufferCompletion(this.nowProvider());
+      return false;
+     }
+     const now = this.nowProvider();
+     const expiresAt = now + 2 * 60 * 60 * 1000;
+     guard?.bufferCompletion(now);
+     transaction.set(docRef, {
+      consumedAt: now,
+      expiresAt,
+      ttlAt: new Date(expiresAt),
+     });
+     return true;
     });
-    return true;
-   });
   }
-
   if (this.consumedResumeTokens.has(resumeId)) {
    return false;
   }
@@ -1114,157 +1289,244 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   client: OAuthClientInformationFull,
   authorizationCode: string,
  ): Promise<OAuthTokens> {
-  if (this.authCodeStore) {
-   const entry = await this.authCodeStore.redeem(authorizationCode, {
-    serverBaseUrl: this.serverBaseUrl,
-    clientId: client.client_id,
-   });
-   if (!entry) {
+  return await this.withOperation('auth_code', async (opCtx) => {
+   if (this.authCodeStore && 'redeemAndIssue' in this.authCodeStore && this.tokenStore instanceof FirestoreTokenStore) {
+    const result = await this.authCodeStore.redeemAndIssue(
+     authorizationCode,
+     this.tokenStore,
+     {
+      serverBaseUrl: this.serverBaseUrl,
+      clientId: client.client_id,
+      tokenLifetimeSec: this.tokenLifetimeSec,
+     },
+     { operation: opCtx },
+    );
+    if (!result) {
+     throw new InvalidGrantError('Invalid authorization code');
+    }
+    return result.tokens;
+   }
+
+   if (this.authCodeStore) {
+    const entry = await this.authCodeStore.redeem(authorizationCode, {
+     serverBaseUrl: this.serverBaseUrl,
+     clientId: client.client_id,
+    }, { operation: opCtx });
+    if (!entry) {
+     throw new InvalidGrantError('Invalid authorization code');
+    }
+    return this.issueTokens(entry.pending.clientId, entry.nsTokens, entry.extra, { operation: opCtx });
+   }
+
+   const inMemEntry = this.authCodes.get(authorizationCode);
+   if (!inMemEntry) {
     throw new InvalidGrantError('Invalid authorization code');
    }
-   return this.issueTokens(entry.pending.clientId, entry.nsTokens, entry.extra);
-  }
-
-  const entry = this.authCodes.get(authorizationCode);
-  if (!entry) {
-   throw new InvalidGrantError('Invalid authorization code');
-  }
-  if (entry.serverBaseUrl || this.serverBaseUrl) {
-   if (!entry.serverBaseUrl || !this.serverBaseUrl || entry.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
+   if (inMemEntry.serverBaseUrl || this.serverBaseUrl) {
+    if (!inMemEntry.serverBaseUrl || !this.serverBaseUrl || inMemEntry.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
+     throw new InvalidGrantError('Invalid authorization code');
+    }
+   }
+   if (client?.client_id && inMemEntry.clientId && inMemEntry.clientId !== client.client_id) {
     throw new InvalidGrantError('Invalid authorization code');
    }
-  }
-  if (client?.client_id && entry.clientId && entry.clientId !== client.client_id) {
-   throw new InvalidGrantError('Invalid authorization code');
-  }
-  this.authCodes.delete(authorizationCode);
+   this.authCodes.delete(authorizationCode);
 
-  return this.issueTokens(entry.pending.clientId, entry.nsTokens, entry.extra);
+   return this.issueTokens(inMemEntry.pending.clientId, inMemEntry.nsTokens, inMemEntry.extra, { operation: opCtx });
+  });
  }
 
  async exchangeRefreshToken(
   client: OAuthClientInformationFull,
   refreshToken: string,
  ): Promise<OAuthTokens> {
-  try {
-   const expectedClientId = client?.client_id;
-   let stored: StoredToken | undefined;
-
-   if ('lookupRefresh' in this.tokenStore && typeof (this.tokenStore as any).lookupRefresh === 'function') {
-    const lookup = await (this.tokenStore as unknown as TokenLedger<StoredToken>).lookupRefresh(
-     refreshToken,
-     expectedClientId,
-     this.nowProvider(),
-    );
-    if (lookup.status === 'missing' || lookup.status === 'replay') {
-     logger.warn('Refresh token rejected', { status: lookup.status });
-     throw new InvalidGrantError('Invalid refresh token');
-    }
-    stored = lookup.token;
-   } else {
-    stored = await this.tokenStore.getByRefreshToken(refreshToken);
-  if (!stored) {
-   logger.warn('Refresh token presented but unknown: user will be asked to reconnect', {
-    refreshFingerprint: refreshToken.slice(0, 8),
-   });
-   throw new InvalidGrantError('Invalid refresh token');
-  }
-    if (expectedClientId && stored.clientId !== expectedClientId) {
-     logger.warn('Refresh token client mismatch', {
-      expected: expectedClientId,
-      actual: stored.clientId,
-     });
-     throw new InvalidGrantError('Invalid refresh token');
-    }
-  }
-
-  // Try to refresh the upstream NS token if we have a refresh token
-  let nsTokens: NsTokenResponse;
-  if (stored.nsRefreshToken) {
+  return await this.withOperation('refresh', async (opCtx) => {
    try {
-    nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
-    nsTokens.username = stored.nsUsername;
-    nsTokens.nsUserRole = stored.nsUserRole;
-    nsTokens.nsApiUrl = stored.nsApiUrl;
-   } catch (err: unknown) {
-    if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-     if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
-      await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
-     } else {
-      await (this.tokenStore as TokenStoreLike).delete(stored.accessToken);
+    const expectedClientId = client?.client_id;
+    let stored: StoredToken | undefined;
+
+    if ('lookupRefresh' in this.tokenStore && typeof (this.tokenStore as unknown as { lookupRefresh: unknown }).lookupRefresh === 'function') {
+     const ledger = this.tokenStore as unknown as TokenLedger<StoredToken>;
+     const lookup = await ledger.lookupRefresh(
+      refreshToken,
+      expectedClientId,
+      this.nowProvider(),
+      { operation: opCtx },
+     );
+     if (lookup.status === 'missing' || lookup.status === 'replay') {
+      logger.warn('Refresh token rejected', { status: lookup.status });
+      throw new InvalidGrantError('Invalid refresh token');
      }
-    throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+     if (lookup.status === 'retry') {
+      const remainingSec = Math.max(1, Math.round((lookup.token.expiresAt - this.nowProvider()) / 1000));
+      return {
+       access_token: lookup.token.accessToken,
+       token_type: 'Bearer',
+       expires_in: remainingSec,
+       refresh_token: lookup.token.refreshToken,
+      };
+     }
+     stored = lookup.token;
+    } else {
+     stored = await this.tokenStore.getByRefreshToken(refreshToken);
+     if (!stored) {
+      logger.warn('Refresh token presented but unknown: user will be asked to reconnect');
+      throw new InvalidGrantError('Invalid refresh token');
+     }
+     if (expectedClientId && stored.clientId !== expectedClientId) {
+      logger.warn('Refresh token client mismatch');
+      throw new InvalidGrantError('Invalid refresh token');
+     }
     }
+
+    if (this.hooks?.onVerify) {
+     try {
+      await this.hooks.onVerify(stored);
+     } catch (err: unknown) {
+      if (err instanceof InvalidTokenError) {
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId, { operation: opCtx });
+       } else {
+        await (this.tokenStore as TokenStoreLike).delete(stored.accessToken);
+       }
+       throw new InvalidGrantError(err.message);
+      }
+      logger.warn('Refresh authorization check failed with operational error', { error: (err as Error).name || 'UnknownError' });
+      throw new TemporarilyUnavailableError('Refresh authorization check temporarily unavailable');
+     }
+    }
+
+    // Try to refresh the upstream NS token if we have a refresh token
+    let nsTokens: NsTokenResponse;
+    if (stored.nsRefreshToken) {
+     try {
+      if (this.tokenStore instanceof FirestoreTokenStore && stored.refreshFamilyId) {
+       const storeWithRefresh = this.tokenStore as FirestoreTokenStore;
+       const upstreamStore = (storeWithRefresh as any).upstreamStore;
+       const upstreamGrant = await upstreamStore.ensureFresh(
+        stored.refreshFamilyId,
+        async (currentGrant: any) => {
+         const grantObj = currentGrant?.grant ?? currentGrant ?? {};
+         const res = await this.nsRefreshGrant(
+          grantObj.nsRefreshToken ?? stored.nsRefreshToken!,
+          grantObj.nsApiUrl ?? stored.nsApiUrl,
+         );
+         return {
+          grant: {
+           nsAccessToken: res.access_token,
+           nsRefreshToken: res.refresh_token ?? stored.nsRefreshToken,
+           nsExpiresAt: res.expires_in ? this.nowProvider() + res.expires_in * 1000 : undefined,
+           nsUsername: stored.nsUsername,
+           nsUserRole: stored.nsUserRole,
+           nsApiUrl: stored.nsApiUrl,
+          },
+          expiresAt: res.expires_in ? this.nowProvider() + res.expires_in * 1000 : undefined,
+         };
+        },
+        { operation: opCtx, now: this.nowProvider(), force: true, completeOperation: false },
+       );
+       const effectiveGrant = (upstreamGrant as any)?.grant ?? upstreamGrant;
+       nsTokens = {
+        access_token: effectiveGrant.nsAccessToken,
+        refresh_token: effectiveGrant.nsRefreshToken,
+        expires_in: effectiveGrant.nsExpiresAt ? Math.max(1, Math.round((effectiveGrant.nsExpiresAt - this.nowProvider()) / 1000)) : 3600,
+        username: effectiveGrant.nsUsername ?? stored.nsUsername,
+        nsUserRole: effectiveGrant.nsUserRole ?? stored.nsUserRole,
+        nsApiUrl: effectiveGrant.nsApiUrl ?? stored.nsApiUrl,
+       };
+      } else {
+       nsTokens = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
+       nsTokens.username = stored.nsUsername;
+       nsTokens.nsUserRole = stored.nsUserRole;
+       nsTokens.nsApiUrl = stored.nsApiUrl;
+      }
+     } catch (err: unknown) {
+      if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId, { operation: opCtx });
+       } else {
+        await (this.tokenStore as TokenStoreLike).delete(stored.accessToken);
+       }
+       throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+      }
+      const isTimeout =
+        err instanceof UpstreamTimeoutError ||
+        (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
+        (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
+        (err instanceof Error && err.message.toLowerCase().includes('timeout'));
+      opCtx?.markAmbiguousRemoteOutcome(isTimeout ? 'upstream_timeout' : 'upstream_transport_error');
+      throw toTokenEndpointError(err);
+     }
+    } else {
+     logger.warn('MCP refresh attempted but no upstream NS refresh token on file');
+     throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
+    }
+
+    const newAccess = randomBytes(32).toString('hex');
+    const newRefresh = randomBytes(32).toString('hex');
+    const expiresAt = this.nowProvider() + this.tokenLifetimeSec * 1000;
+    const nsExpiresAt = nsTokens.expires_in
+     ? this.nowProvider() + nsTokens.expires_in * 1000
+     : undefined;
+
+    const replacement: StoredToken = {
+     accessToken: newAccess,
+     refreshToken: newRefresh,
+     clientId: stored.clientId,
+     expiresAt,
+     ttlAt: new Date(expiresAt + 30 * 24 * 60 * 60 * 1000),
+     extra: stored.extra,
+     nsAccessToken: nsTokens.access_token,
+     nsRefreshToken: nsTokens.refresh_token,
+     nsExpiresAt,
+     nsUsername: nsTokens.username ?? 'unknown',
+     nsUserRole: nsTokens.nsUserRole,
+     nsApiUrl: nsTokens.nsApiUrl,
+     serverBaseUrl: this.serverBaseUrl,
+    };
+
+    try {
+     if ('rotate' in this.tokenStore && typeof (this.tokenStore as unknown as { rotate: unknown }).rotate === 'function') {
+      const rot = await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
+       refreshToken,
+       replacement,
+       stored.clientId,
+       this.nowProvider(),
+       { operation: opCtx },
+      );
+      if (rot.status === 'retry') {
+       const remainingSec = Math.max(1, Math.round((rot.token.expiresAt - this.nowProvider()) / 1000));
+       return {
+        access_token: rot.token.accessToken,
+        token_type: 'Bearer',
+        expires_in: remainingSec,
+        refresh_token: rot.token.refreshToken,
+       };
+      }
+      if (rot.status === 'replay' || rot.status === 'missing') {
+       throw new InvalidGrantError('Invalid refresh token');
+      }
+     } else {
+      await this.tokenStore.delete(stored.accessToken);
+      await this.tokenStore.set(replacement);
+     }
+    } catch (rotErr) {
+     opCtx?.markAmbiguousRemoteOutcome('local_commit_failure');
+     throw rotErr;
+    }
+
+    logger.info('MCP bearer refreshed via refresh_token');
+
+    return {
+     access_token: newAccess,
+     token_type: 'Bearer',
+     expires_in: this.tokenLifetimeSec,
+     refresh_token: newRefresh,
+    };
+   } catch (err: unknown) {
     throw toTokenEndpointError(err);
    }
-  } else {
-   logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
-    username: stored.nsUsername,
-   });
-   throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
-  }
-
-   const newAccess = randomBytes(32).toString('hex');
-   const newRefresh = randomBytes(32).toString('hex');
-   const expiresAt = this.nowProvider() + this.tokenLifetimeSec * 1000;
-   const nsExpiresAt = nsTokens.expires_in
-    ? this.nowProvider() + nsTokens.expires_in * 1000
-    : undefined;
-
-   const replacement: StoredToken = {
-    accessToken: newAccess,
-    refreshToken: newRefresh,
-    clientId: stored.clientId,
-    expiresAt,
-    ttlAt: new Date(expiresAt + 30 * 24 * 60 * 60 * 1000),
-    extra: stored.extra,
-    nsAccessToken: nsTokens.access_token,
-    nsRefreshToken: nsTokens.refresh_token,
-    nsExpiresAt,
-    nsUsername: nsTokens.username ?? 'unknown',
-    nsUserRole: nsTokens.nsUserRole,
-    nsApiUrl: nsTokens.nsApiUrl,
-    serverBaseUrl: this.serverBaseUrl,
-   };
-
-   if ('rotate' in this.tokenStore && typeof (this.tokenStore as any).rotate === 'function') {
-    const rot = await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
-     refreshToken,
-     replacement,
-     stored.clientId,
-     this.nowProvider(),
-    );
-    if (rot.status === 'retry') {
-     const remainingSec = Math.max(1, Math.round((rot.token.expiresAt - this.nowProvider()) / 1000));
-     return {
-      access_token: rot.token.accessToken,
-      token_type: 'Bearer',
-      expires_in: remainingSec,
-      refresh_token: rot.token.refreshToken,
-     };
-    }
-    if (rot.status === 'replay' || rot.status === 'missing') {
-     throw new InvalidGrantError('Invalid refresh token');
-    }
-   } else {
-  await this.tokenStore.delete(stored.accessToken);
-    await this.tokenStore.set(replacement);
-   }
-
-  logger.info('MCP bearer refreshed via refresh_token', {
-   username: stored.nsUsername,
-   clientId: stored.clientId,
   });
-
-   return {
-    access_token: newAccess,
-    token_type: 'Bearer',
-    expires_in: this.tokenLifetimeSec,
-    refresh_token: newRefresh,
-   };
-  } catch (err: unknown) {
-   throw toTokenEndpointError(err);
-  }
  }
 
  // -----------------------------------------------------------------------
@@ -1272,21 +1534,20 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // -----------------------------------------------------------------------
 
  async verifyAccessToken(token: string): Promise<AuthInfo> {
-  let stored = await this.tokenStore.get(token);
+  const op = requestOperationContext.getStore();
+  let stored: StoredToken | undefined;
+  if (this.tokenStore instanceof FirestoreTokenStore) {
+   stored = await this.tokenStore.getByAccessToken(token, { operation: op });
+  } else {
+   stored = await this.tokenStore.get(token);
+  }
   if (!stored) {
-   // Must be InvalidTokenError (not a plain Error): requireBearerAuth maps
-   // it to a 401 with a WWW-Authenticate challenge, which is the signal an
-   // MCP client needs to refresh or re-authenticate. Anything else becomes
-   // a 500 the client can't act on.
    throw new InvalidTokenError('Invalid access token');
   }
 
   if (stored.serverBaseUrl && this.serverBaseUrl) {
    if (stored.serverBaseUrl.toLowerCase() !== this.serverBaseUrl.toLowerCase()) {
-    logger.warn('Token rejected: serverBaseUrl mismatch (cross-server token)', {
-     tokenServer: stored.serverBaseUrl,
-     expectedServer: this.serverBaseUrl,
-    });
+    logger.warn('Token rejected: serverBaseUrl mismatch (cross-server token)');
     throw new InvalidTokenError('Access token was issued for a different server');
    }
   }
@@ -1294,8 +1555,6 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.nowProvider() > stored.expiresAt) {
    const ageMs = this.nowProvider() - stored.expiresAt;
    logger.info('MCP bearer expired: client should refresh', {
-    username: stored.nsUsername,
-    clientId: stored.clientId,
     ageSec: Math.round(ageMs / 1000),
     hadRefreshToken: !!stored.refreshToken,
    });
@@ -1309,18 +1568,42 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const nsExpired = stored.nsExpiresAt && this.nowProvider() > stored.nsExpiresAt - NS_REFRESH_SKEW_MS;
   if (nsExpired) {
    if (stored.nsRefreshToken) {
-    if ('refreshNsToken' in this.tokenStore && typeof this.tokenStore.refreshNsToken === 'function') {
+    if (this.hooks?.onVerify) {
      try {
-      stored = await this.tokenStore.refreshNsToken(token, (current: StoredToken) =>
-       this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
-      );
+      await this.hooks.onVerify(stored);
+     } catch (err: unknown) {
+      if (err instanceof InvalidTokenError) {
+       await this.withOperation('revocation', async (opCtx) => {
+        await (this.tokenStore as any).delete(token, { operation: opCtx });
+       });
+       throw err;
+      }
+      logger.warn('Pre-refresh verification hook failed with operational error', {
+       error: err instanceof Error ? err.message : String(err),
+      });
+      throw new TemporarilyUnavailableError('Verification service temporarily unavailable, please retry');
+     }
+    }
+    if ('refreshNsToken' in this.tokenStore && typeof (this.tokenStore as unknown as { refreshNsToken: unknown }).refreshNsToken === 'function') {
+     try {
+      const storeWithRefresh = this.tokenStore as FirestoreTokenStore;
+      stored = await this.withOperation('upstream_refresh', async (opCtx) => {
+       return await storeWithRefresh.refreshNsToken(token, (current: StoredToken) =>
+        this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
+        { operation: opCtx },
+       );
+      });
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
-       await this.tokenStore.delete(token);
+       logger.warn('Upstream NS refresh grant rejected');
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
+       } else {
+        await this.tokenStore.delete(token);
+       }
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
-      logger.warn('Cross-instance NS token refresh failed with non-fatal error', { error: String(err) });
+      logger.warn('Cross-instance NS token refresh failed with non-fatal error');
       if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
        this.tokenStore.clearCache();
       }
@@ -1343,11 +1626,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       stored = (await this.tokenStore.get(token)) ?? stored;
      } catch (err: unknown) {
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
-       logger.warn('Upstream NS refresh grant rejected by NetSapiens', { error: String(err) });
-       await this.tokenStore.delete(token);
+       logger.warn('Upstream NS refresh grant rejected');
+       if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+        await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId);
+       } else {
+        await this.tokenStore.delete(token);
+       }
        throw new InvalidTokenError('Upstream access token expired and could not be refreshed');
       }
-      logger.warn('In-memory NS token refresh failed with non-fatal error', { error: String(err) });
+      logger.warn('In-memory NS token refresh failed with non-fatal error');
       if ('clearCache' in this.tokenStore && typeof this.tokenStore.clearCache === 'function') {
        this.tokenStore.clearCache();
       }
@@ -1392,7 +1679,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     if (err instanceof InvalidTokenError) {
      throw err;
     }
-    throw new InvalidTokenError(err instanceof Error ? err.message : String(err));
+    throw new InvalidTokenError('Invalid token');
    }
   }
 
@@ -1406,7 +1693,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
    nsExpiresAt: refreshed.expires_in ? this.nowProvider() + refreshed.expires_in * 1000 : undefined,
   });
-  logger.info('Refreshed upstream NS token', { username: stored.nsUsername });
+  logger.info('Refreshed upstream NS token');
  }
 
  // -----------------------------------------------------------------------
@@ -1418,55 +1705,93 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   request: OAuthTokenRevocationRequest,
  ): Promise<void> {
   const { token } = request;
+  await this.withOperation('revocation', async (opCtx) => {
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(token, { operation: opCtx })
+    : await this.tokenStore.get(token);
+   if (stored) {
+    if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
+     await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId, { operation: opCtx });
+    } else {
+     await (this.tokenStore as any).delete(token, { operation: opCtx });
+    }
+    return;
+   }
 
-  const stored = await this.tokenStore.get(token);
-  if (stored) {
-   await this.tokenStore.delete(token);
-   return;
-  }
-
-  const byRefresh = await this.tokenStore.getByRefreshToken(token);
-  if (byRefresh) {
-   await this.tokenStore.deleteByRefreshToken(token);
-  }
+   const byRefresh = await this.tokenStore.getByRefreshToken(token);
+   if (byRefresh) {
+    if ('revokeFamily' in this.tokenStore && byRefresh.refreshFamilyId) {
+     await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(byRefresh.refreshFamilyId, { operation: opCtx });
+    } else {
+     await (this.tokenStore as any).deleteByRefreshToken(token, { operation: opCtx });
+    }
+   }
+  });
  }
-
  // -----------------------------------------------------------------------
  // Lookup: get the upstream NS access token for a verified MCP token
  // -----------------------------------------------------------------------
 
  async getNsAccessToken(mcpToken: string): Promise<string | undefined> {
-  const stored = await this.tokenStore.get(mcpToken);
-  return stored?.nsAccessToken;
+  return await this.withOperation('read', async (opCtx) => {
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(mcpToken, { operation: opCtx })
+    : await this.tokenStore.get(mcpToken);
+   return stored?.nsAccessToken;
+  });
  }
 
  async forceRefreshUpstream(mcpToken: string): Promise<string | undefined> {
-  const stored = await this.tokenStore.get(mcpToken);
-  if (!stored || !stored.nsRefreshToken) return undefined;
-  if ('refreshNsToken' in this.tokenStore && typeof this.tokenStore.refreshNsToken === 'function') {
-   try {
-    const refreshed = await this.tokenStore.refreshNsToken(mcpToken, (current: StoredToken) =>
-     this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
-    );
-    return refreshed.nsAccessToken;
-   } catch (err: unknown) {
-    if (err instanceof UpstreamRevokedError) {
-     await this.tokenStore.delete(mcpToken);
+  return await this.withOperation('upstream_refresh', async (opCtx) => {
+   const stored = this.tokenStore instanceof FirestoreTokenStore
+    ? await this.tokenStore.getByAccessToken(mcpToken, { operation: opCtx })
+    : await this.tokenStore.get(mcpToken);
+   if (!stored || !stored.nsRefreshToken) return undefined;
+   if (this.hooks?.onVerify) {
+    try {
+     await this.hooks.onVerify(stored);
+    } catch (err: unknown) {
+     if (err instanceof InvalidTokenError) {
+      await this.withOperation('revocation', async (innerOpCtx) => {
+       await (this.tokenStore as any).delete(mcpToken, { operation: innerOpCtx });
+      });
+      return undefined;
+     }
+     throw new TemporarilyUnavailableError('Verification service temporarily unavailable, please retry');
     }
-    throw err;
    }
-  } else {
-   try {
-    await this.refreshUpstreamNsToken(mcpToken, stored);
-    const latest = await this.tokenStore.get(mcpToken);
-    return latest?.nsAccessToken;
-   } catch (err: unknown) {
-    if (err instanceof UpstreamRevokedError) {
-     await this.tokenStore.delete(mcpToken);
+   if ('refreshNsToken' in this.tokenStore && typeof (this.tokenStore as unknown as { refreshNsToken: unknown }).refreshNsToken === 'function') {
+    try {
+     const storeWithRefresh = this.tokenStore as FirestoreTokenStore;
+     const refreshed = await storeWithRefresh.refreshNsToken(
+      mcpToken,
+      (current: StoredToken) => this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl),
+      { operation: opCtx, force: true },
+     );
+     return refreshed.nsAccessToken;
+    } catch (err: unknown) {
+     if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
+      await (this.tokenStore as any).delete(mcpToken, { operation: opCtx });
+     }
+     throw err;
     }
-    throw err;
+   } else {
+    try {
+     const refreshed = await this.nsRefreshGrant(stored.nsRefreshToken, stored.nsApiUrl);
+     await this.tokenStore.update(mcpToken, {
+      nsAccessToken: refreshed.access_token,
+      nsRefreshToken: refreshed.refresh_token ?? stored.nsRefreshToken,
+      nsExpiresAt: refreshed.expires_in ? this.nowProvider() + refreshed.expires_in * 1000 : undefined,
+     });
+     return refreshed.access_token;
+    } catch (err: unknown) {
+     if (err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
+      await (this.tokenStore as any).delete(mcpToken, { operation: opCtx });
+     }
+     throw err;
+    }
    }
-  }
+  });
  }
  // -----------------------------------------------------------------------
  // Private helpers
@@ -1476,6 +1801,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   clientId: string,
   nsTokens: NsTokenResponse,
   extra?: Record<string, string>,
+  options?: { operation?: LegacyOperationContext },
  ): Promise<OAuthTokens> {
   const accessToken = randomBytes(32).toString('hex');
   const refreshToken = randomBytes(32).toString('hex');
@@ -1500,7 +1826,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    serverBaseUrl: this.serverBaseUrl,
   };
 
-  await this.tokenStore.set(stored);
+  if ('issue' in this.tokenStore) {
+   await (this.tokenStore as FirestoreTokenStore).issue(stored, options);
+  } else {
+   await this.tokenStore.set(stored);
+  }
 
   return {
    access_token: accessToken,
@@ -1552,10 +1882,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const status = err.response?.status;
    const data = err.response?.data;
    logger.warn('NS password grant failed', {
-    tokenUrl,
-    username,
     status,
-    nsResponse: data,
    });
    const nsMessage = (typeof data === 'object' && data)
     ? (data.error_description || data.error || data.message)
@@ -1595,10 +1922,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const status = err.response?.status;
    const data = err.response?.data;
    logger.warn('NS MFA grant failed', {
-    tokenUrl,
-    username: challenge.username,
     status,
-    nsResponse: data,
    });
    const nsMessage = (typeof data === 'object' && data)
     ? (data.error_description || data.error || data.message)
@@ -1638,7 +1962,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const displayName = [firstName, lastName].filter(Boolean).join(' ') || data?.name || data?.description || user;
    const email = (data?.email || data?.['email-address'] || '') as string;
 
-   logger.info('Detected NS user role', { scope, role, username: user });
+   logger.info('Detected NS user role', { scope, role });
    return { user, domain, scope, role, displayName, email };
   } catch (err: unknown) {
    const status = (err as { response?: { status?: number } })?.response?.status;
@@ -1662,7 +1986,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      // Ignore
     }
    }
-   logger.warn('NS role detection API call failed', { error: String(err) });
+   logger.warn('NS role detection API call failed', { error: (err as Error).name || 'UnknownError' });
    return {
     user: defaultUser,
     domain: defaultDomain,
@@ -1714,16 +2038,22 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const desc = (typeof data === 'object' && data && ((data as Record<string, unknown>).error_description || (data as Record<string, unknown>).error || (data as Record<string, unknown>).message)) || err.message;
     const classification = classifyUpstreamTokenResponse(status, data ?? desc);
     if (classification === 'definitive') {
-     throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status}): ${String(desc)}`);
+     throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status})`);
     }
-    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status}): ${String(desc)}`);
+    throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status})`);
    }
    throw err;
   }
  }
 
- async invalidateToken(mcpToken: string): Promise<void> {
-  await this.tokenStore.delete(mcpToken);
+ async invalidateToken(mcpToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+  if (options?.operation) {
+   await (this.tokenStore as any).delete(mcpToken, options);
+   return;
+  }
+  await this.withOperation('revocation', async (opCtx) => {
+   await (this.tokenStore as any).delete(mcpToken, { operation: opCtx });
+  });
  }
 }
 

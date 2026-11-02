@@ -15,8 +15,16 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearer } from './auth/kit/bearer.js';
-import { UpstreamRevokedError, kitCodeOf } from './auth/kit/errors.js';
+import { UpstreamRevokedError, kitCodeOf, CutoverRefusedError, CutoverFenceError } from './auth/kit/errors.js';
+import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
+import {
+  getCutoverFenceRecord,
+  withLegacyOperation,
+  type CutoverFenceConfig,
+  type SupportedCutoverNamespace,
+  requestOperationContext,
+} from './auth/kit/cutover-fence.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
@@ -34,6 +42,57 @@ import type { UserRole } from './auth/roles.js';
 import type { NetSapiensConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+function detectInstalledMcpSdkVersion(): string {
+ try {
+  const exportedModule = require.resolve('@modelcontextprotocol/sdk/server/auth/router.js');
+  let dir = path.dirname(exportedModule);
+  while (dir && dir !== path.dirname(dir)) {
+   const candidate = path.join(dir, 'package.json');
+   if (fs.existsSync(candidate)) {
+    const raw = fs.readFileSync(candidate, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.name === '@modelcontextprotocol/sdk' && typeof parsed.version === 'string') {
+     return parsed.version;
+    }
+   }
+   dir = path.dirname(dir);
+  }
+ } catch {
+  // Fail closed below
+ }
+ throw new CutoverFenceError('Failed to resolve @modelcontextprotocol/sdk package root; fail closed');
+}
+
+/**
+ * SDK Version Gate:
+ * Pinned to exact supported @modelcontextprotocol/sdk versions.
+ * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
+ * async work before calling response.end().
+ */
+export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1'];
+
+let installedVersion = 'unresolved';
+try {
+ installedVersion = detectInstalledMcpSdkVersion();
+} catch {
+ installedVersion = 'unresolved';
+}
+
+export const INSTALLED_MCP_SDK_VERSION = installedVersion;
+
+export function assertSupportedMcpSdkVersion(): void {
+ if (!SUPPORTED_MCP_SDK_VERSIONS.includes(INSTALLED_MCP_SDK_VERSION)) {
+  throw new CutoverFenceError(
+   `Unsupported @modelcontextprotocol/sdk version: ${INSTALLED_MCP_SDK_VERSION}; bridge requires one of: ${SUPPORTED_MCP_SDK_VERSIONS.join(', ')}`,
+  );
+ }
+}
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -103,7 +162,13 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
+export interface CreateAppOptions {
+ customAuthProvider?: NetSapiensAuthProvider;
+ fence?: CutoverFenceConfig;
+ validateStartup?: boolean;
+}
+
+export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): { app: express.Express; authProvider: NetSapiensAuthProvider; baseUrl: URL; mcpUrl: URL } {
  const config = loadConfig();
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
@@ -119,11 +184,14 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
   );
  }
 
- // Issued bearer lifetime. MCP clients SHOULD refresh on 401 using the
- // refresh token we hand back at /token, but real-world client refresh
- // implementations vary, so a longer-lived bearer keeps far more sessions
- // alive without ever hitting the cliff. Default 7 days; operator-tunable
- // via MCP_TOKEN_LIFETIME_HOURS.
+ const customAuthProvider = options && 'handleLogin' in options ? options as NetSapiensAuthProvider : (options as CreateAppOptions | undefined)?.customAuthProvider;
+ const explicitFence = (options && !('handleLogin' in options)) ? (options as CreateAppOptions | undefined)?.fence : undefined;
+ const fenceEnforce = explicitFence?.enforce ?? (process.env.MCP_FENCE_ENFORCE === 'true' || process.env.MCP_CUTOVER_FENCE === 'true');
+ const fenceNamespace = (explicitFence?.namespace ?? process.env.MCP_FENCE_NAMESPACE ?? process.env.MCP_CUTOVER_FENCE_NAMESPACE ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp' : 'mcp')) as ('mcp' | 'pwmcp' | 'readonly_mcp');
+ const fenceConfig: CutoverFenceConfig | undefined = fenceEnforce
+   ? { namespace: fenceNamespace, enforce: true }
+   : undefined;
+
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  const authProvider = customAuthProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
@@ -131,9 +199,30 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
   nsClientSecret,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
+  fence: fenceConfig,
  });
+ if (fenceConfig?.enforce || authProvider.fenceConfig?.enforce) {
+  assertSupportedMcpSdkVersion();
+ }
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
  return { app, authProvider, baseUrl, mcpUrl };
+}
+
+export async function validateBridgeStartup(authProvider: NetSapiensAuthProvider): Promise<void> {
+ assertSupportedMcpSdkVersion();
+ if (authProvider.fenceConfig?.enforce) {
+  if (!authProvider.dbInstance) {
+   throw new CutoverFenceError(
+    `Bridge startup refused: cutover fence is enforced for namespace ${authProvider.fenceNamespace} but no Firestore database instance is configured`,
+   );
+  }
+  const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
+  if (!control) {
+   throw new CutoverFenceError(
+    `Bridge startup refused: cutover fence control record is missing for namespace ${authProvider.fenceNamespace}`,
+   );
+  }
+ }
 }
 
 /**
@@ -142,9 +231,10 @@ export function createApp(customAuthProvider?: NetSapiensAuthProvider): { app: e
  * Returns the listening `http.Server` so callers can shut it down (tests
  * especially, which otherwise leak a listener per case and collide on ports.
  */
-export async function startHttpServer(): Promise<HttpServer> {
- const { app, baseUrl, mcpUrl } = createApp();
+export async function startHttpServer(options?: CreateAppOptions): Promise<HttpServer> {
+ const { app, authProvider, baseUrl, mcpUrl } = createApp(options);
  const config = loadConfig();
+ await validateBridgeStartup(authProvider);
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const host = process.env.MCP_HOST || '0.0.0.0';
 
@@ -165,7 +255,7 @@ export async function startHttpServer(): Promise<HttpServer> {
    );
   }
   if (config.debug) {
-   logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
+   logger.debug('Debug mode enabled');
   }
  });
 
@@ -311,14 +401,150 @@ function wireApp(
    res.setHeader('ETag', cachedIcon.etag);
    res.send(cachedIcon.bytes);
   } catch (err) {
-   logger.warn('Failed to fetch icon, serving 404', { iconUrl, error: String(err) });
+   logger.warn('Failed to fetch icon, serving 404');
    res.status(404).end();
   }
  });
 
  // Publishes the requested loopback redirect_uri for the clients store, which
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
- // scoped to /authorize so every other endpoint keeps exact redirect matching.
+const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
+  return async (req, res, next) => {
+   if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
+    return next();
+   }
+   try {
+    const control = await getCutoverFenceRecord(authProvider.dbInstance, authProvider.fenceNamespace);
+    if (!control || control.state !== 'legacy_open') {
+     res.setHeader('Retry-After', '5');
+     return res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: control
+       ? `Cutover state is ${control.state}; ${endpointName} is temporarily unavailable`
+       : `Cutover fence control record is missing for namespace ${authProvider.fenceNamespace}`,
+     });
+    }
+
+    await withLegacyOperation(
+     {
+      db: authProvider.dbInstance,
+      namespace: authProvider.fenceNamespace as SupportedCutoverNamespace,
+      kind: endpointName,
+      now: authProvider.nowProvider,
+     },
+     async (opCtx) => {
+      (req as any).cutoverOperation = opCtx;
+      // Whole-task lifecycle: starts at 1 covering the route execution itself
+      let activeTasks = 1;
+      let closedToNewTasks = false;
+      let resolveQuiescence: (() => void) | undefined;
+
+      const checkQuiescent = () => {
+       if (closedToNewTasks && activeTasks === 0) {
+        if (resolveQuiescence) {
+         const r = resolveQuiescence;
+         resolveQuiescence = undefined;
+         r();
+        }
+       }
+      };
+
+      (opCtx as any).enterWriter = () => {
+       if (closedToNewTasks) {
+        throw new CutoverFenceError('Operation is closed to new tasks; mutation rejected');
+       }
+       activeTasks++;
+      };
+
+      (opCtx as any).exitWriter = () => {
+       activeTasks--;
+       if (activeTasks < 0) {
+        throw new CutoverFenceError('Active tasks underflow in operation lifecycle');
+       }
+       checkQuiescent();
+      };
+
+      // Thunk registration: enterWriter is called BEFORE fn() is invoked
+      (opCtx as any).trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
+       (opCtx as any).enterWriter();
+       try {
+        return await fn();
+       } finally {
+        (opCtx as any).exitWriter();
+       }
+      };
+
+      const quiescencePromise = new Promise<void>((resolve) => {
+       resolveQuiescence = resolve;
+      });
+
+      // Transport close ONLY notes transport loss
+      res.once('close', () => {
+       // Transport disconnected
+      });
+      let handlerSettled = false;
+      const markHandlerSettled = () => {
+       if (!handlerSettled) {
+        handlerSettled = true;
+        closedToNewTasks = true;
+        activeTasks--;
+        if (activeTasks < 0) {
+         throw new CutoverFenceError('Active tasks underflow on handler completion');
+        }
+        checkQuiescent();
+       }
+      };
+      (req as any).signalHandlerComplete = markHandlerSettled;
+      res.once('finish', markHandlerSettled);
+      const origEnd = res.end.bind(res);
+      res.end = (...args: any[]) => {
+       const ret = (origEnd as any)(...args);
+       markHandlerSettled();
+       return ret;
+      };
+
+      if (req.method === 'GET' && endpointName === 'mcp') {
+       const origWriteHead = res.writeHead.bind(res);
+       res.writeHead = (...args: any[]) => {
+        const ret = (origWriteHead as any)(...args);
+        markHandlerSettled();
+        return ret;
+       };
+      }
+
+
+      requestOperationContext.run(opCtx, () => {
+       next();
+      });
+
+      await quiescencePromise;
+     },
+    );
+   } catch (err: unknown) {
+    if (res.headersSent) return;
+    if (err instanceof CutoverRefusedError || kitCodeOf(err) === 'cutover_refused') {
+     const retryAfter = (err && typeof err === 'object' && 'retryAfterSeconds' in err && typeof (err as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number')
+      ? (err as { retryAfterSeconds: number }).retryAfterSeconds
+      : 5;
+     res.setHeader('Retry-After', String(retryAfter));
+     return res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description: err instanceof Error ? err.message : 'Cutover in progress; operation temporarily unavailable',
+     });
+    }
+    return next(err);
+   }
+  };
+ };
+
+ // HTTP cutover admission precedes ALL mutating middleware, including client adoption (C9.1)
+ app.use('/register', cutoverAdmissionMiddleware('register'));
+ app.use('/token', cutoverAdmissionMiddleware('token'));
+ app.use('/revoke', cutoverAdmissionMiddleware('revoke'));
+ app.use('/authorize', cutoverAdmissionMiddleware('authorize'));
+ app.use('/login', cutoverAdmissionMiddleware('login'));
+ app.use('/mfa', cutoverAdmissionMiddleware('mfa'));
+
  app.use('/authorize', allowLoopbackRedirectUri());
  app.use(
   '/authorize',
@@ -327,13 +553,34 @@ function wireApp(
    serverName: 'NetSapiens MCP',
   }),
  );
- // OAuth endpoints: discovery, authorize, token, register, revoke
+ // Intercept /token and /revoke responses to map temporarily_unavailable to HTTP 503 + Retry-After: 5
+ app.use(['/token', '/revoke'], (_req, res, next) => {
+  const origStatus = res.status.bind(res);
+  const origJson = res.json.bind(res);
+  let currentStatus = 200;
+
+  res.status = (code: number) => {
+   currentStatus = code;
+   return res;
+  };
+
+  res.json = (body: any) => {
+   if (body && typeof body === 'object' && body.error === 'temporarily_unavailable') {
+    res.setHeader('Retry-After', '5');
+    origStatus(503);
+    return origJson(body);
+   }
+   origStatus(currentStatus);
+   return origJson(body);
+  };
+
+  next();
+ });
  app.use(mcpAuthRouter({
   provider: authProvider,
   issuerUrl: baseUrl,
   resourceServerUrl: mcpUrl,
  }));
-
  // Compatibility: also serve protected-resource metadata at the root path.
  // The SDK mounts it at /.well-known/oauth-protected-resource/mcp (RFC 9728),
  // but some clients still query the root /.well-known/oauth-protected-resource.
@@ -346,35 +593,43 @@ function wireApp(
 
  // Login form submission: the authorize() method shows the page, this handles POST
  app.post('/login', async (req, res) => {
-  const { token, platform, username, password } = req.body;
+  try {
+   const { token, platform, username, password } = req.body;
 
-  if (token) {
-   if (!platform) {
-    res.status(400).json({ error: 'Missing platform' });
+   if (token) {
+    if (!platform) {
+     res.status(400).json({ error: 'Missing platform' });
+     return;
+    }
+    await authProvider.handleTokenLogin(req, res, String(platform), String(token));
     return;
    }
-   await authProvider.handleTokenLogin(req, res, String(platform), String(token));
-   return;
-  }
 
-  if (!username || !password) {
-   res.status(400).json({ error: 'Missing username or password' });
-   return;
-  }
+   if (!username || !password) {
+    res.status(400).json({ error: 'Missing username or password' });
+    return;
+   }
 
-  await authProvider.handleLogin(req, res, String(username), String(password));
+   await authProvider.handleLogin(req, res, String(username), String(password));
+  } finally {
+   (req as any).signalHandlerComplete?.();
+  }
  });
 
  // MFA passcode submission (second step when NS requires MFA)
  app.post('/mfa', async (req, res) => {
-  const { passcode } = req.body;
+  try {
+   const { passcode } = req.body;
 
-  if (!passcode) {
-   res.status(400).json({ error: 'Missing passcode' });
-   return;
+   if (!passcode) {
+    res.status(400).json({ error: 'Missing passcode' });
+    return;
+   }
+
+   await authProvider.handleMfa(req, res, passcode);
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  await authProvider.handleMfa(req, res, passcode);
  });
 
  // -----------------------------------------------------------------------
@@ -387,6 +642,7 @@ function wireApp(
   resourceMetadataUrl,
   now: authProvider.nowProvider,
  });
+ app.use('/mcp', cutoverAdmissionMiddleware('mcp'));
  // Protocol negotiation shim for clients speaking newer versions than our SDK
  app.use('/mcp', (req, _res, next) => {
   const negotiated = negotiateProtocolVersion(req);
@@ -399,62 +655,61 @@ function wireApp(
 
  // POST /mcp: JSON-RPC requests
  app.post('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  const body = (req as any).body;
+  try {
+   const sessionId = req.headers['mcp-session-id'] as string | undefined;
+   const body = (req as any).body;
 
-  // Stateless: build a throwaway server + transport for this one request and
-  // tear it down when the response closes. Every request carries its own
-  // bearer, so the NS client is rebuilt from that bearer each time and no
-  // cross-request state exists to go stale or to be pinned to an instance.
-  if (isStatelessMode()) {
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
-   void client;
-   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+   if (isStatelessMode()) {
+    const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+    void client;
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
-   res.on('close', () => {
-    void Promise.resolve(transport.close()).catch(() => { });
-    void Promise.resolve(server.close()).catch(() => { });
-   });
+    res.on('close', () => {
+     void Promise.resolve(transport.close()).catch(() => { });
+     void Promise.resolve(server.close()).catch(() => { });
+    });
 
-   await server.connect(transport);
-   await transport.handleRequest(req, res, body);
-   return;
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+    return;
+   }
+
+   if (isInitializeRequest(body)) {
+    const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
+
+    const transport = new StreamableHTTPServerTransport({
+     sessionIdGenerator: () => randomUUID(),
+     onsessioninitialized: (sid: string) => {
+      sessions.set(sid, { transport, server, client });
+     },
+    });
+
+    transport.onclose = () => {
+     const sid = transport.sessionId;
+     if (sid) sessions.delete(sid);
+    };
+
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+    return;
+   }
+
+   if (!sessionId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Missing session ID' }));
+    return;
+   }
+   if (!sessions.has(sessionId)) {
+    respondSessionNotFound(res);
+    return;
+   }
+
+   const session = sessions.get(sessionId)!;
+   syncSessionNsToken(session, req);
+   await session.transport.handleRequest(req, res, body);
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  if (isInitializeRequest(body)) {
-   // Create a server + client using the authenticated user's NS token, role, and identity.
-   const { server, client } = createAuthenticatedMcpServerForRequest(config, req, authProvider);
-
-   const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    onsessioninitialized: (sid: string) => {
-     sessions.set(sid, { transport, server, client });
-    },
-   });
-
-   transport.onclose = () => {
-    const sid = transport.sessionId;
-    if (sid) sessions.delete(sid);
-   };
-
-   await server.connect(transport);
-   await transport.handleRequest(req, res, body);
-   return;
-  }
-
-  if (!sessionId) {
-   res.writeHead(400, { 'Content-Type': 'application/json' });
-   res.end(JSON.stringify({ error: 'Missing session ID' }));
-   return;
-  }
-  if (!sessions.has(sessionId)) {
-   respondSessionNotFound(res);
-   return;
-  }
-
-  const session = sessions.get(sessionId)!;
-  syncSessionNsToken(session, req);
-  await session.transport.handleRequest(req, res, body);
  });
 
  // GET /mcp: SSE stream for server-initiated messages
@@ -483,31 +738,59 @@ function wireApp(
 
  // DELETE /mcp: session termination
  app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  try {
+   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  if (isStatelessMode()) {
-   respondMethodNotAllowed(res, 'This server runs stateless; there is no session to terminate');
-   return;
+   if (isStatelessMode()) {
+    respondMethodNotAllowed(res, 'This server runs stateless; there is no session to terminate');
+    return;
+   }
+
+   if (!sessionId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Missing session ID' }));
+    return;
+   }
+   if (!sessions.has(sessionId)) {
+    respondSessionNotFound(res);
+    return;
+   }
+
+   const session = sessions.get(sessionId)!;
+   await session.transport.close();
+   sessions.delete(sessionId);
+
+   res.writeHead(200, { 'Content-Type': 'application/json' });
+   res.end(JSON.stringify({ status: 'session terminated' }));
+  } finally {
+   (req as any).signalHandlerComplete?.();
   }
-
-  if (!sessionId) {
-   res.writeHead(400, { 'Content-Type': 'application/json' });
-   res.end(JSON.stringify({ error: 'Missing session ID' }));
-   return;
-  }
-  if (!sessions.has(sessionId)) {
-   respondSessionNotFound(res);
-   return;
-  }
-
-  const session = sessions.get(sessionId)!;
-  await session.transport.close();
-  sessions.delete(sessionId);
-
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'session terminated' }));
  });
 
+ // Cutover fence and transient store error handler
+ app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+   return next(err);
+  }
+  const code = kitCodeOf(err);
+  if (code === 'cutover_refused' || err instanceof CutoverRefusedError) {
+   const retryAfter = (err && typeof err === 'object' && 'retryAfterSeconds' in err && typeof (err as { retryAfterSeconds: unknown }).retryAfterSeconds === 'number')
+    ? (err as { retryAfterSeconds: number }).retryAfterSeconds
+    : 30;
+   res.setHeader('Retry-After', String(retryAfter));
+   return res.status(503).json({
+    error: 'temporarily_unavailable',
+    error_description: err instanceof Error ? err.message : 'Cutover in progress; operation temporarily unavailable',
+   });
+  }
+  if (err instanceof TemporarilyUnavailableError || code === 'store_unavailable' || code === 'upstream_unavailable' || code === 'cutover_fence_error' || err instanceof CutoverFenceError) {
+   return res.status(503).json({
+    error: 'temporarily_unavailable',
+    error_description: err instanceof Error ? err.message : 'Service temporarily unavailable',
+   });
+  }
+  return next(err);
+ });
  return { app, sessions };
 }
 
@@ -557,7 +840,7 @@ function createAuthenticatedMcpServer(
  registerTools(server, client, userRole, userIdentity);
 
  server.onerror = (error) => {
-  logger.error('[MCP Error]', { error: String(error) });
+  logger.error('[MCP Error]', { error: error instanceof Error ? error.name : 'UnknownError' });
  };
 
  return { server, client };

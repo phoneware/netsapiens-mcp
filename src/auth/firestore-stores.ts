@@ -18,9 +18,28 @@ import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/au
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
-import { FirestoreUpstreamGrantStore } from './kit/upstream-grant.js';
+import type { RefreshRotationResult, StoredRefreshFamily } from './kit/ledger.js';
+import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
+import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
+import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
+import {
+  type CutoverFenceConfig,
+  type LegacyOperationContext,
+  withLegacyOperation,
+  checkMutationGuardInTransaction,
+  type GuardMutationResult,
+  requestOperationContext,
+  type SupportedCutoverNamespace,
+} from './kit/cutover-fence.js';
+import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { logger } from '../utils/logger.js';
+
+function detectNamespace(collection: string): string {
+  if (collection.startsWith('readonly_mcp')) return 'readonly_mcp';
+  if (collection.startsWith('pwmcp')) return 'pwmcp';
+  return 'mcp';
+}
 
 function toDate(val: unknown): Date | undefined {
   if (!val) return undefined;
@@ -86,21 +105,32 @@ export interface NsUpstreamGrant {
 // FirestoreTokenStore
 // ---------------------------------------------------------------------------
 
+export interface FirestoreTokenStoreOptions {
+  collection?: string;
+  projectId?: string;
+  db?: Firestore;
+  now?: () => number;
+  fence?: CutoverFenceConfig;
+}
+
 export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
- private readonly upstreamStore: FirestoreUpstreamGrantStore<NsUpstreamGrant>;
- private readonly localNow: () => number;
- private readonly rawDb: Firestore;
- private readonly tokensCollection: string;
- private readonly refreshColName: string;
- constructor(opts: { collection?: string; projectId?: string; db?: Firestore; now?: () => number } = {}) {
-  const defaultCollection = process.env.MCP_READ_ONLY === 'true'
-   ? 'readonly_mcp_tokens'
-   : 'mcp_tokens';
+  private readonly upstreamStore: FirestoreUpstreamGrantStore<NsUpstreamGrant>;
+  private readonly localNow: () => number;
+  private readonly rawDb: Firestore;
+  private readonly tokensCollection: string;
+  private readonly refreshColName: string;
+  readonly fenceConfig?: CutoverFenceConfig;
+
+  constructor(opts: FirestoreTokenStoreOptions = {}) {
+    const defaultCollection = process.env.MCP_READ_ONLY === 'true'
+      ? 'readonly_mcp_tokens'
+      : 'mcp_tokens';
     const collection = opts.collection ?? defaultCollection;
     const db = opts.db ?? new Firestore({
-   projectId: opts.projectId,
-   ignoreUndefinedProperties: true,
-  });
+      projectId: opts.projectId,
+      ignoreUndefinedProperties: true,
+    });
+    const fenceConfig: CutoverFenceConfig | undefined = opts.fence;
 
     super({
       db,
@@ -108,6 +138,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       refreshCollection: `${collection}_refresh`,
       familyCollection: `${collection}_refresh_families`,
       linkedFamilyCollections: [`${collection}_upstream`],
+      fence: fenceConfig,
       accessDocExtras: (token) => {
         const ttlAt = token.ttlAt ?? new Date(token.expiresAt + 30 * 24 * 60 * 60 * 1000);
         return { ttlAt };
@@ -140,80 +171,114 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     this.rawDb = db;
     this.tokensCollection = collection;
     this.refreshColName = `${collection}_refresh`;
+    this.fenceConfig = fenceConfig;
     this.upstreamStore = new FirestoreUpstreamGrantStore<NsUpstreamGrant>({
       db,
       collection: `${collection}_upstream`,
       now: opts.now,
+      fence: fenceConfig,
     });
     this.localNow = opts.now ?? Date.now;
-  logger.info('Firestore token store initialized', {
+    logger.info('Firestore token store initialized', {
       collection,
-   projectId: opts.projectId,
-  });
- }
+      projectId: opts.projectId,
+    });
+  }
+  get localNowProvider(): () => number {
+    return this.localNow;
+  }
+
+
+  get dbInstance(): Firestore {
+    return this.rawDb;
+  }
+
+  get fenceNamespace(): string {
+    return this.fenceConfig?.namespace ?? detectNamespace(this.tokensCollection);
+  }
+
+  accessDocRef(accessToken: string) {
+    return this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
+  }
+
+  refreshDocRef(refreshToken: string) {
+    return this.rawDb.collection(this.refreshColName).doc(docId(refreshToken));
+  }
+
+  familyDocRef(familyId: string) {
+    return this.rawDb.collection(`${this.tokensCollection}_refresh_families`).doc(docId(familyId));
+  }
+
+  upstreamDocRef(familyId: string) {
+    return this.rawDb.collection(`${this.tokensCollection}_upstream`).doc(docId(familyId));
+  }
+
+  private resolveOp(options?: { operation?: LegacyOperationContext }): LegacyOperationContext | undefined {
+    const op = options?.operation ?? requestOperationContext.getStore();
+    if (op && op.isCompleted()) {
+      return undefined;
+    }
+    return op;
+  }
 
   // Backwards compatibility methods
- async get(accessToken: string): Promise<StoredToken | undefined> {
-    return this.getByAccessToken(accessToken);
- }
+  async get(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
+    return this.getByAccessToken(accessToken, options);
+  }
 
- async getByRefreshToken(refreshToken: string): Promise<StoredToken | undefined> {
-    const res = await this.lookupRefresh(refreshToken);
+  async getByRefreshToken(refreshToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    const res = await this.lookupRefresh(refreshToken, undefined, this.localNow(), { operation: op });
     if (res.status === 'active' || res.status === 'retry') {
       return res.token;
-  }
+    }
     return undefined;
- }
+  }
 
- async set(token: StoredToken): Promise<void> {
-    await this.issue(token);
- }
+  async set(token: StoredToken, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    await this.issue(token, options);
+  }
 
- override async issue(token: StoredToken): Promise<StoredToken> {
-    const issued = await super.issue(token);
-    if (token.nsAccessToken && issued.refreshFamilyId) {
-      await this.upstreamStore.put(
-        issued.refreshFamilyId,
-        {
-          nsAccessToken: token.nsAccessToken,
-          nsRefreshToken: token.nsRefreshToken,
-          nsExpiresAt: token.nsExpiresAt,
-          nsUsername: token.nsUsername,
-          nsUserRole: token.nsUserRole,
-          nsApiUrl: token.nsApiUrl,
-        },
-        token.nsExpiresAt,
+  override async issue(token: StoredToken, options?: { operation?: LegacyOperationContext }): Promise<StoredToken> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'issue', now: this.localNow },
+        async (opCtx) => this.issue(token, { operation: opCtx }),
       );
     }
-    return issued;
- }
+    return super.issue(token, { operation: op });
+  }
 
- override async rotate(
+  override async rotate(
     oldRefreshToken: string,
     replacement: StoredToken,
     expectedClientId: string,
     now?: number,
-  ) {
-    const res = await super.rotate(oldRefreshToken, replacement, expectedClientId, now);
-    if (res.status === 'claimed' && res.token.refreshFamilyId && replacement.nsAccessToken) {
-      await this.upstreamStore.put(
-        res.token.refreshFamilyId,
-        {
-          nsAccessToken: replacement.nsAccessToken,
-          nsRefreshToken: replacement.nsRefreshToken,
-          nsExpiresAt: replacement.nsExpiresAt,
-          nsUsername: replacement.nsUsername,
-          nsUserRole: replacement.nsUserRole,
-          nsApiUrl: replacement.nsApiUrl,
-        },
-        replacement.nsExpiresAt,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<RefreshRotationResult<StoredToken>> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'rotate', now: this.localNow },
+        async (opCtx) => this.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: opCtx }),
       );
     }
-    return res;
- }
+    return super.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: op });
+  }
 
- override async getByAccessToken(accessToken: string): Promise<StoredToken | undefined> {
-    const token = await super.getByAccessToken(accessToken);
+  override async getByAccessToken(
+    accessToken: string,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'read', now: this.localNow },
+        async (opCtx) => this.getByAccessToken(accessToken, { operation: opCtx }),
+      );
+    }
+    const token = await super.getByAccessToken(accessToken, { operation: op });
     if (!token) return undefined;
     if (token.ttlAt) {
       const converted = toDate(token.ttlAt);
@@ -236,168 +301,249 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return token;
  }
 
- async update(accessToken: string, patch: Partial<StoredToken>): Promise<StoredToken | undefined> {
-  const existing = await this.get(accessToken);
-  if (!existing) return undefined;
-  const updated: StoredToken = { ...existing, ...patch };
-  await this.rawDb.collection(this.tokensCollection).doc(docId(accessToken)).set(stripUndefined(updated), { merge: true });
-  if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
-    const familyId = updated.refreshFamilyId ?? existing.refreshFamilyId ?? randomUUID();
-    await this.rawDb.collection(this.refreshColName).doc(docId(existing.refreshToken)).delete().catch(() => {});
-    await this.rawDb.collection(this.refreshColName).doc(docId(patch.refreshToken)).set(stripUndefined({
-      status: 'active',
-      familyId,
-      token: updated,
-    }));
+  async update(
+    accessToken: string,
+    patch: Partial<StoredToken>,
+    options?: { operation?: LegacyOperationContext },
+  ): Promise<StoredToken | undefined> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'update', now: this.localNow },
+        async (opCtx) => this.update(accessToken, patch, { operation: opCtx }),
+      );
+    }
+    const accessRef = this.accessDocRef(accessToken);
+    let guardResult: GuardMutationResult | undefined;
+    const runTx = async () => {
+      return await this.rawDb.runTransaction(async (transaction) => {
+        let guard: GuardMutationResult | undefined;
+        const fence = this.fenceConfig;
+        if (fence && fence.enforce) {
+          guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.rawDb,
+            namespace: fence.namespace,
+            operation: op,
+            now: this.localNow,
+          });
+          guardResult = guard;
+        }
+        const accessSnap = await transaction.get(accessRef);
+      if (!accessSnap.exists) return undefined;
+      const existing = accessSnap.data() as StoredToken;
+      const updated: StoredToken = { ...existing, ...patch };
+      const now = this.localNow();
+
+      guard?.bufferCompletion(now);
+      transaction.set(accessRef, stripUndefined(cleanDoc(updated)), { merge: true });
+
+      if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
+        const familyId = updated.refreshFamilyId ?? existing.refreshFamilyId ?? randomUUID();
+        const oldRefreshRef = this.refreshDocRef(existing.refreshToken);
+        const newRefreshRef = this.refreshDocRef(patch.refreshToken);
+        transaction.delete(oldRefreshRef);
+        transaction.set(newRefreshRef, stripUndefined({
+          status: 'active',
+          familyId,
+          token: updated,
+        }));
+      }
+
+      if (updated.refreshFamilyId && (patch.nsAccessToken || patch.nsRefreshToken || patch.nsExpiresAt)) {
+        const upstreamRef = this.upstreamDocRef(updated.refreshFamilyId);
+        transaction.set(upstreamRef, stripUndefined({
+          grant: {
+            nsAccessToken: updated.nsAccessToken,
+            nsRefreshToken: updated.nsRefreshToken,
+            nsExpiresAt: updated.nsExpiresAt,
+            nsUsername: updated.nsUsername,
+            nsUserRole: updated.nsUserRole,
+            nsApiUrl: updated.nsApiUrl,
+          },
+          expiresAt: updated.nsExpiresAt,
+          updatedAt: now,
+        }), { merge: true });
+      }
+
+        return updated;
+      });
+    };
+    const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
+    guardResult?.commitCompletion?.();
+    return result;
   }
-  return updated;
- }
 
  async refreshNsToken(
   accessToken: string,
   doRefresh: (stored: StoredToken) => Promise<{ access_token: string; refresh_token?: string; expires_in?: number }>,
-  opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number },
+  opts?: { maxWaitMs?: number; pollIntervalMs?: number; leaseDurationMs?: number; operation?: LegacyOperationContext; force?: boolean },
  ): Promise<StoredToken> {
-    const docRef = this.rawDb.collection(this.tokensCollection).doc(docId(accessToken));
-  const MAX_WAIT_MS = opts?.maxWaitMs ?? 15_000;
-  const POLL_INTERVAL_MS = opts?.pollIntervalMs ?? 150;
-  const LEASE_DURATION_MS = opts?.leaseDurationMs ?? 15_000;
-  const startTime = Date.now();
-  const NS_REFRESH_SKEW_MS = 60_000;
+  const op = this.resolveOp(opts);
+  if (this.fenceConfig?.enforce && !op) {
+    return await withLegacyOperation(
+      { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'upstream_refresh', now: this.localNow },
+      async (opCtx) => this.refreshNsToken(accessToken, doRefresh, { ...opts, operation: opCtx }),
+    );
+  }
 
-  while (Date.now() - startTime < MAX_WAIT_MS) {
-   let shouldRefresh = false;
-   let tokenToRefresh: StoredToken | undefined;
-   let currentLeaseOwner: string | undefined;
-      await this.rawDb.runTransaction(async (transaction) => {
-    const snap = await transaction.get(docRef);
-    if (!snap.exists) {
-     throw new Error('Token document not found');
-    }
-    const data = snap.data() as StoredToken & { refreshLockUntil?: number; refreshLockOwner?: string };
-    const convertedDate = toDate(data.ttlAt);
-    if (convertedDate) {
-     data.ttlAt = convertedDate;
-    }
-        const now = this.localNow();
-    const isExpiring = data.nsExpiresAt && now > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
+  const stored = await this.getByAccessToken(accessToken, { operation: op });
+  if (!stored) {
+    throw new Error('Token document not found');
+  }
+  const familyId = stored.refreshFamilyId;
+  if (!familyId) {
+    throw new Error('Token document missing refreshFamilyId');
+  }
 
-    if (!isExpiring) {
-     tokenToRefresh = data;
-     shouldRefresh = false;
-     return;
-    }
-
-    if (data.refreshLockUntil && data.refreshLockUntil > now && data.refreshLockOwner) {
-     shouldRefresh = false;
-     return;
-    }
-
-    shouldRefresh = true;
-    tokenToRefresh = data;
-    currentLeaseOwner = randomUUID();
-    transaction.update(docRef, {
-     refreshLockUntil: now + LEASE_DURATION_MS,
-     refreshLockOwner: currentLeaseOwner,
-    });
-   });
-
-   if (!shouldRefresh) {
-        if (tokenToRefresh && (!tokenToRefresh.nsExpiresAt || this.localNow() <= tokenToRefresh.nsExpiresAt - NS_REFRESH_SKEW_MS)) {
-     return tokenToRefresh;
-    }
-    await delay(POLL_INTERVAL_MS);
-    continue;
-   }
-
-   try {
-    const refreshed = await doRefresh(tokenToRefresh!);
-    const updatedNsExpiresAt = refreshed.expires_in
-          ? this.localNow() + refreshed.expires_in * 1000
-     : undefined;
-    const newRefreshToken = refreshed.refresh_token ?? tokenToRefresh!.nsRefreshToken;
-    let resultToken: StoredToken | undefined;
-        await this.rawDb.runTransaction(async (transaction) => {
-     const snap = await transaction.get(docRef);
-     if (!snap.exists) {
-      throw new Error('Token document was deleted/revoked during refresh');
-     }
-          const current = snap.data() as StoredToken & { refreshLockOwner?: string; refreshLockUntil?: number };
-          const now = this.localNow();
-     if (current.refreshLockOwner !== currentLeaseOwner) {
-      logger.warn('Refresh lease expired or owned by another instance, aborting late completion', {
-       expectedOwner: currentLeaseOwner,
-       actualOwner: current.refreshLockOwner,
-      });
-      throw new LeaseLostError('Refresh lease expired or owned by another instance');
-          }
-          if (current.refreshLockUntil && current.refreshLockUntil < now) {
-            throw new LeaseLostError('Refresh lease expired before refresh completed');
-     }
-     const updated: StoredToken = {
-      ...current,
-      nsAccessToken: refreshed.access_token,
-      nsRefreshToken: newRefreshToken,
-      nsExpiresAt: updatedNsExpiresAt,
-     };
-     delete (updated as unknown as Record<string, unknown>).refreshLockUntil;
-     delete (updated as unknown as Record<string, unknown>).refreshLockOwner;
-          transaction.set(docRef, cleanDoc(updated));
-     resultToken = updated;
-    });
-
-        if (resultToken?.refreshFamilyId) {
-          await this.upstreamStore.put(
-            resultToken.refreshFamilyId,
-            {
-              nsAccessToken: refreshed.access_token,
-              nsRefreshToken: newRefreshToken,
-              nsExpiresAt: updatedNsExpiresAt,
-              nsUsername: resultToken.nsUsername,
-              nsUserRole: resultToken.nsUserRole,
-              nsApiUrl: resultToken.nsApiUrl,
-            },
-            updatedNsExpiresAt,
-          );
-        }
-
-    return resultToken!;
-   } catch (err) {
-    if (currentLeaseOwner) {
-          await this.rawDb.runTransaction(async (transaction) => {
-      const snap = await transaction.get(docRef);
-      const current = snap.data() as StoredToken & { refreshLockOwner?: string };
-      if (current.refreshLockOwner === currentLeaseOwner) {
-       transaction.update(docRef, {
-        refreshLockUntil: null,
-        refreshLockOwner: null,
-       });
-      }
-     }).catch(() => { });
+  let upstreamGrant: NsUpstreamGrant;
+  try {
+    upstreamGrant = await this.upstreamStore.ensureFresh(
+      familyId,
+      async (currentGrant: NsUpstreamGrant) => {
+        const grantObj = (currentGrant as any)?.grant ?? currentGrant ?? {};
+        const authoritativeRefreshToken = grantObj.nsRefreshToken ?? stored.nsRefreshToken;
+        const authoritativeApiUrl = grantObj.nsApiUrl ?? stored.nsApiUrl;
+        const grantCandidate: StoredToken = {
+          ...stored,
+          nsAccessToken: grantObj.nsAccessToken ?? stored.nsAccessToken,
+          nsRefreshToken: authoritativeRefreshToken,
+          nsApiUrl: authoritativeApiUrl,
+          nsExpiresAt: grantObj.nsExpiresAt ?? stored.nsExpiresAt,
+          nsUsername: grantObj.nsUsername ?? stored.nsUsername,
+          nsUserRole: grantObj.nsUserRole ?? stored.nsUserRole,
+        };
+        const refreshed = await doRefresh(grantCandidate);
+        return {
+          grant: {
+            nsAccessToken: refreshed.access_token,
+            nsRefreshToken: refreshed.refresh_token ?? authoritativeRefreshToken,
+            nsExpiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+            nsUsername: stored.nsUsername,
+            nsUserRole: stored.nsUserRole,
+            nsApiUrl: authoritativeApiUrl,
+          },
+          expiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+        };
+      },
+      {
+        operation: op,
+        now: this.localNow(),
+        leaseMs: opts?.leaseDurationMs ?? 30_000,
+        waitMs: opts?.maxWaitMs ?? 15_000,
+        pollIntervalMs: opts?.pollIntervalMs ?? 150,
+        completeOperation: false,
+        force: opts?.force ?? false,
+      },
+    );
+  } catch (err) {
+    if (err instanceof Error && (err.message.includes('Lease owner changed') || err.message.includes('lease expired') || err instanceof LeaseLostError)) {
+      throw new LeaseLostError(err.message);
     }
     throw err;
-   }
   }
 
-  const snap = await docRef.get();
-  if (snap.exists) {
-   const data = snap.data() as StoredToken;
-      const isExpiring = data.nsExpiresAt && this.localNow() > data.nsExpiresAt - NS_REFRESH_SKEW_MS;
-   if (!isExpiring) {
-    return data;
-   }
-  }
-  throw new RetryableRefreshError('Timed out waiting for upstream token refresh');
+  const accessRef = this.accessDocRef(accessToken);
+  const upstreamRef = this.upstreamDocRef(familyId);
+  let guardResult: GuardMutationResult | undefined;
+  const runTx = async () => {
+    return await this.rawDb.runTransaction(async (transaction) => {
+    let guard: GuardMutationResult | undefined;
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.rawDb,
+        namespace: fence.namespace,
+        operation: op,
+        now: this.localNow,
+        completeOperation: true,
+      });
+      guardResult = guard;
+    }
+    const snap = await transaction.get(accessRef);
+    if (!snap.exists) {
+      const familySnap = await transaction.get(this.familyDocRef(familyId));
+      if (familySnap.exists) {
+        const familyData = familySnap.data() as StoredRefreshFamily;
+        if (familyData.currentAccessToken) {
+          const currentAccessSnap = await transaction.get(this.accessDocRef(familyData.currentAccessToken));
+          if (currentAccessSnap.exists) {
+            guard?.bufferCompletion(this.localNow());
+            return currentAccessSnap.data() as StoredToken;
+          }
+        }
+      }
+      throw new Error('Token document was deleted/revoked during refresh');
+    }
+    const current = snap.data() as StoredToken;
+    const updated: StoredToken = {
+      ...current,
+      nsAccessToken: upstreamGrant.nsAccessToken,
+      nsRefreshToken: upstreamGrant.nsRefreshToken ?? current.nsRefreshToken,
+      nsExpiresAt: upstreamGrant.nsExpiresAt,
+    };
+    guard?.bufferCompletion(this.localNow());
+    transaction.set(accessRef, cleanDoc(updated));
+    const upstreamSnap = await transaction.get(upstreamRef);
+    if (upstreamSnap.exists) {
+      const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant>;
+      const currentLeaseOwner = upstreamRecord.leaseOwner;
+      const expectedOwner = op?.id ?? (upstreamGrant as any)?.leaseOwner;
+      if (!currentLeaseOwner || currentLeaseOwner === expectedOwner || currentLeaseOwner === op?.id) {
+        transaction.set(
+          upstreamRef,
+          {
+            leaseUntil: null,
+            leaseOwner: null,
+            ambiguousOutcome: null,
+            ambiguousReason: null,
+            ambiguousAt: null,
+            ambiguousOperationId: null,
+            updatedAt: this.localNow(),
+          },
+          { merge: true },
+        );
+      }
+    }
+    return updated;
+    });
+  };
+  const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
+  guardResult?.commitCompletion?.();
+  return result;
  }
 
- async delete(accessToken: string): Promise<void> {
-    await this.revokeByToken(accessToken);
+ async delete(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+        async (opCtx) => this.delete(accessToken, { operation: opCtx }),
+      );
+    }
+    await this.revokeByToken(accessToken, { operation: op });
  }
 
- async deleteByRefreshToken(refreshToken: string): Promise<void> {
-    await this.revokeByToken(refreshToken);
+ async deleteByRefreshToken(refreshToken: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+        async (opCtx) => this.deleteByRefreshToken(refreshToken, { operation: opCtx }),
+      );
+    }
+    await this.revokeByToken(refreshToken, { operation: op });
  }
 
+ override async revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
+    const op = this.resolveOp(options);
+    if (this.fenceConfig?.enforce && !op) {
+      return await withLegacyOperation(
+        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'revocation', now: this.localNow },
+        async (opCtx) => this.revokeFamily(familyId, { operation: opCtx }),
+      );
+    }
+    return super.revokeFamily(familyId, { operation: op });
+ }
   clearCache(): void {
     // No-op: caches removed per C1
  }
@@ -415,13 +561,15 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
  private cache = new Map<string, OAuthClientInformationFull>();
  private readonly db: Firestore;
  private readonly collection: string;
+ readonly fenceConfig?: CutoverFenceConfig;
 
- constructor(opts: { collection?: string; projectId?: string; db?: Firestore } = {}) {
+ constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig } = {}) {
   this.collection = opts.collection ?? 'mcp_oauth_clients';
   this.db = opts.db ?? new Firestore({
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
+  this.fenceConfig = opts.fence;
   logger.info('Firestore clients store initialized', { collection: this.collection });
  }
 
@@ -431,18 +579,38 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   try {
   const snap = await this.db.collection(this.collection).doc(clientId).get();
   if (!snap.exists) return undefined;
-  const client = snap.data() as OAuthClientInformationFull;
+  const rawData = snap.data() as Record<string, unknown>;
+  if (rawData._mcp_format !== undefined || rawData._targetFormat !== undefined) {
+    throw new CutoverFenceError(
+      'Client record contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous',
+    );
+  }
+  const client = rawData as OAuthClientInformationFull;
   this.cache.set(clientId, client);
   return client;
   } catch (err: unknown) {
+   if (err instanceof CutoverFenceError) throw err;
    if (err instanceof TemporarilyUnavailableError) throw err;
-   throw new TemporarilyUnavailableError('Client store temporarily unavailable');
   }
  }
 
  async registerClient(
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
+  options?: { operation?: LegacyOperationContext },
  ): Promise<OAuthClientInformationFull> {
+  const rawMetadata = client as Record<string, unknown>;
+  if (rawMetadata._mcp_format !== undefined || rawMetadata._targetFormat !== undefined) {
+    throw new CutoverFenceError(
+      'Reserved format fields (_mcp_format, _targetFormat) are forbidden in legacy client registration',
+    );
+  }
+  const op = options?.operation ?? requestOperationContext.getStore();
+  if (this.fenceConfig?.enforce && !op) {
+   return await withLegacyOperation(
+    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'register_client' },
+    async (opCtx) => this.registerClient(client, { operation: opCtx }),
+   );
+  }
   const clientId = client.client_id ?? randomUUID();
   const authMethod = 'token_endpoint_auth_method' in client && typeof client.token_endpoint_auth_method === 'string'
    ? client.token_endpoint_auth_method
@@ -456,16 +624,34 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   if (!isPublic) {
    full.client_secret = randomBytes(32).toString('hex');
   }
+  const docRef = this.db.collection(this.collection).doc(clientId);
   try {
-   await this.db.collection(this.collection).doc(clientId).set(stripUndefined(full));
+   const runTx = async () => {
+    await this.db.runTransaction(async (transaction) => {
+     let guard: GuardMutationResult | undefined;
+     const fence = this.fenceConfig;
+     if (fence && fence.enforce) {
+       guard = await checkMutationGuardInTransaction(transaction, {
+         db: this.db,
+         namespace: fence.namespace,
+         operation: op,
+       });
+     }
+     guard?.bufferCompletion();
+     transaction.set(docRef, stripUndefined(full));
+    });
+   };
+   if (op?.trackWriter) {
+    await op.trackWriter(runTx);
+   } else {
+    await runTx();
+   }
    this.cache.set(clientId, full);
    return full;
   } catch (err: unknown) {
    const e = err as { message?: string; code?: unknown; details?: unknown };
    logger.error('FirestoreClientsStore.registerClient failed', {
-    error: e?.message ?? String(err),
     code: e?.code,
-    details: e?.details,
    });
    throw err;
   }
@@ -479,13 +665,18 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
 export class FirestoreAuthCodeStore {
  private readonly db: Firestore;
  private readonly collection: string;
+ readonly fenceConfig?: CutoverFenceConfig;
 
- constructor(opts: { collection?: string; projectId?: string; db?: Firestore } = {}) {
+ private readonly localNow: () => number;
+
+ constructor(opts: { collection?: string; projectId?: string; db?: Firestore; fence?: CutoverFenceConfig; now?: () => number } = {}) {
   this.collection = opts.collection ?? 'mcp_auth_codes';
   this.db = opts.db ?? new Firestore({
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
+  this.fenceConfig = opts.fence;
+  this.localNow = opts.now ?? Date.now;
   logger.info('Firestore auth code store initialized', { collection: this.collection });
  }
 
@@ -499,8 +690,17 @@ export class FirestoreAuthCodeStore {
    serverBaseUrl?: string;
    clientId?: string;
   },
+  options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
  ): Promise<void> {
-  const expiresAt = data.expiresAt ?? Date.now() + 5 * 60 * 1000;
+  const op = options?.operation ?? requestOperationContext.getStore();
+  if (this.fenceConfig?.enforce && !op) {
+   return await withLegacyOperation(
+    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'auth_code' },
+    async (opCtx) => this.set(code, data, { operation: opCtx, completeOperation: true }),
+   );
+  }
+  const now = this.localNow();
+  const expiresAt = data.expiresAt ?? now + 5 * 60 * 1000;
   const docData: AuthCodeData = {
    pending: data.pending,
    nsTokens: data.nsTokens,
@@ -511,7 +711,28 @@ export class FirestoreAuthCodeStore {
    serverBaseUrl: data.serverBaseUrl,
    clientId: data.clientId ?? data.pending.clientId,
   };
-  await this.db.collection(this.collection).doc(code).set(stripUndefined(docData));
+  const docRef = this.db.collection(this.collection).doc(code);
+  const runTx = async () => {
+    await this.db.runTransaction(async (transaction) => {
+      let guard: GuardMutationResult | undefined;
+      const fence = this.fenceConfig;
+      if (fence && fence.enforce) {
+        guard = await checkMutationGuardInTransaction(transaction, {
+          db: this.db,
+          namespace: fence.namespace,
+          operation: op,
+          completeOperation: options?.completeOperation !== false,
+        });
+      }
+      guard?.bufferCompletion(now);
+      transaction.set(docRef, stripUndefined(docData));
+    });
+  };
+  if (op?.trackWriter) {
+    await op.trackWriter(runTx);
+  } else {
+    await runTx();
+  }
  }
 
  async getChallenge(
@@ -521,22 +742,16 @@ export class FirestoreAuthCodeStore {
   const snap = await this.db.collection(this.collection).doc(code).get();
   if (!snap.exists) return undefined;
   const data = snap.data() as AuthCodeData;
-  if (data.used || Date.now() > data.expiresAt) return undefined;
+  if (data.used || this.localNow() > data.expiresAt) return undefined;
   if (data.serverBaseUrl || expected?.serverBaseUrl) {
    if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
-    logger.warn('Auth code challenge rejected: serverBaseUrl mismatch (cross-server auth code)', {
-     codeServer: data.serverBaseUrl,
-     expectedServer: expected?.serverBaseUrl,
-    });
+    logger.warn('Auth code challenge rejected: serverBaseUrl mismatch');
     return undefined;
    }
   }
   const codeClientId = data.clientId ?? data.pending?.clientId;
   if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
-   logger.warn('Auth code challenge rejected: clientId mismatch', {
-    codeClientId,
-    expectedClientId: expected.clientId,
-   });
+   logger.warn('Auth code challenge rejected: clientId mismatch');
    return undefined;
   }
   return data.pending.codeChallenge;
@@ -545,10 +760,74 @@ export class FirestoreAuthCodeStore {
  async redeem(
   code: string,
   expected?: { serverBaseUrl?: string; clientId?: string },
+  options?: { operation?: LegacyOperationContext },
  ): Promise<{ pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> } | undefined> {
+  const op = options?.operation ?? requestOperationContext.getStore();
   const docRef = this.db.collection(this.collection).doc(code);
-  return await this.db.runTransaction(async (transaction) => {
-   const snap = await transaction.get(docRef);
+  const runTx = async () => {
+   return await this.db.runTransaction(async (transaction) => {
+    let guard: GuardMutationResult | undefined;
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db,
+        namespace: fence.namespace,
+        operation: op,
+        completeOperation: false,
+      });
+    }
+    const snap = await transaction.get(docRef);
+    if (!snap.exists) return undefined;
+    const data = snap.data() as AuthCodeData;
+    if (data.used || this.localNow() > data.expiresAt) {
+     return undefined;
+    }
+    if (data.serverBaseUrl || expected?.serverBaseUrl) {
+     if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
+      logger.warn('Auth code redemption rejected: serverBaseUrl mismatch');
+      return undefined;
+     }
+    }
+    const codeClientId = data.clientId ?? data.pending?.clientId;
+    if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
+     logger.warn('Auth code redemption rejected: clientId mismatch');
+     return undefined;
+    }
+    guard?.bufferCompletion();
+    transaction.delete(docRef);
+    return {
+     pending: data.pending,
+     nsTokens: data.nsTokens,
+     extra: data.extra,
+    };
+   });
+  };
+  return op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
+ }
+
+ async redeemAndIssue(
+  code: string,
+  tokenStore: FirestoreTokenStore,
+  expected: { serverBaseUrl?: string; clientId?: string; tokenLifetimeSec: number },
+  options?: { operation?: LegacyOperationContext },
+ ): Promise<{ tokens: OAuthTokens } | undefined> {
+  const op = options?.operation ?? requestOperationContext.getStore();
+  const codeRef = this.db.collection(this.collection).doc(code);
+  let guardResult: GuardMutationResult | undefined;
+  const runTx = async () => {
+   return await this.db.runTransaction(async (transaction) => {
+    let guard: GuardMutationResult | undefined;
+    const fence = this.fenceConfig;
+    if (fence && fence.enforce) {
+      guard = await checkMutationGuardInTransaction(transaction, {
+        db: this.db,
+        namespace: fence.namespace,
+        operation: op,
+        completeOperation: true,
+      });
+      guardResult = guard;
+    }
+   const snap = await transaction.get(codeRef);
    if (!snap.exists) return undefined;
    const data = snap.data() as AuthCodeData;
    if (data.used || Date.now() > data.expiresAt) {
@@ -556,27 +835,82 @@ export class FirestoreAuthCodeStore {
    }
    if (data.serverBaseUrl || expected?.serverBaseUrl) {
     if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
-     logger.warn('Auth code redemption rejected: serverBaseUrl mismatch (cross-server auth code)', {
-      codeServer: data.serverBaseUrl,
-      expectedServer: expected?.serverBaseUrl,
-     });
      return undefined;
     }
    }
    const codeClientId = data.clientId ?? data.pending?.clientId;
    if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
-    logger.warn('Auth code redemption rejected: clientId mismatch', {
-     codeClientId,
-     expectedClientId: expected.clientId,
-    });
     return undefined;
    }
-   transaction.delete(docRef);
+
+   const accessToken = randomBytes(32).toString('hex');
+   const refreshToken = randomBytes(32).toString('hex');
+   const familyId = randomUUID();
+   const now = tokenStore.localNowProvider();
+   const expiresAt = now + expected.tokenLifetimeSec * 1000;
+   const nsExpiresAt = data.nsTokens.expires_in
+     ? now + data.nsTokens.expires_in * 1000
+     : undefined;
+
+   const storedToken: StoredToken = {
+     accessToken,
+     refreshToken,
+     refreshFamilyId: familyId,
+     clientId: data.clientId ?? data.pending.clientId,
+     expiresAt,
+     ttlAt: new Date(expiresAt + 30 * 24 * 60 * 60 * 1000),
+     extra: data.extra,
+     nsAccessToken: data.nsTokens.access_token,
+     nsRefreshToken: data.nsTokens.refresh_token,
+     nsExpiresAt,
+     nsUsername: data.nsTokens.username ?? 'unknown',
+     nsUserRole: data.nsTokens.nsUserRole,
+     nsApiUrl: data.nsTokens.nsApiUrl,
+     serverBaseUrl: expected.serverBaseUrl,
+   };
+
+   transaction.delete(codeRef);
+   transaction.set(tokenStore.accessDocRef(accessToken), stripUndefined(storedToken));
+   transaction.set(tokenStore.refreshDocRef(refreshToken), stripUndefined({
+     status: 'active',
+     familyId,
+     token: storedToken,
+   }));
+   transaction.set(tokenStore.familyDocRef(familyId), stripUndefined({
+     id: familyId,
+     currentAccessToken: accessToken,
+     currentRefreshToken: refreshToken,
+     retiredRefreshFingerprints: [],
+     updatedAt: now,
+   }));
+   if (data.nsTokens.access_token) {
+     transaction.set(tokenStore.upstreamDocRef(familyId), stripUndefined({
+       grant: {
+         nsAccessToken: data.nsTokens.access_token,
+         nsRefreshToken: data.nsTokens.refresh_token,
+         nsExpiresAt,
+         nsUsername: data.nsTokens.username,
+         nsUserRole: data.nsTokens.nsUserRole,
+         nsApiUrl: data.nsTokens.nsApiUrl,
+       },
+       expiresAt: nsExpiresAt,
+       updatedAt: now,
+     }));
+   }
+   guard?.bufferCompletion(now);
+
    return {
-    pending: data.pending,
-    nsTokens: data.nsTokens,
-    extra: data.extra,
+     tokens: {
+       access_token: accessToken,
+       token_type: 'Bearer',
+       expires_in: expected.tokenLifetimeSec,
+       refresh_token: refreshToken,
+     },
    };
   });
+ };
+ const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
+ guardResult?.commitCompletion?.();
+ return result;
  }
 }

@@ -14,6 +14,8 @@ import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { InMemoryUsageStore } from '../tools/promotion/usage-store.js';
+import { _resetUsageStoreForTests } from '../tools/promotion/index.js';
 
 interface MemoryHarnessBacking {
   tokenStore: TokenStore;
@@ -230,6 +232,7 @@ function createFakeFirestoreHarness(): PermanenceHarness<FakeFirestoreBacking> {
         serverBaseUrl: 'http://localhost',
         now: () => virtualNow,
       });
+      _resetUsageStoreForTests(new InMemoryUsageStore());
 
       const created = createApp(authProvider);
       const server = created.app.listen(0);

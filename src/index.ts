@@ -129,7 +129,7 @@ export class NetSapiensMCPServer {
 
   private setupErrorHandling(): void {
     this.server.onerror = (error) => {
-      logger.error('[MCP Error]', { error: String(error) });
+      logger.error('[MCP Error]', { error: error instanceof Error ? error.name : 'UnknownError' });
     };
 
     process.on('SIGINT', async () => {
@@ -144,7 +144,7 @@ export class NetSapiensMCPServer {
 
     const config = loadConfig();
     if (config.debug) {
-      logger.debug('NetSapiens MCP Server started successfully', { nsApiUrl: config.netsapiens.apiUrl });
+      logger.debug('NetSapiens MCP Server started successfully');
     }
   }
 }
@@ -162,7 +162,7 @@ export function createMcpServer(config: MCPServerConfig): { server: Server; clie
   registerTools(server, client);
 
   server.onerror = (error) => {
-    logger.error('[MCP Error]', { error: String(error) });
+    logger.error('[MCP Error]', { error: error instanceof Error ? error.name : 'UnknownError' });
   };
 
   return { server, client };
@@ -198,8 +198,7 @@ function isEntrypoint(): boolean {
 if (isEntrypoint()) {
   main().catch((error) => {
     logger.error('Fatal error starting MCP server', {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      error: error instanceof Error ? error.name : 'UnknownError',
     });
     process.exit(1);
   });
