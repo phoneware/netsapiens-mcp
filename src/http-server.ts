@@ -75,7 +75,7 @@ function detectInstalledMcpSdkVersion(): string {
  * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
  * async work before calling response.end().
  */
-export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1', '1.32.2'];
+export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1'];
 
 let installedVersion = 'unresolved';
 try {
@@ -201,6 +201,9 @@ export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): 
   serverBaseUrl: baseUrl.origin,
   fence: fenceConfig,
  });
+ if (fenceConfig?.enforce || authProvider.fenceConfig?.enforce) {
+  assertSupportedMcpSdkVersion();
+ }
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl);
  return { app, authProvider, baseUrl, mcpUrl };
 }
