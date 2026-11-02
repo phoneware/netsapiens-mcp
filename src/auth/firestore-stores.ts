@@ -579,7 +579,13 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   try {
   const snap = await this.db.collection(this.collection).doc(clientId).get();
   if (!snap.exists) return undefined;
-  const client = snap.data() as OAuthClientInformationFull;
+  const rawData = snap.data() as Record<string, unknown>;
+  if (rawData._mcp_format !== undefined || rawData._targetFormat !== undefined) {
+    throw new CutoverFenceError(
+      `Client ${clientId} contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous`,
+    );
+  }
+  const client = rawData as OAuthClientInformationFull;
   this.cache.set(clientId, client);
   return client;
   } catch (err: unknown) {
@@ -592,6 +598,12 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
   options?: { operation?: LegacyOperationContext },
  ): Promise<OAuthClientInformationFull> {
+  const rawMetadata = client as Record<string, unknown>;
+  if (rawMetadata._mcp_format !== undefined || rawMetadata._targetFormat !== undefined) {
+    throw new CutoverFenceError(
+      'Reserved format fields (_mcp_format, _targetFormat) are forbidden in legacy client registration',
+    );
+  }
   const op = options?.operation ?? requestOperationContext.getStore();
   if (this.fenceConfig?.enforce && !op) {
    return await withLegacyOperation(
