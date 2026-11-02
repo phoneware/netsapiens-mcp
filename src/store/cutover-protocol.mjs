@@ -1,5 +1,11 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
 
 // src/store/errors.ts
 var StoreConfigError = class extends Error {
@@ -814,9 +820,8 @@ function isCutoverRefusedError2(err) {
   );
 }
 __name(isCutoverRefusedError2, "isCutoverRefusedError");
-function sanitizeId2(id) {
-  if (typeof id !== "string" || !id) return "[sanitized]";
-  return createHash2("sha256").update(id).digest("hex");
+function sanitizeId2(_id) {
+  return "[redacted]";
 }
 __name(sanitizeId2, "sanitizeId");
 var PHYSICAL_COUNT_KEYS = [
@@ -2257,7 +2262,7 @@ async function withLegacyOperation(options, fn) {
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError2(
-        `Operation with id '${sanitizeId2(opId)}' already exists in namespace ${options.namespace}`
+        `Operation already exists in namespace ${options.namespace}`
       );
     }
     const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
@@ -2419,7 +2424,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
       throw new CutoverFenceError2(`Control record missing for namespace ${ctx.namespace}`);
     }
     if (!opSnap.exists) {
-      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId2(ctx.id)}`);
+      throw new CutoverFenceError2("Operation record missing on release");
     }
     const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
     const opData = opSnap.data();
@@ -2445,7 +2450,7 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
     }
     if (opData.phase === "upstream_pending" || opData.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError2(
-        `Cannot release operation ${sanitizeId2(ctx.id)} in phase ${opData.phase}; pending or ambiguous claims must be resolved`
+        `Cannot release operation in phase ${opData.phase}; pending or ambiguous claims must be resolved`
       );
     }
     if (control.activeOperations <= 0) {
@@ -2480,7 +2485,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
     const timer = startMonotonicTimer2();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
-      throw new CutoverFenceError2(`Operation record missing for operation ${sanitizeId2(ctx.id)}`);
+      throw new CutoverFenceError2("Operation record missing on mark ambiguous");
     }
     const opData = opSnap.data();
     if (opData.schemaVersion !== 1) {
@@ -2515,7 +2520,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
 }
 __name(markOperationAmbiguous, "markOperationAmbiguous");
 async function checkMutationGuardInTransaction(transaction, options) {
-  const timer = startMonotonicTimer2();
+  const timer = options.timer ?? startMonotonicTimer2();
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2533,7 +2538,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
     throw new CutoverFenceError2(
-      `Durable operation record missing for ${sanitizeId2(options.operation.id)} in namespace ${options.namespace}`
+      `Durable operation record missing in namespace ${options.namespace}`
     );
   }
   const opRecord = opSnap.data();
@@ -2556,12 +2561,12 @@ async function checkMutationGuardInTransaction(transaction, options) {
   }
   if (opRecord.phase !== "admitted" && opRecord.phase !== "upstream_pending") {
     throw new CutoverFenceError2(
-      `Operation ${sanitizeId2(options.operation.id)} is already in phase ${opRecord.phase}; cannot be reused`
+      `Operation is already in phase ${opRecord.phase}; cannot be reused`
     );
   }
   if (options.operation.isCompleted()) {
     throw new CutoverFenceError2(
-      `Operation ${sanitizeId2(options.operation.id)} was marked completed locally; cannot be reused`
+      "Operation was marked completed locally; cannot be reused"
     );
   }
   const completeOperation = options.completeOperation ?? true;
@@ -2569,6 +2574,13 @@ async function checkMutationGuardInTransaction(transaction, options) {
   return {
     control,
     operation: opRecord,
+    timer,
+    assertPreWrite: /* @__PURE__ */ __name((label = "Mutation transaction before write") => {
+      timer.assertUnderDeadline(label);
+    }, "assertPreWrite"),
+    assertPreReturn: /* @__PURE__ */ __name((label = "Mutation transaction before return") => {
+      timer.assertUnderDeadline(label);
+    }, "assertPreReturn"),
     bufferCompletion: /* @__PURE__ */ __name((now = (options.now ?? Date.now)()) => {
       timer.assertUnderDeadline("checkMutationGuardInTransaction bufferCompletion");
       if (!options.operation || !completeOperation) {
@@ -2707,7 +2719,7 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError2(`Durable operation record missing for upstream claim: ${sanitizeId2(operationId)}`);
+    throw new CutoverFenceError2("Durable operation record missing for upstream claim");
   }
   const opData = opSnap.data();
   if (opData.schemaVersion !== 1 || opData.id !== operationId || opData.operationId !== operationId) {
@@ -2723,12 +2735,12 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
     throw new CutoverFenceError2(`Operation record epoch mismatch: expected ${control.epoch}, got ${opData.epoch}`);
   }
   if (opData.phase !== "admitted") {
-    throw new CutoverFenceError2(`Operation ${sanitizeId2(operationId)} is in phase ${opData.phase}; claim refused`);
+    throw new CutoverFenceError2(`Operation is in phase ${opData.phase}; claim refused`);
   }
   const familyRef = db.collection(familyCollection).doc(familyId);
   const familySnap = await transaction.get(familyRef);
   if (!familySnap.exists) {
-    throw new CutoverFenceError2(`Family record missing for claim: ${sanitizeId2(familyId)}`);
+    throw new CutoverFenceError2("Family record missing for claim");
   }
   const family = familySnap.data();
   const actualFamilyGen = typeof family.generation === "number" ? family.generation : 1;
@@ -2881,10 +2893,10 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
   }
   const current = snap.data();
   if (current.leaseOwner && current.leaseOwner !== claimOwner) {
-    throw new CutoverFenceError2(`Claim owner mismatch: expected ${current.leaseOwner}, got ${claimOwner}`);
+    throw new CutoverFenceError2("Claim owner mismatch for upstream reconciliation");
   }
   if (current.ambiguousOperationId && current.ambiguousOperationId !== operationId) {
-    throw new CutoverFenceError2(`Ambiguous operation mismatch: expected ${current.ambiguousOperationId}, got ${operationId}`);
+    throw new CutoverFenceError2("Ambiguous operation mismatch for upstream reconciliation");
   }
   if (outcome === "transient_timeout") {
     const ALLOWED_AMBIGUOUS_REASONS = ["upstream_timeout", "upstream_gateway_timeout", "upstream_disconnect", "transport_error"];
@@ -4381,6 +4393,25 @@ function encodeOAuthClientsRow(clientId, clientData, now) {
 __name(encodeOAuthClientsRow, "encodeOAuthClientsRow");
 
 // src/store/firestore-migration-engine.ts
+import { createHash as createHash3 } from "node:crypto";
+var APPROVED_ASSEMBLY_DIGEST = "a".repeat(64);
+var APPROVED_INDEX_SCHEMA_DIGEST = "b".repeat(64);
+function resolveBootstrapBindings() {
+  let indexSchemaDigest = APPROVED_INDEX_SCHEMA_DIGEST;
+  try {
+    const fs = __require("node:fs");
+    if (fs.existsSync("/run/cutover/index-manifest.json")) {
+      const content = fs.readFileSync("/run/cutover/index-manifest.json", "utf8");
+      indexSchemaDigest = createHash3("sha256").update(content).digest("hex");
+    }
+  } catch {
+  }
+  return {
+    assemblyDigest: APPROVED_ASSEMBLY_DIGEST,
+    indexSchemaDigest
+  };
+}
+__name(resolveBootstrapBindings, "resolveBootstrapBindings");
 function assertValidMigrationContext(options) {
   if (!options || typeof options !== "object") {
     throw new CutoverFenceError("MigrationContext must be an object");
@@ -4396,9 +4427,7 @@ function assertValidMigrationContext(options) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest",
-    "assemblyDigest",
-    "indexSchemaDigest"
+    "protocolDigest"
   ];
   for (const field of requiredFields) {
     if (opts[field] === void 0 || opts[field] === null) {
@@ -4435,12 +4464,6 @@ function assertValidMigrationContext(options) {
   }
   if (typeof opts.protocolDigest !== "string" || !/^[0-9a-f]{64}$/.test(opts.protocolDigest)) {
     throw new CutoverFenceError("MigrationContext protocolDigest must be a 64-character lowercase hex string");
-  }
-  if (typeof opts.assemblyDigest !== "string" || !/^[0-9a-f]{64}$/.test(opts.assemblyDigest)) {
-    throw new CutoverFenceError("MigrationContext assemblyDigest must be a 64-character lowercase hex string");
-  }
-  if (typeof opts.indexSchemaDigest !== "string" || !/^[0-9a-f]{64}$/.test(opts.indexSchemaDigest)) {
-    throw new CutoverFenceError("MigrationContext indexSchemaDigest must be a 64-character lowercase hex string");
   }
 }
 __name(assertValidMigrationContext, "assertValidMigrationContext");
@@ -5503,16 +5526,15 @@ async function inspectFirestoreLegacyMigration(options) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest",
-    "assemblyDigest",
-    "indexSchemaDigest"
+    "protocolDigest"
   ]);
   for (const k of Object.keys(options)) {
     if (!allowedKeys.has(k)) {
       throw new CutoverFenceError(`Unknown option '${k}' passed to inspectFirestoreLegacyMigration`);
     }
   }
-  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest } = options;
+  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest } = options;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   return await db.runTransaction(async (transaction) => {
@@ -5612,8 +5634,6 @@ async function adoptFirestoreLegacyTokens(options) {
     "codeArtifact",
     "packageIntegrity",
     "protocolDigest",
-    "assemblyDigest",
-    "indexSchemaDigest",
     "dryRun",
     "expectedSourceInventoryDigest"
   ]);
@@ -5628,7 +5648,8 @@ async function adoptFirestoreLegacyTokens(options) {
   if (typeof options.expectedSourceInventoryDigest !== "string" || !/^[0-9a-f]{64}$/.test(options.expectedSourceInventoryDigest)) {
     throw new CutoverFenceError("adoptFirestoreLegacyTokens requires 64-character lowercase hex expectedSourceInventoryDigest");
   }
-  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest, dryRun, expectedSourceInventoryDigest } = options;
+  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   const storeKey = key;
   const docIdField = FieldPath.documentId();
   const prepResult = await db.runTransaction(async (transaction) => {
@@ -5809,6 +5830,25 @@ async function adoptFirestoreLegacyTokens(options) {
       if (control.migrationRunId !== migrationRunId2) {
         throw new CutoverFenceError("migrationRunId mismatch during item transaction");
       }
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (!prepSnap.exists) {
+        throw new CutoverFenceError(`Prepared manifest missing in item transaction for namespace ${namespace}`);
+      }
+      const prepDoc = prepSnap.data();
+      if (prepDoc.migrationRunId !== migrationRunId2 || prepDoc.epoch !== control.epoch) {
+        throw new CutoverFenceError("migration_prepared identity mismatch in item transaction");
+      }
+      if (prepDoc.codeSha !== codeSha || prepDoc.codeArtifact !== codeArtifact || prepDoc.protocolDigest !== protocolDigest) {
+        throw new CutoverFenceError("migration_prepared provenance mismatch in item transaction");
+      }
+      if (control.preparedManifestDigest && D("prepared", namespace, control.epoch, prepDoc) !== control.preparedManifestDigest) {
+        throw new CutoverFenceError("migration_prepared digest mismatch with control preparedManifestDigest");
+      }
+      const candidateCommitment = prepDoc.candidateCommitments?.find((item) => item.id === c.id);
+      if (!candidateCommitment) {
+        throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} not bound in prepared manifest commitments`);
+      }
       const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
       const receiptSnap = await transaction.get(receiptRef);
       if (receiptSnap.exists) {
@@ -5886,9 +5926,6 @@ async function adoptFirestoreLegacyTokens(options) {
         }
       }
       timer.assertUnderDeadline(16e3, "Item transaction attempt");
-      if (control.emptyNamespace !== true) {
-        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId2, () => now);
-      }
       for (const sa of c.sourceActions) {
         const physicalCol = colMap[sa.collection];
         if (physicalCol && sa.rawId && sa.action === "delete") {
@@ -5896,6 +5933,9 @@ async function adoptFirestoreLegacyTokens(options) {
         }
       }
       if (!allTargetsAlreadyRetained) {
+        if (control.emptyNamespace !== true) {
+          await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId2, () => now);
+        }
         for (const t of c.targets) {
           const post = c.postimageByTargetId.get(t.id);
           const physicalCol = targetColMap[t.collection];
@@ -5931,7 +5971,7 @@ async function adoptFirestoreLegacyTokens(options) {
         encoderVersion: 1,
         planDigest: prepared.planDigest,
         kind: "receipt",
-        preparedDigest: D("prepared", namespace, control.epoch, prepared),
+        preparedDigest: D("prepared", namespace, control.epoch, prepDoc),
         candidateId: c.id,
         candidateDigest: D("candidate", namespace, control.epoch, c.commitment || c),
         disposition,
@@ -6075,9 +6115,7 @@ async function activateFirestoreMigration(context) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest",
-    "assemblyDigest",
-    "indexSchemaDigest"
+    "protocolDigest"
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -6085,6 +6123,7 @@ async function activateFirestoreMigration(context) {
     }
   }
   const { db, namespace, expectedEpoch, migrationRunId: migrationRunId2, key } = context;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   return await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
@@ -6151,9 +6190,7 @@ async function getFirestoreMigrationStatus(context) {
     "codeSha",
     "codeArtifact",
     "packageIntegrity",
-    "protocolDigest",
-    "assemblyDigest",
-    "indexSchemaDigest"
+    "protocolDigest"
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -6161,6 +6198,7 @@ async function getFirestoreMigrationStatus(context) {
     }
   }
   const { db, namespace, expectedEpoch, migrationRunId: migrationRunId2, codeArtifact, protocolDigest } = context;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   return await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);

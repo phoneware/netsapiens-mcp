@@ -457,13 +457,20 @@ export function inspectFirestoreLegacyMigration(
   scanned: number;
   prospectiveWritten: number;
   prospectiveRetained: number;
+  planDigest: string;
+  physicalCounts: Record<string, number>;
+  classifications: Record<string, number>;
+  reasons: Record<string, number>;
+  expectedTargetCounts: Record<string, number>;
   preflight: {
     scanned: number;
     sourceInventoryDigest: string;
+    planDigest: string;
     estimatedFirestoreSize: number;
     depth: number;
     indexEntries: number;
     indexBytes: number;
+    readDeadlineMs: number;
   };
 }>;
 
@@ -483,8 +490,35 @@ export function activateFirestoreMigration(
   options: MigrationContext,
 ): Promise<{
   status: 'activated' | 'already_active';
+  epoch: number;
+  migrationRunId: string;
+  migrationManifestDigest: string;
+  planDigest: string;
 }>;
 
 export function getFirestoreMigrationStatus(
   options: MigrationContext,
-): Promise<CutoverFenceControlRecord>;
+): Promise<{
+  state: string;
+  epoch: number;
+  migrationRunId?: string;
+  migrationManifestDigest?: string;
+  planDigest?: string;
+  sourceInventoryDigest?: string;
+}>;
+
+export function startMonotonicTimer(): {
+  elapsedMs(): number;
+  assertUnderDeadline(limitMs?: number, label?: string): void;
+};
+
+export function encodeSessionsRow(codec: any, accessId: string, familyId: string, session: any, now: number): any;
+export function decodeSessionsRow(codec: any, row: any): any;
+export function encodeRefreshFamiliesRow(codec: any, familyId: string, generation: number, activeRefreshId: string, currentAccessTokenId: string, session: any, retiredFingerprints: string[], status: string, now: number): any;
+export function decodeRefreshFamiliesRow(codec: any, row: any): any;
+export function encodeUpstreamRow(codec: any, familyId: string, grantVersion: number, upstream: any, now: number): any;
+export function decodeUpstreamRow(codec: any, row: any): any;
+export function encodeRefreshRow(refreshId: string, familyId: string, generation: number, now: number): any;
+export function encodeAuthCodesRow(codec: any, code: string, data: any, expiresAt: number, now: number): any;
+export function encodeResumeTokensRow(id: string, consumedAt: number, expiresAt: number, now: number): any;
+export function encodeOAuthClientsRow(clientId: string, clientData: any, now: number): any;

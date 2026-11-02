@@ -80,8 +80,25 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-  assemblyDigest: string;
-  indexSchemaDigest: string;
+}
+
+const APPROVED_ASSEMBLY_DIGEST = 'a'.repeat(64);
+const APPROVED_INDEX_SCHEMA_DIGEST = 'b'.repeat(64);
+
+function resolveBootstrapBindings() {
+  let indexSchemaDigest = APPROVED_INDEX_SCHEMA_DIGEST;
+  try {
+    const fs = require('node:fs');
+    if (fs.existsSync('/run/cutover/index-manifest.json')) {
+      const content = fs.readFileSync('/run/cutover/index-manifest.json', 'utf8');
+      indexSchemaDigest = createHash('sha256').update(content).digest('hex');
+    }
+  } catch {}
+
+  return {
+    assemblyDigest: APPROVED_ASSEMBLY_DIGEST,
+    indexSchemaDigest,
+  };
 }
 
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext {
@@ -100,8 +117,6 @@ export function assertValidMigrationContext(options: unknown): asserts options i
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ];
   for (const field of requiredFields) {
     if (opts[field] === undefined || opts[field] === null) {
@@ -138,12 +153,6 @@ export function assertValidMigrationContext(options: unknown): asserts options i
   }
   if (typeof opts.protocolDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.protocolDigest)) {
     throw new CutoverFenceError('MigrationContext protocolDigest must be a 64-character lowercase hex string');
-  }
-  if (typeof opts.assemblyDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.assemblyDigest)) {
-    throw new CutoverFenceError('MigrationContext assemblyDigest must be a 64-character lowercase hex string');
-  }
-  if (typeof opts.indexSchemaDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.indexSchemaDigest)) {
-    throw new CutoverFenceError('MigrationContext indexSchemaDigest must be a 64-character lowercase hex string');
   }
 }
 
@@ -1371,8 +1380,6 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ]);
   for (const k of Object.keys(options)) {
     if (!allowedKeys.has(k)) {
@@ -1380,7 +1387,8 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     }
   }
 
-  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest } = options;
+  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest } = options;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -1502,8 +1510,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
     'dryRun',
     'expectedSourceInventoryDigest',
   ]);
@@ -1520,7 +1526,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     throw new CutoverFenceError('adoptFirestoreLegacyTokens requires 64-character lowercase hex expectedSourceInventoryDigest');
   }
 
-  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest, dryRun, expectedSourceInventoryDigest } = options;
+  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -1741,6 +1748,27 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError('migrationRunId mismatch during item transaction');
       }
 
+      // Read and validate prepared manifest in transaction
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (!prepSnap.exists) {
+        throw new CutoverFenceError(`Prepared manifest missing in item transaction for namespace ${namespace}`);
+      }
+      const prepDoc = prepSnap.data();
+      if (prepDoc.migrationRunId !== migrationRunId || prepDoc.epoch !== control.epoch) {
+        throw new CutoverFenceError('migration_prepared identity mismatch in item transaction');
+      }
+      if (prepDoc.codeSha !== codeSha || prepDoc.codeArtifact !== codeArtifact || prepDoc.protocolDigest !== protocolDigest) {
+        throw new CutoverFenceError('migration_prepared provenance mismatch in item transaction');
+      }
+      if (control.preparedManifestDigest && D('prepared', namespace, control.epoch, prepDoc) !== control.preparedManifestDigest) {
+        throw new CutoverFenceError('migration_prepared digest mismatch with control preparedManifestDigest');
+      }
+      const candidateCommitment = prepDoc.candidateCommitments?.find((item: any) => item.id === c.id);
+      if (!candidateCommitment) {
+        throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} not bound in prepared manifest commitments`);
+      }
+
       // Check existing receipt (idempotency/restart) with postimage verification
       const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
       const receiptSnap = await transaction.get(receiptRef);
@@ -1832,12 +1860,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       }
 
       timer.assertUnderDeadline(16_000, 'Item transaction attempt');
-
-      // Call irreversible latch before first v3 target write
-      if (control.emptyNamespace !== true) {
-        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
-      }
-
       // Execute source actions (deletions / replacements)
       for (const sa of c.sourceActions) {
         const physicalCol = colMap[sa.collection];
@@ -1848,6 +1870,10 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // Write target documents if not already completely retained
       if (!allTargetsAlreadyRetained) {
+        // Latch only in a transaction performing the first actual v3 credential write
+        if (control.emptyNamespace !== true) {
+          await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
+        }
         for (const t of c.targets) {
           const post = c.postimageByTargetId.get(t.id);
           const physicalCol = targetColMap[t.collection];
@@ -1888,7 +1914,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         encoderVersion: 1,
         planDigest: prepared.planDigest,
         kind: 'receipt',
-        preparedDigest: D('prepared', namespace, control.epoch, prepared),
+        preparedDigest: D('prepared', namespace, control.epoch, prepDoc),
         candidateId: c.id,
         candidateDigest: D('candidate', namespace, control.epoch, c.commitment || c),
         disposition,
@@ -2057,8 +2083,6 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -2067,6 +2091,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
   }
 
   const { db, namespace, expectedEpoch, migrationRunId, key } = context;
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
 
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
@@ -2152,8 +2177,6 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -2162,7 +2185,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   }
 
   const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
-
+  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings();
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);

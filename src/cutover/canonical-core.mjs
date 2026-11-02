@@ -56,9 +56,8 @@ export function isCutoverRefusedError(err) {
   );
 }
 
-export function sanitizeId(id) {
-  if (typeof id !== 'string' || !id) return '[sanitized]';
-  return createHash('sha256').update(id).digest('hex');
+export function sanitizeId(_id) {
+  return '[redacted]';
 }
 
 export const PHYSICAL_COUNT_KEYS = [
@@ -1611,7 +1610,7 @@ export async function withLegacyOperation(options, fn) {
     const existingSnap = await transaction.get(opRef);
     if (existingSnap.exists) {
       throw new CutoverFenceError(
-        `Operation with id '${sanitizeId(opId)}' already exists in namespace ${options.namespace}`,
+        `Operation already exists in namespace ${options.namespace}`,
       );
     }
 
@@ -1782,7 +1781,7 @@ export async function releaseLegacyOperation(db, ctx, outcome = 'completed', now
       throw new CutoverFenceError(`Control record missing for namespace ${ctx.namespace}`);
     }
     if (!opSnap.exists) {
-      throw new CutoverFenceError(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
+      throw new CutoverFenceError('Operation record missing on release');
     }
 
     const control = parseCutoverFenceRecord(controlSnap.data(), ctx.namespace);
@@ -1812,7 +1811,7 @@ export async function releaseLegacyOperation(db, ctx, outcome = 'completed', now
 
     if (opData.phase === 'upstream_pending' || opData.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError(
-        `Cannot release operation ${sanitizeId(ctx.id)} in phase ${opData.phase}; pending or ambiguous claims must be resolved`,
+        `Cannot release operation in phase ${opData.phase}; pending or ambiguous claims must be resolved`,
       );
     }
 
@@ -1851,7 +1850,7 @@ export async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
     const timer = startMonotonicTimer();
     const opSnap = await transaction.get(opRef);
     if (!opSnap.exists) {
-      throw new CutoverFenceError(`Operation record missing for operation ${sanitizeId(ctx.id)}`);
+      throw new CutoverFenceError('Operation record missing on mark ambiguous');
     }
     const opData = opSnap.data();
     if (opData.schemaVersion !== 1) {
@@ -1886,7 +1885,7 @@ export async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
 }
 
 export async function checkMutationGuardInTransaction(transaction, options) {
-  const timer = startMonotonicTimer();
+  const timer = options.timer ?? startMonotonicTimer();
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
 
@@ -1907,7 +1906,7 @@ export async function checkMutationGuardInTransaction(transaction, options) {
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
     throw new CutoverFenceError(
-      `Durable operation record missing for ${sanitizeId(options.operation.id)} in namespace ${options.namespace}`,
+      `Durable operation record missing in namespace ${options.namespace}`,
     );
   }
   const opRecord = opSnap.data();
@@ -1931,12 +1930,12 @@ export async function checkMutationGuardInTransaction(transaction, options) {
   }
   if (opRecord.phase !== 'admitted' && opRecord.phase !== 'upstream_pending') {
     throw new CutoverFenceError(
-      `Operation ${sanitizeId(options.operation.id)} is already in phase ${opRecord.phase}; cannot be reused`,
+      `Operation is already in phase ${opRecord.phase}; cannot be reused`,
     );
   }
   if (options.operation.isCompleted()) {
     throw new CutoverFenceError(
-      `Operation ${sanitizeId(options.operation.id)} was marked completed locally; cannot be reused`,
+      'Operation was marked completed locally; cannot be reused',
     );
   }
 
@@ -1946,6 +1945,13 @@ export async function checkMutationGuardInTransaction(transaction, options) {
   return {
     control,
     operation: opRecord,
+    timer,
+    assertPreWrite: (label = 'Mutation transaction before write') => {
+      timer.assertUnderDeadline(label);
+    },
+    assertPreReturn: (label = 'Mutation transaction before return') => {
+      timer.assertUnderDeadline(label);
+    },
     bufferCompletion: (now = (options.now ?? Date.now)()) => {
       timer.assertUnderDeadline('checkMutationGuardInTransaction bufferCompletion');
       if (!options.operation || !completeOperation) {
@@ -2091,7 +2097,7 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
   const opRef = getCutoverOperationDocRef(db, namespace, operationId);
   const opSnap = await transaction.get(opRef);
   if (!opSnap.exists) {
-    throw new CutoverFenceError(`Durable operation record missing for upstream claim: ${sanitizeId(operationId)}`);
+    throw new CutoverFenceError('Durable operation record missing for upstream claim');
   }
   const opData = opSnap.data();
   if (opData.schemaVersion !== 1 || opData.id !== operationId || opData.operationId !== operationId) {
@@ -2107,13 +2113,13 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
     throw new CutoverFenceError(`Operation record epoch mismatch: expected ${control.epoch}, got ${opData.epoch}`);
   }
   if (opData.phase !== 'admitted') {
-    throw new CutoverFenceError(`Operation ${sanitizeId(operationId)} is in phase ${opData.phase}; claim refused`);
+    throw new CutoverFenceError(`Operation is in phase ${opData.phase}; claim refused`);
   }
 
   const familyRef = db.collection(familyCollection).doc(familyId);
   const familySnap = await transaction.get(familyRef);
   if (!familySnap.exists) {
-    throw new CutoverFenceError(`Family record missing for claim: ${sanitizeId(familyId)}`);
+    throw new CutoverFenceError('Family record missing for claim');
   }
   const family = familySnap.data();
   const actualFamilyGen = typeof family.generation === 'number' ? family.generation : 1;
@@ -2280,10 +2286,10 @@ export async function reconcileUpstreamGrantInTransaction(transaction, db, optio
   }
   const current = snap.data();
   if (current.leaseOwner && current.leaseOwner !== claimOwner) {
-    throw new CutoverFenceError(`Claim owner mismatch: expected ${current.leaseOwner}, got ${claimOwner}`);
+    throw new CutoverFenceError('Claim owner mismatch for upstream reconciliation');
   }
   if (current.ambiguousOperationId && current.ambiguousOperationId !== operationId) {
-    throw new CutoverFenceError(`Ambiguous operation mismatch: expected ${current.ambiguousOperationId}, got ${operationId}`);
+    throw new CutoverFenceError('Ambiguous operation mismatch for upstream reconciliation');
   }
 
   // Transient timeout is admissible to preserve ambiguity without terminalization
