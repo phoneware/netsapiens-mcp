@@ -286,7 +286,21 @@ export async function adoptFirestoreLegacyTokens(
     } catch {
       // fallback
     }
-    if (!protocolDigest) protocolDigest = '3746626b047e839c4dc5f527847df3752ee1f2a00868788931aead370a0d91d3';
+  }
+
+  let projectorDigest = options.projectorDigest;
+  if (!projectorDigest) {
+    try {
+      const fsModule = await import('node:fs');
+      const urlModule = await import('node:url');
+      const pathModule = await import('node:path');
+      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './firestore-v2-adoption.js');
+      if (fsModule.existsSync(modulePath)) {
+        projectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
+      }
+    } catch {
+      // fallback
+    }
   }
 
   const codeSha = options.codeSha ?? '3edf8a262e9d06f4849318b1e0d09f197738bff9';
@@ -327,6 +341,11 @@ export async function adoptFirestoreLegacyTokens(
     if (!options.expectedSourceInventoryDigest || !/^[0-9a-f]{64}$/.test(options.expectedSourceInventoryDigest)) {
       throw new CutoverFenceError(
         `expectedSourceInventoryDigest is required for controlled migration of namespace ${namespace} and must be 64-char lowercase hex`,
+      );
+    }
+    if (!projectorDigest || !/^[0-9a-f]{64}$/.test(projectorDigest)) {
+      throw new CutoverFenceError(
+        `projectorDigest is required for controlled migration of namespace ${namespace} and must be 64-char lowercase hex`,
       );
     }
   }
@@ -1531,7 +1550,7 @@ export async function adoptFirestoreLegacyTokens(
     ...(totalPhysicalRecords > 0 ? {
       projectorId: 'netsapiens-mcp/v2-v3-projector',
       projectorVersion: 1,
-      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+      projectorDigest,
     } : {}),
   };
 
@@ -2148,7 +2167,7 @@ export async function adoptFirestoreLegacyTokens(
     ...(totalPhysicalRecords > 0 ? {
       projectorId: 'netsapiens-mcp/v2-v3-projector',
       projectorVersion: 1,
-      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+      projectorDigest,
     } : {}),
   };
 
@@ -2170,7 +2189,7 @@ export async function adoptFirestoreLegacyTokens(
     ...(totalPhysicalRecords > 0 ? {
       projectorId: 'netsapiens-mcp/v2-v3-projector',
       projectorVersion: 1,
-      projectorDigest: '3589e1172d22316c27b0d14d124d2043e19227bb4299f4b19b8fc52422f665c0',
+      projectorDigest,
     } : {}),
     adoptedAt: nowProvider(),
   };

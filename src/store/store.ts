@@ -40,9 +40,6 @@ export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 
   if ('_targetFormat' in (client as Record<string, unknown>)) {
     throw new Error("Invalid client metadata: reserved field '_targetFormat' cannot be set by client");
   }
-  if ('v' in (client as Record<string, unknown>)) {
-    throw new Error("Invalid client metadata: reserved field 'v' cannot be set by client");
-  }
   const full: OAuthClientInformationFull = { ...client, client_id: randomUUID(), client_id_issued_at: Math.floor(Date.now() / 1000) };
   if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomBytes(32).toString('hex');
   else delete full.client_secret;
