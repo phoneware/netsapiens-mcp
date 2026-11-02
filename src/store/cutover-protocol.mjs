@@ -427,7 +427,13 @@ function projectSourceLogical(candidate, sources, codec2) {
       nsApiUrl: rawNsTokens?.nsApiUrl ?? codeDoc.nsApiUrl ?? null,
       serverBaseUrl: codeDoc.serverBaseUrl ?? null,
       extra: codeDoc.extra ?? {},
-      used: Boolean(rawPending.used ?? codeDoc.used),
+      used: (() => {
+        const rawUsed = rawPending.used ?? codeDoc.used;
+        if (rawUsed !== void 0 && typeof rawUsed !== "boolean") {
+          throw new CutoverFenceError("authCodes invalid non-boolean used property");
+        }
+        return rawUsed === true;
+      })(),
       v: 2
     };
   }
@@ -689,6 +695,15 @@ function projectTargetLogical(candidate, targets, codec2) {
     }
     const unsealed = codeData.sealed ? codec2.open(codeData.sealed, `code:${codeData.id}`) : null;
     if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${sanitizeId(codeData.id)}`);
+    if (typeof codeData.used !== "boolean") {
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing boolean used property`);
+    }
+    if (typeof unsealed.used !== "boolean") {
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} unsealed payload missing boolean used property`);
+    }
+    if (codeData.used !== unsealed.used) {
+      throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} top-level used (${codeData.used}) does not match sealed used (${unsealed.used})`);
+    }
     const rawPending = unsealed.pending || {};
     const rawNsTokens = unsealed.nsTokens || {};
     const clientId = unsealed.clientId;
@@ -715,7 +730,7 @@ function projectTargetLogical(candidate, targets, codec2) {
       nsApiUrl: rawNsTokens.nsApiUrl ?? null,
       serverBaseUrl: unsealed.serverBaseUrl ?? null,
       extra: unsealed.extra ?? {},
-      used: Boolean(codeData.used ?? unsealed.used),
+      used: codeData.used,
       v: 2
     };
   }
@@ -4374,13 +4389,14 @@ function encodeRefreshRow(refreshId, familyId, generation, now) {
 __name(encodeRefreshRow, "encodeRefreshRow");
 function encodeAuthCodesRow(codec2, code, data, expiresAt, now) {
   const id = codec2.id("code", code);
-  const sealed = codec2.seal(data, `code:${id}`);
+  const used = typeof data.used === "boolean" ? data.used : false;
+  const sealed = codec2.seal({ ...data, used }, `code:${id}`);
   return {
     id,
     expiresAt,
     ttlAt: new Date(expiresAt),
     sealed,
-    used: data.used ?? false,
+    used,
     v: 2
   };
 }

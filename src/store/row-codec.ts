@@ -197,13 +197,14 @@ export function encodeAuthCodesRow(
   now: number,
 ): AuthCodeRow & { v: 2; ttlAt: Date; used: boolean } {
   const id = codec.id('code', code);
-  const sealed = codec.seal(data, `code:${id}`);
+  const used = typeof data.used === 'boolean' ? data.used : false;
+  const sealed = codec.seal({ ...data, used }, `code:${id}`);
   return {
     id,
     expiresAt,
     ttlAt: new Date(expiresAt),
     sealed,
-    used: data.used ?? false,
+    used,
     v: 2,
   };
 }
