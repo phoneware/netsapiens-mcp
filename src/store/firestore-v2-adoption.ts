@@ -201,7 +201,12 @@ function defined<T>(value: T): T {
   }
   return value;
 }
-
+function safeDocEntry(rawId: string, data: Record<string, unknown>): Record<string, unknown> {
+  if (data && 'id' in data && data.id !== rawId) {
+    throw new CutoverFenceError(`Document id mismatch for ${rawId}: payload claims ${String(data.id)}`);
+  }
+  return { ...data, id: rawId };
+}
 
 function compareDescriptors(
   a: { collection: string; id: string },
@@ -284,21 +289,26 @@ export async function adoptFirestoreLegacyTokens(
       // fallback
     }
   }
-  let projectorDigest = options.projectorDigest;
-  if (!projectorDigest) {
-    try {
-      const fsModule = await import('node:fs');
-      const urlModule = await import('node:url');
-      const pathModule = await import('node:path');
-      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './netsapiens-projector.mjs');
-      if (fsModule.existsSync(modulePath)) {
-        projectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
-      }
-    } catch {
-      // fallback
+  let measuredProjectorDigest: string | undefined;
+  try {
+    const fsModule = await import('node:fs');
+    const urlModule = await import('node:url');
+    const pathModule = await import('node:path');
+    const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './netsapiens-projector.mjs');
+    if (fsModule.existsSync(modulePath)) {
+      measuredProjectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
     }
+  } catch {
+    // fallback
   }
 
+  if (options.projectorDigest && measuredProjectorDigest && options.projectorDigest !== measuredProjectorDigest) {
+    throw new CutoverFenceError(
+      `projectorDigest mismatch: expected ${options.projectorDigest}, measured ${measuredProjectorDigest}`,
+    );
+  }
+
+  const projectorDigest = options.projectorDigest ?? measuredProjectorDigest;
   const codeSha = options.codeSha ?? '3edf8a262e9d06f4849318b1e0d09f197738bff9';
   const codeArtifact = options.codeArtifact ?? `us-docker.pkg.dev/project/image@sha256:${'a'.repeat(64)}`;
   const packageIntegrity = options.packageIntegrity ?? 'sha512-testSRI';
@@ -642,13 +652,13 @@ export async function adoptFirestoreLegacyTokens(
     const sortedSourceIds = candSources.map(s => s.id).sort(codeUnitCompare);
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['pr56Families', sortedSourceIds]);
     const sourcesMap = new Map<string, Record<string, unknown>>();
-    sourcesMap.set('families', { id: familyId, ...famData });
-    sourcesMap.set('refresh', { id: currentRefId, ...curRefDoc });
-    sourcesMap.set('upstream', { id: familyId, ...upstreamById.get(familyId)! });
-    sourcesMap.set('tokens', { id: accessId, ...(tokensByAccessId.get(accessId) || {}) });
+    sourcesMap.set('families', safeDocEntry(familyId, famData));
+    sourcesMap.set('refresh', safeDocEntry(currentRefId, curRefDoc));
+    sourcesMap.set('upstream', safeDocEntry(familyId, upstreamById.get(familyId)!));
+    sourcesMap.set('tokens', safeDocEntry(accessId, tokensByAccessId.get(accessId) || {}));
     if (famData.previousRefreshToken) {
       const prevId = famData.previousRefreshToken as string;
-      sourcesMap.set('prevRefresh', { id: prevId, ...(refreshPointersById.get(prevId) || {}) });
+      sourcesMap.set('prevRefresh', safeDocEntry(prevId, refreshPointersById.get(prevId) || {}));
     }
 
     const logicalProjection = projectSourceLogical({
@@ -930,8 +940,8 @@ export async function adoptFirestoreLegacyTokens(
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['baseFormatTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const sourcesMap = new Map<string, Record<string, unknown>>();
-    sourcesMap.set('tokens', { id: accessToken, ...tokData });
-    sourcesMap.set('refresh', { id: refreshToken, ...refDoc });
+    sourcesMap.set('tokens', safeDocEntry(accessToken, tokData));
+    sourcesMap.set('refresh', safeDocEntry(refreshToken, refDoc));
 
     const logicalProjection = projectSourceLogical({
       id: candidateId,
@@ -1131,7 +1141,7 @@ export async function adoptFirestoreLegacyTokens(
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['authCodes', candSources.map(s => s.id).sort(codeUnitCompare)]);
 
     const sourcesMap = new Map<string, Record<string, unknown>>();
-    sourcesMap.set('authCodes', { id: rawCode, ...codeData });
+    sourcesMap.set('authCodes', safeDocEntry(rawCode, codeData));
 
     const logicalProjection = projectSourceLogical({
       id: candidateId,
@@ -1258,7 +1268,7 @@ export async function adoptFirestoreLegacyTokens(
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['resumeTokens', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const sourcesMap = new Map<string, Record<string, unknown>>();
-    sourcesMap.set('resumeTokens', { id: rDoc.id, ...rData });
+    sourcesMap.set('resumeTokens', safeDocEntry(rDoc.id, rData));
 
     const logicalProjection = projectSourceLogical({
       id: candidateId,
@@ -1385,7 +1395,7 @@ export async function adoptFirestoreLegacyTokens(
 
     const candidateId = H(key, 'candidate-id', namespace, currentEpoch, ['clients', candSources.map(s => s.id).sort(codeUnitCompare)]);
     const sourcesMap = new Map<string, Record<string, unknown>>();
-    sourcesMap.set('clients', { id: clientId, ...clientData });
+    sourcesMap.set('clients', safeDocEntry(clientId, clientData));
 
     const logicalProjection = projectSourceLogical({
       id: candidateId,
@@ -1834,18 +1844,18 @@ export async function adoptFirestoreLegacyTokens(
         const data = doc.data() || {};
         if (t.collection === 'refresh') {
           if (data.status === 'active') {
-            targetDocs.set('activeRefresh', { id: doc.id, ...data });
+            targetDocs.set('activeRefresh', safeDocEntry(doc.id, data));
           } else if (data.status === 'consumed') {
-            targetDocs.set('prevRefresh', { id: doc.id, ...data });
+            targetDocs.set('prevRefresh', safeDocEntry(doc.id, data));
           }
         } else if (t.collection === 'retiredRefreshTokens') {
           const retObj = targetDocs.get('retiredRefresh') as { ids: string[] } | undefined;
           if (retObj) retObj.ids.push(doc.id);
           else targetDocs.set('retiredRefresh', { ids: [doc.id] });
         } else if (t.collection === 'oauthClients') {
-          targetDocs.set('clients', { id: doc.id, ...data });
+          targetDocs.set('clients', safeDocEntry(doc.id, data));
         } else {
-          targetDocs.set(t.collection, { id: doc.id, ...data });
+          targetDocs.set(t.collection, safeDocEntry(doc.id, data));
         }
       }
 

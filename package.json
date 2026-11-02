@@ -23,7 +23,7 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"import('node:fs').then(fs => fs.copyFileSync('src/store/netsapiens-projector.mjs', 'build/store/netsapiens-projector.mjs'))\"",
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",
