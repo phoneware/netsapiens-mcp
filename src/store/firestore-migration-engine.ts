@@ -337,7 +337,7 @@ export function extractCandidatesAndPlan(params: {
   for (const d of upstreamDocs) upstreamById.set(d.id, d.data() || {});
 
   // Physical vs credential token resolution for access tokens and refresh pointers
-  const malformedDocIds = new Set<string>();
+  const malformedDocKeys = new Set<string>();
   const tokensByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
   const tokensByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
   for (const d of tokensDocs) {
@@ -346,7 +346,7 @@ export function extractCandidatesAndPlan(params: {
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
       if (d.id !== expId) {
-        malformedDocIds.add(d.id);
+        malformedDocKeys.add(`tokens:${d.id}`);
         reasons.malformedRecords++;
         continue;
       }
@@ -386,8 +386,9 @@ export function extractCandidatesAndPlan(params: {
       }
     }
     if (typeof credToken === 'string' && credToken.length > 0) {
+      const expId = legacyDocId(credToken);
       if (d.id !== expId) {
-        malformedDocIds.add(d.id);
+        malformedDocKeys.add(`refresh:${d.id}`);
         reasons.malformedRecords++;
         continue;
       }
@@ -441,8 +442,9 @@ export function extractCandidatesAndPlan(params: {
       continue;
     }
     const curRefDoc = curRefEntry.data || {};
+    const curRefFamId = curRefDoc.familyId ?? curRefDoc.family_id;
     if (curRefFamId !== familyId || curRefDoc.status !== 'active') {
-      malformedDocIds.add(famDoc.id);
+      malformedDocKeys.add(`families:${famDoc.id}`);
       reasons.malformedRecords++;
       continue;
     }
@@ -496,7 +498,7 @@ export function extractCandidatesAndPlan(params: {
     let retiredConflict = false;
     for (const fp of rawRetired) {
       if (typeof fp !== 'string' || fp.length === 0) {
-        malformedDocIds.add(famDoc.id);
+        malformedDocKeys.add(`families:${famDoc.id}`);
         reasons.malformedRecords++;
         retiredConflict = true;
         break;
@@ -1198,17 +1200,17 @@ export function extractCandidatesAndPlan(params: {
 
   // Check unclaimed / orphan records for the reason census
   for (const doc of upstreamDocs) {
-    if (!claimedUpstreamDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
+    if (!claimedUpstreamDocIds.has(doc.id) && !malformedDocKeys.has(`upstream:${doc.id}`)) {
       reasons.orphanUpstreamGrants++;
     }
   }
   for (const doc of refreshDocs) {
-    if (!claimedRefreshDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
+    if (!claimedRefreshDocIds.has(doc.id) && !malformedDocKeys.has(`refresh:${doc.id}`)) {
       reasons.orphanRefreshPointers++;
     }
   }
   for (const doc of tokensDocs) {
-    if (!claimedTokenDocIds.has(doc.id) && !malformedDocIds.has(doc.id)) {
+    if (!claimedTokenDocIds.has(doc.id) && !malformedDocKeys.has(`tokens:${doc.id}`)) {
       reasons.orphanAccessTokens++;
     }
   }
@@ -1657,14 +1659,50 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
     for (const c of candidates) {
       let existingCount = 0;
-      const existingCandidateTargetsMap = new Map();
+      const targetMap = new Map();
+      const rows = c.targetRows || {};
 
-      for (const t of c.targets) {
-        const key = `${t.collection}:${t.rawId}`;
-        if (targetDocMapById.has(key)) {
-          existingCount++;
-          existingCandidateTargetsMap.set(t.collection, targetDocMapById.get(key));
+      if (c.kind === 'pr56Families') {
+        const famDoc = targetDocMapById.get(`families:${rows.refreshFamilies?.id}`);
+        const upDoc = targetDocMapById.get(`upstream:${rows.upstreamGrants?.id}`);
+        const sessDoc = targetDocMapById.get(`tokens:${rows.sessions?.id}`);
+        const actRefDoc = targetDocMapById.get(`refresh:${rows.refreshTokens?.id}`);
+        if (famDoc) { existingCount++; targetMap.set('families', famDoc); }
+        if (upDoc) { existingCount++; targetMap.set('upstream', upDoc); }
+        if (sessDoc) { existingCount++; targetMap.set('tokens', sessDoc); }
+        if (actRefDoc) { existingCount++; targetMap.set('activeRefresh', actRefDoc); }
+        if (rows.prevRefresh) {
+          const prevRefDoc = targetDocMapById.get(`refresh:${rows.prevRefresh.id}`);
+          if (prevRefDoc) { existingCount++; targetMap.set('prevRefresh', prevRefDoc); }
         }
+        if (rows.retiredRefresh && rows.retiredRefresh.length > 0) {
+          const fps: string[] = [];
+          for (const ret of rows.retiredRefresh) {
+            const retDoc = targetDocMapById.get(`retiredRefreshTokens:${ret.fingerprint}`);
+            if (retDoc) { existingCount++; fps.push(ret.fingerprint); }
+          }
+          if (fps.length > 0) {
+            targetMap.set('retiredRefresh', { ids: fps });
+          }
+        }
+      } else if (c.kind === 'baseFormatTokens') {
+        const famDoc = targetDocMapById.get(`families:${rows.refreshFamilies?.id}`);
+        const upDoc = targetDocMapById.get(`upstream:${rows.upstreamGrants?.id}`);
+        const sessDoc = targetDocMapById.get(`tokens:${rows.sessions?.id}`);
+        const actRefDoc = targetDocMapById.get(`refresh:${rows.refreshTokens?.id}`);
+        if (famDoc) { existingCount++; targetMap.set('families', famDoc); }
+        if (upDoc) { existingCount++; targetMap.set('upstream', upDoc); }
+        if (sessDoc) { existingCount++; targetMap.set('tokens', sessDoc); }
+        if (actRefDoc) { existingCount++; targetMap.set('activeRefresh', actRefDoc); }
+      } else if (c.kind === 'authCodes') {
+        const codeDoc = targetDocMapById.get(`authCodes:${rows.authCodes?.id}`);
+        if (codeDoc) { existingCount++; targetMap.set('authCodes', codeDoc); }
+      } else if (c.kind === 'resumeTokens') {
+        const resDoc = targetDocMapById.get(`resumeTokens:${rows.resumeTokens?.id}`);
+        if (resDoc) { existingCount++; targetMap.set('resumeTokens', resDoc); }
+      } else if (c.kind === 'clients') {
+        const clientDoc = targetDocMapById.get(`oauthClients:${rows.oauthClients?.client_id}`);
+        if (clientDoc) { existingCount++; targetMap.set('clients', clientDoc); }
       }
 
       if (existingCount === 0) {
@@ -1673,11 +1711,15 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
       if (existingCount !== c.targets.length) {
         reasons.partialTargets++;
+        for (const t of c.targets) {
+          const key = `${t.collection}:${t.rawId}`;
+          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
+        }
         continue;
       }
 
       try {
-        const decodedLogical = projectTargetLogical(c, existingCandidateTargetsMap, codec);
+        const decodedLogical = projectTargetLogical(c, targetMap, codec);
         const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
         if (derivedDigest === c.logicalDigest) {
           prospectiveRetained++;
@@ -1686,9 +1728,17 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
           }
         } else {
           reasons.partialTargets++;
+          for (const t of c.targets) {
+            const key = `${t.collection}:${t.rawId}`;
+            if (targetDocMapById.has(key)) claimedTargetIds.add(key);
+          }
         }
       } catch {
         reasons.partialTargets++;
+        for (const t of c.targets) {
+          const key = `${t.collection}:${t.rawId}`;
+          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
+        }
       }
     }
 
