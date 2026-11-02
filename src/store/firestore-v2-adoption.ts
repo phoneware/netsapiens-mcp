@@ -1,4 +1,8 @@
-import { createHmac } from 'node:crypto';
+import {
+  computeKeyedDocId,
+  computeSourceRecordDigest,
+  computeSourceInventoryDigest as protoComputeSourceInventoryDigest,
+} from '../cutover/canonical-core.mjs';
 import {
   type MigrationContext,
   type SupportedNamespace,
@@ -31,13 +35,6 @@ export {
   isCutoverFenceError,
   isCutoverRefusedError,
 };
-
-function H(storeKey: Uint8Array | Buffer, purpose: string, namespace: string, epoch: number, value: unknown): string {
-  const rawKey = typeof storeKey === 'string' ? Buffer.from(storeKey, 'utf8') : storeKey;
-  const K = createHmac('sha256', rawKey).update(Buffer.from('netsapiens-mcp/cutover/v2', 'utf8')).digest();
-  const payload = JSON.stringify(['netsapiens-mcp/cutover', 2, purpose, namespace, epoch, value]);
-  return createHmac('sha256', K).update(Buffer.from(payload, 'utf8')).digest('hex');
-}
 
 export async function computeSourceInventoryDigest(
   db: any,

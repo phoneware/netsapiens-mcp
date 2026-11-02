@@ -1344,9 +1344,11 @@ var FIRESTORE_MAX_INDEX_BYTES = 8388608;
 var FIRESTORE_MAX_NESTING_DEPTH = 20;
 var FIRESTORE_MAX_FIELD_TRANSFORMS = 500;
 var FIRESTORE_TRANSACTION_READ_DEADLINE_MS = 16e3;
+var TIMER_BRAND = /* @__PURE__ */ Symbol.for("phoneware.cutover.monotonicTimer");
 function startMonotonicTimer2() {
   const start = process.hrtime.bigint();
   return {
+    [TIMER_BRAND]: true,
     elapsedMs() {
       return Number(process.hrtime.bigint() - start) / 1e6;
     },
@@ -1361,6 +1363,10 @@ function startMonotonicTimer2() {
   };
 }
 __name(startMonotonicTimer2, "startMonotonicTimer");
+function isMonotonicTimer(t) {
+  return Boolean(t && typeof t === "object" && t[TIMER_BRAND] === true && typeof t.assertUnderDeadline === "function");
+}
+__name(isMonotonicTimer, "isMonotonicTimer");
 var PREFLIGHT_MAX_DOC_BYTES = Math.floor(4 * FIRESTORE_MAX_DOCUMENT_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_REQUEST_BYTES = Math.floor(4 * FIRESTORE_MAX_REQUEST_SIZE_BYTES / 5);
 var PREFLIGHT_MAX_INDEX_ENTRIES = Math.floor(4 * FIRESTORE_MAX_INDEX_ENTRIES / 5);
@@ -2037,7 +2043,15 @@ async function initializeCutoverFence(db, namespace, options = {}) {
       `Initial state for namespace ${namespace} must be 'legacy_open', got '${requestedInitialState}'`
     );
   }
+  const markerRef = db.collection(`${namespace}_meta`).doc("v2_adopted");
   return await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer2();
+    const markerSnap = await transaction.get(markerRef);
+    if (markerSnap.exists) {
+      throw new CutoverFenceError(
+        `Cannot initialize cutover fence for namespace ${namespace}: immutable ownership marker already exists at v2_adopted`
+      );
+    }
     const snap = await transaction.get(docRef);
     if (snap.exists) {
       const existing = parseCutoverFenceRecord(snap.data(), namespace);
@@ -2046,6 +2060,7 @@ async function initializeCutoverFence(db, namespace, options = {}) {
           `Cutover fence record for namespace ${namespace} already exists with epoch ${existing.epoch}, state ${existing.state}`
         );
       }
+      timer.assertUnderDeadline("initializeCutoverFence exists");
       return existing;
     }
     const initial = {
@@ -2058,7 +2073,9 @@ async function initializeCutoverFence(db, namespace, options = {}) {
       createdAt: now,
       updatedAt: now
     };
+    timer.assertUnderDeadline("initializeCutoverFence preWrite");
     transaction.set(docRef, initial);
+    timer.assertUnderDeadline("initializeCutoverFence preReturn");
     return initial;
   });
 }
@@ -2073,6 +2090,7 @@ async function transitionCutoverFenceState(db, namespace, params) {
     );
   }
   return await db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer2();
     const snap = await transaction.get(docRef);
     if (!snap.exists) {
       throw new CutoverFenceError(
@@ -2147,6 +2165,13 @@ async function transitionCutoverFenceState(db, namespace, params) {
           `Cannot return to legacy_open for namespace ${namespace}: durable v2_adopted ownership marker exists`
         );
       }
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${current.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (prepSnap.exists) {
+        throw new CutoverFenceError(
+          `Cannot return to legacy_open for namespace ${namespace}: prepared migration manifest exists for epoch ${current.epoch}`
+        );
+      }
       if (current.activeOperations !== 0) {
         throw new CutoverFenceError(
           `Cannot return to legacy_open for namespace ${namespace}: activeOperations is ${current.activeOperations}`
@@ -2176,7 +2201,9 @@ async function transitionCutoverFenceState(db, namespace, params) {
       codeSha: current.codeSha,
       lastTransitionReason: `Transitioned from ${current.state} to ${params.toState}`
     };
+    timer.assertUnderDeadline("transitionCutoverFenceState preWrite");
     transaction.set(docRef, stripUndefined(updated));
+    timer.assertUnderDeadline("transitionCutoverFenceState preReturn");
     return updated;
   });
 }
@@ -2345,6 +2372,8 @@ async function withLegacyOperation(options, fn) {
     if (ctx.isAmbiguousRemoteOutcome()) {
       try {
         await options.db.runTransaction(async (transaction) => {
+          const timer = startMonotonicTimer2();
+          timer.assertUnderDeadline("withLegacyOperation ambiguity preWrite");
           const currentTime = now();
           transaction.set(
             opRef,
@@ -2356,6 +2385,7 @@ async function withLegacyOperation(options, fn) {
             }),
             { merge: true }
           );
+          timer.assertUnderDeadline("withLegacyOperation ambiguity preReturn");
         });
       } catch (markErr) {
         if (err && typeof err === "object") {
@@ -2487,7 +2517,11 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
 }
 __name(markOperationAmbiguous, "markOperationAmbiguous");
 async function checkMutationGuardInTransaction(transaction, options) {
-  const timer = options.timer ?? startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("checkMutationGuardInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("checkMutationGuardInTransaction entry");
   assertSupportedCutoverNamespace(options.namespace);
   const control = await readCutoverFenceInTransaction(transaction, options.db, options.namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
@@ -2619,7 +2653,11 @@ async function isLegacyMutationPermittedInTransaction(transaction, db, namespace
 }
 __name(isLegacyMutationPermittedInTransaction, "isLegacyMutationPermittedInTransaction");
 async function claimUpstreamGrantInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("claimUpstreamGrantInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("claimUpstreamGrantInTransaction entry");
   const {
     namespace,
     epoch,
@@ -2800,7 +2838,11 @@ async function claimUpstreamGrantInTransaction(transaction, db, options) {
 }
 __name(claimUpstreamGrantInTransaction, "claimUpstreamGrantInTransaction");
 async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("reconcileUpstreamGrantInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("reconcileUpstreamGrantInTransaction entry");
   const {
     namespace,
     familyId,
@@ -2901,7 +2943,11 @@ async function reconcileUpstreamGrantInTransaction(transaction, db, options) {
 }
 __name(reconcileUpstreamGrantInTransaction, "reconcileUpstreamGrantInTransaction");
 async function prepareMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("prepareMigrationInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("prepareMigrationInTransaction entry");
   const { namespace, prepDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3364,7 +3410,11 @@ async function prepareMigrationInTransaction(transaction, db, options) {
 }
 __name(prepareMigrationInTransaction, "prepareMigrationInTransaction");
 async function finalizeMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("finalizeMigrationInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("finalizeMigrationInTransaction entry");
   const { namespace, finalDoc, markerDoc } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
@@ -3881,7 +3931,11 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
 }
 __name(finalizeMigrationInTransaction, "finalizeMigrationInTransaction");
 async function activateMigrationInTransaction(transaction, db, options) {
-  const timer = startMonotonicTimer2();
+  if (!options || !isMonotonicTimer(options.timer)) {
+    throw new CutoverFenceError("activateMigrationInTransaction requires a canonical startMonotonicTimer() instance in options.timer created at transaction callback entry");
+  }
+  const timer = options.timer;
+  timer.assertUnderDeadline("activateMigrationInTransaction entry");
   const { namespace, expectedEpoch, migrationRunId: migrationRunId2, migrationManifestDigest, codeArtifact, protocolDigest } = options;
   assertSupportedCutoverNamespace(namespace);
   if (!options.storeKey || typeof options.storeKey !== "string" && !Buffer.isBuffer(options.storeKey) && !(options.storeKey instanceof Uint8Array)) {
