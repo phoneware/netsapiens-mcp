@@ -32,7 +32,7 @@
   "type": "module",
   "scripts": {
     "bundle:cutover": "node scripts/build-cutover-protocol.mjs",
-    "build": "npm run bundle:cutover && tsc && node -e \"import('node:fs').then(fs => { fs.copyFileSync('src/store/netsapiens-projector.mjs', 'build/store/netsapiens-projector.mjs'); fs.copyFileSync('src/store/cutover-protocol.mjs', 'build/store/cutover-protocol.mjs'); fs.copyFileSync('src/store/cutover-protocol.d.ts', 'build/store/cutover-protocol.d.ts'); })\"",
+    "build": "tsc --noEmit && npm run bundle:cutover && tsc && node -e \"import('node:fs').then(fs => { fs.copyFileSync('src/store/netsapiens-projector.mjs', 'build/store/netsapiens-projector.mjs'); fs.copyFileSync('src/store/cutover-protocol.mjs', 'build/store/cutover-protocol.mjs'); fs.copyFileSync('src/store/cutover-protocol.d.ts', 'build/store/cutover-protocol.d.ts'); })\"",
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",

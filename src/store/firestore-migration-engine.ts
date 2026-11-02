@@ -970,7 +970,7 @@ export function extractCandidatesAndPlan(params: {
   allSourceDescriptors.sort(compareDescriptors);
   const sourceInventoryDigest = computeSourceInventoryDigest(storeKey, namespace, epoch, allSourceDescriptors);
 
-  // Construct planSpec and planDigest per Section 5
+  // Construct non-secret planSpec per Section 5 (NO rawId!)
   const totalPhysicalRecords = Object.values(physicalCounts).reduce((a, b) => a + b, 0);
 
   const planSpec = {
@@ -991,7 +991,11 @@ export function extractCandidatesAndPlan(params: {
       sources: c.sources,
       targets: c.targets,
       logicalDigest: c.logicalDigest,
-      sourceActions: candidates[idx].sourceActions,
+      sourceActions: candidates[idx].sourceActions.map((sa: any) => ({
+        collection: sa.collection,
+        id: sa.id,
+        action: sa.action,
+      })),
       targetBounds: candidates[idx].prospectiveTargetPostimages.map((img: any) => ({
         sizeBytes: computeEstimatedFirestoreDocSize(img),
         depth: computeDocDepth(img),
@@ -1082,7 +1086,7 @@ export function extractCandidatesAndPlan(params: {
       sourceReferences: c.sources.map((s: any) => ({ collection: s.collection, id: s.id })),
       targetReferences: c.targets.map((t: any) => ({ collection: t.collection, id: t.id })),
       prospectiveTargetPostimages: targetPostimages,
-      sourceActions: c.sourceActions,
+      sourceActions: c.sourceActions.map((sa: any) => ({ collection: sa.collection, id: sa.id, action: sa.action })),
       receiptUpperBound,
       transaction: {
         estimatedCommitBytes: Math.max(100, itemCommitBytes),
@@ -1438,34 +1442,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
     }
 
-    // Restart/resumption check per Section 5
-    if (control.state === 'migrating') {
-      if (control.migrationRunId !== migrationRunId) {
-        throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
-      }
-      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
-      const prepSnap = await transaction.get(prepRef);
-      if (!prepSnap.exists) {
-        throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
-      }
-      const prepDoc = prepSnap.data();
-      timer.assertUnderDeadline(16_000, 'Preparation resume check');
-      return {
-        dryRun: false,
-        isResume: true,
-        candidates: prepDoc.candidateCommitments || [],
-        prepared: prepDoc,
-        planSpec: prepDoc.planSpec,
-      };
-    }
-
-    if (control.state !== 'fenced') {
-      throw new CutoverRefusedError(`Cannot adopt: cutover state is '${control.state}', expected 'fenced'`, {
-        cutoverState: control.state,
-        epoch: control.epoch,
-      });
-    }
-
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
 
@@ -1517,6 +1493,34 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       now: Date.now(),
     });
 
+    // Restart/resumption check per Section 5
+    if (control.state === 'migrating') {
+      if (control.migrationRunId !== migrationRunId) {
+        throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
+      }
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (!prepSnap.exists) {
+        throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
+      }
+      const prepDoc = prepSnap.data();
+      timer.assertUnderDeadline(16_000, 'Preparation resume check');
+      return {
+        dryRun: false,
+        isResume: true,
+        candidates,
+        prepared: prepDoc,
+        planSpec: prepDoc.planSpec,
+      };
+    }
+
+    if (control.state !== 'fenced') {
+      throw new CutoverRefusedError(`Cannot adopt: cutover state is '${control.state}', expected 'fenced'`, {
+        cutoverState: control.state,
+        epoch: control.epoch,
+      });
+    }
+
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
         `Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${sourceInventoryDigest}`,
@@ -1566,10 +1570,12 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
   const { candidates, prepared } = prepResult;
   const now = Date.now();
+  let migratedCount = 0;
+  let skippedCount = 0;
 
   // Phase 2: Execute each item in its own atomic transaction with exact receipt and latch
   for (const c of candidates) {
-    await db.runTransaction(async (transaction: any) => {
+    const itemResult = await db.runTransaction(async (transaction: any) => {
       const timer = startMonotonicTimer();
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== 'migrating') {
@@ -1579,19 +1585,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError('migrationRunId mismatch during item transaction');
       }
 
-      // Check existing receipt (idempotency/restart)
-      const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
-      const receiptSnap = await transaction.get(receiptRef);
-      if (receiptSnap.exists) {
-        const rData = receiptSnap.data();
-        if (rData && rData.candidateId === c.id && rData.kind === 'receipt') {
-          validateReceipt(rData, namespace, control.epoch, control.migrationRunId);
-          timer.assertUnderDeadline(16_000, 'Item retry check');
-          return; // Already executed in previous attempt
-        }
-      }
-
-      // Read source documents and verify preimages
       const colMap: Record<string, string> = {
         families: `${namespace}_tokens_refresh_families`,
         tokens: `${namespace}_tokens`,
@@ -1603,6 +1596,46 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         clients: `${namespace}_clients`,
       };
 
+      const targetColMap: Record<string, string> = {
+        families: `${namespace}_refresh_families`,
+        tokens: `${namespace}_sessions`,
+        refresh: `${namespace}_refresh`,
+        upstream: `${namespace}_upstream`,
+        authCodes: `${namespace}_auth_codes`,
+        resumeTokens: `${namespace}_resume_tokens`,
+        oauthClients: `${namespace}_oauth_clients`,
+        retiredRefreshTokens: `${namespace}_retired_refresh`,
+      };
+
+      // Check existing receipt (idempotency/restart) with postimage verification
+      const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
+      const receiptSnap = await transaction.get(receiptRef);
+      if (receiptSnap.exists) {
+        const rData = receiptSnap.data();
+        if (rData && rData.candidateId === c.id && rData.kind === 'receipt') {
+          validateReceipt(rData, namespace, control.epoch, control.migrationRunId);
+          // Verify that all targets from receipt exist in Firestore matching targetAfter digests
+          for (const t of rData.targetAfter) {
+            const physicalCol = targetColMap[t.collection];
+            if (physicalCol) {
+              const post = c.postimageByTargetId?.get(t.id);
+              const docId = post?.id || post?.code || post?.client_id || post?.fingerprint || t.rawId;
+              const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
+              if (!targetSnap.exists) {
+                throw new CutoverFenceError(`Receipt exists for ${sanitizeId(c.id)} but target '${t.collection}/${sanitizeId(docId)}' missing in Firestore`);
+              }
+              const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, targetSnap.data());
+              if (recDigest !== t.recordDigest) {
+                throw new CutoverFenceError(`Receipt exists for ${sanitizeId(c.id)} but target '${t.collection}/${sanitizeId(docId)}' recordDigest mismatch`);
+              }
+            }
+          }
+          timer.assertUnderDeadline(16_000, 'Item retry check');
+          return { status: rData.disposition === 'retained' ? 'retained' : 'written' };
+        }
+      }
+
+      // Read source documents and verify preimages
       for (const s of c.sources) {
         const physicalCol = colMap[s.collection];
         if (physicalCol && s.rawId) {
@@ -1613,6 +1646,33 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
           const recDigest = computeSourceRecordDigest(storeKey, namespace, control.epoch, s.collection, s.id, docSnap.data() || {});
           if (recDigest !== s.recordDigest) {
             throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
+          }
+        }
+      }
+
+      // Fail before any buffered delete unless every target postimage is present
+      for (const t of c.targets) {
+        const post = c.postimageByTargetId?.get(t.id);
+        const physicalCol = targetColMap[t.collection];
+        if (!post || !physicalCol) {
+          throw new CutoverFenceError(`Missing prospective target postimage or mapping for target ${t.collection}:${sanitizeId(t.id)}`);
+        }
+      }
+
+      // Check retained path: read target documents first before overwrite
+      let allTargetsAlreadyRetained = true;
+      for (const t of c.targets) {
+        const post = c.postimageByTargetId.get(t.id);
+        const physicalCol = targetColMap[t.collection];
+        const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
+        const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
+        if (!targetSnap.exists) {
+          allTargetsAlreadyRetained = false;
+        } else {
+          const existingDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, targetSnap.data());
+          const postDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
+          if (existingDigest !== postDigest) {
+            allTargetsAlreadyRetained = false;
           }
         }
       }
@@ -1632,22 +1692,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         }
       }
 
-      // Write target documents
-      const targetColMap: Record<string, string> = {
-        families: `${namespace}_refresh_families`,
-        tokens: `${namespace}_sessions`,
-        refresh: `${namespace}_refresh`,
-        upstream: `${namespace}_upstream`,
-        authCodes: `${namespace}_auth_codes`,
-        resumeTokens: `${namespace}_resume_tokens`,
-        oauthClients: `${namespace}_oauth_clients`,
-        retiredRefreshTokens: `${namespace}_retired_refresh`,
-      };
-
-      for (const t of c.targets) {
-        const post = c.postimageByTargetId?.get(t.id);
-        const physicalCol = targetColMap[t.collection];
-        if (physicalCol && post) {
+      // Write target documents if not already completely retained
+      if (!allTargetsAlreadyRetained) {
+        for (const t of c.targets) {
+          const post = c.postimageByTargetId.get(t.id);
+          const physicalCol = targetColMap[t.collection];
           const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
           transaction.set(db.collection(physicalCol).doc(docId), post);
         }
@@ -1655,8 +1704,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // Write exact receipt
       const targetAfter = c.targets.map((t: any) => {
-        const post = c.postimageByTargetId?.get(t.id);
-        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post || {});
+        const post = c.postimageByTargetId.get(t.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
         return { collection: t.collection, id: t.id, recordDigest: recDigest };
       });
 
@@ -1668,6 +1717,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
           recordDigest: (sa?.action === 'delete' || sa?.action === 'replace') ? null : s.recordDigest,
         };
       });
+
+      const disposition = allTargetsAlreadyRetained ? ('retained' as const) : ('written' as const);
 
       const receiptDoc = {
         schemaVersion: 2,
@@ -1686,7 +1737,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         preparedDigest: D('prepared', namespace, control.epoch, prepared),
         candidateId: c.id,
         candidateDigest: D('candidate', namespace, control.epoch, c.commitment || c),
-        disposition: 'written',
+        disposition,
         sourceAfter,
         targetAfter,
         logicalDigest: c.logicalDigest,
@@ -1695,7 +1746,14 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       transaction.set(receiptRef, receiptDoc);
       timer.assertUnderDeadline(16_000, 'Item transaction commit');
+      return { status: disposition };
     });
+
+    if (itemResult.status === 'retained') {
+      skippedCount++;
+    } else {
+      migratedCount++;
+    }
   }
 
   // Phase 3: Finalization transaction (reads actual targets and receipts, writes final & marker, transitions to v3_ready)
@@ -1763,8 +1821,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       totalPhysicalRecords: prepared.totalPhysicalRecords,
       targetCounts: prepared.expectedTargetCounts,
       scanned: candidates.length,
-      migrated: candidates.length,
-      skipped: 0,
+      migrated: migratedCount,
+      skipped: skippedCount,
       errors: 0,
       sourceInventoryDigest: prepared.sourceInventoryDigest,
       targetInventoryDigest,
@@ -1820,8 +1878,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
   return {
     scanned: candidates.length,
-    migrated: candidates.length,
-    skipped: 0,
+    migrated: migratedCount,
+    skipped: skippedCount,
     errors: 0,
   };
 }
@@ -1881,6 +1939,12 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
         throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
       }
       timer.assertUnderDeadline(16_000, 'Activation check');
+      const res = await activateMigrationInTransaction(transaction, db, {
+        ...context,
+        storeKey: key,
+        migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+      });
+      timer.assertUnderDeadline(16_000, 'Activation check commit');
       return {
         status: 'already_active',
         epoch: control.epoch,
@@ -1968,7 +2032,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       }
 
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
-      const finalSnap = await finalRef.get();
+      const finalSnap = await transaction.get(finalRef);
       if (finalSnap.exists) {
         const f = finalSnap.data() as Record<string, unknown>;
         planDigest = f.planDigest as string | undefined;
