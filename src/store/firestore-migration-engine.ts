@@ -1648,9 +1648,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     const targetDocMapById = new Map<string, any>();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
-        if (isTargetFormatRow(colKey, d.data(), d.id)) {
-          targetDocMapById.set(`${colKey}:${d.id}`, { ...(d.data() || {}), id: d.id });
-        }
+        targetDocMapById.set(`${colKey}:${d.id}`, { ...(d.data() || {}), id: d.id });
       }
     }
 

@@ -5800,9 +5800,7 @@ async function inspectFirestoreLegacyMigration(options) {
     const targetDocMapById = /* @__PURE__ */ new Map();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
-        if (isTargetFormatRow(colKey, d.data(), d.id)) {
-          targetDocMapById.set(`${colKey}:${d.id}`, { ...d.data() || {}, id: d.id });
-        }
+        targetDocMapById.set(`${colKey}:${d.id}`, { ...d.data() || {}, id: d.id });
       }
     }
     let prospectiveRetained = 0;
