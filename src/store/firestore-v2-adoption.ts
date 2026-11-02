@@ -278,8 +278,20 @@ export async function adoptFirestoreLegacyTokens(
       // fallback
     }
   }
-
-  let projectorDigest = options.projectorDigest ?? '762a08e8c71850699ee93bdd781aa297c6424661e6368da986c7a4eb2d68464e';
+  let projectorDigest = options.projectorDigest;
+  if (!projectorDigest) {
+    try {
+      const fsModule = await import('node:fs');
+      const urlModule = await import('node:url');
+      const pathModule = await import('node:path');
+      const modulePath = pathModule.resolve(pathModule.dirname(urlModule.fileURLToPath(import.meta.url)), './graph-projector.ts');
+      if (fsModule.existsSync(modulePath)) {
+        projectorDigest = computeProtocolDigest(fsModule.readFileSync(modulePath));
+      }
+    } catch {
+      // fallback
+    }
+  }
 
   const codeSha = options.codeSha ?? '3edf8a262e9d06f4849318b1e0d09f197738bff9';
   const codeArtifact = options.codeArtifact ?? `us-docker.pkg.dev/project/image@sha256:${'a'.repeat(64)}`;
