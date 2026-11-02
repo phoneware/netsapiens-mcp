@@ -420,6 +420,8 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
+  assemblyDigest: string;
+  indexSchemaDigest: string;
 }
 
 export interface CompleteMigrationPlan {

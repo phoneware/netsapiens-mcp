@@ -154,6 +154,8 @@ describe('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant sha
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
+      assemblyDigest: 'a'.repeat(64),
+      indexSchemaDigest: 'b'.repeat(64),
       expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key, ctrlFenced!.epoch),
     });
     expect(report.errors).toBe(0);

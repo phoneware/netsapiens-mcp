@@ -1,10 +1,10 @@
 import {
   type MigrationContext,
   type SupportedNamespace,
-  inspectFirestoreLegacyMigration as engineInspect,
-  adoptFirestoreLegacyTokens as engineAdopt,
-  activateFirestoreMigration as engineActivate,
-  getFirestoreMigrationStatus as engineStatus,
+  inspectFirestoreLegacyMigration,
+  adoptFirestoreLegacyTokens,
+  activateFirestoreMigration,
+  getFirestoreMigrationStatus,
 } from './firestore-migration-engine.js';
 import {
   CutoverFenceError,
@@ -24,49 +24,15 @@ import type { FirestoreLike } from './firestore.js';
 export {
   type MigrationContext,
   type SupportedNamespace,
+  inspectFirestoreLegacyMigration,
+  adoptFirestoreLegacyTokens,
+  activateFirestoreMigration,
+  getFirestoreMigrationStatus,
   CutoverFenceError,
   CutoverRefusedError,
   isCutoverFenceError,
   isCutoverRefusedError,
 };
-
-export async function inspectFirestoreLegacyMigration(
-  options: MigrationContext,
-) {
-  return engineInspect(options);
-}
-
-export async function adoptFirestoreLegacyTokens(
-  options: MigrationContext & {
-    dryRun?: boolean;
-    expectedSourceInventoryDigest: string;
-  },
-) {
-  const strictOptions = {
-    ...options,
-    dryRun: options.dryRun ?? false,
-    FieldPath: options.FieldPath ?? { documentId: () => '__name__' },
-  };
-  return engineAdopt(strictOptions);
-}
-
-export async function activateFirestoreMigration(
-  options: MigrationContext & {
-    migrationManifestDigest?: string;
-  },
-) {
-  const strictOptions = {
-    ...options,
-    FieldPath: options.FieldPath ?? { documentId: () => '__name__' },
-  };
-  return engineActivate(strictOptions);
-}
-
-export async function getFirestoreMigrationStatus(
-  options: MigrationContext,
-) {
-  return engineStatus(options);
-}
 
 export async function computeSourceInventoryDigest(
   db: any,

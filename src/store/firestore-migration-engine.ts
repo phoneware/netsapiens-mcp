@@ -45,17 +45,22 @@ import {
   validateCompleteMigrationPlan,
   computeKeyedDocId,
   computeSourceRecordDigest,
+  computeTargetRecordDigest,
   computeSourceInventoryDigest,
+  computeTargetInventoryDigest,
+  computeReceiptSetDigest,
   computeLogicalInventoryDigest,
-  computeCandidateId,
-  computeCandidateLogicalDigest,
   computeEstimatedFirestoreDocSize,
   prepareMigrationInTransaction,
   finalizeMigrationInTransaction,
   activateMigrationInTransaction,
+  markIrreversibleInTransaction,
   getCutoverDistinctCollectionNames,
   isTargetFormatRow,
-} from './cutover-protocol.mjs';
+  parseCutoverFenceRecord,
+  validateMigrationIdentityFields,
+  sanitizeId,
+} from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 
 export type SupportedNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
@@ -71,8 +76,8 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-  assemblyDigest?: string;
-  indexSchemaDigest?: string;
+  assemblyDigest: string;
+  indexSchemaDigest: string;
 }
 
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext {
@@ -91,10 +96,12 @@ export function assertValidMigrationContext(options: unknown): asserts options i
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
+    'assemblyDigest',
+    'indexSchemaDigest',
   ];
   for (const field of requiredFields) {
     if (opts[field] === undefined || opts[field] === null) {
-      throw new CutoverFenceError(\`MigrationContext missing required field: \${field}\`);
+      throw new CutoverFenceError(`MigrationContext missing required field: ${field}`);
     }
   }
   if (typeof opts.db !== 'object' || typeof (opts.db as any).collection !== 'function' || typeof (opts.db as any).runTransaction !== 'function') {
@@ -128,6 +135,12 @@ export function assertValidMigrationContext(options: unknown): asserts options i
   if (typeof opts.protocolDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.protocolDigest)) {
     throw new CutoverFenceError('MigrationContext protocolDigest must be a 64-character lowercase hex string');
   }
+  if (typeof opts.assemblyDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.assemblyDigest)) {
+    throw new CutoverFenceError('MigrationContext assemblyDigest must be a 64-character lowercase hex string');
+  }
+  if (typeof opts.indexSchemaDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.indexSchemaDigest)) {
+    throw new CutoverFenceError('MigrationContext indexSchemaDigest must be a 64-character lowercase hex string');
+  }
 }
 
 function computeDocDepth(obj: unknown, currentDepth = 1): number {
@@ -145,6 +158,37 @@ function computeDocDepth(obj: unknown, currentDepth = 1): number {
   return maxDepth;
 }
 
+function countIndexMetrics(val: unknown): { entries: number; bytes: number } {
+  let entries = 0;
+  let bytes = 0;
+  function traverse(v: unknown, pathLen = 0) {
+    if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string' || v instanceof Date) {
+      entries += 2;
+      bytes += (pathLen + 8);
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        entries += 1;
+        bytes += (pathLen + 8);
+        traverse(item, pathLen);
+      }
+    } else if (v && typeof v === 'object') {
+      for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
+        traverse(child, pathLen + Buffer.byteLength(k, 'utf8') + 1);
+      }
+    }
+  }
+  traverse(val);
+  return { entries, bytes };
+}
+
+function computeCandidateId(storeKey: Uint8Array | Buffer, namespace: string, epoch: number, kind: string, sortedSourceIds: string[]): string {
+  return H(storeKey, 'candidate-id', namespace, epoch, [kind, sortedSourceIds]);
+}
+
+function computeCandidateLogicalDigest(storeKey: Uint8Array | Buffer, namespace: string, epoch: number, kind: string, logicalProjection: unknown): string {
+  return H(storeKey, 'logical-record', namespace, epoch, [kind, logicalProjection]);
+}
+
 export function extractCandidatesAndPlan(params: {
   sourceDocsByKey: Map<string, any[]>;
   storeKey: Uint8Array | Buffer;
@@ -155,8 +199,8 @@ export function extractCandidatesAndPlan(params: {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-  assemblyDigest?: string;
-  indexSchemaDigest?: string;
+  assemblyDigest: string;
+  indexSchemaDigest: string;
   now: number;
 }) {
   const {
@@ -169,11 +213,10 @@ export function extractCandidatesAndPlan(params: {
     codeArtifact,
     packageIntegrity,
     protocolDigest,
+    assemblyDigest,
+    indexSchemaDigest,
     now,
   } = params;
-
-  const assemblyDigest = params.assemblyDigest || protocolDigest;
-  const indexSchemaDigest = params.indexSchemaDigest || protocolDigest;
 
   const codec = createCodec(storeKey);
 
@@ -214,7 +257,7 @@ export function extractCandidatesAndPlan(params: {
   const claimedRefreshIds = new Set<string>();
   const claimedRetiredFingerprints = new Set<string>();
 
-  // 1. Process families
+  // 1. Process families (pr56Families)
   for (const famDoc of familiesDocs) {
     const familyId = famDoc.id;
     const famData = famDoc.data() || {};
@@ -283,21 +326,25 @@ export function extractCandidatesAndPlan(params: {
       {
         collection: 'families',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'families', familyId),
+        rawId: familyId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'families', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'families', familyId), famData),
       },
       {
         collection: 'refresh',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', currentRefId),
+        rawId: currentRefId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', currentRefId), curRefDoc),
       },
       {
         collection: 'upstream',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'upstream', familyId),
+        rawId: familyId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'upstream', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'upstream', familyId), upstreamById.get(familyId)),
       },
       {
         collection: 'tokens',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId),
+        rawId: accessId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId), tokensById.get(accessId) || {}),
       },
     ];
@@ -308,24 +355,33 @@ export function extractCandidatesAndPlan(params: {
       candSources.push({
         collection: 'refresh',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevId),
+        rawId: prevId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', prevId), prevDoc),
       });
     }
 
     candSources.sort(compareDescriptors);
 
+    const famTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'families', familyId);
+    const accTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'tokens', newAccessId);
+    const refTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', newRefreshId);
+    const upTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'upstream', familyId);
+
     const candTargets = [
-      { collection: 'families', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'families', familyId) },
-      { collection: 'tokens', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'tokens', newAccessId) },
-      { collection: 'refresh', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', newRefreshId) },
-      { collection: 'upstream', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'upstream', familyId) },
+      { collection: 'families', id: famTargetId, rawId: familyId },
+      { collection: 'tokens', id: accTargetId, rawId: newAccessId },
+      { collection: 'refresh', id: refTargetId, rawId: newRefreshId },
+      { collection: 'upstream', id: upTargetId, rawId: familyId },
     ];
+    let prevRefTargetId: string | undefined;
     if (famData.previousRefreshToken) {
-      const prevRefTargetId = codec.id('refresh', famData.previousRefreshToken);
-      candTargets.push({ collection: 'refresh', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', prevRefTargetId) });
+      const prevRefId = codec.id('refresh', famData.previousRefreshToken);
+      prevRefTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', prevRefId);
+      candTargets.push({ collection: 'refresh', id: prevRefTargetId, rawId: prevRefId });
     }
     for (const fp of retiredFingerprints) {
-      candTargets.push({ collection: 'retiredRefreshTokens', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'retiredRefreshTokens', fp) });
+      const retTgtId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'retiredRefreshTokens', fp);
+      candTargets.push({ collection: 'retiredRefreshTokens', id: retTgtId, rawId: fp });
     }
     candTargets.sort(compareDescriptors);
 
@@ -353,46 +409,65 @@ export function extractCandidatesAndPlan(params: {
     const grantVersion = typeof upstreamById.get(familyId)?.grantVersion === 'number' ? upstreamById.get(familyId).grantVersion : 1;
 
     const famRow = encodeRefreshFamiliesRow(codec, familyId, generation, newRefreshId, newAccessId, logicalProjection, retiredFingerprints, famData.status, now);
-    const upRow = encodeUpstreamRow(codec, familyId, grantVersion, logicalProjection, now);
+    const upRow = encodeUpstreamRow(codec, familyId, grantVersion, {
+      nsAccessToken: logicalProjection.upstream.nsAccessToken,
+      nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
+      nsUsername: logicalProjection.upstream.nsUsername,
+      nsUserRole: logicalProjection.upstream.nsUserRole,
+      nsApiUrl: logicalProjection.upstream.nsApiUrl,
+      nsExpiresAt: logicalProjection.upstream.nsExpiresAt,
+    }, now);
     const refRow = encodeRefreshRow(newRefreshId, familyId, generation, now);
-    const accRow = encodeSessionsRow(codec, newAccessId, familyId, logicalProjection, now);
+    const accRow = encodeSessionsRow(codec, newAccessId, familyId, {
+      expiresAt: logicalProjection.expiresAt,
+      clientId: logicalProjection.clientId,
+      serverBaseUrl: logicalProjection.serverBaseUrl,
+      extra: logicalProjection.extra,
+    }, now);
 
     const targetDocsMap = new Map();
-    targetDocsMap.set('refreshFamilies', famRow);
-    targetDocsMap.set('upstreamGrants', upRow);
-    targetDocsMap.set('refreshTokens', refRow);
-    targetDocsMap.set('sessions', accRow);
+    targetDocsMap.set('families', famRow);
+    targetDocsMap.set('upstream', upRow);
+    targetDocsMap.set('activeRefresh', refRow);
+    targetDocsMap.set('tokens', accRow);
 
-    const targetPostimageByTargetId = new Map();
-    targetPostimageByTargetId.set(candTargets[0].id, famRow);
-    targetPostimageByTargetId.set(candTargets[1].id, accRow);
-    targetPostimageByTargetId.set(candTargets[2].id, refRow);
-    targetPostimageByTargetId.set(candTargets[3].id, upRow);
+    const postimageByTargetId = new Map();
+    postimageByTargetId.set(famTargetId, famRow);
+    postimageByTargetId.set(accTargetId, accRow);
+    postimageByTargetId.set(refTargetId, refRow);
+    postimageByTargetId.set(upTargetId, upRow);
 
+    let prevRefreshRow: any = null;
     if (famData.previousRefreshToken) {
-      const prevRefreshId = codec.id('refresh', famData.previousRefreshToken);
+      const prevRefId = codec.id('refresh', famData.previousRefreshToken);
       const prevRefDoc = refreshById.get(famData.previousRefreshToken) || {};
-      const prevRefreshRow = {
-        id: prevRefreshId,
+      prevRefreshRow = {
+        id: prevRefId,
         familyId,
-        status: 'consumed',
+        status: 'consumed' as const,
         generation: Math.max(1, generation - 1),
         consumedAt: prevRefDoc.consumedAt || now,
-        successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefId }, \`successor:\${prevRefreshId}\`),
+        successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefId }, `successor:${prevRefId}`),
+        v: 2,
       };
-      targetDocsMap.set('prevRefreshTokens', prevRefreshRow);
-      const prevTgtId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', prevRefreshId);
-      targetPostimageByTargetId.set(prevTgtId, prevRefreshRow);
+      targetDocsMap.set('prevRefresh', prevRefreshRow);
+      postimageByTargetId.set(prevRefTargetId, prevRefreshRow);
     }
 
+    const retiredRows: any[] = [];
     for (const fp of retiredFingerprints) {
       const retRow = {
         fingerprint: fp,
         familyId,
         retiredAt: now,
+        v: 2,
       };
+      retiredRows.push(retRow);
       const retTgtId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'retiredRefreshTokens', fp);
-      targetPostimageByTargetId.set(retTgtId, retRow);
+      postimageByTargetId.set(retTgtId, retRow);
+    }
+    if (retiredFingerprints.length > 0) {
+      targetDocsMap.set('retiredRefresh', { ids: retiredFingerprints });
     }
 
     // Verify logical projection equivalence
@@ -402,13 +477,13 @@ export function extractCandidatesAndPlan(params: {
       codec,
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
-      throw new CutoverFenceError(\`Logical projection equivalence check failed for candidate \${candidateId}\`);
+      throw new CutoverFenceError(`Logical projection equivalence check failed for candidate ${sanitizeId(candidateId)}`);
     }
 
-    // Order postimages strictly matching candTargets order
+    // Map postimages strictly according to sorted candTargets
     const prospectiveTargetPostimages = candTargets.map((t) => {
-      const post = targetPostimageByTargetId.get(t.id);
-      if (!post) throw new CutoverFenceError(\`Missing prospective target postimage for target \${t.collection}:\${t.id}\`);
+      const post = postimageByTargetId.get(t.id);
+      if (!post) throw new CutoverFenceError(`Missing prospective target postimage for target ${t.collection}:${sanitizeId(t.id)}`);
       return post;
     });
 
@@ -424,8 +499,8 @@ export function extractCandidatesAndPlan(params: {
     const candCommitment = {
       id: candidateId,
       kind: 'pr56Families',
-      sources: candSources,
-      targets: candTargets,
+      sources: candSources.map((s) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
+      targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
     candidateCommitments.push(candCommitment);
@@ -433,11 +508,150 @@ export function extractCandidatesAndPlan(params: {
     candidates.push({
       id: candidateId,
       kind: 'pr56Families',
+      commitment: candCommitment,
       sources: candSources,
       targets: candTargets,
       logicalDigest,
       prospectiveTargetPostimages,
-      sourceActions: candSources.map((s) => ({ collection: s.collection, id: s.id, action: 'delete' })),
+      postimageByTargetId,
+      sourceActions: candSources.map((s) => ({ collection: s.collection, id: s.id, rawId: s.rawId, action: 'delete' })),
+      targetRows: {
+        refreshFamilies: famRow,
+        upstreamGrants: upRow,
+        refreshTokens: refRow,
+        sessions: accRow,
+        prevRefresh: prevRefreshRow,
+        retiredRefresh: retiredRows,
+      },
+    });
+  }
+
+  // 2. Process baseFormatTokens (tokens not claimed by any family)
+  for (const tokDoc of tokensDocs) {
+    const accessId = tokDoc.id;
+    if (claimedAccessIds.has(accessId)) continue;
+    claimedAccessIds.add(accessId);
+
+    const tokData = tokDoc.data() || {};
+    const familyId = codec.id('family', accessId);
+    const refreshId = codec.id('refresh', tokData.refreshToken || accessId);
+    const newAccessId = codec.id('session', accessId);
+
+    const candSources = [
+      {
+        collection: 'tokens',
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId),
+        rawId: accessId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessId), tokData),
+      },
+    ];
+    if (tokData.refreshToken && refreshById.has(tokData.refreshToken)) {
+      const refDoc = refreshById.get(tokData.refreshToken);
+      candSources.push({
+        collection: 'refresh',
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', tokData.refreshToken),
+        rawId: tokData.refreshToken,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'refresh', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'refresh', tokData.refreshToken), refDoc),
+      });
+      claimedRefreshIds.add(tokData.refreshToken);
+    }
+    candSources.sort(compareDescriptors);
+
+    const famTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'families', familyId);
+    const accTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'tokens', newAccessId);
+    const refTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'refresh', refreshId);
+    const upTargetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'upstream', familyId);
+
+    const candTargets = [
+      { collection: 'families', id: famTargetId, rawId: familyId },
+      { collection: 'tokens', id: accTargetId, rawId: newAccessId },
+      { collection: 'refresh', id: refTargetId, rawId: refreshId },
+      { collection: 'upstream', id: upTargetId, rawId: familyId },
+    ];
+    candTargets.sort(compareDescriptors);
+
+    const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
+    const candidateId = computeCandidateId(storeKey, namespace, epoch, 'baseFormatTokens', sortedSourceIds);
+
+    const sourcesMap = new Map();
+    sourcesMap.set('tokens', safeDocEntry(accessId, tokData));
+    if (tokData.refreshToken && refreshById.has(tokData.refreshToken)) {
+      sourcesMap.set('refresh', safeDocEntry(tokData.refreshToken, refreshById.get(tokData.refreshToken)));
+    }
+
+    const logicalProjection = projectSourceLogical(
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      sourcesMap,
+      codec,
+    );
+    const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'baseFormatTokens', logicalProjection);
+
+    const famRow = encodeRefreshFamiliesRow(codec, familyId, 1, refreshId, newAccessId, logicalProjection, [], 'active', now);
+    const upRow = encodeUpstreamRow(codec, familyId, 1, {
+      nsAccessToken: logicalProjection.upstream.nsAccessToken,
+      nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
+      nsUsername: logicalProjection.upstream.nsUsername,
+      nsUserRole: logicalProjection.upstream.nsUserRole,
+      nsApiUrl: logicalProjection.upstream.nsApiUrl,
+      nsExpiresAt: logicalProjection.upstream.nsExpiresAt,
+    }, now);
+    const refRow = encodeRefreshRow(refreshId, familyId, 1, now);
+    const accRow = encodeSessionsRow(codec, newAccessId, familyId, {
+      expiresAt: logicalProjection.expiresAt,
+      clientId: logicalProjection.clientId,
+      serverBaseUrl: logicalProjection.serverBaseUrl,
+      extra: logicalProjection.extra,
+    }, now);
+
+    const targetDocsMap = new Map();
+    targetDocsMap.set('families', famRow);
+    targetDocsMap.set('upstream', upRow);
+    targetDocsMap.set('activeRefresh', refRow);
+    targetDocsMap.set('tokens', accRow);
+
+    const postimageByTargetId = new Map();
+    postimageByTargetId.set(famTargetId, famRow);
+    postimageByTargetId.set(accTargetId, accRow);
+    postimageByTargetId.set(refTargetId, refRow);
+    postimageByTargetId.set(upTargetId, upRow);
+
+    const targetLogicalProjection = projectTargetLogical(
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      targetDocsMap,
+      codec,
+    );
+    if (C(logicalProjection) !== C(targetLogicalProjection)) {
+      throw new CutoverFenceError(`Logical projection equivalence check failed for candidate ${sanitizeId(candidateId)}`);
+    }
+
+    const prospectiveTargetPostimages = candTargets.map((t) => postimageByTargetId.get(t.id));
+
+    expectedTargetCounts.families++;
+    expectedTargetCounts.tokens++;
+    expectedTargetCounts.refresh++;
+    expectedTargetCounts.upstream++;
+
+    classifications.baseFormatTokens++;
+
+    const candCommitment = {
+      id: candidateId,
+      kind: 'baseFormatTokens',
+      sources: candSources.map((s) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
+      targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
+      logicalDigest,
+    };
+    candidateCommitments.push(candCommitment);
+
+    candidates.push({
+      id: candidateId,
+      kind: 'baseFormatTokens',
+      commitment: candCommitment,
+      sources: candSources,
+      targets: candTargets,
+      logicalDigest,
+      prospectiveTargetPostimages,
+      postimageByTargetId,
+      sourceActions: candSources.map((s) => ({ collection: s.collection, id: s.id, rawId: s.rawId, action: 'delete' })),
       targetRows: {
         refreshFamilies: famRow,
         upstreamGrants: upRow,
@@ -447,25 +661,31 @@ export function extractCandidatesAndPlan(params: {
     });
   }
 
-  // 2. Process auth_codes
+  // 3. Process auth_codes
   for (const codeDoc of authCodesDocs) {
-    const codeId = codeDoc.id;
+    const rawCode = codeDoc.id;
     const cData = codeDoc.data() || {};
     const candSources = [
       {
         collection: 'authCodes',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'authCodes', codeId),
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'authCodes', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'authCodes', codeId), cData),
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'authCodes', rawCode),
+        rawId: rawCode,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'authCodes', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'authCodes', rawCode), cData),
       },
     ];
+    const hmacCodeId = codec.id('code', rawCode);
+    const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'authCodes', hmacCodeId);
     const candTargets = [
-      { collection: 'authCodes', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'authCodes', codeId) },
+      { collection: 'authCodes', id: targetId, rawId: hmacCodeId },
     ];
+    candSources.sort(compareDescriptors);
+    candTargets.sort(compareDescriptors);
+
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'authCodes', sortedSourceIds);
 
     const sourcesMap = new Map();
-    sourcesMap.set('authCodes', safeDocEntry(codeId, cData));
+    sourcesMap.set('authCodes', safeDocEntry(rawCode, cData));
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'authCodes', sources: candSources, targets: candTargets, logicalDigest: '' },
@@ -474,8 +694,32 @@ export function extractCandidatesAndPlan(params: {
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'authCodes', logicalProjection);
 
-    const codeRow = encodeAuthCodesRow(codeId, logicalProjection, now);
-    const prospectiveTargetPostimages = [codeRow];
+    const codeRow = encodeAuthCodesRow(
+      codec,
+      rawCode,
+      {
+        pending: {
+          clientId: logicalProjection.clientId,
+          codeChallenge: logicalProjection.codeChallenge,
+          redirectUri: logicalProjection.redirectUri,
+          createdAt: logicalProjection.createdAt,
+          state: logicalProjection.state,
+          scopes: logicalProjection.scopes,
+        },
+        nsTokens: {
+          access_token: logicalProjection.nsAccessToken,
+          refresh_token: logicalProjection.nsRefreshToken,
+          username: logicalProjection.nsUsername,
+          nsUserRole: logicalProjection.nsUserRole,
+          nsApiUrl: logicalProjection.nsApiUrl,
+        },
+        clientId: logicalProjection.clientId,
+        serverBaseUrl: logicalProjection.serverBaseUrl,
+        extra: logicalProjection.extra,
+      },
+      logicalProjection.expiresAt,
+      now,
+    );
 
     const targetDocsMap = new Map();
     targetDocsMap.set('authCodes', codeRow);
@@ -485,33 +729,39 @@ export function extractCandidatesAndPlan(params: {
       codec,
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
-      throw new CutoverFenceError(\`Logical projection equivalence check failed for authCode \${candidateId}\`);
+      throw new CutoverFenceError(`Logical projection equivalence check failed for authCode ${sanitizeId(candidateId)}`);
     }
+
+    const prospectiveTargetPostimages = [codeRow];
+    const postimageByTargetId = new Map([[targetId, codeRow]]);
 
     expectedTargetCounts.authCodes++;
     classifications.authCodes++;
 
-    candidateCommitments.push({
+    const candCommitment = {
       id: candidateId,
       kind: 'authCodes',
-      sources: candSources,
-      targets: candTargets,
+      sources: candSources.map((s) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
+      targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
-    });
+    };
+    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
       kind: 'authCodes',
+      commitment: candCommitment,
       sources: candSources,
       targets: candTargets,
       logicalDigest,
       prospectiveTargetPostimages,
-      sourceActions: [{ collection: 'authCodes', id: candSources[0].id, action: 'replace' }],
+      postimageByTargetId,
+      sourceActions: [{ collection: 'authCodes', id: candSources[0].id, rawId: rawCode, action: 'delete' }],
       targetRows: { authCodes: codeRow },
     });
   }
 
-  // 3. Process resume_tokens
+  // 4. Process resume_tokens
   for (const resDoc of resumeDocs) {
     const resId = resDoc.id;
     const rData = resDoc.data() || {};
@@ -519,12 +769,17 @@ export function extractCandidatesAndPlan(params: {
       {
         collection: 'resumeTokens',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'resumeTokens', resId),
+        rawId: resId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'resumeTokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'resumeTokens', resId), rData),
       },
     ];
+    const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'resumeTokens', resId);
     const candTargets = [
-      { collection: 'resumeTokens', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'resumeTokens', resId) },
+      { collection: 'resumeTokens', id: targetId, rawId: resId },
     ];
+    candSources.sort(compareDescriptors);
+    candTargets.sort(compareDescriptors);
+
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'resumeTokens', sortedSourceIds);
 
@@ -538,8 +793,7 @@ export function extractCandidatesAndPlan(params: {
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'resumeTokens', logicalProjection);
 
-    const resRow = encodeResumeTokensRow(resId, logicalProjection, now);
-    const prospectiveTargetPostimages = [resRow];
+    const resRow = encodeResumeTokensRow(resId, logicalProjection.consumedAt, logicalProjection.expiresAt, now);
 
     const targetDocsMap = new Map();
     targetDocsMap.set('resumeTokens', resRow);
@@ -549,53 +803,86 @@ export function extractCandidatesAndPlan(params: {
       codec,
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
-      throw new CutoverFenceError(\`Logical projection equivalence check failed for resumeToken \${candidateId}\`);
+      throw new CutoverFenceError(`Logical projection equivalence check failed for resumeToken ${sanitizeId(candidateId)}`);
     }
+
+    const prospectiveTargetPostimages = [resRow];
+    const postimageByTargetId = new Map([[targetId, resRow]]);
 
     expectedTargetCounts.resumeTokens++;
     classifications.resumeTokens++;
 
-    candidateCommitments.push({
+    const candCommitment = {
       id: candidateId,
       kind: 'resumeTokens',
-      sources: candSources,
-      targets: candTargets,
+      sources: candSources.map((s) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
+      targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
-    });
+    };
+    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
       kind: 'resumeTokens',
+      commitment: candCommitment,
       sources: candSources,
       targets: candTargets,
       logicalDigest,
       prospectiveTargetPostimages,
-      sourceActions: [{ collection: 'resumeTokens', id: candSources[0].id, action: 'replace' }],
+      postimageByTargetId,
+      sourceActions: [{ collection: 'resumeTokens', id: candSources[0].id, rawId: resId, action: 'replace' }],
       targetRows: { resumeTokens: resRow },
     });
   }
 
-  // 4. Process oauth_clients / clients
-  const clientDocsMap = new Map<string, any>();
-  for (const doc of clientsDocs) clientDocsMap.set(doc.id, doc.data() || {});
-  for (const doc of oauthClientsDocs) clientDocsMap.set(doc.id, doc.data() || {});
+  // 5. Process clients / oauth_clients preserving dual-source identity
+  const allClientIds = new Set<string>();
+  const clientDocsById = new Map<string, any>();
+  const oauthClientDocsById = new Map<string, any>();
 
-  for (const [clientId, cData] of clientDocsMap.entries()) {
-    const candSources = [
-      {
+  for (const doc of clientsDocs) {
+    allClientIds.add(doc.id);
+    clientDocsById.set(doc.id, doc.data() || {});
+  }
+  for (const doc of oauthClientsDocs) {
+    allClientIds.add(doc.id);
+    oauthClientDocsById.set(doc.id, doc.data() || {});
+  }
+
+  for (const clientId of Array.from(allClientIds).sort(codeUnitCompare)) {
+    const candSources = [];
+    if (clientDocsById.has(clientId)) {
+      const d = clientDocsById.get(clientId);
+      candSources.push({
+        collection: 'clients',
+        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'clients', clientId),
+        rawId: clientId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'clients', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'clients', clientId), d),
+      });
+    }
+    if (oauthClientDocsById.has(clientId)) {
+      const d = oauthClientDocsById.get(clientId);
+      candSources.push({
         collection: 'oauthClients',
         id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'oauthClients', clientId),
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'oauthClients', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'oauthClients', clientId), cData),
-      },
-    ];
+        rawId: clientId,
+        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'oauthClients', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'oauthClients', clientId), d),
+      });
+    }
+    candSources.sort(compareDescriptors);
+
+    const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'oauthClients', clientId);
     const candTargets = [
-      { collection: 'oauthClients', id: computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'oauthClients', clientId) },
+      { collection: 'oauthClients', id: targetId, rawId: clientId },
     ];
+    candTargets.sort(compareDescriptors);
+
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'clients', sortedSourceIds);
 
     const sourcesMap = new Map();
-    sourcesMap.set('clients', safeDocEntry(clientId, cData));
+    if (clientDocsById.has(clientId)) sourcesMap.set('clients', safeDocEntry(clientId, clientDocsById.get(clientId)));
+    if (oauthClientDocsById.has(clientId)) sourcesMap.set('oauthClients', safeDocEntry(clientId, oauthClientDocsById.get(clientId)));
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
@@ -604,39 +891,55 @@ export function extractCandidatesAndPlan(params: {
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'clients', logicalProjection);
 
-    const clientRow = encodeOAuthClientsRow(clientId, logicalProjection, now);
-    const prospectiveTargetPostimages = [clientRow];
+    const clientRow = encodeOAuthClientsRow(clientId, {
+      client_name: logicalProjection.clientName,
+      redirect_uris: logicalProjection.redirectUris,
+      token_endpoint_auth_method: logicalProjection.tokenEndpointAuthMethod,
+      client_secret: logicalProjection.clientSecret,
+      grant_types: logicalProjection.grantTypes,
+      response_types: logicalProjection.responseTypes,
+      client_uri: logicalProjection.clientUri,
+      logo_uri: logicalProjection.logoUri,
+      scope: logicalProjection.scope,
+      client_id_issued_at: logicalProjection.clientIdIssuedAt,
+    }, now);
 
     const targetDocsMap = new Map();
-    targetDocsMap.set('oauthClients', clientRow);
+    targetDocsMap.set('clients', clientRow);
     const targetLogicalProjection = projectTargetLogical(
       { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
-      throw new CutoverFenceError(\`Logical projection equivalence check failed for client \${candidateId}\`);
+      throw new CutoverFenceError(`Logical projection equivalence check failed for client ${sanitizeId(candidateId)}`);
     }
+
+    const prospectiveTargetPostimages = [clientRow];
+    const postimageByTargetId = new Map([[targetId, clientRow]]);
 
     expectedTargetCounts.oauthClients++;
     classifications.clients++;
 
-    candidateCommitments.push({
+    const candCommitment = {
       id: candidateId,
       kind: 'clients',
-      sources: candSources,
-      targets: candTargets,
+      sources: candSources.map((s) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
+      targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
-    });
+    };
+    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
       kind: 'clients',
+      commitment: candCommitment,
       sources: candSources,
       targets: candTargets,
       logicalDigest,
       prospectiveTargetPostimages,
-      sourceActions: [{ collection: 'oauthClients', id: candSources[0].id, action: 'replace' }],
+      postimageByTargetId,
+      sourceActions: candSources.map((s) => ({ collection: s.collection, id: s.id, rawId: s.rawId, action: s.collection === 'clients' ? 'delete' : 'replace' })),
       targetRows: { oauthClients: clientRow },
     });
   }
@@ -680,6 +983,12 @@ export function extractCandidatesAndPlan(params: {
       targets: c.targets,
       logicalDigest: c.logicalDigest,
       sourceActions: candidates[idx].sourceActions,
+      targetBounds: candidates[idx].prospectiveTargetPostimages.map((img: any) => ({
+        sizeBytes: computeEstimatedFirestoreDocSize(img),
+        depth: computeDocDepth(img),
+        indexEntries: countIndexMetrics(img).entries,
+        indexBytes: countIndexMetrics(img).bytes,
+      })),
     })),
     expectedTargetCounts,
     physicalCounts,
@@ -739,12 +1048,16 @@ export function extractCandidatesAndPlan(params: {
       encoderVersion: 1,
       planDigest,
       kind: 'receipt',
-      preparedDigest: '0'.repeat(64),
+      preparedDigest: D('manifest', namespace, epoch, prepared),
       candidateId: c.id,
-      candidateDigest: '0'.repeat(64),
+      candidateDigest: D('candidate', namespace, epoch, c.commitment),
       disposition: 'written',
       sourceAfter: c.sources.map((s: any) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
-      targetAfter: c.targets.map((t: any) => ({ collection: t.collection, id: t.id, recordDigest: '0'.repeat(64) })),
+      targetAfter: c.targets.map((t: any) => {
+        const post = c.postimageByTargetId.get(t.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, epoch, t.collection, t.id, post);
+        return { collection: t.collection, id: t.id, recordDigest: recDigest };
+      }),
       logicalDigest: c.logicalDigest,
       completedAt: now,
     };
@@ -770,16 +1083,40 @@ export function extractCandidatesAndPlan(params: {
   });
 
   const finalUpperBound = {
-    ...prepared,
+    schemaVersion: 2,
+    namespace,
+    epoch,
+    migrationRunId: runId,
+    codeSha,
+    codeArtifact,
+    packageIntegrity,
+    protocolDigest,
+    assemblyDigest,
+    indexSchemaDigest,
+    encoderVersion: 1,
+    planDigest,
     kind: 'final',
+    preparedDigest: D('manifest', namespace, epoch, prepared),
     completedAt: now,
+    physicalCounts,
+    classifications,
+    reasons,
+    totalPhysicalRecords,
     targetCounts: expectedTargetCounts,
+    scanned: candidateCommitments.length,
     migrated: candidateCommitments.length,
     skipped: 0,
     errors: 0,
+    sourceInventoryDigest,
     targetInventoryDigest: '0'.repeat(64),
+    sourceLogicalDigest,
     targetLogicalDigest: sourceLogicalDigest,
     receiptSetDigest: '0'.repeat(64),
+    ...(totalPhysicalRecords > 0 ? {
+      projectorId: PROJECTOR_ID,
+      projectorVersion: PROJECTOR_VERSION,
+      projectorDigest: protocolDigest,
+    } : {}),
   };
 
   const markerUpperBound = {
@@ -796,15 +1133,10 @@ export function extractCandidatesAndPlan(params: {
     encoderVersion: 1,
     planDigest,
     kind: 'ownership',
-    adoptedAt: now,
+    preparedDigest: D('manifest', namespace, epoch, prepared),
     migrationManifestDigest: '0'.repeat(64),
-    sourceInventoryDigest,
-    targetInventoryDigest: '0'.repeat(64),
-    scanned: candidateCommitments.length,
-    migrated: candidateCommitments.length,
-    skipped: 0,
-    errors: 0,
-    targetCounts: expectedTargetCounts,
+    emptyNamespace: totalPhysicalRecords === 0,
+    adoptedAt: now,
     ...(totalPhysicalRecords > 0 ? {
       projectorId: PROJECTOR_ID,
       projectorVersion: PROJECTOR_VERSION,
@@ -877,28 +1209,28 @@ export function extractCandidatesAndPlan(params: {
 function computePreflightSummaryFromPlan(plan: any, sourceInventoryDigest: string, planDigest: string) {
   let estimatedFirestoreSize = computeEstimatedFirestoreDocSize(plan.prepared);
   let depth = computeDocDepth(plan.prepared);
-  let indexEntries = (countIndexMetrics as any)(plan.prepared).entries;
-  let indexBytes = (countIndexMetrics as any)(plan.prepared).bytes;
+  let indexEntries = countIndexMetrics(plan.prepared).entries;
+  let indexBytes = countIndexMetrics(plan.prepared).bytes;
 
   for (const item of plan.items) {
     estimatedFirestoreSize += computeEstimatedFirestoreDocSize(item.receiptUpperBound);
     depth = Math.max(depth, computeDocDepth(item.receiptUpperBound));
-    indexEntries += (countIndexMetrics as any)(item.receiptUpperBound).entries;
-    indexBytes += (countIndexMetrics as any)(item.receiptUpperBound).bytes;
+    indexEntries += countIndexMetrics(item.receiptUpperBound).entries;
+    indexBytes += countIndexMetrics(item.receiptUpperBound).bytes;
 
     for (const post of item.prospectiveTargetPostimages) {
       estimatedFirestoreSize += computeEstimatedFirestoreDocSize(post);
       depth = Math.max(depth, computeDocDepth(post));
-      indexEntries += (countIndexMetrics as any)(post).entries;
-      indexBytes += (countIndexMetrics as any)(post).bytes;
+      indexEntries += countIndexMetrics(post).entries;
+      indexBytes += countIndexMetrics(post).bytes;
     }
   }
 
   estimatedFirestoreSize += computeEstimatedFirestoreDocSize(plan.finalization.finalUpperBound);
   estimatedFirestoreSize += computeEstimatedFirestoreDocSize(plan.finalization.markerUpperBound);
   depth = Math.max(depth, computeDocDepth(plan.finalization.finalUpperBound), computeDocDepth(plan.finalization.markerUpperBound));
-  indexEntries += (countIndexMetrics as any)(plan.finalization.finalUpperBound).entries + (countIndexMetrics as any)(plan.finalization.markerUpperBound).entries;
-  indexBytes += (countIndexMetrics as any)(plan.finalization.finalUpperBound).bytes + (countIndexMetrics as any)(plan.finalization.markerUpperBound).bytes;
+  indexEntries += countIndexMetrics(plan.finalization.finalUpperBound).entries + countIndexMetrics(plan.finalization.markerUpperBound).entries;
+  indexBytes += countIndexMetrics(plan.finalization.finalUpperBound).bytes + countIndexMetrics(plan.finalization.markerUpperBound).bytes;
 
   return {
     scanned: plan.items.length,
@@ -910,29 +1242,6 @@ function computePreflightSummaryFromPlan(plan: any, sourceInventoryDigest: strin
     indexBytes,
     readDeadlineMs: 16000,
   };
-}
-
-function countIndexMetrics(val: unknown): { entries: number; bytes: number } {
-  let entries = 0;
-  let bytes = 0;
-  function traverse(v: unknown, pathLen = 0) {
-    if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string' || v instanceof Date) {
-      entries += 2;
-      bytes += (pathLen + 8);
-    } else if (Array.isArray(v)) {
-      for (const item of v) {
-        entries += 1;
-        bytes += (pathLen + 8);
-        traverse(item, pathLen);
-      }
-    } else if (v && typeof v === 'object') {
-      for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
-        traverse(child, pathLen + Buffer.byteLength(k, 'utf8') + 1);
-      }
-    }
-  }
-  traverse(val);
-  return { entries, bytes };
 }
 
 export async function inspectFirestoreLegacyMigration(options: MigrationContext): Promise<{
@@ -969,7 +1278,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   ]);
   for (const k of Object.keys(options)) {
     if (!allowedKeys.has(k)) {
-      throw new CutoverFenceError(\`Unknown option '\${k}' passed to inspectFirestoreLegacyMigration\`);
+      throw new CutoverFenceError(`Unknown option '${k}' passed to inspectFirestoreLegacyMigration`);
     }
   }
 
@@ -981,7 +1290,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     const startTime = Date.now();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
-      throw new CutoverFenceError(\`Epoch mismatch in inspect: expected \${expectedEpoch}, got \${control.epoch}\`);
+      throw new CutoverFenceError(`Epoch mismatch in inspect: expected ${expectedEpoch}, got ${control.epoch}`);
     }
 
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
@@ -1031,7 +1340,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
     const duration = Date.now() - startTime;
     if (duration > 16_000) {
-      throw new CutoverFenceError(\`Preflight scan exceeded 16,000 ms lock deadline (\${duration} ms)\`);
+      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
     }
 
     const { candidates, sourceInventoryDigest, expectedTargetCounts, planSpec, planDigest, plan } = extractCandidatesAndPlan({
@@ -1091,7 +1400,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   ]);
   for (const k of Object.keys(options)) {
     if (!allowedKeys.has(k)) {
-      throw new CutoverFenceError(\`Unknown option '\${k}' passed to adoptFirestoreLegacyTokens\`);
+      throw new CutoverFenceError(`Unknown option '${k}' passed to adoptFirestoreLegacyTokens`);
     }
   }
 
@@ -1106,15 +1415,35 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
-  // Phase 1: Preparation in transaction
+  // Phase 1: Preparation in transaction (supporting restart per Section 5)
   const prepResult = await db.runTransaction(async (transaction: any) => {
     const startTime = Date.now();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
-      throw new CutoverFenceError(\`Epoch mismatch in adopt: expected \${expectedEpoch}, got \${control.epoch}\`);
+      throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
     }
+
+    // Restart/resumption check per Section 5
+    if (control.state === 'migrating') {
+      if (control.migrationRunId !== migrationRunId) {
+        throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
+      }
+      const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+      const prepSnap = await transaction.get(prepRef);
+      if (!prepSnap.exists) {
+        throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
+      }
+      const prepDoc = prepSnap.data();
+      return {
+        dryRun: false,
+        isResume: true,
+        prepared: prepDoc,
+        planSpec: prepDoc.planSpec,
+      };
+    }
+
     if (control.state !== 'fenced') {
-      throw new CutoverRefusedError(\`Cannot adopt: cutover state is '\${control.state}', expected 'fenced'\`, {
+      throw new CutoverRefusedError(`Cannot adopt: cutover state is '${control.state}', expected 'fenced'`, {
         cutoverState: control.state,
         epoch: control.epoch,
       });
@@ -1158,7 +1487,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     const duration = Date.now() - startTime;
     if (duration > 16_000) {
-      throw new CutoverFenceError(\`Preflight scan exceeded 16,000 ms lock deadline (\${duration} ms)\`);
+      throw new CutoverFenceError(`Preflight scan exceeded 16,000 ms lock deadline (${duration} ms)`);
     }
 
     const { candidates, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
@@ -1178,7 +1507,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
-        \`Source inventory digest mismatch: expected \${expectedSourceInventoryDigest}, observed \${sourceInventoryDigest}\`,
+        `Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${sourceInventoryDigest}`,
       );
     }
 
@@ -1202,8 +1531,10 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     return {
       dryRun: false,
+      isResume: false,
       candidates,
       plan,
+      prepared: plan.prepared,
     };
   });
 
@@ -1216,39 +1547,87 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     };
   }
 
-  const { candidates, plan } = prepResult;
+  const { candidates, prepared } = prepResult;
   const now = Date.now();
 
-  // Phase 2: Execute each item in its own transaction with receipt
-  for (const itemPlan of plan.items) {
-    const candidate = candidates.find((c: any) => c.id === itemPlan.candidateId);
-    if (!candidate) throw new CutoverFenceError(\`Candidate \${itemPlan.candidateId} missing from execution plan\`);
-
+  // Phase 2: Execute each item in its own atomic transaction with exact receipt and latch
+  for (const c of candidates) {
     await db.runTransaction(async (transaction: any) => {
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== 'migrating') {
-        throw new CutoverFenceError(\`Cannot execute item: state must be 'migrating', got '\${control.state}'\`);
+        throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
       }
       if (control.migrationRunId !== migrationRunId) {
         throw new CutoverFenceError('migrationRunId mismatch during item transaction');
       }
 
-      // Write target documents
-      if (candidate.kind === 'pr56Families') {
-        const rows = candidate.targetRows;
-        transaction.set(db.collection(\`\${namespace}_refresh_families\`).doc(rows.refreshFamilies.id), rows.refreshFamilies);
-        transaction.set(db.collection(\`\${namespace}_upstream\`).doc(rows.upstreamGrants.id), rows.upstreamGrants);
-        transaction.set(db.collection(\`\${namespace}_refresh\`).doc(rows.refreshTokens.id), rows.refreshTokens);
-        transaction.set(db.collection(\`\${namespace}_sessions\`).doc(rows.sessions.id), rows.sessions);
-      } else if (candidate.kind === 'authCodes') {
-        transaction.set(db.collection(\`\${namespace}_auth_codes\`).doc(candidate.targetRows.authCodes.code), candidate.targetRows.authCodes);
-      } else if (candidate.kind === 'resumeTokens') {
-        transaction.set(db.collection(\`\${namespace}_resume_tokens\`).doc(candidate.targetRows.resumeTokens.id), candidate.targetRows.resumeTokens);
-      } else if (candidate.kind === 'clients') {
-        transaction.set(db.collection(\`\${namespace}_oauth_clients\`).doc(candidate.targetRows.oauthClients.client_id), candidate.targetRows.oauthClients);
+      // Check existing receipt (idempotency/restart)
+      const receiptRef = db.collection(`${namespace}_meta`).doc(`migration_receipt_${control.epoch}_${c.id}`);
+      const receiptSnap = await transaction.get(receiptRef);
+      if (receiptSnap.exists) {
+        return; // Already executed in previous attempt
       }
 
-      // Write receipt
+      // Call irreversible latch before first v3 target write
+      if (control.emptyNamespace !== true) {
+        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
+      }
+
+      // Execute source actions (deletions / replacements)
+      for (const sa of c.sourceActions) {
+        const colMap: Record<string, string> = {
+          families: `${namespace}_tokens_refresh_families`,
+          tokens: `${namespace}_tokens`,
+          refresh: `${namespace}_tokens_refresh`,
+          upstream: `${namespace}_tokens_upstream`,
+          authCodes: `${namespace}_auth_codes`,
+          resumeTokens: `${namespace}_resume_tokens`,
+          oauthClients: `${namespace}_oauth_clients`,
+          clients: `${namespace}_clients`,
+        };
+        const physicalCol = colMap[sa.collection];
+        if (physicalCol && sa.action === 'delete') {
+          transaction.delete(db.collection(physicalCol).doc(sa.rawId));
+        }
+      }
+
+      // Write target documents
+      const targetColMap: Record<string, string> = {
+        families: `${namespace}_refresh_families`,
+        tokens: `${namespace}_sessions`,
+        refresh: `${namespace}_refresh`,
+        upstream: `${namespace}_upstream`,
+        authCodes: `${namespace}_auth_codes`,
+        resumeTokens: `${namespace}_resume_tokens`,
+        oauthClients: `${namespace}_oauth_clients`,
+        retiredRefreshTokens: `${namespace}_retired_refresh`,
+      };
+
+      for (const t of c.targets) {
+        const post = c.postimageByTargetId.get(t.id);
+        const physicalCol = targetColMap[t.collection];
+        if (physicalCol && post) {
+          const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
+          transaction.set(db.collection(physicalCol).doc(docId), post);
+        }
+      }
+
+      // Write exact receipt
+      const targetAfter = c.targets.map((t: any) => {
+        const post = c.postimageByTargetId.get(t.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
+        return { collection: t.collection, id: t.id, recordDigest: recDigest };
+      });
+
+      const sourceAfter = c.sources.map((s: any) => {
+        const sa = c.sourceActions.find((a: any) => a.collection === s.collection && a.id === s.id);
+        return {
+          collection: s.collection,
+          id: s.id,
+          recordDigest: sa?.action === 'delete' ? null : s.recordDigest,
+        };
+      });
+
       const receiptDoc = {
         schemaVersion: 2,
         namespace,
@@ -1261,44 +1640,69 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         assemblyDigest,
         indexSchemaDigest,
         encoderVersion: 1,
-        planDigest: plan.prepared.planDigest,
+        planDigest: prepared.planDigest,
         kind: 'receipt',
-        preparedDigest: D('manifest', namespace, control.epoch, plan.prepared),
-        candidateId: candidate.id,
-        candidateDigest: D('candidate', namespace, control.epoch, candidate),
+        preparedDigest: D('manifest', namespace, control.epoch, prepared),
+        candidateId: c.id,
+        candidateDigest: D('candidate', namespace, control.epoch, c.commitment),
         disposition: 'written',
-        sourceAfter: candidate.sources.map((s: any) => ({ collection: s.collection, id: s.id, recordDigest: s.recordDigest })),
-        targetAfter: candidate.targets.map((t: any) => ({ collection: t.collection, id: t.id, recordDigest: '0'.repeat(64) })),
-        logicalDigest: candidate.logicalDigest,
+        sourceAfter,
+        targetAfter,
+        logicalDigest: c.logicalDigest,
         completedAt: now,
       };
 
-      const receiptRef = db.collection(\`\${namespace}_meta\`).doc('cutover_fence').collection('operations').doc(\`receipt_\${candidate.id}\`);
       transaction.set(receiptRef, receiptDoc);
     });
   }
 
-  // Phase 3: Finalization transaction
+  // Phase 3: Finalization transaction (reads actual targets and receipts, writes final & marker, transitions to v3_ready)
   await db.runTransaction(async (transaction: any) => {
-    const finalDoc = {
-      ...plan.prepared,
-      kind: 'final',
-      completedAt: Date.now(),
-      targetCounts: plan.prepared.expectedTargetCounts,
-      migrated: candidates.length,
-      skipped: 0,
-      errors: 0,
-      targetInventoryDigest: '0'.repeat(64),
-      targetLogicalDigest: plan.prepared.sourceLogicalDigest,
-      receiptSetDigest: '0'.repeat(64),
+    const control = await readCutoverFenceInTransaction(transaction, db, namespace);
+    if (control.state !== 'migrating') {
+      throw new CutoverFenceError(`Cannot finalize: state must be 'migrating', got '${control.state}'`);
+    }
+
+    // Read all receipts
+    const receiptsCol = db.collection(`${namespace}_meta`);
+    const lowerBound = `migration_receipt_${control.epoch}_`;
+    const upperBound = `migration_receipt_${control.epoch}\``;
+    const receiptsSnap = await transaction.get(receiptsCol.orderBy(docIdField).startAt(lowerBound).endBefore(upperBound));
+    const actualReceipts = receiptsSnap.docs.map((d: any) => d.data());
+
+    // Read all target collections to compute targetInventoryDigest
+    const { target: targetNames } = getCutoverDistinctCollectionNames(namespace);
+    const targetDescriptors: Array<{ collection: string; id: string; recordDigest: string }> = [];
+
+    const targetPhysicalToKey: Record<string, string> = {
+      [`${namespace}_refresh_families`]: 'families',
+      [`${namespace}_sessions`]: 'tokens',
+      [`${namespace}_refresh`]: 'refresh',
+      [`${namespace}_upstream`]: 'upstream',
+      [`${namespace}_auth_codes`]: 'authCodes',
+      [`${namespace}_resume_tokens`]: 'resumeTokens',
+      [`${namespace}_retired_refresh`]: 'retiredRefreshTokens',
+      [`${namespace}_oauth_clients`]: 'oauthClients',
     };
 
-    const finalManifestDigest = D('manifest', namespace, expectedEpoch, finalDoc);
+    for (const [physicalName, colKey] of Object.entries(targetPhysicalToKey)) {
+      const snap = await transaction.get(db.collection(physicalName).orderBy(docIdField));
+      for (const d of snap.docs) {
+        const data = d.data() || {};
+        const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
+        const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
+        targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
+      }
+    }
+    targetDescriptors.sort(compareDescriptors);
 
-    const markerDoc = {
+    const targetInventoryDigest = computeTargetInventoryDigest(storeKey, namespace, control.epoch, targetDescriptors);
+    const receiptSetDigest = computeReceiptSetDigest(actualReceipts, namespace, control.epoch);
+
+    const finalDoc = {
       schemaVersion: 2,
       namespace,
-      epoch: expectedEpoch,
+      epoch: control.epoch,
       migrationRunId,
       codeSha,
       codeArtifact,
@@ -1307,18 +1711,52 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       assemblyDigest,
       indexSchemaDigest,
       encoderVersion: 1,
-      planDigest: plan.prepared.planDigest,
-      kind: 'ownership',
-      adoptedAt: Date.now(),
-      migrationManifestDigest: finalManifestDigest,
-      sourceInventoryDigest: plan.prepared.sourceInventoryDigest,
-      targetInventoryDigest: '0'.repeat(64),
+      planDigest: prepared.planDigest,
+      kind: 'final',
+      preparedDigest: D('manifest', namespace, control.epoch, prepared),
+      completedAt: Date.now(),
+      physicalCounts: prepared.physicalCounts,
+      classifications: prepared.classifications,
+      reasons: prepared.reasons,
+      totalPhysicalRecords: prepared.totalPhysicalRecords,
+      targetCounts: prepared.expectedTargetCounts,
       scanned: candidates.length,
       migrated: candidates.length,
       skipped: 0,
       errors: 0,
-      targetCounts: plan.prepared.expectedTargetCounts,
-      ...(plan.prepared.totalPhysicalRecords > 0 ? {
+      sourceInventoryDigest: prepared.sourceInventoryDigest,
+      targetInventoryDigest,
+      sourceLogicalDigest: prepared.sourceLogicalDigest,
+      targetLogicalDigest: prepared.sourceLogicalDigest,
+      receiptSetDigest,
+      ...(prepared.totalPhysicalRecords > 0 ? {
+        projectorId: PROJECTOR_ID,
+        projectorVersion: PROJECTOR_VERSION,
+        projectorDigest: protocolDigest,
+      } : {}),
+    };
+
+    const finalManifestDigest = D('manifest', namespace, control.epoch, finalDoc);
+
+    const markerDoc = {
+      schemaVersion: 2,
+      namespace,
+      epoch: control.epoch,
+      migrationRunId,
+      codeSha,
+      codeArtifact,
+      packageIntegrity,
+      protocolDigest,
+      assemblyDigest,
+      indexSchemaDigest,
+      encoderVersion: 1,
+      planDigest: prepared.planDigest,
+      kind: 'ownership',
+      preparedDigest: D('manifest', namespace, control.epoch, prepared),
+      migrationManifestDigest: finalManifestDigest,
+      emptyNamespace: prepared.totalPhysicalRecords === 0,
+      adoptedAt: Date.now(),
+      ...(prepared.totalPhysicalRecords > 0 ? {
         projectorId: PROJECTOR_ID,
         projectorVersion: PROJECTOR_VERSION,
         projectorDigest: protocolDigest,
@@ -1366,17 +1804,17 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
-      throw new CutoverFenceError(\`Unknown option '\${k}' passed to activateFirestoreMigration\`);
+      throw new CutoverFenceError(`Unknown option '${k}' passed to activateFirestoreMigration`);
     }
   }
 
-  const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest } = context;
+  const { db, namespace, expectedEpoch, migrationRunId, key } = context;
 
   return await db.runTransaction(async (transaction: any) => {
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
 
     // Read final manifest internally per Section 6
-    const finalRef = db.collection(\`\${namespace}_meta\`).doc(\`migration_manifest_\${expectedEpoch}\`);
+    const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
     const finalSnap = await transaction.get(finalRef);
 
     let migrationManifestDigest = control.migrationManifestDigest;
@@ -1390,10 +1828,10 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
 
     if (control.state === 'v3_active') {
       if (control.epoch !== expectedEpoch) {
-        throw new CutoverFenceError(\`Epoch mismatch for namespace \${namespace}: expected \${expectedEpoch}, got \${control.epoch}\`);
+        throw new CutoverFenceError(`Epoch mismatch for namespace ${namespace}: expected ${expectedEpoch}, got ${control.epoch}`);
       }
       if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
-        throw new CutoverFenceError(\`migrationRunId mismatch for namespace \${namespace}: expected \${migrationRunId}, got \${control.migrationRunId}\`);
+        throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
       }
       return {
         status: 'already_active',
@@ -1405,7 +1843,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     }
 
     if (control.state !== 'v3_ready') {
-      throw new CutoverFenceError(\`Cannot activate namespace \${namespace}: state must be v3_ready, got \${control.state}\`);
+      throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
     }
 
     const res = await activateMigrationInTransaction(transaction, db, {
@@ -1454,45 +1892,44 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   }
 
   const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
-  const docRef = getCutoverFenceDocRef(db, namespace);
-  const snap = await docRef.get();
-  if (!snap.exists) {
-    throw new CutoverFenceError(`Cutover fence control record missing for namespace '${namespace}'`);
-  }
-  const control = (await import('./cutover-protocol.mjs')).parseCutoverFenceRecord(snap.data(), namespace);
 
-  if (control.state === 'v3_ready' || control.state === 'v3_active') {
-    if (control.epoch !== expectedEpoch) {
-      throw new CutoverFenceError(`Status epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
-    }
-    const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
-    const markerSnap = await markerRef.get();
-    if (!markerSnap.exists) {
-      throw new CutoverFenceError('Immutable migration marker missing at v2_adopted');
-    }
-    const marker = markerSnap.data();
-    (await import('./cutover-protocol.mjs')).validateMigrationIdentityFields(marker, namespace, expectedEpoch, migrationRunId);
-    if (marker.codeArtifact !== codeArtifact || marker.protocolDigest !== protocolDigest) {
-      throw new CutoverFenceError('Immutable migration marker artifact/protocolDigest mismatch');
-    }
-  }
+  return await db.runTransaction(async (transaction: any) => {
+    const control = await readCutoverFenceInTransaction(transaction, db, namespace);
 
-  let planDigest: string | undefined;
-  let sourceInventoryDigest: string | undefined;
-  const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
-  const finalSnap = await finalRef.get();
-  if (finalSnap.exists) {
-    const f = finalSnap.data() as Record<string, unknown>;
-    planDigest = f.planDigest as string | undefined;
-    sourceInventoryDigest = f.sourceInventoryDigest as string | undefined;
-  }
+    let planDigest: string | undefined;
+    let sourceInventoryDigest: string | undefined;
 
-  return {
-    state: control.state,
-    epoch: control.epoch,
-    migrationRunId: control.migrationRunId,
-    migrationManifestDigest: control.migrationManifestDigest,
-    planDigest,
-    sourceInventoryDigest,
-  };
+    if (control.state === 'v3_ready' || control.state === 'v3_active') {
+      if (control.epoch !== expectedEpoch) {
+        throw new CutoverFenceError(`Status epoch mismatch: expected ${expectedEpoch}, got ${control.epoch}`);
+      }
+      const markerRef = db.collection(`${namespace}_meta`).doc('v2_adopted');
+      const markerSnap = await transaction.get(markerRef);
+      if (!markerSnap.exists) {
+        throw new CutoverFenceError('Immutable migration marker missing at v2_adopted');
+      }
+      const marker = markerSnap.data();
+      validateMigrationIdentityFields(marker, namespace, expectedEpoch, migrationRunId);
+      if (marker.codeArtifact !== codeArtifact || marker.protocolDigest !== protocolDigest) {
+        throw new CutoverFenceError('Immutable migration marker artifact/protocolDigest mismatch');
+      }
+
+      const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
+      const finalSnap = await transaction.get(finalRef);
+      if (finalSnap.exists) {
+        const f = finalSnap.data() as Record<string, unknown>;
+        planDigest = f.planDigest as string | undefined;
+        sourceInventoryDigest = f.sourceInventoryDigest as string | undefined;
+      }
+    }
+
+    return {
+      state: control.state,
+      epoch: control.epoch,
+      migrationRunId: control.migrationRunId,
+      migrationManifestDigest: control.migrationManifestDigest,
+      planDigest,
+      sourceInventoryDigest,
+    };
+  });
 }

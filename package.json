@@ -16,6 +16,14 @@
     "./testing/store-conformance": {
       "types": "./build/store/conformance.d.ts",
       "default": "./build/store/conformance.js"
+    },
+    "./cutover-protocol": {
+      "types": "./build/store/cutover-protocol.d.ts",
+      "default": "./build/store/cutover-protocol.mjs"
+    },
+    "./cutover-protocol.mjs": {
+      "types": "./build/store/cutover-protocol.d.ts",
+      "default": "./build/store/cutover-protocol.mjs"
     }
   },
   "bin": {
@@ -23,7 +31,8 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && node -e \"import('node:fs').then(fs => fs.copyFileSync('src/store/netsapiens-projector.mjs', 'build/store/netsapiens-projector.mjs'))\"",
+    "bundle:cutover": "node scripts/build-cutover-protocol.mjs",
+    "build": "npm run bundle:cutover && tsc && node -e \"import('node:fs').then(fs => { fs.copyFileSync('src/store/netsapiens-projector.mjs', 'build/store/netsapiens-projector.mjs'); fs.copyFileSync('src/store/cutover-protocol.mjs', 'build/store/cutover-protocol.mjs'); fs.copyFileSync('src/store/cutover-protocol.d.ts', 'build/store/cutover-protocol.d.ts'); })\"",
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",

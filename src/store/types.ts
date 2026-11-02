@@ -140,6 +140,28 @@ export interface McpStore {
   sweep?(now: number): Promise<number>;
   close(): Promise<void>;
 }
+export interface UpstreamSealedData {
+  nsAccessToken: string;
+  nsRefreshToken?: string;
+  nsUsername: string;
+  nsUserRole?: string;
+  nsApiUrl?: string;
+}
+
+export interface AccessSealedData {
+  familyId: string;
+  clientId: string;
+  serverBaseUrl?: string;
+  extra?: Record<string, string>;
+}
+
+export interface FamilySealedData {
+  clientId: string;
+  serverBaseUrl?: string;
+  extra?: Record<string, string>;
+  retiredRefreshIds?: string[];
+}
+
 export interface AccessRow {
   id: string;
   familyId: string;

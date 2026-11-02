@@ -5,14 +5,14 @@ import {
   familyAad,
   upstreamAad,
 } from './row-format.js';
-import { CutoverFenceError } from './errors.js';
 import type {
   AccessRow,
   AccessSealedData,
-  AuthCodeData,
+  AuthCodeRow,
   FamilyRow,
   FamilySealedData,
   RefreshPointerRow,
+  ResumeRow,
   UpstreamGrantRow,
   UpstreamSealedData,
 } from './types.js';
@@ -21,21 +21,22 @@ export function encodeSessionsRow(
   codec: Codec,
   accessId: string,
   familyId: string,
-  logicalProjection: {
+  session: {
     expiresAt: number;
-    nsAccessToken: string;
-    nsUsername: string;
-    extra?: Record<string, unknown>;
+    clientId: string;
+    serverBaseUrl?: string;
+    extra?: Record<string, string>;
   },
   now: number,
-): AccessRow {
-  const expiresAt = logicalProjection.expiresAt;
+): AccessRow & { v: 2; ttlAt: Date; updatedAt: number } {
+  const expiresAt = session.expiresAt;
   const retainUntil = expiresAt + ACCESS_RETENTION_MS;
   const sealed = codec.seal(
     {
-      nsAccessToken: logicalProjection.nsAccessToken,
-      nsUsername: logicalProjection.nsUsername,
-      extra: logicalProjection.extra,
+      familyId,
+      clientId: session.clientId,
+      serverBaseUrl: session.serverBaseUrl,
+      extra: session.extra,
     } satisfies AccessSealedData,
     accessAad({ id: accessId, familyId }),
   );
@@ -44,8 +45,9 @@ export function encodeSessionsRow(
     familyId,
     expiresAt,
     retainUntil,
-    ttlAt: retainUntil,
+    ttlAt: new Date(retainUntil),
     sealed,
+    v: 2,
     updatedAt: now,
   };
 }
@@ -66,20 +68,20 @@ export function encodeRefreshFamiliesRow(
   generation: number,
   activeRefreshId: string,
   currentAccessTokenId: string,
-  logicalProjection: {
+  session: {
     clientId: string;
-    serverBaseUrl: string;
-    extra?: Record<string, unknown>;
+    serverBaseUrl?: string;
+    extra?: Record<string, string>;
   },
   retiredFingerprints: string[],
   status: 'active' | 'revoked',
   now: number,
-): FamilyRow {
+): FamilyRow & { v: 2 } {
   const sealed = codec.seal(
     {
-      clientId: logicalProjection.clientId,
-      serverBaseUrl: logicalProjection.serverBaseUrl,
-      extra: logicalProjection.extra,
+      clientId: session.clientId,
+      serverBaseUrl: session.serverBaseUrl,
+      extra: session.extra,
       retiredRefreshIds: retiredFingerprints,
     } satisfies FamilySealedData,
     familyAad({ id: familyId, generation }),
@@ -110,26 +112,30 @@ export function encodeUpstreamRow(
   codec: Codec,
   familyId: string,
   grantVersion: number,
-  logicalProjection: {
-    upstream: {
-      nsRefreshToken?: string;
-      nsExpiresAt?: number;
-      nsApiUrl?: string;
-    };
+  upstream: {
+    nsAccessToken: string;
+    nsRefreshToken?: string;
+    nsUsername: string;
+    nsUserRole?: string;
+    nsApiUrl?: string;
+    nsExpiresAt?: number;
   },
   now: number,
-): UpstreamGrantRow {
+): UpstreamGrantRow & { v: 2 } {
   const sealed = codec.seal(
     {
-      nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
-      nsApiUrl: logicalProjection.upstream.nsApiUrl,
+      nsAccessToken: upstream.nsAccessToken,
+      nsRefreshToken: upstream.nsRefreshToken,
+      nsUsername: upstream.nsUsername,
+      nsUserRole: upstream.nsUserRole,
+      nsApiUrl: upstream.nsApiUrl,
     } satisfies UpstreamSealedData,
     upstreamAad({ id: familyId, grantVersion }),
   );
   return {
     id: familyId,
     grantVersion,
-    nsExpiresAt: logicalProjection.upstream.nsExpiresAt,
+    nsExpiresAt: upstream.nsExpiresAt,
     updatedAt: now,
     sealed,
     v: 2,
@@ -151,80 +157,100 @@ export function encodeRefreshRow(
   familyId: string,
   generation: number,
   now: number,
-): RefreshPointerRow {
+): RefreshPointerRow & { v: 2; createdAt: number; updatedAt: number } {
   return {
     id: refreshId,
     familyId,
     generation,
     status: 'active',
+    v: 2,
     createdAt: now,
     updatedAt: now,
   };
 }
 
 export function encodeAuthCodesRow(
-  docId: string,
-  logicalProjection: {
+  codec: Codec,
+  code: string,
+  data: {
+    pending: {
+      clientId: string;
+      codeChallenge?: string;
+      redirectUri: string;
+      createdAt: number;
+      state?: string | null;
+      scopes?: string[];
+    };
+    nsTokens: {
+      access_token: string;
+      refresh_token?: string | null;
+      username?: string | null;
+      nsUserRole?: string | null;
+      nsApiUrl?: string | null;
+    };
     clientId: string;
-    redirectUri: string;
-    codeChallenge?: string;
-    codeChallengeMethod?: string;
-    scope?: string;
-    expiresAt: number;
+    serverBaseUrl?: string | null;
     extra?: Record<string, unknown>;
   },
+  expiresAt: number,
   now: number,
-): AuthCodeData {
+): AuthCodeRow & { v: 2; ttlAt: Date } {
+  const id = codec.id('code', code);
+  const sealed = codec.seal(data, `code:${id}`);
   return {
-    code: docId,
-    clientId: logicalProjection.clientId,
-    redirectUri: logicalProjection.redirectUri,
-    codeChallenge: logicalProjection.codeChallenge,
-    codeChallengeMethod: logicalProjection.codeChallengeMethod,
-    scope: logicalProjection.scope,
-    expiresAt: logicalProjection.expiresAt,
-    ttlAt: logicalProjection.expiresAt,
-    extra: logicalProjection.extra,
-    used: false,
-    createdAt: now,
+    id,
+    expiresAt,
+    ttlAt: new Date(expiresAt),
+    sealed,
+    v: 2,
   };
 }
 
 export function encodeResumeTokensRow(
-  docId: string,
-  logicalProjection: {
-    clientId: string;
-    expiresAt: number;
-    consumedAt: number;
-  },
+  id: string,
+  consumedAt: number,
+  expiresAt: number,
   now: number,
-): Record<string, unknown> {
+): ResumeRow & { v: 2; ttlAt: Date; _mcp_format: 'v3_target' } {
   return {
-    id: docId,
-    clientId: logicalProjection.clientId,
-    expiresAt: logicalProjection.expiresAt,
-    ttlAt: logicalProjection.expiresAt,
-    consumedAt: logicalProjection.consumedAt,
-    createdAt: now,
+    id,
+    consumedAt,
+    expiresAt,
+    ttlAt: new Date(expiresAt),
+    _mcp_format: 'v3_target',
+    v: 2,
   };
 }
 
 export function encodeOAuthClientsRow(
-  docId: string,
-  logicalProjection: {
-    clientName?: string;
-    redirectUris: string[];
-    tokenEndpointAuthMethod?: string;
-    clientSecretHash?: string;
+  clientId: string,
+  clientData: {
+    client_name?: string | null;
+    redirect_uris: string[];
+    token_endpoint_auth_method?: string;
+    client_secret?: string | null;
+    grant_types?: string[];
+    response_types?: string[];
+    client_uri?: string | null;
+    logo_uri?: string | null;
+    scope?: string | null;
+    client_id_issued_at?: number | null;
   },
   now: number,
 ): Record<string, unknown> {
   return {
-    client_id: docId,
-    client_name: logicalProjection.clientName,
-    redirect_uris: logicalProjection.redirectUris,
-    token_endpoint_auth_method: logicalProjection.tokenEndpointAuthMethod,
-    client_secret_hash: logicalProjection.clientSecretHash,
-    updatedAt: now,
+    client_id: clientId,
+    client_name: clientData.client_name ?? null,
+    redirect_uris: clientData.redirect_uris,
+    token_endpoint_auth_method: clientData.token_endpoint_auth_method ?? 'client_secret_basic',
+    client_secret: clientData.client_secret ?? null,
+    grant_types: clientData.grant_types ?? ['authorization_code', 'refresh_token'],
+    response_types: clientData.response_types ?? ['code'],
+    client_uri: clientData.client_uri ?? null,
+    logo_uri: clientData.logo_uri ?? null,
+    scope: clientData.scope ?? null,
+    client_id_issued_at: clientData.client_id_issued_at ?? Math.floor(now / 1000),
+    _mcp_format: 'v3_target',
+    v: 2,
   };
 }
