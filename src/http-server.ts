@@ -42,6 +42,33 @@ import type { UserRole } from './auth/roles.js';
 import type { NetSapiensConfig } from './types/config.js';
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+let installedMcpSdkVersion = 'unknown';
+try {
+ const sdkPkg = require('@modelcontextprotocol/sdk/package.json');
+ installedMcpSdkVersion = sdkPkg?.version ?? 'unknown';
+} catch {
+ // Ignored if package.json cannot be resolved
+}
+
+/**
+ * SDK Version Gate:
+ * Verified for @modelcontextprotocol/sdk ^1.32.1 (pinned runtime 1.32.2).
+ * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
+ * async work before calling response.end().
+ */
+export const INSTALLED_MCP_SDK_VERSION = installedMcpSdkVersion;
+export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1', '1.32.2'];
+
+export function assertSupportedMcpSdkVersion(): void {
+ if (INSTALLED_MCP_SDK_VERSION !== 'unknown' && !SUPPORTED_MCP_SDK_VERSIONS.includes(INSTALLED_MCP_SDK_VERSION)) {
+  throw new CutoverFenceError(
+   `Unsupported @modelcontextprotocol/sdk version: ${INSTALLED_MCP_SDK_VERSION}; bridge requires one of: ${SUPPORTED_MCP_SDK_VERSIONS.join(', ')}`,
+  );
+ }
+}
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -155,6 +182,7 @@ export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): 
 }
 
 export async function validateBridgeStartup(authProvider: NetSapiensAuthProvider): Promise<void> {
+ assertSupportedMcpSdkVersion();
  if (authProvider.fenceConfig?.enforce) {
   if (!authProvider.dbInstance) {
    throw new CutoverFenceError(
@@ -353,14 +381,6 @@ function wireApp(
 
  // Publishes the requested loopback redirect_uri for the clients store, which
  // the SDK calls with no request context. Must precede mcpAuthRouter, and is
-/**
- * SDK Version Gate:
- * Verified for @modelcontextprotocol/sdk ^1.32.1 (pinned runtime 1.32.2).
- * Pinned SDK handlers (token, authorize, revoke, register) await provider/store
- * async work before calling response.end().
- */
-export const SUPPORTED_MCP_SDK_VERSIONS = ['1.32.1', '1.32.2'];
-
 const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandler => {
   return async (req, res, next) => {
    if (!authProvider.fenceConfig?.enforce || !authProvider.dbInstance) {
