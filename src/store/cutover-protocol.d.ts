@@ -20,7 +20,7 @@ export class CutoverRefusedError extends Error {
 }
 export interface MonotonicTimer {
   elapsedMs(): number;
-  assertUnderDeadline(limitMs?: number, label?: string): void;
+  assertUnderDeadline(label?: string): void;
 }
 export function startMonotonicTimer(): MonotonicTimer;
 
@@ -254,8 +254,6 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-  assemblyDigest: string;
-  indexSchemaDigest: string;
 }
 
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext;

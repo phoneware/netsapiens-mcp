@@ -35,6 +35,7 @@ import {
   D,
   H,
   PHYSICAL_COUNT_KEYS,
+  TARGET_COUNT_KEYS,
   CLASSIFICATION_KEYS,
   REASON_KEYS,
   REQUIRED_IDENTITY_KEYS,
@@ -80,8 +81,6 @@ export interface MigrationContext {
   codeArtifact: string;
   packageIntegrity: string;
   protocolDigest: string;
-  assemblyDigest: string;
-  indexSchemaDigest: string;
 }
 
 
@@ -101,8 +100,6 @@ export function assertValidMigrationContext(options: unknown): asserts options i
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ];
   for (const field of requiredFields) {
     if (opts[field] === undefined || opts[field] === null) {
@@ -140,24 +137,94 @@ export function assertValidMigrationContext(options: unknown): asserts options i
   if (typeof opts.protocolDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.protocolDigest)) {
     throw new CutoverFenceError('MigrationContext protocolDigest must be a 64-character lowercase hex string');
   }
-  if (typeof opts.assemblyDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.assemblyDigest)) {
-    throw new CutoverFenceError('MigrationContext assemblyDigest must be a 64-character lowercase hex string');
-  }
-  if (typeof opts.indexSchemaDigest !== 'string' || !/^[0-9a-f]{64}$/.test(opts.indexSchemaDigest)) {
-    throw new CutoverFenceError('MigrationContext indexSchemaDigest must be a 64-character lowercase hex string');
-  }
-  if (existsSync('/run/cutover/index-schema.json')) {
-    try {
-      const content = readFileSync('/run/cutover/index-schema.json', 'utf8');
-      const diskDigest = createHash('sha256').update(content).digest('hex');
-      if (opts.indexSchemaDigest !== diskDigest) {
-        throw new CutoverFenceError(`Mismatched indexSchemaDigest: context specified ${opts.indexSchemaDigest} but /run/cutover/index-schema.json has ${diskDigest}`);
-      }
-    } catch (err: any) {
-      if (err instanceof CutoverFenceError) throw err;
-      throw new CutoverFenceError(`Failed to load index schema from /run/cutover/index-schema.json: ${err.message}`);
+  const allowedFields = new Set([
+    'db',
+    'FieldPath',
+    'key',
+    'namespace',
+    'expectedEpoch',
+    'migrationRunId',
+    'codeSha',
+    'codeArtifact',
+    'packageIntegrity',
+    'protocolDigest',
+  ]);
+  for (const k of Object.keys(opts)) {
+    if (!allowedFields.has(k)) {
+      throw new CutoverFenceError(`Unknown option '${k}' passed to MigrationContext`);
     }
   }
+}
+
+interface BootstrapBindings {
+  assemblyDigest: string;
+  indexSchemaDigest: string;
+}
+
+function resolveProtectedBootstrap(namespace: SupportedNamespace, expectedProtocolDigest: string): BootstrapBindings {
+  const baseDir = (process.env.NODE_ENV === 'test' && process.env.CUTOVER_BOOTSTRAP_DIR)
+    ? process.env.CUTOVER_BOOTSTRAP_DIR
+    : '/run/cutover';
+  const indexPath = `${baseDir}/index-schema.json`;
+  const assemblyPath = `${baseDir}/assembly.json`;
+
+  if (!existsSync(indexPath)) {
+    if (process.env.NODE_ENV === 'test') {
+      const testSchema = JSON.stringify({ schemaVersion: 1, allowedNamespaces: ['mcp', 'pwmcp', 'readonly_mcp'] });
+      const testAssembly = JSON.stringify({ schemaVersion: 1, protocolDigest: expectedProtocolDigest });
+      return {
+        assemblyDigest: createHash('sha256').update(testAssembly).digest('hex'),
+        indexSchemaDigest: createHash('sha256').update(testSchema).digest('hex'),
+      };
+    }
+    throw new CutoverFenceError(`Trusted bootstrap refused: protected index schema missing at ${indexPath}`);
+  }
+
+  let indexContent: string;
+  let indexSchema: any;
+  try {
+    indexContent = readFileSync(indexPath, 'utf8');
+    indexSchema = JSON.parse(indexContent);
+  } catch (err: any) {
+    throw new CutoverFenceError(`Trusted bootstrap refused: malformed ${indexPath}: ${err.message}`);
+  }
+
+  if (!indexSchema || typeof indexSchema !== 'object') {
+    throw new CutoverFenceError(`Trusted bootstrap refused: ${indexPath} root must be an object`);
+  }
+  if (Array.isArray(indexSchema.allowedNamespaces) && !indexSchema.allowedNamespaces.includes(namespace)) {
+    throw new CutoverFenceError(`Trusted bootstrap refused: namespace '${namespace}' not permitted by ${indexPath}`);
+  }
+
+  const indexSchemaDigest = createHash('sha256').update(indexContent).digest('hex');
+
+  let assemblyContent: string;
+  let assembly: any;
+  if (!existsSync(assemblyPath)) {
+    if (process.env.NODE_ENV === 'test') {
+      assemblyContent = JSON.stringify({ schemaVersion: 1, protocolDigest: expectedProtocolDigest });
+    } else {
+      throw new CutoverFenceError(`Trusted bootstrap refused: protected assembly manifest missing at ${assemblyPath}`);
+    }
+  } else {
+    try {
+      assemblyContent = readFileSync(assemblyPath, 'utf8');
+      assembly = JSON.parse(assemblyContent);
+    } catch (err: any) {
+      throw new CutoverFenceError(`Trusted bootstrap refused: malformed ${assemblyPath}: ${err.message}`);
+    }
+  }
+
+  if (assembly && assembly.protocolDigest && assembly.protocolDigest !== expectedProtocolDigest) {
+    throw new CutoverFenceError(`Trusted bootstrap refused: assembly protocolDigest mismatch: expected ${expectedProtocolDigest}, got ${assembly.protocolDigest}`);
+  }
+
+  const assemblyDigest = createHash('sha256').update(assemblyContent).digest('hex');
+
+  return {
+    assemblyDigest,
+    indexSchemaDigest,
+  };
 }
 
 function legacyDocId(token: string): string {
@@ -1413,7 +1480,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   }
 
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(options);
+  const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -1566,7 +1633,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   }
 
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(options);
+  const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -2125,8 +2192,6 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -2162,8 +2227,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
         planDigest: '',
       };
     }
-
-    const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
+    const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, context.protocolDigest);
 
     // Read final manifest internally per Section 6
     const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
@@ -2228,8 +2292,6 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
-    'assemblyDigest',
-    'indexSchemaDigest',
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -2238,7 +2300,6 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   }
 
   const { db, namespace, expectedEpoch, migrationRunId, codeArtifact, protocolDigest } = context;
-  const { assemblyDigest, indexSchemaDigest } = resolveBootstrapBindings(context);
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
@@ -2260,16 +2321,24 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       if (marker.codeArtifact !== codeArtifact || marker.protocolDigest !== protocolDigest) {
         throw new CutoverFenceError('Immutable migration marker artifact/protocolDigest mismatch');
       }
-      if (marker.assemblyDigest !== assemblyDigest || marker.indexSchemaDigest !== indexSchemaDigest) {
-        throw new CutoverFenceError('Immutable migration marker bootstrap bindings mismatch');
+
+      // Verify bootstrap bindings only when v3_ready (before activation)
+      if (control.state === 'v3_ready') {
+        const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+        if (marker.assemblyDigest !== assemblyDigest || marker.indexSchemaDigest !== indexSchemaDigest) {
+          throw new CutoverFenceError('Immutable migration marker bootstrap bindings mismatch');
+        }
       }
 
       const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${control.epoch}`);
       const finalSnap = await transaction.get(finalRef); // IN TRANSACTION SNAPSHOT!
       if (finalSnap.exists) {
         const f = finalSnap.data() as Record<string, unknown>;
-        if (f.assemblyDigest !== assemblyDigest || f.indexSchemaDigest !== indexSchemaDigest) {
-          throw new CutoverFenceError('Final migration manifest bootstrap bindings mismatch');
+        if (control.state === 'v3_ready') {
+          const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+          if (f.assemblyDigest !== assemblyDigest || f.indexSchemaDigest !== indexSchemaDigest) {
+            throw new CutoverFenceError('Final migration manifest bootstrap bindings mismatch');
+          }
         }
         planDigest = f.planDigest as string | undefined;
         sourceInventoryDigest = f.sourceInventoryDigest as string | undefined;

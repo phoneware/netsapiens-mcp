@@ -451,7 +451,20 @@ export function projectTargetLogical(candidate, targets, codec) {
     }
 
     const rawRetired = targets.get('retiredRefresh');
-    const retiredRefreshFingerprints = (rawRetired?.ids || []).sort(codeUnitCompare);
+    const retiredIds = Array.isArray(rawRetired?.ids) ? rawRetired.ids : [];
+    const seenTgtFp = new Set();
+    const retiredRefreshFingerprints = [];
+    for (const fp of retiredIds) {
+      if (typeof fp !== 'string' || fp.length === 0) {
+        throw new CutoverFenceError(`Target retired refresh token fingerprint must be a non-empty string in family ${sanitizeId(familyId)}`);
+      }
+      if (seenTgtFp.has(fp)) {
+        throw new CutoverFenceError(`Duplicate target retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
+      }
+      seenTgtFp.add(fp);
+      retiredRefreshFingerprints.push(fp);
+    }
+    retiredRefreshFingerprints.sort(codeUnitCompare);
 
     return {
       familyId,
