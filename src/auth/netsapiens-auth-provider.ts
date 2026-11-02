@@ -247,12 +247,26 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
  private clients = new Map<string, OAuthClientInformationFull>();
 
  getClient(clientId: string): OAuthClientInformationFull | undefined {
-  return this.clients.get(clientId);
+  const hit = this.clients.get(clientId);
+  if (!hit) return undefined;
+  const rawData = hit as Record<string, unknown>;
+  if (rawData._mcp_format !== undefined || rawData._targetFormat !== undefined) {
+   throw new CutoverFenceError(
+    'Client record contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous',
+   );
+  }
+  return hit;
  }
 
  registerClient(
   client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'> & { client_id?: string },
  ): OAuthClientInformationFull {
+  const rawMetadata = client as Record<string, unknown>;
+  if (rawMetadata._mcp_format !== undefined || rawMetadata._targetFormat !== undefined) {
+   throw new CutoverFenceError(
+    'Reserved format fields (_mcp_format, _targetFormat) are forbidden in legacy client registration',
+   );
+  }
   const clientId = client.client_id ?? randomUUID();
   // Honor the client's requested authentication method. Public clients
   // (token_endpoint_auth_method=none) get no secret: they rely on PKCE

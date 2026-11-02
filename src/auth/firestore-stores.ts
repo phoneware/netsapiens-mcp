@@ -582,15 +582,15 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   const rawData = snap.data() as Record<string, unknown>;
   if (rawData._mcp_format !== undefined || rawData._targetFormat !== undefined) {
     throw new CutoverFenceError(
-      `Client ${clientId} contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous`,
+      'Client record contains reserved format fields (_mcp_format, _targetFormat); legacy client held as ambiguous',
     );
   }
   const client = rawData as OAuthClientInformationFull;
   this.cache.set(clientId, client);
   return client;
   } catch (err: unknown) {
+   if (err instanceof CutoverFenceError) throw err;
    if (err instanceof TemporarilyUnavailableError) throw err;
-   throw new TemporarilyUnavailableError('Client store temporarily unavailable');
   }
  }
 
