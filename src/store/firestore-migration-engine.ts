@@ -1315,7 +1315,6 @@ export function extractCandidatesAndPlan(params: {
 
   const preparation = {
     estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(prepared) + 200),
-    readDurationMs: 100,
   };
 
   const items = candidates.map((c) => {
@@ -1362,7 +1361,6 @@ export function extractCandidatesAndPlan(params: {
       receiptUpperBound,
       transaction: {
         estimatedCommitBytes: Math.max(100, itemCommitBytes),
-        readDurationMs: 50,
       },
     };
   });
@@ -1408,7 +1406,7 @@ export function extractCandidatesAndPlan(params: {
     schemaVersion: 2,
     namespace,
     epoch,
-    migrationRunId,
+    migrationRunId: runId,
     codeSha,
     codeArtifact,
     packageIntegrity,
@@ -1430,7 +1428,7 @@ export function extractCandidatesAndPlan(params: {
   };
 
   const controlUpperBound = {
-    schemaVersion: 2,
+    schemaVersion: 1,
     namespace,
     epoch,
     state: 'v3_ready',
@@ -1450,7 +1448,6 @@ export function extractCandidatesAndPlan(params: {
     controlUpperBound,
     transaction: {
       estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(finalUpperBound) + computeEstimatedFirestoreDocSize(markerUpperBound) + computeEstimatedFirestoreDocSize(controlUpperBound)),
-      readDurationMs: 200,
     },
   };
 
@@ -1463,7 +1460,6 @@ export function extractCandidatesAndPlan(params: {
     controlUpperBound: activationControlUpperBound,
     transaction: {
       estimatedCommitBytes: Math.max(100, computeEstimatedFirestoreDocSize(activationControlUpperBound)),
-      readDurationMs: 100,
     },
   };
 
@@ -2383,14 +2379,14 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   };
 }
 
-export async function activateFirestoreMigration(context: MigrationContext): Promise<{
+export async function activateFirestoreMigration(context: MigrationContext & { migrationManifestDigest: string }): Promise<{
   status: 'activated' | 'already_active';
   epoch: number;
   migrationRunId: string;
   migrationManifestDigest: string;
   planDigest: string;
 }> {
-  assertValidMigrationContext(context);
+  assertValidMigrationContext(context, ['migrationManifestDigest']);
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2402,6 +2398,7 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
+    'migrationManifestDigest',
   ]);
   for (const k of Object.keys(context)) {
     if (!allowedKeys.has(k)) {
@@ -2409,57 +2406,34 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     }
   }
 
-  const { db, namespace, expectedEpoch, migrationRunId, key } = context;
+  const { db, namespace, expectedEpoch, migrationRunId, key, migrationManifestDigest } = context;
+  if (!/^[0-9a-f]{64}$/.test(migrationManifestDigest)) {
+    throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
+  }
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
 
-    if (control.state === 'v3_active') {
-      if (control.epoch !== expectedEpoch) {
-        throw new CutoverFenceError(`Epoch mismatch for namespace ${namespace}: expected ${expectedEpoch}, got ${control.epoch}`);
-      }
-      if (control.migrationRunId && control.migrationRunId !== migrationRunId) {
-        throw new CutoverFenceError(`migrationRunId mismatch for namespace ${namespace}: expected ${migrationRunId}, got ${control.migrationRunId}`);
-      }
-      timer.assertUnderDeadline(16_000, 'Activation check');
-      const res = await activateMigrationInTransaction(transaction, db, {
-        ...context,
-        storeKey: key,
-        migrationManifestDigest: control.migrationManifestDigest,
-        timer,
-      });
-      timer.assertUnderDeadline(16_000, 'Activation check commit');
-      return {
-        status: 'already_active',
-        epoch: control.epoch,
-        migrationRunId: control.migrationRunId || migrationRunId,
-        migrationManifestDigest: control.migrationManifestDigest || '',
-        planDigest: '',
-      };
+    if (control.epoch !== expectedEpoch || control.migrationRunId !== migrationRunId ||
+      control.migrationManifestDigest !== migrationManifestDigest) {
+      throw new CutoverFenceError('Activation control identity or manifest digest mismatch');
     }
-    const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, context.protocolDigest);
-
-    // Read final manifest internally per Section 6
-    const finalRef = db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`);
-    const finalSnap = await transaction.get(finalRef);
-
-    let migrationManifestDigest = control.migrationManifestDigest;
-    let planDigest = '';
-
-    if (finalSnap.exists) {
-      const f = finalSnap.data() as Record<string, unknown>;
-      if (f.assemblyDigest !== assemblyDigest) {
-        throw new CutoverFenceError(`final manifest assemblyDigest mismatch: expected ${assemblyDigest}, got ${f.assemblyDigest}`);
-      }
-      if (f.indexSchemaDigest !== indexSchemaDigest) {
-        throw new CutoverFenceError(`final manifest indexSchemaDigest mismatch: expected ${indexSchemaDigest}, got ${f.indexSchemaDigest}`);
-      }
-      migrationManifestDigest = D('final', namespace, expectedEpoch, f);
-      planDigest = (f.planDigest as string) || '';
+    if (control.state !== 'v3_ready' && control.state !== 'v3_active') {
+      throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready or v3_active`);
     }
-
-    if (control.state !== 'v3_ready') {
-      throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready, got ${control.state}`);
+    const finalSnap = await transaction.get(db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`));
+    if (!finalSnap.exists) throw new CutoverFenceError('Final migration manifest is missing');
+    const finalDoc = finalSnap.data() as Record<string, unknown>;
+    validateMigrationIdentityFields(finalDoc, namespace, expectedEpoch, migrationRunId);
+    if (D('final', namespace, expectedEpoch, finalDoc) !== migrationManifestDigest ||
+      typeof finalDoc.planDigest !== 'string' || !/^[0-9a-f]{64}$/.test(finalDoc.planDigest)) {
+      throw new CutoverFenceError('Final migration manifest digest or plan binding mismatch');
+    }
+    if (control.state === 'v3_ready') {
+      const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, context.protocolDigest);
+      if (finalDoc.assemblyDigest !== assemblyDigest || finalDoc.indexSchemaDigest !== indexSchemaDigest) {
+        throw new CutoverFenceError('Final migration manifest bootstrap bindings mismatch');
+      }
     }
 
     timer.assertUnderDeadline(16_000, 'Activation attempt');
@@ -2467,17 +2441,17 @@ export async function activateFirestoreMigration(context: MigrationContext): Pro
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
       storeKey: key,
-      migrationManifestDigest: migrationManifestDigest || control.migrationManifestDigest,
+      migrationManifestDigest,
       timer,
     });
     timer.assertUnderDeadline(16_000, 'Activation commit');
 
     return {
-      status: 'activated',
+      status: res.status,
       epoch: control.epoch,
       migrationRunId,
-      migrationManifestDigest: res.control?.migrationManifestDigest || migrationManifestDigest || '',
-      planDigest,
+      migrationManifestDigest,
+      planDigest: finalDoc.planDigest as string,
     };
   });
 }

@@ -2,6 +2,8 @@ import {
   computeKeyedDocId,
   computeSourceRecordDigest,
   computeSourceInventoryDigest as protoComputeSourceInventoryDigest,
+  isSupportedCutoverNamespace,
+  getCutoverFenceRecord,
 } from '../cutover/canonical-core.mjs';
 import {
   type MigrationContext,
@@ -17,10 +19,6 @@ import {
   isCutoverFenceError,
   isCutoverRefusedError,
 } from './errors.js';
-import {
-  isSupportedCutoverNamespace,
-  getCutoverFenceRecord,
-} from './cutover-protocol.mjs';
 import type { FirestoreLike } from './firestore.js';
 
 export {
@@ -35,6 +33,18 @@ export {
   isCutoverFenceError,
   isCutoverRefusedError,
 };
+export {
+  getCutoverFenceRecord,
+  initializeCutoverFence,
+  transitionCutoverFenceState,
+  markIrreversibleInTransaction,
+  withLegacyOperation,
+  releaseLegacyOperation,
+  markOperationAmbiguous,
+  checkMutationGuardInTransaction,
+  isLegacyMutationPermittedInTransaction,
+} from '../cutover/canonical-core.mjs';
+export type { CutoverFenceControlRecord, CutoverFenceState } from './cutover-protocol.mjs';
 
 export async function computeSourceInventoryDigest(
   db: any,

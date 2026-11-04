@@ -30,8 +30,6 @@ export {
   adoptFirestoreLegacyTokens,
   computeSourceInventoryDigest,
   ensureFirestoreAdopted,
-  type FirestoreAdoptionReport,
-  type MigrationManifest,
   type CutoverFenceControlRecord,
   type CutoverFenceState,
   getCutoverFenceRecord,

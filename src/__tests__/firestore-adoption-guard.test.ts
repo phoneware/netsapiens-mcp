@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ensureFirestoreAdopted, type FirestoreAdoptionReport } from '../store/firestore-v2-adoption.js';
+import { ensureFirestoreAdopted } from '../store/firestore-v2-adoption.js';
 import type { FirestoreLike } from '../store/firestore.js';
 import { deriveStoreKey } from '../store/codec.js';
 

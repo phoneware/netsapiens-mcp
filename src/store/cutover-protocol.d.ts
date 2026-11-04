@@ -228,8 +228,8 @@ export interface ReconcileUpstreamGrantOptions {
   expectedFamilyGeneration: number;
   expectedGrantVersion: number;
   outcome: 'success' | 'revoked' | 'transient_timeout' | 'fatal_error';
-  evidence?: { provider: string; timestamp: number; [key: string]: unknown };
-  replacementGrant?: { accessToken: string; refreshToken?: string; [key: string]: unknown };
+  evidence?: { provider: string; timestamp: number;[key: string]: unknown };
+  replacementGrant?: { accessToken: string; refreshToken?: string;[key: string]: unknown };
   nowProvider?: () => number;
   collection?: string;
   familyCollection?: string;
@@ -295,7 +295,7 @@ export function adoptFirestoreLegacyTokens(
 }>;
 
 export function activateFirestoreMigration(
-  options: MigrationContext,
+  options: MigrationContext & { migrationManifestDigest: string },
 ): Promise<{
   status: 'activated' | 'already_active';
   epoch: number;
