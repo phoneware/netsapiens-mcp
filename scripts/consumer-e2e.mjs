@@ -1113,6 +1113,30 @@ runStoreConformance({
     // -------------------------------------------------------------------------
     if (opts.legs.includes('library')) {
       console.log('Running leg: library');
+      const identityProof = await runCommand('node', ['--input-type=module', '-e', `
+import { deriveStoreKey, getCutoverOperationDocRef, withLegacyOperation } from 'netsapiens-mcp/lib';
+const pathRef = (path = '') => ({
+        collection: name => pathRef(path + '/' + name),
+        doc: id => ({ ...pathRef(path + '/' + id), path: path + '/' + id }),
+});
+const db = pathRef();
+const identityKey = deriveStoreKey('consumer proof session secret with more than 32 characters');
+const callerId = 'arbitrary/id-with-secret-like-content';
+const first = getCutoverOperationDocRef(db, 'mcp', callerId, identityKey).path;
+const second = getCutoverOperationDocRef(db, 'mcp', callerId, identityKey).path;
+if (first !== second || first.includes(callerId) || !/^op1_[0-9a-f]{64}$/.test(first.split('/').pop())) throw new Error('incorrect keyed operation path');
+let called = false;
+try {
+        await withLegacyOperation({ db, namespace: 'mcp', kind: 'token_issue' }, async () => { called = true; });
+        throw new Error('missing identityKey accepted');
+} catch (error) {
+        if (called || error?.kitCode !== 'cutover_fence_error' || error.message !== 'A stable operation identity key is required') throw error;
+}
+`], { cwd: tempDir });
+      if (identityProof.status !== 0) {
+        fail('library', 'standalone-fence-identity', identityProof.stderr);
+      }
+      pass('library', 'standalone-fence-identity');
       execSync('npm i --legacy-peer-deps -D typescript @types/node', { cwd: tempDir, stdio: 'pipe' });
       const consumerTsPath = path.join(tempDir, 'consumer-check.ts');
       fs.writeFileSync(consumerTsPath, `

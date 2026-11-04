@@ -37,6 +37,9 @@ export {
   initializeCutoverFence,
   transitionCutoverFenceState,
   markIrreversibleInTransaction,
+  getCutoverOperationDocRef,
+  claimUpstreamGrantInTransaction,
+  reconcileUpstreamGrantInTransaction,
   withLegacyOperation,
   releaseLegacyOperation,
   markOperationAmbiguous,
@@ -48,6 +51,12 @@ export {
 export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError, StoreUnavailableError } from './store/codec.js';
 
 // Types
+export type {
+  LegacyOperationContext,
+  WithLegacyOperationOptions,
+  ClaimUpstreamGrantOptions,
+  ReconcileUpstreamGrantOptions,
+} from './store/cutover-protocol.mjs';
 export type { GenericApiClient } from './generated/types.js';
 export type { CuratedTool, CuratedResult } from './tools/curated/types.js';
 export type { UserRole } from './auth/roles.js';

@@ -77,6 +77,7 @@ export interface LegacyOperationRecord {
 
 export interface LegacyOperationContext {
   readonly id: string;
+  readonly storageId: string;
   readonly namespace: SupportedCutoverNamespace;
   readonly epoch: number;
   readonly kind: string;
@@ -114,7 +115,7 @@ export function transitionCutoverFenceState(db: Firestore | FirestoreLike, names
 
 export function getCutoverFenceDocRef(db: Firestore | FirestoreLike, namespace: string): DocumentReference | any;
 export function getCutoverOperationsColRef(db: Firestore | FirestoreLike, namespace: string): CollectionReference | any;
-export function getCutoverOperationDocRef(db: Firestore | FirestoreLike, namespace: string, operationId: string): DocumentReference | any;
+export function getCutoverOperationDocRef(db: Firestore | FirestoreLike, namespace: string, operationId: string, identityKey: Uint8Array): DocumentReference | any;
 
 export function markIrreversibleInTransaction(
   transaction: Transaction | any,
@@ -136,6 +137,7 @@ export interface LegacyOperationMetadata {
 export interface WithLegacyOperationOptions {
   db: Firestore | FirestoreLike;
   namespace: SupportedCutoverNamespace;
+  identityKey: Uint8Array;
   kind: string;
   operationId?: string;
   leaseMs?: number;
@@ -190,6 +192,7 @@ export function isLegacyMutationPermittedInTransaction(
 
 export interface ClaimUpstreamGrantOptions {
   namespace: SupportedCutoverNamespace;
+  identityKey: Uint8Array;
   epoch: number;
   familyId: string;
   operationId: string;
@@ -222,6 +225,7 @@ export function claimUpstreamGrantInTransaction(
 
 export interface ReconcileUpstreamGrantOptions {
   namespace: SupportedCutoverNamespace;
+  identityKey: Uint8Array;
   familyId: string;
   operationId: string;
   claimOwner: string;

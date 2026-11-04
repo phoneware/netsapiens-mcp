@@ -242,6 +242,10 @@ import {
 } from 'netsapiens-mcp/lib';
 ```
 
+Standalone legacy fence operations require an explicit `identityKey`. Derive it with `deriveStoreKey` from the namespace's existing `MCP_SESSION_SECRET`, and use the same pinned secret version for every writer in that namespace. Pass the key to `withLegacyOperation`, direct upstream claim and reconciliation calls, and `getCutoverOperationDocRef`. Missing or mismatched keys are refused; existing raw-ID operation records require an explicit upgrade.
+
+Caller-supplied operation IDs remain unchanged in `ctx.id`. The separate `ctx.storageId` identifies the keyed durable record; do not treat an ID's prefix as evidence that it is already encoded.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on development and submitting version observations.
