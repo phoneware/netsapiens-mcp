@@ -81,8 +81,7 @@ function pass(leg, assertion) {
 }
 
 function fail(leg, assertion, reason) {
-  console.error(`FAIL ${leg} ${assertion}: ${reason}`);
-  process.exit(1);
+  throw new Error(`FAIL ${leg} ${assertion}: ${reason}`);
 }
 
 async function getAvailablePort() {

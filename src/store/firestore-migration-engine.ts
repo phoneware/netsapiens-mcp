@@ -1813,6 +1813,13 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError(`Prepared manifest missing during resume of migrating namespace ${namespace}`);
       }
       const prepDoc = prepSnap.data();
+      validateMigrationIdentityFields(prepDoc, namespace, expectedEpoch, migrationRunId);
+      if (prepDoc.kind !== 'prepared' || prepDoc.sourceInventoryDigest !== expectedSourceInventoryDigest ||
+        prepDoc.codeSha !== codeSha || prepDoc.codeArtifact !== codeArtifact ||
+        prepDoc.packageIntegrity !== packageIntegrity || prepDoc.protocolDigest !== protocolDigest ||
+        prepDoc.assemblyDigest !== assemblyDigest || prepDoc.indexSchemaDigest !== indexSchemaDigest) {
+        throw new CutoverFenceError('Prepared manifest identity or inventory mismatch during resume');
+      }
 
       // Validate planSpec binding
       const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
@@ -2315,6 +2322,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     // Read all target collections to compute targetInventoryDigest
     const targetDescriptors: Array<{ collection: string; id: string; recordDigest: string }> = [];
     const targetRowsById = new Map<string, Record<string, unknown> & { id: string }>();
+    const targetCounts: Record<string, number> = Object.fromEntries(TARGET_COUNT_KEYS.map((key: string) => [key, 0]));
 
     const targetPhysicalToKey: Record<string, string> = {
       [`${namespace}_refresh_families`]: 'families',
@@ -2336,6 +2344,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
         targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
+        targetCounts[colKey]++;
         targetRowsById.set(`${colKey}:${targetId}`, { ...data, id: d.id });
       }
     }
@@ -2400,7 +2409,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       classifications: prepared.classifications,
       reasons: prepared.reasons,
       totalPhysicalRecords: prepared.totalPhysicalRecords,
-      targetCounts: prepared.expectedTargetCounts,
+      targetCounts,
       scanned: prepared.scanned,
       migrated: migratedCount,
       skipped: skippedCount,
