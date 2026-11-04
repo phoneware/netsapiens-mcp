@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
-import { Firestore } from '@google-cloud/firestore';
+import { FieldPath, Firestore } from '@google-cloud/firestore';
 import {
   initializeCutoverFence,
   getCutoverFenceRecord,
@@ -45,9 +45,10 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     const ctrl = await getCutoverFenceRecord(db, namespace);
     const epoch = (opts.expectedEpoch as number | undefined) ?? ctrl?.epoch ?? 1;
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
-      (opts.dryRun ? undefined : await computeSourceInventoryDigest(db, namespace, key, epoch));
+            await computeSourceInventoryDigest(db, namespace, key, epoch);
     return {
       db,
+            FieldPath,
       namespace,
       key,
       expectedEpoch: epoch,
@@ -55,10 +56,10 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
+            dryRun: false,
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
-      assemblyDigest: 'c'.repeat(64),
-      indexSchemaDigest: 'd'.repeat(64),
       expectedSourceInventoryDigest: digest,
+            ...opts,
     };
   };
   beforeAll(async () => {
@@ -126,7 +127,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     await expect(
-      withLegacyOperation({ db, namespace, kind: 'op_after_closing' }, async () => {}),
+            withLegacyOperation({ db, namespace, kind: 'op_after_closing' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to fenced

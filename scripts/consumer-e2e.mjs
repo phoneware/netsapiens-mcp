@@ -4,6 +4,8 @@
  *
  * Usage:
  *   node scripts/consumer-e2e.mjs (--tarball <path> | --registry <version>) [--legs <csv>] [--firestore-major 7|8|9]
+        *   node scripts/consumer-e2e.mjs --cold-registry <versioned|unversioned>
+        *   Run both modes after publishing to exercise independent, empty npm caches.
  *
  * Legs:
  *   - install: installs package, proves no firestore dir, no *.node files, exports resolve.
@@ -32,6 +34,7 @@ function parseArgs() {
   const args = process.argv.slice(2);
   let tarball = null;
   let registry = null;
+  let coldRegistry = null;
   let legs = null;
   let firestoreMajor = '8';
 
@@ -41,6 +44,8 @@ function parseArgs() {
       tarball = args[++i];
     } else if (arg === '--registry') {
       registry = args[++i];
+    } else if (arg === '--cold-registry') {
+      coldRegistry = args[++i];
     } else if (arg === '--legs') {
       legs = args[++i];
     } else if (arg === '--firestore-major') {
@@ -51,18 +56,21 @@ function parseArgs() {
     }
   }
 
-  if (!tarball && !registry) {
-    console.error('FAIL args: Either --tarball <path> or --registry <version> is required.');
-    process.exit(1);
+  if (coldRegistry && (!['versioned', 'unversioned'].includes(coldRegistry) || tarball || registry || legs)) {
+    throw new Error('--cold-registry requires versioned or unversioned and cannot be combined with package or leg options');
+  }
+  if (!tarball && !registry && !coldRegistry) {
+    throw new Error('Specify --tarball, --registry, or --cold-registry');
   }
 
-  const selectedLegs = legs
+  const selectedLegs = coldRegistry ? ['sqlite'] : legs
     ? legs.split(',').map((s) => s.trim().toLowerCase())
     : ['install', 'config', 'sqlite', 'memory', 'version', 'library'];
 
   return {
     tarball: tarball ? path.resolve(process.cwd(), tarball) : null,
     registry,
+    coldRegistry,
     legs: selectedLegs,
     firestoreMajor,
   };
@@ -121,9 +129,9 @@ function runCommand(cmd, args, options = {}) {
   });
 }
 
+let coldPackage = null;
 function getPackageBinaryRunner() {
-  // Proven documented npx entry path
-  return { cmd: 'npx', args: ['--yes', 'netsapiens-mcp'] };
+  return { cmd: 'npx', args: ['--yes', coldPackage ?? 'netsapiens-mcp'] };
 }
 
 async function startMcpServerProcess(tempDir, env) {
@@ -143,7 +151,7 @@ async function startMcpServerProcess(tempDir, env) {
     async stop() {
       if (cp.exitCode === null) {
         if (process.platform !== 'win32' && cp.pid) {
-          try { process.kill(-cp.pid, 'SIGTERM'); } catch {}
+          try { process.kill(-cp.pid, 'SIGTERM'); } catch { }
         } else {
           cp.kill('SIGTERM');
         }
@@ -152,7 +160,7 @@ async function startMcpServerProcess(tempDir, env) {
           await delay(50);
         }
         if (process.platform !== 'win32' && cp.pid) {
-          try { process.kill(-cp.pid, 'SIGKILL'); } catch {}
+          try { process.kill(-cp.pid, 'SIGKILL'); } catch { }
         } else {
           cp.kill('SIGKILL');
         }
@@ -172,7 +180,7 @@ async function waitForHealthDown(port, maxAttempts = 30) {
   }
 }
 
-async function waitForHealth(port, maxAttempts = 50) {
+async function waitForHealth(port, maxAttempts = coldPackage ? 1200 : 50) {
   for (let i = 0; i < maxAttempts; i++) {
     await delay(100);
     try {
@@ -300,7 +308,10 @@ async function sendMcpRequest(serverPort, bearer, method, params, sessionId) {
 async function main() {
   const opts = parseArgs();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nsmcp-consumer-e2e-'));
-  const targetPkg = opts.tarball || `netsapiens-mcp@${opts.registry}`;
+  coldPackage = opts.coldRegistry === 'versioned' ? 'netsapiens-mcp@3'
+    : opts.coldRegistry === 'unversioned' ? 'netsapiens-mcp' : null;
+  const targetPkg = coldPackage || opts.tarball || `netsapiens-mcp@${opts.registry}`;
+  if (coldPackage) process.env.npm_config_cache = path.join(tempDir, 'npm-cache');
   const sessionSecret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
   console.log(`Starting consumer-e2e in ${tempDir} [target: ${targetPkg}]`);
@@ -309,9 +320,10 @@ async function main() {
   const { startFakeNetSapiens } = await import(path.join(repoRoot, 'scripts/fake-netsapiens/index.mjs'));
 
   try {
-    // Initialize consumer directory with target package
+    if (!coldPackage) {
     execSync('npm init -y', { cwd: tempDir, stdio: 'pipe' });
     execSync(`npm i --legacy-peer-deps ${targetPkg}`, { cwd: tempDir, stdio: 'pipe' });
+    }
 
     // -------------------------------------------------------------------------
     // LEG 1: install
@@ -524,6 +536,13 @@ async function main() {
         } catch (err) {
           console.error(`Server failed to start. Logs:\n${srv1.getLogs()}`);
           throw err;
+        }
+        if (coldPackage) {
+          const health = await (await fetch(`http://127.0.0.1:${serverPort}/health`)).json();
+          if (typeof health.version !== 'string' || !/^3\./.test(health.version)) {
+            fail('cold-registry', 'running-v3', `unexpected server version ${JSON.stringify(health.version)}`);
+          }
+          pass('cold-registry', `running-v3 ${health.version}`);
         }
 
         // Perform DCR, PKCE, token sign-in

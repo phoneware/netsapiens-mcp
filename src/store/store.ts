@@ -30,6 +30,23 @@ import {
   encodeResumeTokensRow,
   encodeOAuthClientsRow,
 } from './row-codec.js';
+import {
+    ACCESS_RETENTION_MS,
+    SESSION_RETENTION_MS,
+    REFRESH_RETRY_WINDOW_MS,
+    MAX_RETIRED_REFRESH_FINGERPRINTS,
+    AUTH_CODE_TTL_MS,
+    RESUME_TOKEN_TTL_MS,
+    REFRESH_WAIT_MS,
+    REFRESH_POLL_MS,
+    REFRESH_LEASE_MS,
+    REFRESH_SKEW_MS,
+    accessAad,
+    refreshAad,
+    familyAad,
+    upstreamAad,
+    sessionAad,
+} from './row-format.js';
 
 export {
   ACCESS_RETENTION_MS,
@@ -435,7 +452,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
 
         // Compatibility fallback
         if (backend.deleteSession) {
-          await backend.deleteSession(accessId).catch(() => {});
+                    await backend.deleteSession(accessId).catch(() => { });
         }
       },
 
@@ -569,13 +586,13 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
                   expectedFamilyGeneration: fam.generation,
                   expectedUpstreamGrantVersion: updated.grantVersion,
                   expectedLeaseOwner: owner,
-                }).catch(() => {});
+                                }).catch(() => { });
               }
             }
             await backend.updateUpstream(familyId, (cur) => {
               if (cur.leaseOwner !== owner) return undefined;
               return { ...cur, leaseOwner: undefined, leaseUntil: undefined };
-            }).catch(() => {});
+                        }).catch(() => { });
             throw error;
           }
         }

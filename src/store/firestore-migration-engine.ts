@@ -84,7 +84,7 @@ export interface MigrationContext {
 }
 
 
-export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext {
+export function assertValidMigrationContext(options: unknown, extraFields: readonly string[] = []): asserts options is MigrationContext {
   if (!options || typeof options !== 'object') {
     throw new CutoverFenceError('MigrationContext must be an object');
   }
@@ -148,6 +148,7 @@ export function assertValidMigrationContext(options: unknown): asserts options i
     'codeArtifact',
     'packageIntegrity',
     'protocolDigest',
+    ...extraFields,
   ]);
   for (const k of Object.keys(opts)) {
     if (!allowedFields.has(k)) {
@@ -192,7 +193,7 @@ function resolveProtectedBootstrap(namespace: SupportedNamespace, expectedProtoc
   if (!indexSchema || typeof indexSchema !== 'object') {
     throw new CutoverFenceError(`Trusted bootstrap refused: ${indexPath} root must be an object`);
   }
-  if (Array.isArray(indexSchema.allowedNamespaces) && !indexSchema.allowedNamespaces.includes(namespace)) {
+  if (!Array.isArray(indexSchema.allowedNamespaces) || !indexSchema.allowedNamespaces.includes(namespace)) {
     throw new CutoverFenceError(`Trusted bootstrap refused: namespace '${namespace}' not permitted by ${indexPath}`);
   }
 
@@ -215,8 +216,8 @@ function resolveProtectedBootstrap(namespace: SupportedNamespace, expectedProtoc
     }
   }
 
-  if (assembly && assembly.protocolDigest && assembly.protocolDigest !== expectedProtocolDigest) {
-    throw new CutoverFenceError(`Trusted bootstrap refused: assembly protocolDigest mismatch: expected ${expectedProtocolDigest}, got ${assembly.protocolDigest}`);
+  if (!assembly || assembly.protocolDigest !== expectedProtocolDigest) {
+    throw new CutoverFenceError('Trusted bootstrap refused: assembly protocolDigest mismatch or missing');
   }
 
   const assemblyDigest = createHash('sha256').update(assemblyContent).digest('hex');
@@ -1784,7 +1785,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   skipped: number;
   errors: number;
 }> {
-  assertValidMigrationContext(options);
+  assertValidMigrationContext(options, ['dryRun', 'expectedSourceInventoryDigest']);
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -1827,6 +1828,9 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     // Restart/resumption check FIRST before any source scanning
     if (control.state === 'migrating') {
+      if (dryRun) {
+        throw new CutoverFenceError('Dry-run inspection cannot resume a migration already in progress');
+      }
       if (control.migrationRunId !== migrationRunId) {
         throw new CutoverFenceError(`Cannot resume migration for namespace ${namespace}: migrationRunId mismatch`);
       }
@@ -2121,6 +2125,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       let allTargetsAlreadyRetained = true;
       let hasAnyTarget = false;
       const existingTargetsMap = new Map();
+      const retainedTargetRows = new Map<string, unknown>();
 
       for (const t of c.targets) {
         const post = c.postimageByTargetId.get(t.id);
@@ -2130,7 +2135,24 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
         if (targetSnap.exists) {
           hasAnyTarget = true;
-          existingTargetsMap.set(t.collection, { ...(targetSnap.data() || {}), id: docId });
+          const row = { ...(targetSnap.data() || {}), id: docId };
+          retainedTargetRows.set(t.id, targetSnap.data());
+          if (t.collection === 'refresh') {
+            const role = docId === c.targetRows?.refreshTokens?.id ? 'activeRefresh'
+              : docId === c.targetRows?.prevRefresh?.id ? 'prevRefresh' : null;
+            if (!role) throw new CutoverFenceError('Unexpected refresh target in candidate');
+            existingTargetsMap.set(role, row);
+          } else if (t.collection === 'retiredRefreshTokens') {
+            if (row.fingerprint !== docId || row.familyId !== c.targetRows?.refreshFamilies?.id ||
+              row.v !== 2 || typeof row.consumedAt !== 'number' || row.consumedAt <= 0 || !row.ttlAt) {
+              throw new CutoverFenceError('Invalid retired refresh target in candidate');
+            }
+            const retired = existingTargetsMap.get('retiredRefresh') ?? { ids: [] };
+            retired.ids.push(row.fingerprint);
+            existingTargetsMap.set('retiredRefresh', retired);
+          } else {
+            existingTargetsMap.set(t.collection === 'oauthClients' ? 'clients' : t.collection, row);
+          }
         } else {
           allTargetsAlreadyRetained = false;
         }
@@ -2180,7 +2202,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       }
       // Write exact receipt
       const targetAfter = c.targets.map((t: any) => {
-        const post = c.postimageByTargetId.get(t.id);
+        const post = allTargetsAlreadyRetained ? retainedTargetRows.get(t.id) : c.postimageByTargetId.get(t.id);
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, post);
         return { collection: t.collection, id: t.id, recordDigest: recDigest };
       });

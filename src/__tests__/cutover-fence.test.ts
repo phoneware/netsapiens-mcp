@@ -118,9 +118,10 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const ctrl = await getCutoverFenceRecord(db, namespace);
     const epoch = (opts.expectedEpoch as number | undefined) ?? ctrl?.epoch ?? 1;
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
-      (opts.dryRun ? undefined : await computeSourceInventoryDigest(db, namespace, key, epoch));
+            await computeSourceInventoryDigest(db, namespace, key, epoch);
     return {
       db,
+            FieldPath: { documentId: () => '__name__' },
       namespace,
       key,
       expectedEpoch: epoch,
@@ -129,9 +130,9 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
-      assemblyDigest: 'c'.repeat(64),
-      indexSchemaDigest: 'd'.repeat(64),
+            dryRun: false,
       expectedSourceInventoryDigest: digest,
+            ...opts,
     };
   };
 
@@ -199,7 +200,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
 
     await expect(
-      withLegacyOperation({ db, namespace, kind: 'new_op' }, async () => {}),
+            withLegacyOperation({ db, namespace, kind: 'new_op' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to 'fenced': requires activeOperations === 0
@@ -316,7 +317,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       clientId: 'dry-client',
     });
 
-    const report = await adoptFirestoreLegacyTokens({ db, namespace, key, dryRun: true, expectedEpoch: 2 });
+        const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { dryRun: true, expectedEpoch: 2 }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
 
