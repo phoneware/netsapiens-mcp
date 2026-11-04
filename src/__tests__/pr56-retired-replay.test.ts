@@ -8,7 +8,7 @@ import {
   initializeCutoverFence,
   getCutoverFenceRecord,
   transitionCutoverFenceState,
-} from '../auth/kit/cutover-fence.js';
+} from '../store/firestore-v2-adoption.js';
 import { adoptFirestoreLegacyTokens, computeSourceInventoryDigest } from '../store/firestore-v2-adoption.js';
 
 class MockFirestore implements FirestoreLike {
@@ -151,12 +151,13 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
-      assemblyDigest: 'c'.repeat(64),
-      indexSchemaDigest: 'd'.repeat(64),
       expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key, ctrlFenced!.epoch),
     });
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
+    const retiredRow = await db.collection(`${namespace}_retired_refresh`).doc(legacyShaFingerprint).get();
+    expect(retiredRow.exists).toBe(true);
+    expect(retiredRow.data()).toEqual({ familyId });
 
     const ctrl = await getCutoverFenceRecord(db, namespace);
     await transitionCutoverFenceState(db, namespace, {

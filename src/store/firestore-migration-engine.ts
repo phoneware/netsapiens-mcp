@@ -19,8 +19,6 @@ import {
   encodeOAuthClientsRow,
 } from './row-codec.js';
 import {
-  PROJECTOR_ID,
-  PROJECTOR_VERSION,
   projectSourceLogical,
   projectTargetLogical,
   sanitizeId,
@@ -639,7 +637,7 @@ export function extractCandidatesAndPlan(params: {
         familyId,
         status: 'consumed' as const,
         generation: Math.max(1, generation - 1),
-        consumedAt: prevRefEntry.data?.consumedAt || now,
+        consumedAt: logicalProjection.previousRefresh.consumedAt,
         successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefToken }, `successor:${prevRefId}`),
         v: 2,
       };
@@ -649,13 +647,10 @@ export function extractCandidatesAndPlan(params: {
 
     const retiredRows: any[] = [];
     for (const fp of retiredFingerprints) {
-      const retRow = {
-        fingerprint: fp,
-        familyId,
-        retiredAt: now,
-        v: 2,
-      };
-      retiredRows.push(retRow);
+      // Historical fingerprints carry no retirement timestamp. Preserve the
+      // replay index without inventing one; runtime lookup uses familyId.
+      const retRow = { familyId };
+      retiredRows.push({ fingerprint: fp });
       const retTgtId = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, 'retiredRefreshTokens', fp);
       postimageByTargetId.set(retTgtId, retRow);
     }
@@ -1306,11 +1301,6 @@ export function extractCandidatesAndPlan(params: {
     sourceInventoryDigest,
     sourceLogicalDigest,
     candidateCommitments,
-    ...(totalPhysicalRecords > 0 ? {
-      projectorId: PROJECTOR_ID,
-      projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
-    } : {}),
   };
 
   const preparation = {
@@ -1395,11 +1385,6 @@ export function extractCandidatesAndPlan(params: {
     sourceLogicalDigest,
     targetLogicalDigest: sourceLogicalDigest,
     receiptSetDigest: '0'.repeat(64),
-    ...(totalPhysicalRecords > 0 ? {
-      projectorId: PROJECTOR_ID,
-      projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
-    } : {}),
   };
 
   const markerUpperBound = {
@@ -1420,11 +1405,6 @@ export function extractCandidatesAndPlan(params: {
     migrationManifestDigest: '0'.repeat(64),
     emptyNamespace: totalPhysicalRecords === 0,
     adoptedAt: now,
-    ...(totalPhysicalRecords > 0 ? {
-      projectorId: PROJECTOR_ID,
-      projectorVersion: PROJECTOR_VERSION,
-      projectorDigest: protocolDigest,
-    } : {}),
   };
 
   const controlUpperBound = {
@@ -1677,15 +1657,12 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
             if (
               retDoc &&
               typeof retDoc === 'object' &&
-              retDoc.fingerprint === ret.fingerprint &&
+              retDoc.id === ret.fingerprint &&
               retDoc.familyId === rows.refreshFamilies?.id &&
-              retDoc.v === 2 &&
-              typeof retDoc.consumedAt === 'number' &&
-              retDoc.consumedAt > 0 &&
-              retDoc.ttlAt
+              (retDoc.retiredAt === undefined || (Number.isSafeInteger(retDoc.retiredAt) && retDoc.retiredAt > 0))
             ) {
               existingCount++;
-              fps.push(retDoc.fingerprint);
+              fps.push(ret.fingerprint);
             }
           }
           if (fps.length > 0) {
@@ -1969,23 +1946,90 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
   const { prepared, isResume } = prepResult;
   let candidates = prepResult.candidates;
+  let migratedCount = 0;
+  let skippedCount = 0;
 
   // On resume: reconstruct candidates from sources if resuming
   if (isResume) {
     // Read source docs to reconstruct pending candidates
-    const { source: sourceNames } = getCutoverDistinctCollectionNames(namespace);
-    const sourceDocsByKey = new Map<string, any[]>();
-    for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
-
-    const sourcePhysicalToKey: Record<string, string> = {};
-    for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
-
+    const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
+    type Reference = { collection: string; id: string; recordDigest: string | null };
+    type Commitment = { id: string; logicalDigest: string; sources: Reference[]; targets: Reference[] };
+    type Receipt = Record<string, unknown> & {
+      candidateId: string; preparedDigest: string; candidateDigest: string; logicalDigest: string;
+      sourceAfter: Reference[]; targetAfter: Reference[]; disposition: 'written' | 'retained';
+    };
+    const sourceDocsByKey = new Map<string, Array<{ id: string; data(): Record<string, unknown> | undefined }>>();
+    const sourceAfter = new Map<string, string>();
+    const targetAfter = new Map<string, string>();
+    const targetNamesSet = new Set(Object.values(targetNames));
+    const sourceNamesSet = new Set(Object.values(sourceNames));
     for (const [k, colName] of Object.entries(sourceNames)) {
-      const q = typeof db.collection(colName).orderBy === 'function'
-        ? db.collection(colName).orderBy(docIdField)
-        : db.collection(colName);
-      const snap = await q.get();
-      sourceDocsByKey.set(k, snap.docs);
+      const snap = await db.collection(colName).orderBy(docIdField).get();
+      const docs = targetNamesSet.has(colName)
+        ? snap.docs.filter(d => !isTargetFormatRow(colName, d.data(), d.id))
+        : snap.docs;
+      sourceDocsByKey.set(k, docs);
+      for (const d of docs) {
+        const id = computeKeyedDocId(storeKey, 'source-id', namespace, expectedEpoch, k, d.id);
+        sourceAfter.set(`${k}:${id}`, computeSourceRecordDigest(storeKey, namespace, expectedEpoch, k, id, d.data()));
+      }
+    }
+    for (const [k, colName] of Object.entries(targetNames)) {
+      const snap = await db.collection(colName).orderBy(docIdField).get();
+      const docs = sourceNamesSet.has(colName)
+        ? snap.docs.filter(d => isTargetFormatRow(colName, d.data(), d.id))
+        : snap.docs;
+      for (const d of docs) {
+        const id = computeKeyedDocId(storeKey, 'target-id', namespace, expectedEpoch, k, d.id);
+        targetAfter.set(`${k}:${id}`, computeTargetRecordDigest(storeKey, namespace, expectedEpoch, k, id, d.data()));
+      }
+    }
+    const receipts = await db.collection(`${namespace}_meta`).orderBy(docIdField)
+      .startAt(`migration_receipt_${expectedEpoch}_`).endBefore(`migration_receipt_${expectedEpoch}\``).get();
+    const commitments = new Map<string, Commitment>(
+      (prepared.candidateCommitments as Commitment[]).map(c => [c.id, c]),
+    );
+    const completed = new Set<string>();
+    for (const receiptSnapshot of receipts.docs) {
+      const data = receiptSnapshot.data();
+      validateReceipt(data, namespace, expectedEpoch, migrationRunId);
+      const receipt = data as Receipt;
+      const commitment = commitments.get(receipt.candidateId);
+      if (!commitment || completed.has(receipt.candidateId) ||
+        receiptSnapshot.id !== `migration_receipt_${expectedEpoch}_${receipt.candidateId}` ||
+        receipt.preparedDigest !== D('prepared', namespace, expectedEpoch, prepared) ||
+        receipt.candidateDigest !== D('candidate', namespace, expectedEpoch, commitment) ||
+        receipt.logicalDigest !== commitment.logicalDigest ||
+        REQUIRED_IDENTITY_KEYS.some((key: string) => receipt[key] !== prepared[key])) {
+        throw new CutoverFenceError('Resume receipt does not match its prepared candidate');
+      }
+      const plans = prepared.planSpec.candidates as Array<{
+        candidateId: string; sourceActions: Array<{ collection: string; id: string; action: string }>;
+      }>;
+      const itemPlan = plans.find(item => item.candidateId === receipt.candidateId);
+      const refs = (items: Reference[]) => items.map(item => `${item.collection}:${item.id}`).sort(codeUnitCompare);
+      if (!itemPlan || C(refs(receipt.sourceAfter)) !== C(refs(commitment.sources)) ||
+        C(refs(receipt.targetAfter)) !== C(refs(commitment.targets))) {
+        throw new CutoverFenceError('Resume receipt does not cover its prepared references');
+      }
+      for (const source of receipt.sourceAfter) {
+        const action = itemPlan.sourceActions.find(a => a.collection === source.collection && a.id === source.id);
+        const before = commitment.sources.find(s => s.collection === source.collection && s.id === source.id);
+        const expected = action?.action === 'retain' ? before?.recordDigest : null;
+        if (!action || source.recordDigest !== expected ||
+          (sourceAfter.get(`${source.collection}:${source.id}`) ?? null) !== expected) {
+          throw new CutoverFenceError('Resume receipt source postimage mismatch');
+        }
+      }
+      for (const target of receipt.targetAfter) {
+        if (targetAfter.get(`${target.collection}:${target.id}`) !== target.recordDigest) {
+          throw new CutoverFenceError('Resume receipt target postimage mismatch');
+        }
+      }
+      completed.add(receipt.candidateId);
+      if (receipt.disposition === 'retained') skippedCount++;
+      else migratedCount++;
     }
 
     const reconstructed = extractCandidatesAndPlan({
@@ -2003,11 +2047,14 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       now: Date.now(),
     });
     candidates = reconstructed.candidates;
+    if (Object.values(reconstructed.reasons).some(count => count !== 0) ||
+      candidates.length + completed.size !== commitments.size ||
+      candidates.some(c => completed.has(c.id) || C(c.commitment) !== C(commitments.get(c.id)))) {
+      throw new CutoverFenceError('Resume source inventory does not match the pending prepared candidates');
+    }
   }
 
   const now = Date.now();
-  let migratedCount = 0;
-  let skippedCount = 0;
 
   const targetColMap: Record<string, string> = {
     families: `${namespace}_refresh_families`,
@@ -2139,12 +2186,12 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
             if (!role) throw new CutoverFenceError('Unexpected refresh target in candidate');
             existingTargetsMap.set(role, row);
           } else if (t.collection === 'retiredRefreshTokens') {
-            if (row.fingerprint !== docId || row.familyId !== c.targetRows?.refreshFamilies?.id ||
-              row.v !== 2 || typeof row.consumedAt !== 'number' || row.consumedAt <= 0 || !row.ttlAt) {
+            if (row.familyId !== c.targetRows?.refreshFamilies?.id ||
+              (row.retiredAt !== undefined && (!Number.isSafeInteger(row.retiredAt) || row.retiredAt <= 0))) {
               throw new CutoverFenceError('Invalid retired refresh target in candidate');
             }
             const retired = existingTargetsMap.get('retiredRefresh') ?? { ids: [] };
-            retired.ids.push(row.fingerprint);
+            retired.ids.push(docId);
             existingTargetsMap.set('retiredRefresh', retired);
           } else {
             existingTargetsMap.set(t.collection === 'oauthClients' ? 'clients' : t.collection, row);
@@ -2267,6 +2314,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     // Read all target collections to compute targetInventoryDigest
     const targetDescriptors: Array<{ collection: string; id: string; recordDigest: string }> = [];
+    const targetRowsById = new Map<string, Record<string, unknown> & { id: string }>();
 
     const targetPhysicalToKey: Record<string, string> = {
       [`${namespace}_refresh_families`]: 'families',
@@ -2283,12 +2331,51 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       const snap = await transaction.get(db.collection(physicalName).orderBy(docIdField));
       for (const d of snap.docs) {
         const data = d.data() || {};
+        if (['authCodes', 'resumeTokens', 'oauthClients'].includes(colKey) &&
+          !isTargetFormatRow(physicalName, data, d.id)) continue;
         const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
         targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
+        targetRowsById.set(`${colKey}:${targetId}`, { ...data, id: d.id });
       }
     }
     targetDescriptors.sort(compareDescriptors);
+    const logicalItems: Array<[string, string]> = [];
+    const codec = createCodec(storeKey);
+    const commitments = prepared.candidateCommitments as Array<{
+      id: string; kind: string; logicalDigest: string; targets: Array<{ collection: string; id: string }>;
+    }>;
+    for (const candidate of commitments) {
+      const targets = new Map<string, unknown>();
+      const retiredIds: string[] = [];
+      const rows = candidate.targets.map(ref => {
+        const row = targetRowsById.get(`${ref.collection}:${ref.id}`);
+        if (!row) throw new CutoverFenceError('Final target graph is incomplete');
+        return { ref, row };
+      });
+      const family = rows.find(({ ref }) => ref.collection === 'families')?.row;
+      for (const { ref, row } of rows) {
+        if (ref.collection === 'refresh') {
+          if (!family || row.familyId !== family.id) throw new CutoverFenceError('Final refresh family mismatch');
+          const role = row.id === family.activeRefreshId ? 'activeRefresh' : 'prevRefresh';
+          if (targets.has(role)) throw new CutoverFenceError('Duplicate final refresh role');
+          targets.set(role, row);
+        } else if (ref.collection === 'retiredRefreshTokens') {
+          if (!family || row.familyId !== family.id) throw new CutoverFenceError('Final retired refresh family mismatch');
+          retiredIds.push(row.id);
+        } else {
+          const role = ref.collection === 'oauthClients' ? 'clients' : ref.collection;
+          if (targets.has(role)) throw new CutoverFenceError('Duplicate final target role');
+          targets.set(role, row);
+        }
+      }
+      if (retiredIds.length) targets.set('retiredRefresh', { ids: retiredIds.sort(codeUnitCompare) });
+      const logical = projectTargetLogical(candidate, targets, codec);
+      const digest = H(storeKey, 'logical-record', namespace, control.epoch, [candidate.kind, logical]);
+      if (digest !== candidate.logicalDigest) throw new CutoverFenceError('Final target semantic mismatch');
+      logicalItems.push([candidate.id, digest]);
+    }
+    const targetLogicalDigest = computeLogicalInventoryDigest(storeKey, namespace, control.epoch, logicalItems);
 
     const targetInventoryDigest = computeTargetInventoryDigest(storeKey, namespace, control.epoch, targetDescriptors);
     const receiptSetDigest = computeReceiptSetDigest(actualReceipts, namespace, control.epoch);
@@ -2314,20 +2401,15 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       reasons: prepared.reasons,
       totalPhysicalRecords: prepared.totalPhysicalRecords,
       targetCounts: prepared.expectedTargetCounts,
-      scanned: prepared.scanned || candidates.length,
+      scanned: prepared.scanned,
       migrated: migratedCount,
       skipped: skippedCount,
       errors: 0,
       sourceInventoryDigest: prepared.sourceInventoryDigest,
       targetInventoryDigest,
       sourceLogicalDigest: prepared.sourceLogicalDigest,
-      targetLogicalDigest: prepared.sourceLogicalDigest,
+      targetLogicalDigest,
       receiptSetDigest,
-      ...(prepared.totalPhysicalRecords > 0 ? {
-        projectorId: PROJECTOR_ID,
-        projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest,
-      } : {}),
     };
 
     const finalManifestDigest = D('final', namespace, control.epoch, finalDoc);
@@ -2350,11 +2432,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       migrationManifestDigest: finalManifestDigest,
       emptyNamespace: prepared.totalPhysicalRecords === 0,
       adoptedAt: Date.now(),
-      ...(prepared.totalPhysicalRecords > 0 ? {
-        projectorId: PROJECTOR_ID,
-        projectorVersion: PROJECTOR_VERSION,
-        projectorDigest: protocolDigest,
-      } : {}),
     };
 
     timer.assertUnderDeadline(16_000, 'Finalization attempt');
@@ -2372,7 +2449,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   });
 
   return {
-    scanned: prepared.scanned || candidates.length,
+    scanned: prepared.scanned,
     migrated: migratedCount,
     skipped: skippedCount,
     errors: 0,
