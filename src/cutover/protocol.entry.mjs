@@ -34,6 +34,9 @@ export {
   isCutoverRefusedError,
 } from '../store/errors.js';
 
+// Use the same root derivation as the store; do not duplicate its HKDF.
+export { deriveStoreKey } from '../store/codec.js';
+
 // High-level Migration Operations
 export {
   assertValidMigrationContext,

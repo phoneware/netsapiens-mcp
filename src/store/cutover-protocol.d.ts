@@ -4,6 +4,8 @@ import type { FirestoreLike } from './firestore.js';
 export const SUPPORTED_CUTOVER_NAMESPACES: readonly ['mcp', 'pwmcp', 'readonly_mcp'];
 export type SupportedCutoverNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
 
+export function deriveStoreKey(sessionSecret: string): Buffer;
+
 export function isSupportedCutoverNamespace(namespace: string): namespace is SupportedCutoverNamespace;
 export function assertSupportedCutoverNamespace(namespace: string): asserts namespace is SupportedCutoverNamespace;
 

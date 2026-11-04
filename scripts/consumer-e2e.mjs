@@ -1115,12 +1115,14 @@ runStoreConformance({
       console.log('Running leg: library');
       const identityProof = await runCommand('node', ['--input-type=module', '-e', `
 import { deriveStoreKey, getCutoverOperationDocRef, withLegacyOperation } from 'netsapiens-mcp/lib';
+import { deriveStoreKey as bundleDeriveStoreKey } from 'netsapiens-mcp/cutover-protocol';
 const pathRef = (path = '') => ({
         collection: name => pathRef(path + '/' + name),
         doc: id => ({ ...pathRef(path + '/' + id), path: path + '/' + id }),
 });
 const db = pathRef();
 const identityKey = deriveStoreKey('consumer proof session secret with more than 32 characters');
+if (!Buffer.from(identityKey).equals(Buffer.from(bundleDeriveStoreKey('consumer proof session secret with more than 32 characters')))) throw new Error('bundle and library identity roots differ');
 const callerId = 'arbitrary/id-with-secret-like-content';
 const first = getCutoverOperationDocRef(db, 'mcp', callerId, identityKey).path;
 const second = getCutoverOperationDocRef(db, 'mcp', callerId, identityKey).path;
