@@ -40,5 +40,6 @@ export {
   inspectFirestoreLegacyMigration,
   adoptFirestoreLegacyTokens,
   activateFirestoreMigration,
+  verifyActiveFirestoreMigration,
   getFirestoreMigrationStatus,
 } from '../store/firestore-migration-engine.js';

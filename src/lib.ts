@@ -28,6 +28,7 @@ export { createFirestoreStore, createFirestoreBackend, firestoreCollections, Fir
 export { createMemoryStore } from './store/memory.js';
 export {
   adoptFirestoreLegacyTokens,
+  verifyActiveFirestoreMigration,
   computeSourceInventoryDigest,
   ensureFirestoreAdopted,
   type CutoverFenceControlRecord,

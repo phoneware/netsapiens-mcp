@@ -304,6 +304,10 @@ export function activateFirestoreMigration(
   planDigest: string;
 }>;
 
+export function verifyActiveFirestoreMigration(
+  options: MigrationContext & { migrationManifestDigest: string },
+): Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }>;
+
 export function getFirestoreMigrationStatus(
   options: MigrationContext,
 ): Promise<{

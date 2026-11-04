@@ -11,6 +11,7 @@ import {
   inspectFirestoreLegacyMigration,
   adoptFirestoreLegacyTokens,
   activateFirestoreMigration,
+  verifyActiveFirestoreMigration,
   getFirestoreMigrationStatus,
 } from './firestore-migration-engine.js';
 import {
@@ -27,6 +28,7 @@ export {
   inspectFirestoreLegacyMigration,
   adoptFirestoreLegacyTokens,
   activateFirestoreMigration,
+  verifyActiveFirestoreMigration,
   getFirestoreMigrationStatus,
   CutoverFenceError,
   CutoverRefusedError,

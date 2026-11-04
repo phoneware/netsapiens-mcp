@@ -58,6 +58,7 @@ import {
   prepareMigrationInTransaction,
   finalizeMigrationInTransaction,
   activateMigrationInTransaction,
+  verifyActiveMigrationInTransaction,
   markIrreversibleInTransaction,
   getCutoverDistinctCollectionNames,
   isTargetFormatRow,
@@ -2468,6 +2469,25 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     skipped: skippedCount,
     errors: 0,
   };
+}
+
+export async function verifyActiveFirestoreMigration(
+  context: MigrationContext & { migrationManifestDigest: string },
+): Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }> {
+  assertValidMigrationContext(context, ['migrationManifestDigest']);
+  if (typeof context.migrationManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
+    throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
+  }
+  return context.db.runTransaction(async transaction => {
+    const timer = startMonotonicTimer();
+    const result = await verifyActiveMigrationInTransaction(transaction, context.db, {
+      ...context,
+      storeKey: context.key,
+      timer,
+    });
+    timer.assertUnderDeadline(16_000, 'Active ownership verification');
+    return result;
+  });
 }
 
 export async function activateFirestoreMigration(context: MigrationContext & { migrationManifestDigest: string }): Promise<{
