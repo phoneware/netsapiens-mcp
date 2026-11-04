@@ -165,10 +165,13 @@ export function projectSourceLogical(candidate, sources, codec) {
   if (candidate.kind === 'baseFormatTokens') {
     const tokDoc = sources.get('tokens');
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
-    const refDoc = sources.get('refresh');
 
-    const accessToken = tokDoc.accessToken ?? tokDoc.id;
-    const refreshToken = (tokDoc.refreshToken ?? refDoc?.refreshToken ?? refDoc?.id ?? accessToken);
+        const accessToken = tokDoc.accessToken;
+        const refreshToken = tokDoc.refreshToken;
+        if (typeof accessToken !== 'string' || accessToken.length === 0 ||
+            typeof refreshToken !== 'string' || refreshToken.length === 0) {
+            throw new CutoverFenceError('baseFormatTokens missing raw access or refresh credential');
+        }
     const familyId = codec.id('family', accessToken);
     const accessId = codec.id('session', accessToken);
     const refreshId = codec.id('refresh', refreshToken);

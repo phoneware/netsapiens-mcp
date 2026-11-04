@@ -728,8 +728,13 @@ export function extractCandidatesAndPlan(params: {
     claimedAccessIds.add(tokEntry.credentialToken);
 
     const tokData = tokEntry.data || {};
+    if (typeof tokData.refreshToken !== 'string' || tokData.refreshToken.length === 0) {
+      malformedDocKeys.add(`tokens:${tokEntry.doc.id}`);
+      reasons.malformedRecords++;
+      continue;
+    }
     const familyId = codec.id('family', tokEntry.credentialToken);
-    const refreshId = codec.id('refresh', tokData.refreshToken || tokEntry.credentialToken);
+    const refreshId = codec.id('refresh', tokData.refreshToken);
     const newAccessId = codec.id('session', tokEntry.credentialToken);
 
     const candSources = [
