@@ -11,6 +11,7 @@ jobs:
     environment: npm-publish
     permissions:
       contents: write
+      attestations: write
       id-token: write
     defaults:
       run:
@@ -69,6 +70,10 @@ jobs:
         run: |
           node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs install,config,sqlite,memory,version
           node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major 8
+      - name: Attest release tarball provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.TARBALL }}
       - name: Publish to npm
         run: |
           case "$VERSION" in
