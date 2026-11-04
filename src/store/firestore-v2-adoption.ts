@@ -38,6 +38,7 @@ export {
 export {
   getCutoverFenceRecord,
   initializeCutoverFence,
+  startMonotonicTimer,
   transitionCutoverFenceState,
   markIrreversibleInTransaction,
   getCutoverOperationDocRef,

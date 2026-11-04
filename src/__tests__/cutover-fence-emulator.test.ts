@@ -5,6 +5,7 @@ import {
   getCutoverFenceRecord,
   transitionCutoverFenceState,
   withLegacyOperation,
+    startMonotonicTimer,
   checkMutationGuardInTransaction,
   markIrreversibleInTransaction,
   CutoverFenceError,
@@ -107,17 +108,29 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     // 2. withLegacyOperation admits operation during legacy_open in real Firestore
+        const callerId = 'arbitrary/secret-like-id';
+        let storageId = '';
     let executedOp = false;
-    await withLegacyOperation({ db, namespace, kind: 'token_exchange' }, async (ctx) => {
+        await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token', operationId: callerId }, async (ctx) => {
+            expect(ctx.id).toBe(callerId);
+            expect(ctx.storageId).toMatch(/^op1_[0-9a-f]{64}$/);
+            storageId = ctx.storageId;
       expect(ctx.epoch).toBe(1);
       executedOp = true;
-      await db.runTransaction(async (tx) => {
-        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx });
+            const guard = await db.runTransaction(async (tx) => {
+                const timer = startMonotonicTimer();
+                const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
+                guard.assertPreReturn();
+                return guard;
       });
+            guard.onCommit();
     });
     expect(executedOp).toBe(true);
+        const durable = await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').doc(storageId).get();
+        expect(durable.exists).toBe(true);
+        expect(JSON.stringify(durable.data())).not.toContain(callerId);
 
     // 3. Transition to closing: new admissions refused
     await transitionCutoverFenceState(db, namespace, {
@@ -127,7 +140,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     await expect(
-            withLegacyOperation({ db, namespace, kind: 'op_after_closing' }, async () => { }),
+            withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to fenced

@@ -80,6 +80,7 @@ export interface LegacyOperationRecord {
 export interface LegacyOperationContext {
   readonly id: string;
   readonly storageId: string;
+  readonly identityKeyCheck: string;
   readonly namespace: SupportedCutoverNamespace;
   readonly epoch: number;
   readonly kind: string;
@@ -218,6 +219,8 @@ export function claimUpstreamGrantInTransaction(
   status: 'claimed';
   familyId: string;
   operationId: string;
+  storageId: string;
+  ownerStorageId: string;
   claimOwner: string;
   familyGeneration: number;
   grantVersion: number;

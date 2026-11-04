@@ -5,6 +5,7 @@ import {
   getCutoverFenceRecord,
   transitionCutoverFenceState,
   withLegacyOperation,
+    startMonotonicTimer,
   checkMutationGuardInTransaction,
   markIrreversibleInTransaction,
   CutoverFenceError,
@@ -176,16 +177,20 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
     // 2. withLegacyOperation admits operation during legacy_open
     let executedOp = false;
-    await withLegacyOperation({ db, namespace, kind: 'token_exchange' }, async (ctx) => {
+        await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async (ctx) => {
       expect(ctx.epoch).toBe(1);
       executedOp = true;
 
       // Inside transaction, checkMutationGuardInTransaction permits mutation
-      await db.runTransaction(async (tx) => {
-        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx });
+            const guard = await db.runTransaction(async (tx) => {
+                const timer = startMonotonicTimer();
+                const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
+                guard.assertPreReturn();
+                return guard;
       });
+            guard.onCommit();
     });
     expect(executedOp).toBe(true);
 
@@ -200,7 +205,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
 
     await expect(
-            withLegacyOperation({ db, namespace, kind: 'new_op' }, async () => { }),
+            withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to 'fenced': requires activeOperations === 0
