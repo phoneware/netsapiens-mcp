@@ -1612,7 +1612,8 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   };
 }> {
   assertValidMigrationContext(options);
-  assertProtectedContext(options, { operation: 'inspect', options: {} });
+  const binding = assertProtectedContext(options, { operation: 'inspect', options: {} });
+  options = { ...options, key: binding.key };
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -1946,10 +1947,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   errors: number;
 }> {
   assertValidMigrationContext(options, ['dryRun', 'expectedSourceInventoryDigest']);
-  assertProtectedContext(options, {
+  const binding = assertProtectedContext(options, {
     operation: 'adopt',
     options: { dryRun: options.dryRun, expectedSourceInventoryDigest: options.expectedSourceInventoryDigest },
   });
+  options = { ...options, key: binding.key };
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2701,7 +2703,8 @@ export async function verifyActiveFirestoreMigration(
   context: MigrationContext & { migrationManifestDigest: string },
 ): Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { operation: 'verifyActive', options: { migrationManifestDigest: context.migrationManifestDigest } });
+  const binding = assertProtectedContext(context, { operation: 'verifyActive', options: { migrationManifestDigest: context.migrationManifestDigest } });
+  context = { ...context, key: binding.key };
   if (typeof context.migrationManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
     throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
   }
@@ -2731,7 +2734,8 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
   planDigest: string;
 }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { operation: 'activate', options: { migrationManifestDigest: context.migrationManifestDigest } });
+  const binding = assertProtectedContext(context, { operation: 'activate', options: { migrationManifestDigest: context.migrationManifestDigest } });
+  context = { ...context, key: binding.key };
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2823,7 +2827,8 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   sourceInventoryDigest?: string;
 }> {
   assertValidMigrationContext(context);
-  assertProtectedContext(context, { operation: 'status', options: {} });
+  const binding = assertProtectedContext(context, { operation: 'status', options: {} });
+  context = { ...context, key: binding.key };
   const allowedKeys = new Set([
     'db',
     'FieldPath',

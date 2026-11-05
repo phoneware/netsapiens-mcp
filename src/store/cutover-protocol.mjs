@@ -5593,7 +5593,11 @@ function bindProtectedContext(db, binding) {
   if (bindings.has(db)) {
     throw new CutoverFenceError("Protected migration database handle is already bound");
   }
-  bindings.set(db, deepFreeze({ ...binding, key: Buffer.from(binding.key) }));
+  const privateKey = Buffer.from(binding.key);
+  const stored = { ...binding, get key() {
+    return Buffer.from(privateKey);
+  } };
+  bindings.set(db, deepFreeze(stored));
 }
 __name(bindProtectedContext, "bindProtectedContext");
 function assertCredentialUnchanged(db) {
@@ -7391,7 +7395,8 @@ function computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest
 __name(computePreflightSummaryFromPlan, "computePreflightSummaryFromPlan");
 async function inspectFirestoreLegacyMigration(options) {
   assertValidMigrationContext2(options);
-  assertProtectedContext(options, { operation: "inspect", options: {} });
+  const binding = assertProtectedContext(options, { operation: "inspect", options: {} });
+  options = { ...options, key: binding.key };
   const allowedKeys = /* @__PURE__ */ new Set([
     "db",
     "FieldPath",
@@ -7697,10 +7702,11 @@ async function readPreparationInputs(transaction, input) {
 __name(readPreparationInputs, "readPreparationInputs");
 async function adoptFirestoreLegacyTokens(options) {
   assertValidMigrationContext2(options, ["dryRun", "expectedSourceInventoryDigest"]);
-  assertProtectedContext(options, {
+  const binding = assertProtectedContext(options, {
     operation: "adopt",
     options: { dryRun: options.dryRun, expectedSourceInventoryDigest: options.expectedSourceInventoryDigest }
   });
+  options = { ...options, key: binding.key };
   const allowedKeys = /* @__PURE__ */ new Set([
     "db",
     "FieldPath",
@@ -8354,7 +8360,8 @@ async function adoptFirestoreLegacyTokens(options) {
 __name(adoptFirestoreLegacyTokens, "adoptFirestoreLegacyTokens");
 async function verifyActiveFirestoreMigration(context) {
   assertValidMigrationContext2(context, ["migrationManifestDigest"]);
-  assertProtectedContext(context, { operation: "verifyActive", options: { migrationManifestDigest: context.migrationManifestDigest } });
+  const binding = assertProtectedContext(context, { operation: "verifyActive", options: { migrationManifestDigest: context.migrationManifestDigest } });
+  context = { ...context, key: binding.key };
   if (typeof context.migrationManifestDigest !== "string" || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
     throw new CutoverFenceError("migrationManifestDigest must be a 64-character lowercase hex string");
   }
@@ -8376,7 +8383,8 @@ async function verifyActiveFirestoreMigration(context) {
 __name(verifyActiveFirestoreMigration, "verifyActiveFirestoreMigration");
 async function activateFirestoreMigration(context) {
   assertValidMigrationContext2(context, ["migrationManifestDigest"]);
-  assertProtectedContext(context, { operation: "activate", options: { migrationManifestDigest: context.migrationManifestDigest } });
+  const binding = assertProtectedContext(context, { operation: "activate", options: { migrationManifestDigest: context.migrationManifestDigest } });
+  context = { ...context, key: binding.key };
   const allowedKeys = /* @__PURE__ */ new Set([
     "db",
     "FieldPath",
@@ -8414,9 +8422,9 @@ async function activateFirestoreMigration(context) {
       throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready or v3_active`);
     }
     if (control.state === "v3_ready") {
-      const binding = getProtectedBinding(db);
-      if (!binding) throw new CutoverRefusedError("Protected migration context required for activation");
-      assertActivationObservation(db, binding);
+      const binding2 = getProtectedBinding(db);
+      if (!binding2) throw new CutoverRefusedError("Protected migration context required for activation");
+      assertActivationObservation(db, binding2);
     }
     const finalSnap = await transaction.get(db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`));
     if (!finalSnap.exists) throw new CutoverFenceError("Final migration manifest is missing");
@@ -8451,7 +8459,8 @@ async function activateFirestoreMigration(context) {
 __name(activateFirestoreMigration, "activateFirestoreMigration");
 async function getFirestoreMigrationStatus(context) {
   assertValidMigrationContext2(context);
-  assertProtectedContext(context, { operation: "status", options: {} });
+  const binding = assertProtectedContext(context, { operation: "status", options: {} });
+  context = { ...context, key: binding.key };
   const allowedKeys = /* @__PURE__ */ new Set([
     "db",
     "FieldPath",

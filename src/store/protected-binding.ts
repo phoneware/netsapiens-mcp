@@ -51,8 +51,8 @@ const bindings = new WeakMap<object, ProtectedBinding>();
 const consumed = new WeakSet<object>();
 
 function deepFreeze<T>(value: T): T {
-  // Byte views are leaves: Object.freeze throws on a typed array with elements. The key is a private copy made
-  // by Buffer.from in bindProtectedContext, so it is never shared; the binding object itself is frozen.
+  // Typed-array views cannot be frozen in Node. The retained authority key is kept in a closure and exposed
+  // only through fresh copies; other byte views are treated as leaves.
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value) && !ArrayBuffer.isView(value)) {
     Object.freeze(value);
     for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
@@ -64,7 +64,9 @@ export function bindProtectedContext(db: object, binding: ProtectedBinding): voi
   if (bindings.has(db)) {
     throw new CutoverFenceError('Protected migration database handle is already bound');
   }
-  bindings.set(db, deepFreeze({ ...binding, key: Buffer.from(binding.key) }));
+  const privateKey = Buffer.from(binding.key);
+  const stored = { ...binding, get key() { return Buffer.from(privateKey); } };
+  bindings.set(db, deepFreeze(stored));
 }
 
 // Re-reads the mounted credential and requires the exact bytes STS accepted.
