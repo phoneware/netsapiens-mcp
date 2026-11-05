@@ -33,6 +33,9 @@ export class UpstreamUnavailableError extends KitError {
  }
 }
 
+/** A token endpoint explicitly rejected the request without issuing a grant. */
+export class UpstreamRequestRejectedError extends UpstreamUnavailableError { }
+
 export class UpstreamRevokedError extends KitError {
  readonly kitCode = 'upstream_revoked';
 

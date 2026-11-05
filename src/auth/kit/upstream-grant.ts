@@ -6,6 +6,7 @@ import {
   CutoverRefusedError,
   UpstreamRevokedError,
   UpstreamUnavailableError,
+  UpstreamRequestRejectedError,
   classifyUpstreamTokenResponse,
   kitCodeOf,
 } from './errors.js';
@@ -43,11 +44,19 @@ export interface StoredUpstreamRecord<G> {
   updatedAt?: number;
 }
 
+export function assertGrantNotPending(record: StoredUpstreamRecord<unknown> | undefined): void {
+  if (record?.leaseOwner || record?.leaseUntil || record?.ambiguousOutcome || record?.ambiguousOperationId) {
+    throw new UpstreamUnavailableError('Upstream grant has a pending or ambiguous claim');
+  }
+}
+
 
 export type EnsureFreshResult<G> = Readonly<{
   grant: G;
   completion: UpstreamCompletion | null;
 }>;
+
+export class RefreshSupersededError extends Error { }
 
 export interface EnsureFreshOptions {
   force?: boolean;
@@ -56,6 +65,7 @@ export interface EnsureFreshOptions {
   waitMs?: number;
   pollIntervalMs?: number;
   now?: number;
+  expectedRefresh?: { ref: DocumentReference; clientId: string };
 }
 
 export interface UpstreamGrantStore<G> {
@@ -194,6 +204,8 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             now: this.nowProvider,
           });
           guardResult = guard;
+          const current = await transaction.get(docRef);
+          assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
           guard.bufferCompletion(this.nowProvider());
           transaction.set(
             docRef,
@@ -215,14 +227,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       return;
     }
 
-    await docRef.set(
-      stripUndefined({
-        grant,
-        expiresAt,
-        updatedAt: this.nowProvider(),
-      }),
-      { merge: true },
-    );
+    await this.db.runTransaction(async (transaction) => {
+      const current = await transaction.get(docRef);
+      assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
+      transaction.set(docRef, stripUndefined({ grant, expiresAt, updatedAt: this.nowProvider() }), { merge: true });
+    });
   }
 
   async get(familyId: string): Promise<StoredUpstreamRecord<G> | undefined> {
@@ -252,6 +261,8 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             now: this.nowProvider,
           });
           guardResult = guard;
+          const current = await transaction.get(docRef);
+          assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
           transaction.delete(docRef);
         });
       };
@@ -264,7 +275,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       return;
     }
 
-    await docRef.delete();
+    await this.db.runTransaction(async (transaction) => {
+      const current = await transaction.get(docRef);
+      assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
+      transaction.delete(docRef);
+    });
   }
 
   async ensureFresh(
@@ -286,6 +301,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     const pollIntervalMs = options?.pollIntervalMs ?? 100;
     const force = options?.force ?? false;
     const leaseOwner = randomUUID();
+    const operationId = this.fence?.enforce ? op?.id ?? null : null;
 
     const runClaimTx = async () => {
       return await this.db.runTransaction(async (transaction) => {
@@ -298,6 +314,14 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           now: this.nowProvider,
           completeOperation: false,
         });
+        }
+        if (options?.expectedRefresh) {
+          const refreshSnap = await transaction.get(options.expectedRefresh.ref);
+          const refreshRecord = refreshSnap.data();
+          if (!refreshRecord || refreshRecord.status !== 'active' ||
+            refreshRecord.familyId !== familyId || refreshRecord.token?.clientId !== options.expectedRefresh.clientId) {
+            throw new RefreshSupersededError('Refresh token changed before upstream claim');
+          }
       }
       const snap = await transaction.get(docRef);
       if (!snap.exists) {
@@ -401,7 +425,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             const snap = await transaction.get(docRef);
             if (snap.exists) {
               const current = snap.data() as StoredUpstreamRecord<G>;
-              if (current.leaseOwner === leaseOwner && (current.ambiguousOperationId ?? null) === (op?.id ?? null)) {
+              if (current.leaseOwner === leaseOwner && (current.ambiguousOperationId ?? null) === operationId) {
                 transaction.delete(docRef);
               }
             }
@@ -420,12 +444,38 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         throw new UpstreamRevokedError(err instanceof Error ? err.message : String(err));
       }
 
+      if (err instanceof UpstreamRequestRejectedError) {
+        const release = async () => this.db.runTransaction(async (transaction) => {
+          let guard: GuardMutationResult | undefined;
+          if (this.fence?.enforce && op) {
+            guard = await checkMutationGuardInTransaction(transaction, {
+              db: this.db, namespace: this.fence.namespace, operation: op,
+              now: this.nowProvider, completeOperation: false,
+            });
+          }
+          const snap = await transaction.get(docRef);
+          const current = snap.data() as StoredUpstreamRecord<G> | undefined;
+          if (!current || current.leaseOwner !== leaseOwner ||
+            (current.ambiguousOperationId ?? null) !== operationId || current.ambiguousOutcome ||
+            (operationId && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
+            throw new UpstreamUnavailableError('Upstream claim changed before rejection was recorded');
+          }
+          transaction.set(docRef, { leaseOwner: null, leaseUntil: null, ambiguousOperationId: null }, { merge: true });
+          if (operationId && this.fence?.enforce) {
+            transaction.set(getCutoverOperationDocRef(this.db, this.fence.namespace, operationId),
+              { phase: 'admitted', ambiguousRemoteOutcome: false, familyId: null, updatedAt: this.nowProvider() }, { merge: true });
+          }
+        });
+        if (op?.trackWriter) await op.trackWriter(release); else await release();
+        op?.clearAmbiguousRemoteOutcome();
+        throw err;
+      }
+
       const reasonCode: AmbiguousGrantReasonCode =
         (err instanceof Error && /timeout|timed out|econnreset|econnrefused|408|504/i.test(err.message))
           ? 'upstream_timeout'
           : 'upstream_transport_error';
 
-      const op = options?.operation ?? requestOperationContext.getStore();
       if (this.fence?.enforce && op) {
         op.markAmbiguousRemoteOutcome(reasonCode);
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
@@ -495,7 +545,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamRevokedError('Grant document deleted during refresh');
         }
         const current = snap.data() as StoredUpstreamRecord<G>;
-          if (current.leaseOwner !== leaseOwner || (current.ambiguousOperationId ?? null) !== (op?.id ?? null) ||
+          if (current.leaseOwner !== leaseOwner || (current.ambiguousOperationId ?? null) !== operationId ||
             current.ambiguousOutcome || (op && this.fence?.enforce &&
               (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
           throw new UpstreamUnavailableError('Lease owner changed during refresh');
@@ -515,7 +565,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             ambiguousOutcome: null,
             ambiguousReason: null,
             ambiguousAt: null,
-            ambiguousOperationId: isTerminal ? null : op?.id,
+              ambiguousOperationId: isTerminal ? null : operationId,
             updatedAt: commitNow,
           }),
           { merge: true },
@@ -531,7 +581,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       return {
         grant: refreshed.grant,
         completion: options?.completeOperation === false
-          ? { familyId, leaseOwner, operationId: op?.id ?? null }
+          ? { familyId, leaseOwner, operationId }
           : null,
       };
     } catch (err) {

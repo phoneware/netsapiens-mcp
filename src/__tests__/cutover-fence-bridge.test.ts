@@ -6,6 +6,7 @@ import {
   CutoverRefusedError,
   UpstreamRevokedError,
   UpstreamUnavailableError,
+  UpstreamRequestRejectedError,
   toTokenEndpointError,
 } from '../auth/kit/errors.js';
 import {
@@ -2355,5 +2356,48 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect((await upstreamRef.get()).data()?.leaseOwner).toBe('actual-owner');
     expect((await store.accessDocRef(replacement.accessToken).get()).exists).toBe(false);
     expect((await store.refreshDocRef(token.refreshToken).get()).data()?.status).toBe('active');
+  });
+
+  it('held upstream credentials cannot be exposed, replaced, or removed by another writer', async () => {
+    const db = createTestDb();
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const token = await store.issue({
+      accessToken: 'held-access', refreshToken: 'held-refresh', clientId: 'held-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'committed', nsUsername: 'user',
+    });
+    const familyId = token.refreshFamilyId!;
+    const ref = store.upstreamDocRef(familyId);
+    await ref.set({ grant: { nsAccessToken: 'uncommitted' }, leaseOwner: 'held-owner', leaseUntil: 1 });
+    const upstream = new FirestoreUpstreamGrantStore({ db, collection: 'mcp_tokens_upstream' });
+    expect((await store.get(token.accessToken))?.nsAccessToken).toBe('committed');
+    await expect(upstream.put(familyId, { nsAccessToken: 'other' })).rejects.toThrow();
+    await expect(upstream.delete(familyId)).rejects.toThrow();
+    await expect(store.update(token.accessToken, { nsAccessToken: 'other' })).rejects.toThrow();
+    await expect(store.revokeFamily(familyId)).rejects.toThrow();
+    await expect(store.revokeByToken(token.refreshToken)).rejects.toThrow();
+    expect((await ref.get()).data()).toMatchObject({ leaseOwner: 'held-owner', grant: { nsAccessToken: 'uncommitted' } });
+    expect((await store.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
+});
+
+  it('a confirmed upstream rejection releases the exact claim and permits a later attempt', async () => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp', { initialEpoch: 1, initialState: 'legacy_open' });
+    const upstream = new FirestoreUpstreamGrantStore<{ token: string }>({
+      db, collection: 'mcp_tokens_upstream', fence: { namespace: 'mcp', enforce: true },
+    });
+    const familyId = randomUUID();
+    await withLegacyOperation({ db, namespace: 'mcp', kind: 'seed' }, async (op) => {
+      await upstream.put(familyId, { token: 'original' }, 1, { operation: op });
+    });
+    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh' }, async (op) =>
+      upstream.ensureFresh(familyId, async () => { throw new UpstreamRequestRejectedError(); },
+        { operation: op, force: true }),
+    )).rejects.toBeInstanceOf(UpstreamRequestRejectedError);
+    expect((await upstream.get(familyId))?.leaseOwner).toBeNull();
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
+    const recovered = await withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh' }, async (op) =>
+      upstream.ensureFresh(familyId, async () => ({ grant: { token: 'recovered' } }), { operation: op, force: true }),
+    );
+    expect(recovered.grant.token).toBe('recovered');
   });
 });

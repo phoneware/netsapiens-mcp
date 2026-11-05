@@ -39,6 +39,7 @@ import {
 import {
  UpstreamRevokedError,
  UpstreamUnavailableError,
+ UpstreamRequestRejectedError,
  CutoverRefusedError,
  classifyUpstreamTokenResponse,
  toTokenEndpointError,
@@ -46,6 +47,7 @@ import {
 } from './kit/errors.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { DEFAULT_ACCESS_TOKEN_TTL_MS } from './kit/ledger.js';
+import { RefreshSupersededError } from './kit/upstream-grant.js';
 import type { TokenLedger, UpstreamCompletion } from './kit/ledger.js';
 import type {
  OAuthClientInformationFull,
@@ -1424,7 +1426,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
           expiresAt: res.expires_in ? this.nowProvider() + res.expires_in * 1000 : undefined,
          };
         },
-        { operation: opCtx, now: this.nowProvider(), force: true, completeOperation: false },
+        {
+         operation: opCtx, now: this.nowProvider(), force: true, completeOperation: false,
+         expectedRefresh: { ref: storeWithRefresh.refreshDocRef(refreshToken), clientId: stored.clientId }
+        },
        );
        upstreamCompletion = upstreamGrant.completion;
        const effectiveGrant = upstreamGrant.grant;
@@ -1443,6 +1448,17 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        nsTokens.nsApiUrl = stored.nsApiUrl;
       }
      } catch (err: unknown) {
+      if (err instanceof RefreshSupersededError) {
+       const lookup = await (this.tokenStore as unknown as TokenLedger<StoredToken>).lookupRefresh(
+        refreshToken, stored.clientId, this.nowProvider(), { operation: opCtx },
+       );
+       if (lookup.status !== 'retry') throw new InvalidGrantError('Invalid refresh token');
+       return {
+        access_token: lookup.token.accessToken, token_type: 'Bearer',
+        expires_in: Math.max(1, Math.round((lookup.token.expiresAt - this.nowProvider()) / 1000)),
+        refresh_token: lookup.token.refreshToken,
+       };
+      }
       if (err instanceof UpstreamGrantRejectedError || err instanceof UpstreamRevokedError || kitCodeOf(err) === 'upstream_revoked') {
        if ('revokeFamily' in this.tokenStore && stored.refreshFamilyId) {
         await (this.tokenStore as unknown as TokenLedger<StoredToken>).revokeFamily(stored.refreshFamilyId, { operation: opCtx });
@@ -1456,7 +1472,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
         (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
         (err instanceof Error && err.message.toLowerCase().includes('timeout'));
+      if (!(err instanceof UpstreamRequestRejectedError)) {
       opCtx?.markAmbiguousRemoteOutcome(isTimeout ? 'upstream_timeout' : 'upstream_transport_error');
+      }
       throw toTokenEndpointError(err);
      }
     } else {
@@ -1489,7 +1507,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
     try {
      if ('rotate' in this.tokenStore && typeof (this.tokenStore as unknown as { rotate: unknown }).rotate === 'function') {
-      const rotateOptions = { operation: opCtx, upstreamCompletion };
+      const rotateOptions = { operation: opCtx, upstreamCompletion, useCurrentUpstream: true };
       const rot = this.tokenStore instanceof FirestoreTokenStore
        ? await this.tokenStore.rotate(refreshToken, replacement, stored.clientId, this.nowProvider(), rotateOptions)
        : await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
@@ -2040,6 +2058,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const classification = classifyUpstreamTokenResponse(status, data ?? desc);
     if (classification === 'definitive') {
      throw new UpstreamRevokedError(`Upstream refresh grant definitive failure (${status})`);
+    }
+    if (status === 401) {
+     throw new UpstreamRequestRejectedError('Upstream authentication was rejected');
     }
     throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status})`);
    }

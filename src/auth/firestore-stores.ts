@@ -19,7 +19,7 @@ import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
+import { FirestoreUpstreamGrantStore, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
@@ -255,7 +255,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     replacement: StoredToken,
     expectedClientId: string,
     now?: number,
-  options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletion | null },
+  options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletion | null; useCurrentUpstream?: boolean },
   ): Promise<RefreshRotationResult<StoredToken>> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
@@ -286,6 +286,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     }
     if (token.refreshFamilyId) {
       const up = await this.upstreamStore.get(token.refreshFamilyId);
+   if (up?.leaseOwner || up?.leaseUntil || up?.ambiguousOutcome || up?.ambiguousOperationId) return token;
       if (up?.grant) {
         return {
           ...token,
@@ -333,6 +334,10 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       const existing = accessSnap.data() as StoredToken;
       const updated: StoredToken = { ...existing, ...patch };
       const now = this.localNow();
+    if (updated.refreshFamilyId && (patch.nsAccessToken || patch.nsRefreshToken || patch.nsExpiresAt)) {
+     const upstreamSnap = await transaction.get(this.upstreamDocRef(updated.refreshFamilyId));
+     assertGrantNotPending(upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant> | undefined);
+    }
 
       guard?.bufferCompletion(now);
       transaction.set(accessRef, stripUndefined(cleanDoc(updated)), { merge: true });
@@ -467,7 +472,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     if (receipt) {
      if (receipt.familyId !== familyId || receipt.leaseOwner !== upstreamRecord.leaseOwner ||
       receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
-      receipt.operationId !== (op?.id ?? null) || upstreamRecord.ambiguousOutcome ||
+      receipt.operationId !== (fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome ||
       (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
       throw new LeaseLostError('Upstream refresh claim changed before finalization');
      }

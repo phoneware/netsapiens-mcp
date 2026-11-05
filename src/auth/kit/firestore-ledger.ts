@@ -20,7 +20,7 @@ import {
 } from './ledger.js';
 import { StoreUnavailableError, CutoverFenceError, CutoverRefusedError, kitCodeOf } from './errors.js';
 import { stripUndefined } from './strip-undefined.js';
-import type { StoredUpstreamRecord } from './upstream-grant.js';
+import { assertGrantNotPending, type StoredUpstreamRecord } from './upstream-grant.js';
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
@@ -389,6 +389,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               });
               const familyDoc = retiredMatch.docs[0]!;
               const family = familyDoc.data() as StoredRefreshFamily;
+              await this.assertFamilyNotPending(transaction, family.id);
               retiredGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
               return { status: 'replay', familyId: familyDoc.id };
@@ -467,6 +468,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               now: this.nowProvider,
             });
             if (family) {
+              await this.assertFamilyNotPending(transaction, family.id);
               replayGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyRef, family);
             }
@@ -574,7 +576,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     replacement: T,
     expectedClientId: string,
     now: number = this.nowProvider(),
-    options?: { operation?: LegacyOperationContext; completeOperation?: boolean; upstreamCompletion?: UpstreamCompletion | null },
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean; upstreamCompletion?: UpstreamCompletion | null; useCurrentUpstream?: boolean },
   ): Promise<RefreshRotationResult<T>> {
     try {
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
@@ -678,6 +680,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (!retiredMatches.empty) {
             const familyDoc = retiredMatches.docs[0]!;
             const family = familyDoc.data() as StoredRefreshFamily;
+              await this.assertFamilyNotPending(transaction, family.id);
             guard?.bufferCompletion(now);
             this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
             return { status: 'replay' } as const;
@@ -784,6 +787,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             }
           }
 
+            await this.assertFamilyNotPending(transaction, family.id);
           guard?.bufferCompletion(now);
           this.deleteFamilyInTransaction(transaction, familyRef, family);
           return { status: 'replay' } as const;
@@ -801,7 +805,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             if (!upstreamRecord || receipt.familyId !== oldRecord.familyId ||
               receipt.leaseOwner !== upstreamRecord.leaseOwner ||
               receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
-              receipt.operationId !== (op?.id ?? null) || upstreamRecord.ambiguousOutcome ||
+              receipt.operationId !== (this.fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome ||
               (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== oldRecord.familyId))) {
               throw new CutoverFenceError('Upstream refresh claim changed before rotation');
             }
@@ -833,7 +837,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
         transaction.delete(this.accessCol().doc(docId(oldRecord.token.accessToken)));
 
-          const stored: T = { ...replacement, ...(upstreamRecord?.grant ?? {}), refreshFamilyId: oldRecord.familyId };
+          const stored: T = { ...replacement, ...(options?.useCurrentUpstream ? upstreamRecord?.grant ?? {} : {}), refreshFamilyId: oldRecord.familyId };
         const extras = this.accessDocExtras ? this.accessDocExtras(stored) : {};
         const accessPayload = stripUndefined({ ...stored, ...extras });
 
@@ -913,6 +917,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           return;
         }
         const family = familySnap.data() as StoredRefreshFamily;
+          await this.assertFamilyNotPending(transaction, family.id);
         guard?.bufferCompletion(this.nowProvider());
         this.deleteFamilyInTransaction(transaction, familyRef, family);
         });
@@ -959,6 +964,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (typeof data.refreshFamilyId === 'string') {
             const familyRef = this.familyCol().doc(docId(data.refreshFamilyId));
             const familySnap = await transaction.get(familyRef);
+              if (familySnap.exists) await this.assertFamilyNotPending(transaction, data.refreshFamilyId);
             guard?.bufferCompletion(this.nowProvider());
             if (familySnap.exists) {
               this.deleteFamilyInTransaction(
@@ -980,6 +986,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           if (typeof raw.familyId === 'string') {
             const familyRef = this.familyCol().doc(docId(raw.familyId));
             const familySnap = await transaction.get(familyRef);
+              if (familySnap.exists) await this.assertFamilyNotPending(transaction, raw.familyId);
             guard?.bufferCompletion(this.nowProvider());
             if (familySnap.exists) {
               this.deleteFamilyInTransaction(
@@ -1000,6 +1007,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         );
         if (!retiredMatches.empty) {
           const familyDoc = retiredMatches.docs[0]!;
+            await this.assertFamilyNotPending(transaction, (familyDoc.data() as StoredRefreshFamily).id);
           guard?.bufferCompletion(this.nowProvider());
           this.deleteFamilyInTransaction(
             transaction,
@@ -1023,6 +1031,15 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     }
   }
 
+
+  private async assertFamilyNotPending(transaction: Transaction, familyId: string): Promise<void> {
+    const collections = new Set(this.linkedFamilyCollections);
+    if (this.legacy?.upstreamCollection) collections.add(this.legacy.upstreamCollection);
+    for (const collection of collections) {
+      const snapshot = await transaction.get(this.db.collection(collection).doc(docId(familyId)));
+      assertGrantNotPending(snapshot.data() as StoredUpstreamRecord<unknown> | undefined);
+    }
+  }
 
   private deleteFamilyInTransaction(
     transaction: Transaction,
