@@ -181,7 +181,7 @@ function assertRuntimeScopeFromCore(_namespace: string, _collectionGroups: reado
 // Exact dispatch claims for mutating production operations. These are checked
 // on the decoded token; signature and STS acceptance are the host pre-pass.
 const OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
-const OIDC_REQUEST_AUDIENCE = 'projects/859122914438/locations/global/workloadIdentityPools/github/providers/github';
+const OIDC_REQUEST_AUDIENCE = 'https://iam.googleapis.com/projects/859122914438/locations/global/workloadIdentityPools/github/providers/github';
 const OIDC_WORKFLOW_REF = 'phoneware/monorepo/.github/workflows/deploy.yml@refs/heads/main';
 
 function assertMutatingClaims(bytes: Buffer): { runId: string; runAttempt: string } {
