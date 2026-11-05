@@ -5,9 +5,12 @@
 // argv, and returns its JSON result. A refusal is returned as data (ok: false, exitStatus).
 //
 // One fixture holds one signing keypair. The fake Admin serves its index and every step mounts its trust
-// policy, so all steps of a test share one fixture (cached below) and only request.json changes per step.
+// policy, so all steps of one bundle share one fixture (cached below) and only request.json changes per step.
+// The fixture binds the bundle's bytes through protocolDigest, so the cache is keyed by the bundle hash too:
+// a mutated bundle never reuses a fixture bound to the original bytes.
 // Callers must start the fake Admin (support/fake-admin.mjs) before a step that reads the index.
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,27 +23,41 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const RUNNER_SOURCE = resolve(here, 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', '..', 'node_modules');
 
-// The reviewed union of collection groups for a namespace, from the reviewed canonical core. It fails
-// closed if the export or its completeness is missing.
+// Collection-group names from a scope object's union. Entries are strings, or objects carrying a name.
+function unionNamesOf(scope) {
+  return scope.union.map((entry) => (typeof entry === 'string' ? entry : entry.name));
+}
+
+// The reviewed union for a namespace, fail-closed: the harness refuses to build a positive fixture on an
+// incomplete scope. The factory is the authority on completeness; this check keeps positive runs honest.
 export function reviewedUnion(namespace) {
   const scopeFn = canonicalCore.getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== 'function') throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent');
   const scope = scopeFn(namespace);
   if (!scope || scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
-  return scope.union.map((entry) => (typeof entry === 'string' ? entry : entry.name));
+  return unionNamesOf(scope);
 }
 
-// One fixture per (namespace, epoch, nonce, descriptor) for this process, so the fake Admin and every step
-// share one signing keypair. The action and options are not part of the cache key: each step rewrites them.
+// The union without the completeness check. Only for negative proofs, where the factory must be the gate
+// that refuses an incomplete or unscanned scope.
+export function scopeUnionUnchecked(namespace) {
+  const scopeFn = canonicalCore.getCutoverRuntimeCollectionScope;
+  if (typeof scopeFn !== 'function') throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent');
+  return unionNamesOf(scopeFn(namespace));
+}
+
+// One fixture per (bundle, namespace, epoch, nonce, descriptor) for this process. The action and options are
+// not part of the cache key: each step rewrites them in request.json.
 const fixtures = new Map();
-export function fixtureFor({ bundleBytes, namespace, epoch, nonce = '1', subjectDescriptor = null }) {
-  const cacheKey = JSON.stringify([namespace, epoch, nonce, subjectDescriptor]);
+export function fixtureFor({ bundleBytes, namespace, epoch, nonce = '1', subjectDescriptor = null, collectionGroups }) {
+  const bundleSha = createHash('sha256').update(bundleBytes).digest('hex');
+  const cacheKey = JSON.stringify([bundleSha, namespace, epoch, nonce, subjectDescriptor]);
   if (!fixtures.has(cacheKey)) {
     fixtures.set(cacheKey, createSyntheticFixture({
       canonicalJson,
       formatPAE,
       bundleBytes,
-      collectionGroups: reviewedUnion(namespace),
+      collectionGroups: collectionGroups ?? reviewedUnion(namespace),
       namespace,
       epoch,
       action: 'inspect',
@@ -99,8 +116,8 @@ export function runFactory(argv) {
 // One protected step: mount this fixture with the step's action and options, then run it with the factory's
 // argv. For adopt, pass the inspect digest in options.expectedSourceInventoryDigest, from a prior inspect
 // against the same emulator state.
-export function runStep({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null }) {
-  const fixture = fixtureFor({ bundleBytes, namespace, epoch, nonce, subjectDescriptor });
+export function runStep({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null, collectionGroups }) {
+  const fixture = fixtureFor({ bundleBytes, namespace, epoch, nonce, subjectDescriptor, collectionGroups });
   mountFixture(fixture, action, options);
   return runFactory(argvFor(action, namespace, options));
 }
