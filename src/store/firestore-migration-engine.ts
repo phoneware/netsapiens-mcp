@@ -70,6 +70,7 @@ import type { FirestoreLike } from './firestore-like.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
+import { assertPreparedIdentity, NONEMPTY_PROJECTOR_KEYS, REQUIRED_PREPARED_MANIFEST_KEYS, validateMapKeysExact } from '../cutover/canonical-core.mjs';
 import { PROJECTOR_ID, PROJECTOR_VERSION } from './netsapiens-projector.mjs';
 import type { ProtectedBinding } from './protected-binding.js';
 import { observeFreshIndexes } from './fresh-index-producer.js';
@@ -2037,7 +2038,22 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         prepDoc.assemblyDigest !== assemblyDigest || prepDoc.indexSchemaDigest !== indexSchemaDigest) {
         throw new CutoverFenceError('Prepared manifest identity or inventory mismatch during resume');
       }
+      if (prepDoc.encoderVersion !== 1 || prepDoc.namespace !== namespace || prepDoc.epoch !== expectedEpoch ||
+        prepDoc.migrationRunId !== migrationRunId || control.migrationRunId !== migrationRunId) {
+        throw new CutoverFenceError('Prepared manifest identity does not match the control record during resume');
+      }
+      // The reviewed core's identity check, the same one its migrating branch applies before it accepts a stored doc.
+      assertPreparedIdentity(prepDoc, {
+        namespace, epoch: expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity,
+        protocolDigest, assemblyDigest, indexSchemaDigest, encoderVersion: 1,
+      }, namespace);
 
+      // The stored manifest carries exactly the core's key list, plus the projector keys once records exist.
+      validateMapKeysExact(
+        prepDoc,
+        prepDoc.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS,
+        'prepared manifest',
+      );
       // Validate planSpec binding
       const computedPlanDigest = computePlanDigest(namespace, control.epoch, prepDoc.planSpec);
       if (prepDoc.planDigest !== computedPlanDigest) {
@@ -2060,11 +2076,20 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       });
     }
 
+    // A fenced namespace must not already hold a prepared manifest. One that does is an inconsistent state, and
+    // the engine refuses it rather than overwriting or resuming it.
+    const existingPreparedRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
+    if ((await transaction.get(existingPreparedRef)).exists) {
+      throw new CutoverFenceError(`Inconsistent state: prepared manifest exists while cutover state is 'fenced' for namespace ${namespace}`);
+    }
+    timer.assertUnderDeadline(16_000, 'Fenced prepared check');
+
 
     const { candidates, sourceInventoryDigest, plan } = await readPreparationInputs(transaction, {
       db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
       packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
+    timer.assertUnderDeadline(16_000, 'Preparation source scan');
 
     const preparationBinding = getProtectedBinding(db);
     if (!preparationBinding) throw new CutoverRefusedError('Protected migration context required for preparation');
