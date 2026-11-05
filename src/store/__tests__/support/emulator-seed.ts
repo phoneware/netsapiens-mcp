@@ -10,7 +10,8 @@ export const EMULATOR = { projectId: 'demo-netsapiens-cutover', host: '127.0.0.1
 
 // The fence epoch every runner suite seeds at. The runner's identity carries the same epoch, so an adopt
 // with expectedEpoch equal to this value matches the fence.
-export const EPOCH = 2;
+// initializeCutoverFence accepts only epoch 1 for a new namespace (it throws "must be exactly 1").
+export const EPOCH = 1;
 
 // Every collection the preparation can read or write for a namespace, for clearing and snapshots.
 export function groupsFor(namespace: string): string[] {

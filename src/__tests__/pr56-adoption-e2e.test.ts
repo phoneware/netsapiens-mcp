@@ -14,10 +14,10 @@ import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { deriveStoreKey } from '../store/codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
 import { getCutoverFenceRecord, transitionCutoverFenceState } from '../store/firestore-v2-adoption.js';
-import { startFakeAdmin } from './support/fake-admin.mjs';
-import { assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
-import { fixtureFor, runStep, sessionSecretOf } from './support/runner-harness.mjs';
-import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from './support/emulator-seed.js';
+import { startFakeAdmin } from '../store/__tests__/support/fake-admin.mjs';
+import { assertCanOwnMounts, containerGateOpen, releaseMounts } from '../store/__tests__/support/mounts.mjs';
+import { fixtureFor, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
+import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from '../store/__tests__/support/emulator-seed.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUNDLE_SOURCE = resolve(here, '..', 'store', 'cutover-protocol.mjs');
