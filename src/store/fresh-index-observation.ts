@@ -51,22 +51,6 @@ function requireObservation(db: object, purpose: FreshIndexObservation['purpose'
   return observation;
 }
 
-// The authenticated recorded preparation observation for this handle, for the preparation seam. It is the
-// same record the preparation gate checked: purpose, namespace, epoch, run, policy digest, admin token
-// digest and age are all re-verified against the binding now. It never observes again, so there is one
-// observation per handle. A caller cannot supply it; it refuses unless the recorded one matches.
-export function recordedPreparationObservation(db: object, binding: ProtectedBinding): FreshIndexObservation {
-  return requireObservation(db, 'preparation', binding);
-}
-
-// True only when this exact object is the observation recorded for the handle and it is still within the
-// freshness window. A structurally identical copy, a fake, another handle's record or a stale record is refused.
-// Identity comes from the module's single WeakMap, so no caller can forge it.
-export function isRecordedObservation(db: object, observation: unknown): boolean {
-  if (observation === undefined || observations.get(db) !== observation) return false;
-  const ageNs = process.hrtime.bigint() - (observation as FreshIndexObservation).completedAtNs;
-  return ageNs >= 0n && ageNs <= FRESH_INDEX_OBSERVATION_MAX_AGE_NS;
-}
 
 // TTL schema for prospective targets. The settled expiry metadata is the row's own
 // stored field: sessions carry ttlAt = retainUntil, auth codes and resume tokens
