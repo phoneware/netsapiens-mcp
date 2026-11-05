@@ -69,7 +69,8 @@ interface TransactionLike {
 }
 export interface FirestoreLike {
   collection(path: string): CollectionLike;
-  runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>): Promise<T>;
+  // readOnly transactions take no write locks. Inspect, verify and status use them.
+  runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
 }
 
 export interface FirestoreCollections {

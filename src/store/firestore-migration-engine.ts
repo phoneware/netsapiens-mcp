@@ -58,13 +58,13 @@ import {
   prepareMigrationInTransaction,
   finalizeMigrationInTransaction,
   activateMigrationInTransaction,
-  verifyActiveMigrationInTransaction,
   markIrreversibleInTransaction,
   getCutoverDistinctCollectionNames,
   isTargetFormatRow,
   parseCutoverFenceRecord,
   validateMigrationIdentityFields,
 } from '../cutover/canonical-core.mjs';
+import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
@@ -1618,6 +1618,9 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in inspect: expected ${expectedEpoch}, got ${control.epoch}`);
     }
+    if (control.state !== 'fenced') {
+      throw new CutoverFenceError(`Inspect requires a fenced namespace: state is '${control.state}'`);
+    }
 
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
@@ -1806,7 +1809,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       expectedTargetCounts,
       preflight,
     };
-  });
+  }, { readOnly: true });
 }
 
 // Fields each prospective group writes, from the concrete paths of the plan's
@@ -2607,16 +2610,22 @@ export async function verifyActiveFirestoreMigration(
   if (typeof context.migrationManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
     throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
   }
+  // Read-only: verification never writes, so it takes a read-only transaction and holds no
+  // write locks. The reviewed core supplies the verification; refuse while it is absent.
+  const verifyActive = (canonicalCoreVerify as Record<string, unknown>).verifyActiveMigrationInTransaction;
+  if (typeof verifyActive !== 'function') {
+    throw new CutoverRefusedError('Active verification requires verifyActiveMigrationInTransaction from the reviewed canonical core, which this build does not export');
+  }
   return context.db.runTransaction(async transaction => {
     const timer = startMonotonicTimer();
-    const result = await verifyActiveMigrationInTransaction(transaction, context.db, {
+    const result = await (verifyActive as (...args: unknown[]) => Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }>)(transaction, context.db, {
       ...context,
       storeKey: context.key,
       timer,
     });
     timer.assertUnderDeadline(16_000, 'Active ownership verification');
     return result;
-  });
+  }, { readOnly: true });
 }
 
 export async function activateFirestoreMigration(context: MigrationContext & { migrationManifestDigest: string }): Promise<{
@@ -2794,5 +2803,5 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       planDigest,
       sourceInventoryDigest,
     };
-  });
+  }, { readOnly: true });
 }
