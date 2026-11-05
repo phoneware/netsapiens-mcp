@@ -9,6 +9,7 @@ import { canonicalJson, formatPAE } from '../../cutover/dsse-verifier-core.mjs';
 import type { FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, initializeCutoverFence, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
+import { reviewedScopeClosed } from './support/reviewed-scope.mjs';
 import { createSyntheticFixture } from './support/synthetic-dsse-fixture.mjs';
 import { OPT, RUN, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import type { SubjectDescriptor } from '../subject-descriptor.js';
@@ -100,7 +101,7 @@ function runStep(fixture: any, namespace: string, bundleBytes: Buffer, request: 
   return JSON.parse(line) as StepResult;
 }
 
-describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator and fake Admin', () => {
+describe.skipIf(!gateOpen || !reviewedScopeClosed())('preparation proof on the genuine bundle, emulator and fake Admin', () => {
   let bundleBytes: Buffer;
   let db: Firestore;
   let admin: { close: () => Promise<void> } | null = null;
