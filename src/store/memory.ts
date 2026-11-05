@@ -1,4 +1,5 @@
 import { CutoverRefusedError } from './errors.js';
+import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
 import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -20,7 +21,7 @@ import type {
 
 export class MemoryBackend implements StoreBackend {
   readonly name = 'memory';
-  readonly capabilities: StoreCapabilities = { persistent: false, multiInstance: false, exclusive: false, expiry: 'sweep' };
+  readonly capabilities: StoreCapabilities = { persistent: false, multiInstance: false, subjectGuards: true, exclusive: false, expiry: 'sweep' };
   readonly state = {
     access: new Map<string, AccessRow>(),
     refresh: new Map<string, RefreshPointerRow>(),
@@ -32,6 +33,7 @@ export class MemoryBackend implements StoreBackend {
     usage: new Map<string, { userHash: string; toolName: string; count: number; lastUsed: number }>(),
     clients: new Map<string, OAuthClientInformationFull>(),
     sessions: new Map<string, SessionRow>(),
+    guardDocuments: new Map<string, Record<string, unknown>>(),
   };
 
   async getAccess(id: string): Promise<AccessRow | undefined> { return this.state.access.get(id); }
@@ -44,6 +46,17 @@ export class MemoryBackend implements StoreBackend {
 
   async getFamily(id: string): Promise<FamilyRow | undefined> { return this.state.families.get(id); }
   async putFamily(row: FamilyRow): Promise<void> { this.state.families.set(row.id, row); }
+  // Guard documents are owned by the memory store here. Reads happen in the same synchronous step as the write they gate.
+  guardAllows(guard: SubjectGuard): boolean {
+    assertSubjectGuardShape(guard);
+    return subjectGuardAllows(this.state.guardDocuments.get(`${guard.collection}\0${guard.documentId}`), guard);
+  }
+  async putGuardDocument(collection: string, id: string, data: Record<string, unknown>): Promise<void> {
+    this.state.guardDocuments.set(`${collection}\0${id}`, data);
+  }
+  async deleteGuardDocument(collection: string, id: string): Promise<void> {
+    this.state.guardDocuments.delete(`${collection}\0${id}`);
+  }
   // Finds families by keyed subject reference. The memory store keeps them in its own map.
   async findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
     const matches: Array<{ id: string; status: 'active' | 'revoked' }> = [];
@@ -56,9 +69,9 @@ export class MemoryBackend implements StoreBackend {
     return matches;
   }
 
-  // Guarded issuance is refused: the memory store has no guard documents to read.
+  // The guard is checked and the rows written in one synchronous step, so no other write can interleave.
   async atomicIssue(params: AtomicIssueParams): Promise<void> {
-    if (params.subjectGuard) throw new CutoverRefusedError('In-memory store cannot enforce a subject guard');
+    if (params.subjectGuard && !this.guardAllows(params.subjectGuard)) throw new CutoverRefusedError('Subject is not active for this issuance');
     this.state.access.set(params.accessRow.id, params.accessRow);
     this.state.refresh.set(params.refreshRow.id, params.refreshRow);
     this.state.families.set(params.familyRow.id, params.familyRow);
@@ -227,11 +240,11 @@ export class MemoryBackend implements StoreBackend {
   async getAuthCode(id: string): Promise<AuthCodeRow | undefined> { return this.state.authCodes.get(id); }
   async takeAuthCode(id: string): Promise<AuthCodeRow | undefined> { const row = this.state.authCodes.get(id); this.state.authCodes.delete(id); return row; }
   async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
-    if (params.subjectGuard) throw new CutoverRefusedError('In-memory store cannot enforce a subject guard');
     const row = this.state.authCodes.get(params.codeId);
     if (!row) return undefined;
     if (row.expiresAt <= params.now) return undefined;
     if (params.expectedSealed && row.sealed !== params.expectedSealed) return undefined;
+    if (params.subjectGuard && !this.guardAllows(params.subjectGuard)) return undefined;
     this.state.authCodes.delete(params.codeId);
     await this.atomicIssue(params.issue);
     return row;

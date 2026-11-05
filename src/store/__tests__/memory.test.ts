@@ -4,7 +4,7 @@ import { createMemoryBackend, MemoryBackend } from '../memory.js';
 
 runStoreConformance({
   name: 'memory',
-  capabilities: { persistent: false, multiInstance: false, exclusive: false, expiry: 'sweep' },
+  capabilities: { persistent: false, multiInstance: false, subjectGuards: true, exclusive: false, expiry: 'sweep' },
   async openBackend() { return createMemoryBackend(); },
   async inspect(handle) {
     const state = (handle as MemoryBackend).state;

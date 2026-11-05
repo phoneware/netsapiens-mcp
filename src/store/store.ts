@@ -668,6 +668,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         expectedSealed?: string,
         subject?: { extraKey: string; value: string; guard?: SubjectGuard },
       ): Promise<AuthCodeData | undefined> {
+        if (subject && !backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot enforce a subject guard');
         const codeId = codec.id('code', code);
         const row = await backend.getAuthCode(codeId);
         const existing = decodeCode(row, expected);
@@ -791,6 +792,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     // the call finds only already-revoked families and changes nothing. `more`
     // reports that the bounded page was full, so the caller repeats.
     revokeSubject: async (extraKey: string, value: string, options: { limit: number }) => {
+      if (!backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot revoke by subject');
       if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new CutoverRefusedError('revokeSubject limit must be a positive safe integer');
       const ref = subjectRefFor(key, namespace, extraKey, value);
       const page = await backend.findFamilyIdsBySubjectRef(ref, options.limit + 1);
@@ -801,6 +803,15 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         if (await backend.atomicRevokeFamily(family.id) === 'revoked') revoked++;
       }
       return { revoked, more };
+    },
+    // Guard documents exist only on backends that own them; others refuse the call.
+    putGuardDocument: async (collection: string, id: string, data: Record<string, unknown>) => {
+      if (!backend.putGuardDocument) throw new CutoverRefusedError('This store does not own guard documents');
+      await backend.putGuardDocument(collection, id, data);
+    },
+    deleteGuardDocument: async (collection: string, id: string) => {
+      if (!backend.deleteGuardDocument) throw new CutoverRefusedError('This store does not own guard documents');
+      await backend.deleteGuardDocument(collection, id);
     },
     sweep: (now: number) => backend.sweep(now),
     close: () => backend.close(),

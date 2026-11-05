@@ -26,7 +26,7 @@ afterAll(() => rmSync(conformanceRoot, { recursive: true, force: true, maxRetrie
 const conformancePath = (namespace: string) => join(conformanceRoot, `${namespace}.sqlite`);
 runStoreConformance({
   name: 'sqlite',
-  capabilities: { persistent: true, multiInstance: false, exclusive: true, expiry: 'sweep' },
+  capabilities: { persistent: true, multiInstance: false, subjectGuards: true, exclusive: true, expiry: 'sweep' },
   async openBackend(namespace) { return createSqliteBackend({ path: conformancePath(namespace), namespace }); },
   async inspect(handle) {
     const db = (handle as SqliteBackend).db;

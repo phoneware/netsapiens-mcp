@@ -7,6 +7,8 @@ import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/share
 import { createCodec, StoreConfigError, StoreLockedError } from './codec.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
 import { logger } from '../utils/logger.js';
+import { CutoverRefusedError } from './errors.js';
+import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
 import type {
   AccessRow,
   AuthCodeRow,
@@ -27,7 +29,7 @@ import type {
 type SqlValue = string | number | null;
 type Statement = { run(...values: SqlValue[]): { changes: number | bigint }; get(...values: SqlValue[]): Record<string, SqlValue> | undefined; all(...values: SqlValue[]): Record<string, SqlValue>[] };
 type Database = { exec(sql: string): void; prepare(sql: string): Statement; close(): void };
-const capabilities: StoreCapabilities = { persistent: true, multiInstance: false, exclusive: true, expiry: 'sweep' };
+const capabilities: StoreCapabilities = { persistent: true, multiInstance: false, subjectGuards: true, exclusive: true, expiry: 'sweep' };
 
 function accessRow(row: Record<string, SqlValue> | undefined): AccessRow | undefined {
   if (!row) return undefined;
@@ -143,6 +145,19 @@ export class SqliteBackend implements StoreBackend {
       } catch (error) {
         db.exec('ROLLBACK');
         throw error;
+      }
+    };
+
+    // Subject guards read their document inside the caller's transaction, so the
+    // guard check and the credential write are one step, as in the Firestore store.
+    const guardAllowsSync = (guard: SubjectGuard): boolean => {
+      assertSubjectGuardShape(guard);
+      const row = db.prepare('SELECT data FROM guard_documents WHERE collection=? AND id=?').get(guard.collection, guard.documentId);
+      return row !== undefined && subjectGuardAllows(JSON.parse(row.data as string) as Record<string, unknown>, guard);
+    };
+    const insertSubjectRefs = (familyId: string, refs: readonly string[] | undefined): void => {
+      for (const ref of refs ?? []) {
+        db.prepare('INSERT INTO family_subject_refs(ref,family_id) VALUES (?,?) ON CONFLICT(ref,family_id) DO NOTHING').run(ref, familyId);
       }
     };
 
@@ -269,6 +284,12 @@ export class SqliteBackend implements StoreBackend {
         COMMIT;`);
       }
 
+      // Subject tables are created on every open, so existing version-2 files gain
+      // them without a version bump.
+      db.exec(`BEGIN IMMEDIATE;
+        CREATE TABLE IF NOT EXISTS family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
+        CREATE TABLE IF NOT EXISTS guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
+      COMMIT;`);
       const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
       if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
       db.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES ('namespace',?)").run(namespace);
@@ -335,9 +356,8 @@ export class SqliteBackend implements StoreBackend {
           .run(row.id, row.grantVersion, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.updatedAt, row.sealed);
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
-        if (params.subjectGuard) throw new StoreConfigError('The sqlite store cannot enforce a subject guard');
-        if (params.familyRow.subjectRefs?.length) throw new StoreConfigError('The sqlite store does not persist subject references');
         transaction(() => {
+          if (params.subjectGuard && !guardAllowsSync(params.subjectGuard)) throw new CutoverRefusedError('Subject is not active for this issuance');
           db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,sealed=excluded.sealed`)
             .run(params.accessRow.id, params.accessRow.familyId, params.accessRow.expiresAt, params.accessRow.retainUntil, params.accessRow.sealed);
@@ -353,6 +373,7 @@ export class SqliteBackend implements StoreBackend {
           db.prepare(`INSERT INTO upstream_grants(id,grant_version,ns_expires_at,lease_owner,lease_until,updated_at,sealed) VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET grant_version=excluded.grant_version,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,updated_at=excluded.updated_at,sealed=excluded.sealed`)
             .run(params.upstreamRow.id, params.upstreamRow.grantVersion, params.upstreamRow.nsExpiresAt ?? null, params.upstreamRow.leaseOwner ?? null, params.upstreamRow.leaseUntil ?? null, params.upstreamRow.updatedAt, params.upstreamRow.sealed);
+          insertSubjectRefs(params.familyRow.id, params.familyRow.subjectRefs);
         });
       },
 
@@ -504,18 +525,19 @@ export class SqliteBackend implements StoreBackend {
 
       async putAuthCode(row: AuthCodeRow) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
       async getAuthCode(id: string) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
-      async findFamilyIdsBySubjectRef(_subjectRef: string, _limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
-        throw new StoreConfigError('Subject revocation is not supported by the sqlite store; use the firestore store');
+      async findFamilyIdsBySubjectRef(subjectRef: string, limit: number) {
+        return db.prepare('SELECT f.id AS id, f.status AS status FROM family_subject_refs r JOIN refresh_families f ON f.id = r.family_id WHERE r.ref = ? ORDER BY f.id LIMIT ?')
+          .all(subjectRef, limit)
+          .map(row => ({ id: row.id as string, status: (row.status === 'active' ? 'active' : 'revoked') as 'active' | 'revoked' }));
       },
       async takeAuthCode(id: string) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
       async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
-        if (params.subjectGuard) throw new StoreConfigError('The sqlite store cannot enforce a subject guard');
-        if (params.issue.familyRow.subjectRefs?.length) throw new StoreConfigError('The sqlite store does not persist subject references');
         return transaction(() => {
           const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(params.codeId));
           if (!row) return undefined;
           if (row.expiresAt <= params.now) return undefined;
           if (params.expectedSealed && row.sealed !== params.expectedSealed) return undefined;
+          if (params.subjectGuard && !guardAllowsSync(params.subjectGuard)) return undefined;
           db.prepare('DELETE FROM auth_codes WHERE id=?').run(params.codeId);
 
           db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)
@@ -529,6 +551,7 @@ export class SqliteBackend implements StoreBackend {
           db.prepare(`INSERT INTO refresh_families(id,generation,status,active_refresh_id,current_access_token_id,revoked_at,updated_at,sealed) VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,status=excluded.status,active_refresh_id=excluded.active_refresh_id,current_access_token_id=excluded.current_access_token_id,revoked_at=excluded.revoked_at,updated_at=excluded.updated_at,sealed=excluded.sealed`)
             .run(params.issue.familyRow.id, params.issue.familyRow.generation, params.issue.familyRow.status, params.issue.familyRow.activeRefreshId, params.issue.familyRow.currentAccessTokenId, params.issue.familyRow.revokedAt ?? null, params.issue.familyRow.updatedAt, params.issue.familyRow.sealed);
+          insertSubjectRefs(params.issue.familyRow.id, params.issue.familyRow.subjectRefs);
 
           db.prepare(`INSERT INTO upstream_grants(id,grant_version,ns_expires_at,lease_owner,lease_until,updated_at,sealed) VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET grant_version=excluded.grant_version,ns_expires_at=excluded.ns_expires_at,lease_owner=excluded.lease_owner,lease_until=excluded.lease_until,updated_at=excluded.updated_at,sealed=excluded.sealed`)
@@ -542,6 +565,12 @@ export class SqliteBackend implements StoreBackend {
       async listUsage(userHash) { return db.prepare('SELECT tool_name,count,last_used FROM usage WHERE user_hash=?').all(userHash).map(row => ({ toolName: row.tool_name as string, count: row.count as number, lastUsed: row.last_used as number })); },
       async getClient(id) { const row = db.prepare('SELECT value FROM oauth_clients WHERE id=?').get(id); return row ? JSON.parse(row.value as string) as OAuthClientInformationFull : undefined; },
       async putClient(client) { db.prepare('INSERT OR REPLACE INTO oauth_clients(id,value) VALUES(?,?)').run(client.client_id, JSON.stringify(client)); },
+      async putGuardDocument(collection: string, id: string, data: Record<string, unknown>) {
+        db.prepare('INSERT OR REPLACE INTO guard_documents(collection,id,data) VALUES (?,?,?)').run(collection, id, JSON.stringify(data));
+      },
+      async deleteGuardDocument(collection: string, id: string) {
+        db.prepare('DELETE FROM guard_documents WHERE collection=? AND id=?').run(collection, id);
+      },
       async sweep(now) { return sweep(now); },
       async close() { if (!closed) { closed = true; clearInterval(timer); db.close(); } },
       async getSession(id) {

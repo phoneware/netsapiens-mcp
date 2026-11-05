@@ -60,7 +60,7 @@ describe.skipIf(!host)('Firestore emulator', () => {
  beforeAll(checkEmulator);
  afterAll(async () => { for (const ns of handles.keys()) await cleanup(ns); });
  runStoreConformance({
-  name: 'firestore', capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
+  name: 'firestore', capabilities: { persistent: true, multiInstance: true, subjectGuards: true, exclusive: false, expiry: 'ttl-policy' },
   async openBackend(ns) {
    const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
    handles.set(ns, [...(handles.get(ns) ?? []), db]);

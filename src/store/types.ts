@@ -85,6 +85,8 @@ export interface UsageRecord { count: number; lastUsed: number; }
 export interface StoreCapabilities {
   persistent: boolean;
   multiInstance: boolean;
+  /** True when atomic issue and redeem enforce a subject guard in their transaction, persist subject references, and support revokeSubject. */
+  subjectGuards: boolean;
   exclusive: boolean;
   expiry: 'sweep' | 'ttl-policy';
 }
@@ -143,6 +145,8 @@ export interface McpStore {
   readonly authCodes: AuthCodeStore; readonly resumeTokens: ResumeTokenStore; readonly usage: UsageStore;
   sweep?(now: number): Promise<number>;
   revokeSubject(extraKey: string, value: string, options: { limit: number }): Promise<{ revoked: number; more: boolean }>;
+  putGuardDocument(collection: string, id: string, data: Record<string, unknown>): Promise<void>;
+  deleteGuardDocument(collection: string, id: string): Promise<void>;
   close(): Promise<void>;
 }
 export interface UpstreamSealedData {
@@ -243,6 +247,11 @@ export interface StoreBackend {
     condition?: RevokeCondition,
   ): Promise<'revoked' | 'stale' | 'missing'>;
   findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>>;
+  // Guard documents are written here only by backends that own them (memory and
+  // sqlite). Firestore guard documents belong to the application and are read
+  // inside the credential transaction, never written by the store.
+  putGuardDocument?(collection: string, id: string, data: Record<string, unknown>): Promise<void>;
+  deleteGuardDocument?(collection: string, id: string): Promise<void>;
   findFamilyByRetiredId?(retiredId: string): Promise<FamilyRow | undefined>;
 
   // Compatibility methods for v1 session operations

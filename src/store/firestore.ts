@@ -183,7 +183,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
 export interface FirestoreBackend extends StoreBackend { }
 export class FirestoreBackend implements StoreBackend {
   readonly name = 'firestore';
-  readonly capabilities: StoreCapabilities = { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' };
+  readonly capabilities: StoreCapabilities = { persistent: true, multiInstance: true, subjectGuards: true, exclusive: false, expiry: 'ttl-policy' };
   readonly db: FirestoreLike;
   readonly collections: FirestoreCollections;
 
