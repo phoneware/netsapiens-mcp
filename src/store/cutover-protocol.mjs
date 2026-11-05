@@ -5593,9 +5593,9 @@ function bindProtectedContext(db, binding) {
   if (bindings.has(db)) {
     throw new CutoverFenceError("Protected migration database handle is already bound");
   }
-  const privateKey = Buffer.from(binding.key);
+  const privateKey = Uint8Array.from(binding.key);
   const stored = { ...binding, get key() {
-    return Buffer.from(privateKey);
+    return Uint8Array.from(privateKey);
   } };
   bindings.set(db, deepFreeze(stored));
 }

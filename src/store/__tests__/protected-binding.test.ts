@@ -14,15 +14,15 @@ describe('protected binding key isolation', () => {
   it.each([Buffer.alloc(32, 7), new Uint8Array(32).fill(7)])('binds nonempty byte views', key => {
     const f = fixture(key);
     expect(() => bindProtectedContext(f.db, f.binding)).not.toThrow();
-    expect(assertProtectedContext(f.context, request).key).toEqual(Buffer.alloc(32, 7));
+    expect(Array.from(assertProtectedContext(f.context, request).key)).toEqual(Array(32).fill(7));
   });
   it('keeps the original authority after the input is mutated', () => {
     const f = fixture();
     bindProtectedContext(f.db, f.binding);
     f.key[0] ^= 1;
-    expect(getProtectedBinding(f.db)!.key).toEqual(Buffer.alloc(32, 7));
+    expect(Array.from(getProtectedBinding(f.db)!.key)).toEqual(Array(32).fill(7));
     expect(() => assertProtectedContext(f.context, request)).toThrow(/does not match/);
-    expect(assertProtectedContext({ ...f.context, key: Buffer.alloc(32, 7) }, request).key).toEqual(Buffer.alloc(32, 7));
+    expect(Array.from(assertProtectedContext({ ...f.context, key: Buffer.alloc(32, 7) }, request).key)).toEqual(Array(32).fill(7));
   });
   it('never exposes retained key bytes through returned views', () => {
     const f = fixture();
@@ -32,11 +32,14 @@ describe('protected binding key isolation', () => {
     const second = getProtectedBinding(f.db)!.key;
     second.subarray(0, 4).set([1, 2, 3, 4]);
     const third = getProtectedBinding(f.db)!.key;
-    new Uint8Array(third.buffer, third.byteOffset, third.byteLength).fill(9);
-    expect(getProtectedBinding(f.db)!.key).toEqual(Buffer.alloc(32, 7));
+    const fourth = getProtectedBinding(f.db)!.key;
+    expect(third.buffer).not.toBe(fourth.buffer);
+    new Uint8Array(third.buffer).fill(9);
+    expect(Array.from(fourth)).toEqual(Array(32).fill(7));
+    expect(Array.from(getProtectedBinding(f.db)!.key)).toEqual(Array(32).fill(7));
     const accepted = assertProtectedContext(f.context, request);
-    accepted.key.fill(0);
-    expect(getProtectedBinding(f.db)!.key).toEqual(Buffer.alloc(32, 7));
+    new Uint8Array(accepted.key.buffer).fill(0);
+    expect(Array.from(getProtectedBinding(f.db)!.key)).toEqual(Array(32).fill(7));
     expect(() => assertProtectedContext(f.context, request)).toThrow(/already used/);
   });
   it('freezes nested policy, descriptor and authorized options', () => {

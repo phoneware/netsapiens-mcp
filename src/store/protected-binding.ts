@@ -64,8 +64,9 @@ export function bindProtectedContext(db: object, binding: ProtectedBinding): voi
   if (bindings.has(db)) {
     throw new CutoverFenceError('Protected migration database handle is already bound');
   }
-  const privateKey = Buffer.from(binding.key);
-  const stored = { ...binding, get key() { return Buffer.from(privateKey); } };
+  // Dedicated ArrayBuffers prevent a caller from reaching the retained key through a pooled Buffer's `.buffer`.
+  const privateKey = Uint8Array.from(binding.key);
+  const stored = { ...binding, get key() { return Uint8Array.from(privateKey); } };
   bindings.set(db, deepFreeze(stored));
 }
 
