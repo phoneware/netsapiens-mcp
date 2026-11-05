@@ -25,7 +25,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
 const PREPARE_RUNNER = resolve(here, 'support', 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', 'node_modules');
-const EPOCH = 2;
+// initializeCutoverFence accepts only epoch 1 for a new namespace. The fixture's signed identity derives its
+// migration run id from this same epoch, so the fence and the signed binding agree.
+const EPOCH = 1;
 const EMULATOR = { projectId: 'demo-netsapiens-cutover', host: '127.0.0.1', port: 8080, ssl: false, ignoreUndefinedProperties: false };
 const DESCRIPTOR: SubjectDescriptor = { allow: ['active'], collection: 'seats', extraKey: 'seatId', field: 'state' };
 const LEGACY_EXPIRY = () => Date.now() + 3_600_000;
