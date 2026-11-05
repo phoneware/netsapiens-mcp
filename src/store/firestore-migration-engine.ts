@@ -796,6 +796,10 @@ export function extractCandidatesAndPlan(params: {
     claimedAccessIds.add(tokEntry.credentialToken);
 
     const tokData = tokEntry.data || {};
+    // A family-linked token that no family claimed is an orphan, not a standalone base token.
+    // Leave it unclaimed for the orphan census below; otherwise projection may throw on unrelated
+    // missing base fields and never report the broken family link.
+    if (tokData.refreshFamilyId != null || tokData.familyId != null) continue;
     if (typeof tokData.refreshToken !== 'string' || tokData.refreshToken.length === 0) {
       malformedDocKeys.add(`tokens:${tokEntry.doc.id}`);
       reasons.malformedRecords++;

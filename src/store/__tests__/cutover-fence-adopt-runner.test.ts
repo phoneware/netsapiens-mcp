@@ -278,9 +278,9 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     expect(init.irreversible).toBe(false);
     await seedDocs(db, [
       [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'tok-1', clientId: 'client-leg', scope: 'read', createdAt: now, updatedAt: now }],
-      [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
+      [`${NS}_tokens_refresh/ref-1`, { refreshToken: 'ref-1', accessToken: 'tok-1', familyId: 'fam-1', status: 'active', createdAt: now }],
       [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok', nsRefreshToken: 'ns-ref', nsUsername: 'user@domain.com', updatedAt: now }],
-      [`${NS}_tokens/tok-1`, { familyId: 'fam-1', accessToken: 'tok-1', clientId: 'client-leg', expiresAt: now + 3600_000 }],
+      [`${NS}_tokens/tok-1`, { familyId: 'fam-1', accessToken: 'tok-1', refreshToken: 'ref-1', clientId: 'client-leg', expiresAt: now + 3600_000 }],
     ]);
 
     let executedOp = false;
