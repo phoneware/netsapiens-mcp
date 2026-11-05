@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createCodec, type Codec, LeaseLostError, RetryableRefreshError } from './codec.js';
+import { CutoverRefusedError } from './errors.js';
+import { subjectRefFor, type SubjectGuard } from './subject-guard.js';
 import type {
   AccessRow,
   AtomicIssueParams,
@@ -664,6 +666,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         tokens: { accessToken: string; refreshToken: string },
         stored: StoredToken,
         expectedSealed?: string,
+        subject?: { extraKey: string; value: string; guard?: SubjectGuard },
       ): Promise<AuthCodeData | undefined> {
         const codeId = codec.id('code', code);
         const row = await backend.getAuthCode(codeId);
@@ -701,6 +704,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
             id: familyId,
             generation,
             status: 'active',
+            ...(subject ? { subjectRefs: [subjectRefFor(key, namespace, subject.extraKey, subject.value)] } : {}),
             activeRefreshId: refreshId,
             currentAccessTokenId: accessId,
             updatedAt: now,
@@ -729,6 +733,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         if (backend.atomicRedeemCodeAndIssue) {
           const redeemedRow = await backend.atomicRedeemCodeAndIssue({
             codeId,
+            subjectGuard: subject?.guard,
             expectedSealed: expectedSealed ?? row.sealed,
             now,
             issue: issueParams,
@@ -736,6 +741,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
           return redeemedRow ? decodeCode(redeemedRow, expected) : undefined;
         }
 
+        if (subject?.guard) throw new CutoverRefusedError('Subject-guarded redeem requires the atomic store path');
         const redeemed = decodeCode(await backend.takeAuthCode(codeId), expected);
         if (!redeemed) return undefined;
         await backend.atomicIssue(issueParams);
@@ -781,6 +787,21 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       },
     },
 
+    // Revokes active families carrying the keyed subject reference. Repeating
+    // the call finds only already-revoked families and changes nothing. `more`
+    // reports that the bounded page was full, so the caller repeats.
+    revokeSubject: async (extraKey: string, value: string, options: { limit: number }) => {
+      if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new CutoverRefusedError('revokeSubject limit must be a positive safe integer');
+      const ref = subjectRefFor(key, namespace, extraKey, value);
+      const page = await backend.findFamilyIdsBySubjectRef(ref, options.limit + 1);
+      const more = page.length > options.limit;
+      let revoked = 0;
+      for (const family of page.slice(0, options.limit)) {
+        if (family.status !== 'active') continue;
+        if (await backend.atomicRevokeFamily(family.id) === 'revoked') revoked++;
+      }
+      return { revoked, more };
+    },
     sweep: (now: number) => backend.sweep(now),
     close: () => backend.close(),
   };

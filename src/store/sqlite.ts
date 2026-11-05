@@ -335,6 +335,8 @@ export class SqliteBackend implements StoreBackend {
           .run(row.id, row.grantVersion, row.nsExpiresAt ?? null, row.leaseOwner ?? null, row.leaseUntil ?? null, row.updatedAt, row.sealed);
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
+        if (params.subjectGuard) throw new StoreConfigError('The sqlite store cannot enforce a subject guard');
+        if (params.familyRow.subjectRefs?.length) throw new StoreConfigError('The sqlite store does not persist subject references');
         transaction(() => {
           db.prepare(`INSERT INTO sessions(id,family_id,expires_at,retain_until,sealed) VALUES (?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET family_id=excluded.family_id,expires_at=excluded.expires_at,retain_until=excluded.retain_until,sealed=excluded.sealed`)
@@ -502,8 +504,13 @@ export class SqliteBackend implements StoreBackend {
 
       async putAuthCode(row: AuthCodeRow) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
       async getAuthCode(id: string) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
+      async findFamilyIdsBySubjectRef(_subjectRef: string, _limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
+        throw new StoreConfigError('Subject revocation is not supported by the sqlite store; use the firestore store');
+      },
       async takeAuthCode(id: string) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
       async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
+        if (params.subjectGuard) throw new StoreConfigError('The sqlite store cannot enforce a subject guard');
+        if (params.issue.familyRow.subjectRefs?.length) throw new StoreConfigError('The sqlite store does not persist subject references');
         return transaction(() => {
           const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(params.codeId));
           if (!row) return undefined;

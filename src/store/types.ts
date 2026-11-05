@@ -1,3 +1,4 @@
+import type { SubjectGuard } from './subject-guard.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { PendingAuthorization, NsTokenResponse } from '../auth/types.js';
@@ -59,12 +60,14 @@ export interface AtomicIssueParams {
   refreshRow: RefreshPointerRow;
   familyRow: FamilyRow;
   upstreamRow: UpstreamGrantRow;
+  subjectGuard?: SubjectGuard;
 }
 export interface AtomicRedeemAndIssueParams {
   codeId: string;
   expectedSealed: string;
   now: number;
   issue: AtomicIssueParams;
+  subjectGuard?: SubjectGuard;
 }
 export interface UpstreamTokens {
   access_token: string;
@@ -129,6 +132,7 @@ export interface AuthCodeStore {
     tokens: { accessToken: string; refreshToken: string },
     stored: StoredToken,
     expectedSealed?: string,
+    subject?: { extraKey: string; value: string; guard?: SubjectGuard },
   ): Promise<AuthCodeData | undefined>;
 }
 export interface ResumeTokenStore { consume(resumeId: string): Promise<boolean>; }
@@ -138,6 +142,7 @@ export interface McpStore {
   readonly sessions: SessionStore; readonly clients: OAuthRegisteredClientsStore;
   readonly authCodes: AuthCodeStore; readonly resumeTokens: ResumeTokenStore; readonly usage: UsageStore;
   sweep?(now: number): Promise<number>;
+  revokeSubject(extraKey: string, value: string, options: { limit: number }): Promise<{ revoked: number; more: boolean }>;
   close(): Promise<void>;
 }
 export interface UpstreamSealedData {
@@ -183,6 +188,7 @@ export interface FamilyRow {
   status: 'active' | 'revoked';
   activeRefreshId: string;
   currentAccessTokenId: string;
+  subjectRefs?: string[];
   revokedAt?: number;
   updatedAt: number;
   sealed: string;
@@ -236,6 +242,7 @@ export interface StoreBackend {
     familyId: string,
     condition?: RevokeCondition,
   ): Promise<'revoked' | 'stale' | 'missing'>;
+  findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>>;
   findFamilyByRetiredId?(retiredId: string): Promise<FamilyRow | undefined>;
 
   // Compatibility methods for v1 session operations

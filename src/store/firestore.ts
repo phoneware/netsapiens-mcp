@@ -14,6 +14,7 @@ import { adoptFirestoreLegacyTokens, ensureFirestoreAdopted } from './firestore-
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
+import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
 import type {
   AccessRow,
   AuthCodeRow,
@@ -268,6 +269,14 @@ export class FirestoreBackend implements StoreBackend {
       }
     };
 
+    // Reads the subject guard document in the caller's transaction. Must run
+    // before any buffered write; the caller refuses when this returns false.
+    const subjectAllowed = async (tx: { get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike> }, guard: SubjectGuard): Promise<boolean> => {
+      assertSubjectGuardShape(guard);
+      const snap = await tx.get(db.collection(guard.collection).doc(guard.documentId));
+      return snap.exists && subjectGuardAllows(snap.data(), guard);
+    };
+
     const backend: StoreBackend = {
       name: 'firestore',
       capabilities: this.capabilities,
@@ -311,6 +320,9 @@ export class FirestoreBackend implements StoreBackend {
       },
       async atomicIssue(params: AtomicIssueParams): Promise<void> {
         return runCredentialTransaction(db, namespace, async tx => {
+          if (params.subjectGuard && !(await subjectAllowed(tx, params.subjectGuard))) {
+            throw new CutoverRefusedError('Subject is not active for this issuance');
+          }
           tx.set(sessions.doc(params.accessRow.id), accessData(params.accessRow));
           tx.set(refreshTokens.doc(params.refreshRow.id), refreshData(params.refreshRow));
           tx.set(refreshFamilies.doc(params.familyRow.id), familyData(params.familyRow));
@@ -318,6 +330,12 @@ export class FirestoreBackend implements StoreBackend {
         });
       },
 
+      async findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
+        await assertV3Active();
+        await ensureAdopted();
+        const snap = await refreshFamilies.where('subjectRefs', 'array-contains', subjectRef).limit(limit).get();
+        return snap.docs.map((doc) => ({ id: doc.id, status: doc.data()?.status === 'active' ? 'active' : 'revoked' }));
+      },
       async getFamily(id) {
         await assertV3Active();
         await ensureAdopted();
@@ -694,6 +712,7 @@ export class FirestoreBackend implements StoreBackend {
           }
 
 
+          if (params.subjectGuard && !(await subjectAllowed(tx, params.subjectGuard))) return undefined;
           tx.delete(codeRef);
           tx.set(sessions.doc(params.issue.accessRow.id), accessData(params.issue.accessRow));
           tx.set(refreshTokens.doc(params.issue.refreshRow.id), refreshData(params.issue.refreshRow));

@@ -1,3 +1,4 @@
+import { CutoverRefusedError } from './errors.js';
 import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
@@ -43,8 +44,21 @@ export class MemoryBackend implements StoreBackend {
 
   async getFamily(id: string): Promise<FamilyRow | undefined> { return this.state.families.get(id); }
   async putFamily(row: FamilyRow): Promise<void> { this.state.families.set(row.id, row); }
+  // Finds families by keyed subject reference. The memory store keeps them in its own map.
+  async findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
+    const matches: Array<{ id: string; status: 'active' | 'revoked' }> = [];
+    for (const family of this.state.families.values()) {
+      if (Array.isArray(family.subjectRefs) && family.subjectRefs.includes(subjectRef)) {
+        matches.push({ id: family.id, status: family.status === 'active' ? 'active' : 'revoked' });
+        if (matches.length >= limit) break;
+      }
+    }
+    return matches;
+  }
 
+  // Guarded issuance is refused: the memory store has no guard documents to read.
   async atomicIssue(params: AtomicIssueParams): Promise<void> {
+    if (params.subjectGuard) throw new CutoverRefusedError('In-memory store cannot enforce a subject guard');
     this.state.access.set(params.accessRow.id, params.accessRow);
     this.state.refresh.set(params.refreshRow.id, params.refreshRow);
     this.state.families.set(params.familyRow.id, params.familyRow);
@@ -213,6 +227,7 @@ export class MemoryBackend implements StoreBackend {
   async getAuthCode(id: string): Promise<AuthCodeRow | undefined> { return this.state.authCodes.get(id); }
   async takeAuthCode(id: string): Promise<AuthCodeRow | undefined> { const row = this.state.authCodes.get(id); this.state.authCodes.delete(id); return row; }
   async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {
+    if (params.subjectGuard) throw new CutoverRefusedError('In-memory store cannot enforce a subject guard');
     const row = this.state.authCodes.get(params.codeId);
     if (!row) return undefined;
     if (row.expiresAt <= params.now) return undefined;
