@@ -421,7 +421,7 @@ function getTimestampMs(val) {
   return null;
 }
 __name(getTimestampMs, "getTimestampMs");
-function projectSourceLogical(candidate, sources, codec2, subject) {
+function projectSourceLogical(candidate, sources, codec, subject) {
   requireSubjectParameter(subject);
   if (candidate.kind === "pr56Families") {
     const famDoc = sources.get("families");
@@ -444,8 +444,8 @@ function projectSourceLogical(candidate, sources, codec2, subject) {
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
     const accessId = tokDoc.accessToken ?? famData.currentAccessToken ?? tokDoc.id;
     if (!accessId || typeof accessId !== "string") throw new CutoverFenceError("pr56Families missing accessId");
-    const newAccessId = codec2.id("session", accessId);
-    const newRefreshId = codec2.id("refresh", currentRefId);
+    const newAccessId = codec.id("session", accessId);
+    const newRefreshId = codec.id("refresh", currentRefId);
     let previousRefresh = null;
     if (famData.previousRefreshToken) {
       const prevId = famData.previousRefreshToken;
@@ -459,7 +459,7 @@ function projectSourceLogical(candidate, sources, codec2, subject) {
       if (typeof prevDoc.consumedAt !== "number") {
         throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} previous refresh missing numeric consumedAt`);
       }
-      const prevRefreshId = codec2.id("refresh", prevId);
+      const prevRefreshId = codec.id("refresh", prevId);
       previousRefresh = {
         id: prevRefreshId,
         consumedAt: prevDoc.consumedAt,
@@ -534,9 +534,9 @@ function projectSourceLogical(candidate, sources, codec2, subject) {
     if (typeof accessToken !== "string" || accessToken.length === 0 || typeof refreshToken !== "string" || refreshToken.length === 0) {
       throw new CutoverFenceError("baseFormatTokens missing raw access or refresh credential");
     }
-    const familyId = codec2.id("family", accessToken);
-    const accessId = codec2.id("session", accessToken);
-    const refreshId = codec2.id("refresh", refreshToken);
+    const familyId = codec.id("family", accessToken);
+    const accessId = codec.id("session", accessToken);
+    const refreshId = codec.id("refresh", refreshToken);
     const expiresAt = tokDoc.expiresAt;
     if (typeof expiresAt !== "number" || expiresAt <= 0) {
       throw new CutoverFenceError("baseFormatTokens missing required positive expiresAt");
@@ -583,7 +583,7 @@ function projectSourceLogical(candidate, sources, codec2, subject) {
     const codeDoc = sources.get("authCodes");
     if (!codeDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing authCodes source`);
     const rawCode = codeDoc.code ?? codeDoc.rawCode ?? codeDoc.id;
-    const hmacId = codec2.id("code", rawCode);
+    const hmacId = codec.id("code", rawCode);
     const rawPending = codeDoc.pending && typeof codeDoc.pending === "object" ? codeDoc.pending : codeDoc;
     const rawNsTokens = codeDoc.nsTokens && typeof codeDoc.nsTokens === "object" ? codeDoc.nsTokens : void 0;
     const clientId = rawPending.clientId ?? rawPending.client_id ?? codeDoc.clientId ?? codeDoc.client_id;
@@ -684,7 +684,7 @@ function projectSourceLogical(candidate, sources, codec2, subject) {
   throw new CutoverFenceError(`Unsupported candidate kind for source projection: ${candidate.kind}`);
 }
 __name(projectSourceLogical, "projectSourceLogical");
-function projectTargetLogical(candidate, targets, codec2) {
+function projectTargetLogical(candidate, targets, codec) {
   if (candidate.kind === "pr56Families") {
     const famDoc = targets.get("families");
     if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
@@ -695,7 +695,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (typeof generation !== "number" || generation < 1) {
       throw new CutoverFenceError(`Target family ${sanitizeId(familyId)} malformed generation`);
     }
-    const unsealedFam = famData.sealed ? codec2.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
+    const unsealedFam = famData.sealed ? codec.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
     if (!unsealedFam) {
       throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
@@ -709,7 +709,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (upData.familyId !== familyId && upData.id !== familyId) {
       throw new CutoverFenceError(`Target upstream family binding mismatch for ${sanitizeId(familyId)}`);
     }
-    const unsealedUp = upData.sealed ? codec2.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
+    const unsealedUp = upData.sealed ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
     if (!unsealedUp) {
       throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
@@ -729,7 +729,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
       throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for family ${sanitizeId(familyId)}`);
     }
-    const unsealedSess = codec2.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
+    const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
     if (!unsealedSess) {
       throw new CutoverFenceError(`Target session sealed payload decrypt failed for family ${sanitizeId(familyId)}`);
     }
@@ -758,7 +758,7 @@ function projectTargetLogical(candidate, targets, codec2) {
       if (prevRefData.familyId !== familyId || prevRefData.status !== "consumed" || typeof prevRefData.consumedAt !== "number" || prevRefData.v !== 2) {
         throw new CutoverFenceError(`Target consumed refresh token invalid for family ${sanitizeId(familyId)}`);
       }
-      const unsealedSuccessor = codec2.open(
+      const unsealedSuccessor = codec.open(
         prevRefData.successorSealed,
         `successor:${prevRefData.id}`
       );
@@ -825,7 +825,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (typeof generation !== "number" || generation !== 1) {
       throw new CutoverFenceError(`Target base family ${sanitizeId(familyId)} malformed generation`);
     }
-    const unsealedFam = famData.sealed ? codec2.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
+    const unsealedFam = famData.sealed ? codec.open(famData.sealed, familyAad({ id: familyId, generation })) : null;
     if (!unsealedFam) {
       throw new CutoverFenceError(`Target family sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
@@ -836,7 +836,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (typeof grantVersion !== "number" || grantVersion !== 1) {
       throw new CutoverFenceError(`Target base upstream ${sanitizeId(familyId)} malformed grantVersion`);
     }
-    const unsealedUp = upData.sealed ? codec2.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
+    const unsealedUp = upData.sealed ? codec.open(upData.sealed, upstreamAad({ id: familyId, grantVersion })) : null;
     if (!unsealedUp) {
       throw new CutoverFenceError(`Target upstream sealed payload decrypt failed for ${sanitizeId(familyId)}`);
     }
@@ -856,7 +856,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (ttlMs === null || ttlMs !== sessData.retainUntil) {
       throw new CutoverFenceError(`Target session ttlAt must equal retainUntil for base session ${sanitizeId(sessData.id)}`);
     }
-    const unsealedSess = codec2.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
+    const unsealedSess = codec.open(sessData.sealed, accessAad({ id: sessData.id, familyId }));
     if (!unsealedSess) {
       throw new CutoverFenceError(`Target base session decrypt failed for ${sanitizeId(sessData.id)}`);
     }
@@ -914,7 +914,7 @@ function projectTargetLogical(candidate, targets, codec2) {
     if (ttlMs === null || ttlMs !== codeData.expiresAt) {
       throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} ttlAt must equal expiresAt`);
     }
-    const unsealed = codeData.sealed ? codec2.open(codeData.sealed, `code:${codeData.id}`) : null;
+    const unsealed = codeData.sealed ? codec.open(codeData.sealed, `code:${codeData.id}`) : null;
     if (!unsealed) throw new CutoverFenceError(`Target auth code decrypt failed for ${sanitizeId(codeData.id)}`);
     if (typeof codeData.used !== "boolean") {
       throw new CutoverFenceError(`Target auth code ${sanitizeId(codeData.id)} missing boolean used property`);
@@ -3551,7 +3551,7 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
   const { namespace, storeKey, completePlan, prepDoc, expectedIdentity, timer, protectedBinding } = options;
   const epoch = control.epoch;
   const registry = getCutoverCollectionRegistry(namespace);
-  const codec2 = bundledCodec(storeKey);
+  const codec = bundledCodec(storeKey);
   const subject = subjectSpecFor(protectedBinding.subjectDescriptor, namespace, storeKey);
   const { sourceDocsByKey, targetDocsByKey } = options.snapshot;
   timer.assertUnderDeadline("revalidatePreparationSnapshot reads");
@@ -3620,7 +3620,7 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
       if (!snap) throw new CutoverFenceError("Candidate source is absent from the snapshot");
       sourcesMap.set(s.collection, snap.data);
     }
-    const srcProj = projectSourceLogical(cand, sourcesMap, codec2, subject);
+    const srcProj = projectSourceLogical(cand, sourcesMap, codec, subject);
     assertSubjectRefsPresent(cand.kind, srcProj, subject);
     const srcDigest = H(storeKey, "logical-record", namespace, epoch, [cand.kind, srcProj]);
     if (srcDigest !== cand.logicalDigest) {
@@ -3637,7 +3637,7 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
       const snap = snapshotTargets.get(t.id);
       tgtMap.set(snap.collection, snap.data);
     }
-    const tgtProj = projectTargetLogical(cand, tgtMap, codec2);
+    const tgtProj = projectTargetLogical(cand, tgtMap, codec);
     assertSubjectRefsPresent(cand.kind, tgtProj, subject);
     if (H(storeKey, "logical-record", namespace, epoch, [cand.kind, tgtProj]) !== srcDigest) {
       throw new CutoverFenceError("Existing target graph does not equal the source projection; held");
@@ -3948,7 +3948,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
     if (prepDoc.projectorDigest !== options.expectedIdentity.protocolDigest) {
       throw new CutoverFenceError("prepDoc.projectorDigest must equal protocolDigest");
     }
-    const codec2 = createCodec(options.storeKey);
+    const codec = createCodec(options.storeKey);
     const subject = subjectSpecFor(options.protectedBinding.subjectDescriptor, namespace, options.storeKey);
     for (const c of prepDoc.candidateCommitments) {
       const sourcesMap = /* @__PURE__ */ new Map();
@@ -4037,7 +4037,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
           sourcesMap.set("clients", { ...clientEntry.data || {}, id: clientEntry.rawId });
         }
       }
-      const sourceResult = projectSourceLogical(c, sourcesMap, codec2, subject);
+      const sourceResult = projectSourceLogical(c, sourcesMap, codec, subject);
       assertSubjectRefsPresent(c.kind, sourceResult, subject);
       validateCandidateProjection(c.kind, c.id, sourceResult);
       const derivedSourceLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, sourceResult]);
@@ -4135,7 +4135,7 @@ async function prepareMigrationInTransaction(transaction, db, options) {
             if (e) targetsMap.set("clients", { ...e.data || {}, id: e.rawId });
           }
         }
-        const targetResult = projectTargetLogical(c, targetsMap, codec2);
+        const targetResult = projectTargetLogical(c, targetsMap, codec);
         assertSubjectRefsPresent(c.kind, targetResult, subject);
         validateCandidateProjection(c.kind, c.id, targetResult);
         const derivedTargetLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, targetResult]);
@@ -4523,7 +4523,7 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
     }
   }
   if (finalDoc.totalPhysicalRecords > 0) {
-    const codec2 = bundledCodec(options.storeKey);
+    const codec = bundledCodec(options.storeKey);
     for (const r of actualReceipts) {
       const c = candidateMap.get(r.candidateId);
       const targetsMap = /* @__PURE__ */ new Map();
@@ -4613,7 +4613,7 @@ async function finalizeMigrationInTransaction(transaction, db, options) {
           if (e) targetsMap.set("clients", { ...e.data || {}, id: e.rawId });
         }
       }
-      const targetResult = projectTargetLogical(c, targetsMap, codec2);
+      const targetResult = projectTargetLogical(c, targetsMap, codec);
       validateCandidateProjection(c.kind, r.candidateId, targetResult);
       const derivedTargetLogicalDigest = H(options.storeKey, "logical-record", namespace, control.epoch, [c.kind, targetResult]);
       if (r.logicalDigest !== derivedTargetLogicalDigest) {
@@ -5304,10 +5304,10 @@ function assertValidMigrationContext(options) {
 __name(assertValidMigrationContext, "assertValidMigrationContext");
 
 // src/store/row-codec.ts
-function encodeSessionsRow(codec2, accessId, familyId, session, now) {
+function encodeSessionsRow(codec, accessId, familyId, session, now) {
   const expiresAt = session.expiresAt;
   const retainUntil = expiresAt + ACCESS_RETENTION_MS;
-  const sealed = codec2.seal(
+  const sealed = codec.seal(
     {
       familyId,
       clientId: session.clientId,
@@ -5328,15 +5328,15 @@ function encodeSessionsRow(codec2, accessId, familyId, session, now) {
   };
 }
 __name(encodeSessionsRow, "encodeSessionsRow");
-function decodeSessionsRow(codec2, row) {
-  return codec2.open(
+function decodeSessionsRow(codec, row) {
+  return codec.open(
     row.sealed,
     accessAad({ id: row.id, familyId: row.familyId })
   );
 }
 __name(decodeSessionsRow, "decodeSessionsRow");
-function encodeRefreshFamiliesRow(codec2, familyId, generation, activeRefreshId, currentAccessTokenId, session, retiredFingerprints, status, now, subjectRefs) {
-  const sealed = codec2.seal(
+function encodeRefreshFamiliesRow(codec, familyId, generation, activeRefreshId, currentAccessTokenId, session, retiredFingerprints, status, now, subjectRefs) {
+  const sealed = codec.seal(
     {
       clientId: session.clientId,
       serverBaseUrl: session.serverBaseUrl,
@@ -5358,15 +5358,15 @@ function encodeRefreshFamiliesRow(codec2, familyId, generation, activeRefreshId,
   };
 }
 __name(encodeRefreshFamiliesRow, "encodeRefreshFamiliesRow");
-function decodeRefreshFamiliesRow(codec2, row) {
-  return codec2.open(
+function decodeRefreshFamiliesRow(codec, row) {
+  return codec.open(
     row.sealed,
     familyAad({ id: row.id, generation: row.generation })
   );
 }
 __name(decodeRefreshFamiliesRow, "decodeRefreshFamiliesRow");
-function encodeUpstreamRow(codec2, familyId, grantVersion, upstream, now) {
-  const sealed = codec2.seal(
+function encodeUpstreamRow(codec, familyId, grantVersion, upstream, now) {
+  const sealed = codec.seal(
     {
       nsAccessToken: upstream.nsAccessToken,
       nsRefreshToken: upstream.nsRefreshToken,
@@ -5379,15 +5379,15 @@ function encodeUpstreamRow(codec2, familyId, grantVersion, upstream, now) {
   return {
     id: familyId,
     grantVersion,
-    nsExpiresAt: upstream.nsExpiresAt,
+    nsExpiresAt: upstream.nsExpiresAt ?? void 0,
     updatedAt: now,
     sealed,
     v: 2
   };
 }
 __name(encodeUpstreamRow, "encodeUpstreamRow");
-function decodeUpstreamRow(codec2, row) {
-  return codec2.open(
+function decodeUpstreamRow(codec, row) {
+  return codec.open(
     row.sealed,
     upstreamAad({ id: row.id, grantVersion: row.grantVersion })
   );
@@ -5405,10 +5405,10 @@ function encodeRefreshRow(refreshId, familyId, generation, now) {
   };
 }
 __name(encodeRefreshRow, "encodeRefreshRow");
-function encodeAuthCodesRow(codec2, code, data, expiresAt, now) {
-  const id = codec2.id("code", code);
+function encodeAuthCodesRow(codec, code, data, expiresAt, now) {
+  const id = codec.id("code", code);
   const used = typeof data.used === "boolean" ? data.used : false;
-  const sealed = codec2.seal({ ...data, used }, `code:${id}`);
+  const sealed = codec.seal({ ...data, used }, `code:${id}`);
   return {
     id,
     expiresAt,
@@ -6189,7 +6189,7 @@ function extractCandidatesAndPlan(params) {
     now,
     subject = null
   } = params;
-  const codec2 = createCodec(storeKey);
+  const codec = createCodec(storeKey);
   const physicalCounts = {};
   for (const k of PHYSICAL_COUNT_KEYS) physicalCounts[k] = 0;
   const classifications = {};
@@ -6379,8 +6379,8 @@ function extractCandidatesAndPlan(params) {
     }
     if (retiredConflict) continue;
     retiredFingerprints.sort(codeUnitCompare);
-    const newAccessId = codec2.id("session", accessEntry.credentialToken);
-    const newRefreshId = codec2.id("refresh", curRefEntry.credentialToken);
+    const newAccessId = codec.id("session", accessEntry.credentialToken);
+    const newRefreshId = codec.id("refresh", curRefEntry.credentialToken);
     const candSources = [
       {
         collection: "families",
@@ -6428,7 +6428,7 @@ function extractCandidatesAndPlan(params) {
     ];
     let prevRefTargetId;
     if (prevRefEntry) {
-      const prevRefId = codec2.id("refresh", prevRefEntry.credentialToken);
+      const prevRefId = codec.id("refresh", prevRefEntry.credentialToken);
       prevRefTargetId = computeKeyedDocId(storeKey, "target-id", namespace, epoch, "refresh", prevRefId);
       candTargets.push({ collection: "refresh", id: prevRefTargetId, rawId: prevRefId });
     }
@@ -6448,17 +6448,17 @@ function extractCandidatesAndPlan(params) {
       sourcesMap.set("prevRefresh", safeDocEntry(prevRefEntry.physicalId, prevRefEntry.data || {}, prevRefEntry.credentialToken));
     }
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: "pr56Families", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "pr56Families", targets: candTargets, logicalDigest: "" },
       sourcesMap,
-      codec2,
+      codec,
       subject
     );
     if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, "pr56Families", logicalProjection);
     const generation = typeof famData.generation === "number" ? famData.generation : 1;
     const grantVersion = typeof upstreamById.get(familyId)?.grantVersion === "number" ? upstreamById.get(familyId).grantVersion : 1;
-    const famRow = encodeRefreshFamiliesRow(codec2, familyId, generation, newRefreshId, newAccessId, logicalProjection, retiredFingerprints, famData.status, now, logicalProjection.subjectRefs);
-    const upRow = encodeUpstreamRow(codec2, familyId, grantVersion, {
+    const famRow = encodeRefreshFamiliesRow(codec, familyId, generation, newRefreshId, newAccessId, logicalProjection, retiredFingerprints, famData.status, now, logicalProjection.subjectRefs);
+    const upRow = encodeUpstreamRow(codec, familyId, grantVersion, {
       nsAccessToken: logicalProjection.upstream.nsAccessToken,
       nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
       nsUsername: logicalProjection.upstream.nsUsername,
@@ -6467,7 +6467,7 @@ function extractCandidatesAndPlan(params) {
       nsExpiresAt: logicalProjection.upstream.nsExpiresAt
     }, now);
     const refRow = encodeRefreshRow(newRefreshId, familyId, generation, now);
-    const accRow = encodeSessionsRow(codec2, newAccessId, familyId, {
+    const accRow = encodeSessionsRow(codec, newAccessId, familyId, {
       expiresAt: logicalProjection.expiresAt,
       clientId: logicalProjection.clientId,
       serverBaseUrl: logicalProjection.serverBaseUrl,
@@ -6485,14 +6485,16 @@ function extractCandidatesAndPlan(params) {
     postimageByTargetId.set(upTargetId, upRow);
     let prevRefreshRow = null;
     if (prevRefEntry) {
-      const prevRefId = codec2.id("refresh", prevRefEntry.credentialToken);
+      const prevRefId = codec.id("refresh", prevRefEntry.credentialToken);
+      const previousRefresh = logicalProjection.previousRefresh;
+      if (!previousRefresh) throw new CutoverFenceError(`Previous refresh projection missing for candidate ${sanitizeId(candidateId)}`);
       prevRefreshRow = {
         id: prevRefId,
         familyId,
         status: "consumed",
         generation: Math.max(1, generation - 1),
-        consumedAt: logicalProjection.previousRefresh.consumedAt,
-        successorSealed: codec2.seal({ accessToken: accessId, refreshToken: currentRefToken }, `successor:${prevRefId}`),
+        consumedAt: previousRefresh.consumedAt,
+        successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefToken }, `successor:${prevRefId}`),
         v: 2
       };
       targetDocsMap.set("prevRefresh", prevRefreshRow);
@@ -6509,9 +6511,9 @@ function extractCandidatesAndPlan(params) {
       targetDocsMap.set("retiredRefresh", { ids: retiredFingerprints });
     }
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: "pr56Families", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "pr56Families", targets: candTargets, logicalDigest: "" },
       targetDocsMap,
-      codec2
+      codec
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
       throw new CutoverFenceError(`Logical projection equivalence check failed for candidate ${sanitizeId(candidateId)}`);
@@ -6572,9 +6574,9 @@ function extractCandidatesAndPlan(params) {
       reasons.malformedRecords++;
       continue;
     }
-    const familyId = codec2.id("family", tokEntry.credentialToken);
-    const refreshId = codec2.id("refresh", tokData.refreshToken);
-    const newAccessId = codec2.id("session", tokEntry.credentialToken);
+    const familyId = codec.id("family", tokEntry.credentialToken);
+    const refreshId = codec.id("refresh", tokData.refreshToken);
+    const newAccessId = codec.id("session", tokEntry.credentialToken);
     const candSources = [
       {
         collection: "tokens",
@@ -6631,15 +6633,15 @@ function extractCandidatesAndPlan(params) {
       sourcesMap.set("refresh", safeDocEntry(baseRefEntry.physicalId, baseRefEntry.data || {}, baseRefEntry.credentialToken));
     }
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: "baseFormatTokens", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "baseFormatTokens", targets: candTargets, logicalDigest: "" },
       sourcesMap,
-      codec2,
+      codec,
       subject
     );
     if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, "baseFormatTokens", logicalProjection);
-    const famRow = encodeRefreshFamiliesRow(codec2, familyId, 1, refreshId, newAccessId, logicalProjection, [], "active", now, logicalProjection.subjectRefs);
-    const upRow = encodeUpstreamRow(codec2, familyId, 1, {
+    const famRow = encodeRefreshFamiliesRow(codec, familyId, 1, refreshId, newAccessId, logicalProjection, [], "active", now, logicalProjection.subjectRefs);
+    const upRow = encodeUpstreamRow(codec, familyId, 1, {
       nsAccessToken: logicalProjection.upstream.nsAccessToken,
       nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
       nsUsername: logicalProjection.upstream.nsUsername,
@@ -6648,7 +6650,7 @@ function extractCandidatesAndPlan(params) {
       nsExpiresAt: logicalProjection.upstream.nsExpiresAt
     }, now);
     const refRow = encodeRefreshRow(refreshId, familyId, 1, now);
-    const accRow = encodeSessionsRow(codec2, newAccessId, familyId, {
+    const accRow = encodeSessionsRow(codec, newAccessId, familyId, {
       expiresAt: logicalProjection.expiresAt,
       clientId: logicalProjection.clientId,
       serverBaseUrl: logicalProjection.serverBaseUrl,
@@ -6665,9 +6667,9 @@ function extractCandidatesAndPlan(params) {
     postimageByTargetId.set(refTargetId, refRow);
     postimageByTargetId.set(upTargetId, upRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: "baseFormatTokens", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "baseFormatTokens", targets: candTargets, logicalDigest: "" },
       targetDocsMap,
-      codec2
+      codec
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
       throw new CutoverFenceError(`Logical projection equivalence check failed for candidate ${sanitizeId(candidateId)}`);
@@ -6717,7 +6719,7 @@ function extractCandidatesAndPlan(params) {
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "authCodes", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "authCodes", rawCode), cData)
       }
     ];
-    const hmacCodeId = codec2.id("code", rawCode);
+    const hmacCodeId = codec.id("code", rawCode);
     const targetId = computeKeyedDocId(storeKey, "target-id", namespace, epoch, "authCodes", hmacCodeId);
     const candTargets = [
       { collection: "authCodes", id: targetId, rawId: hmacCodeId }
@@ -6729,14 +6731,14 @@ function extractCandidatesAndPlan(params) {
     const sourcesMap = /* @__PURE__ */ new Map();
     sourcesMap.set("authCodes", safeDocEntry(rawCode, cData));
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: "authCodes", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "authCodes", targets: candTargets, logicalDigest: "" },
       sourcesMap,
-      codec2,
+      codec,
       subject
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, "authCodes", logicalProjection);
     const codeRow = encodeAuthCodesRow(
-      codec2,
+      codec,
       rawCode,
       {
         pending: {
@@ -6765,9 +6767,9 @@ function extractCandidatesAndPlan(params) {
     const targetDocsMap = /* @__PURE__ */ new Map();
     targetDocsMap.set("authCodes", codeRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: "authCodes", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "authCodes", targets: candTargets, logicalDigest: "" },
       targetDocsMap,
-      codec2
+      codec
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
       throw new CutoverFenceError(`Logical projection equivalence check failed for authCode ${sanitizeId(candidateId)}`);
@@ -6819,9 +6821,9 @@ function extractCandidatesAndPlan(params) {
     const sourcesMap = /* @__PURE__ */ new Map();
     sourcesMap.set("resumeTokens", safeDocEntry(resId, rData));
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: "resumeTokens", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "resumeTokens", targets: candTargets, logicalDigest: "" },
       sourcesMap,
-      codec2,
+      codec,
       subject
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, "resumeTokens", logicalProjection);
@@ -6829,9 +6831,9 @@ function extractCandidatesAndPlan(params) {
     const targetDocsMap = /* @__PURE__ */ new Map();
     targetDocsMap.set("resumeTokens", resRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: "resumeTokens", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "resumeTokens", targets: candTargets, logicalDigest: "" },
       targetDocsMap,
-      codec2
+      codec
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
       throw new CutoverFenceError(`Logical projection equivalence check failed for resumeToken ${sanitizeId(candidateId)}`);
@@ -6921,9 +6923,9 @@ function extractCandidatesAndPlan(params) {
     const sourcesMap = /* @__PURE__ */ new Map();
     sourcesMap.set("clients", safeDocEntry(clientId, authoritativeDoc));
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: "clients", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "clients", targets: candTargets, logicalDigest: "" },
       sourcesMap,
-      codec2,
+      codec,
       subject
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, "clients", logicalProjection);
@@ -6942,9 +6944,9 @@ function extractCandidatesAndPlan(params) {
     const targetDocsMap = /* @__PURE__ */ new Map();
     targetDocsMap.set("clients", clientRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: "clients", sources: candSources, targets: candTargets, logicalDigest: "" },
+      { id: candidateId, kind: "clients", targets: candTargets, logicalDigest: "" },
       targetDocsMap,
-      codec2
+      codec
     );
     if (C(logicalProjection) !== C(targetLogicalProjection)) {
       throw new CutoverFenceError(`Logical projection equivalence check failed for client ${sanitizeId(candidateId)}`);
@@ -7295,6 +7297,7 @@ async function inspectFirestoreLegacyMigration(options) {
     if (control.state !== "fenced") {
       throw new CutoverFenceError(`Inspect requires a fenced namespace: state is '${control.state}'`);
     }
+    const codec = createCodec(storeKey);
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const distinctColNames = Array.from(/* @__PURE__ */ new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
     const sourceDocsByKey = /* @__PURE__ */ new Map();
@@ -7323,7 +7326,7 @@ async function inspectFirestoreLegacyMigration(options) {
         const tDocs = [];
         for (const doc of snap.docs) {
           const data = doc.data() || {};
-          if (isTargetFormatRow(colName, data, doc.id)) {
+          if (isTargetFormatRow(colName, data)) {
             tDocs.push(doc);
           } else {
             sDocs.push(doc);
@@ -7542,7 +7545,7 @@ async function readPreparationInputs(transaction, input) {
       const sDocs = [];
       for (const doc of snap.docs) {
         const data = doc.data() || {};
-        if (!isTargetFormatRow(colName, data, doc.id)) {
+        if (!isTargetFormatRow(colName, data)) {
           sDocs.push(doc);
         }
       }
@@ -7601,6 +7604,7 @@ async function adoptFirestoreLegacyTokens(options) {
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
   const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(db);
   const storeKey = key;
+  const codec = createCodec(storeKey);
   const docIdField = FieldPath.documentId();
   const observed = await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
@@ -7789,7 +7793,7 @@ async function adoptFirestoreLegacyTokens(options) {
     };
   }
   const { prepared, isResume } = prepResult;
-  let candidates = prepResult.candidates;
+  let candidates = prepResult.isResume ? [] : prepResult.candidates;
   let migratedCount = 0;
   let skippedCount = 0;
   if (isResume) {
@@ -7801,7 +7805,7 @@ async function adoptFirestoreLegacyTokens(options) {
     const sourceNamesSet = new Set(Object.values(sourceNames));
     for (const [k, colName] of Object.entries(sourceNames)) {
       const snap = await db.collection(colName).orderBy(docIdField).get();
-      const docs = targetNamesSet.has(colName) ? snap.docs.filter((d) => !isTargetFormatRow(colName, d.data(), d.id)) : snap.docs;
+      const docs = targetNamesSet.has(colName) ? snap.docs.filter((d) => !isTargetFormatRow(colName, d.data())) : snap.docs;
       sourceDocsByKey.set(k, docs);
       for (const d of docs) {
         const id = computeKeyedDocId(storeKey, "source-id", namespace, expectedEpoch, k, d.id);
@@ -7810,7 +7814,7 @@ async function adoptFirestoreLegacyTokens(options) {
     }
     for (const [k, colName] of Object.entries(targetNames)) {
       const snap = await db.collection(colName).orderBy(docIdField).get();
-      const docs = sourceNamesSet.has(colName) ? snap.docs.filter((d) => isTargetFormatRow(colName, d.data(), d.id)) : snap.docs;
+      const docs = sourceNamesSet.has(colName) ? snap.docs.filter((d) => isTargetFormatRow(colName, d.data())) : snap.docs;
       for (const d of docs) {
         const id = computeKeyedDocId(storeKey, "target-id", namespace, expectedEpoch, k, d.id);
         targetAfter.set(`${k}:${id}`, computeTargetRecordDigest(storeKey, namespace, expectedEpoch, k, id, d.data()));
@@ -8109,7 +8113,7 @@ async function adoptFirestoreLegacyTokens(options) {
       const snap = await transaction.get(db.collection(physicalName).orderBy(docIdField));
       for (const d of snap.docs) {
         const data = d.data() || {};
-        if (["authCodes", "resumeTokens", "oauthClients"].includes(colKey) && !isTargetFormatRow(physicalName, data, d.id)) continue;
+        if (["authCodes", "resumeTokens", "oauthClients"].includes(colKey) && !isTargetFormatRow(physicalName, data)) continue;
         const targetId = computeKeyedDocId(storeKey, "target-id", namespace, control.epoch, colKey, d.id);
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
         targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
@@ -8119,7 +8123,6 @@ async function adoptFirestoreLegacyTokens(options) {
     }
     targetDescriptors.sort(compareDescriptors);
     const logicalItems = [];
-    const codec2 = createCodec(storeKey);
     const commitments = prepared.candidateCommitments;
     for (const candidate of commitments) {
       const targets = /* @__PURE__ */ new Map();
@@ -8146,7 +8149,7 @@ async function adoptFirestoreLegacyTokens(options) {
         }
       }
       if (retiredIds.length) targets.set("retiredRefresh", { ids: retiredIds.sort(codeUnitCompare) });
-      const logical = projectTargetLogical(candidate, targets, codec2);
+      const logical = projectTargetLogical(candidate, targets, codec);
       const digest = H(storeKey, "logical-record", namespace, control.epoch, [candidate.kind, logical]);
       if (digest !== candidate.logicalDigest) throw new CutoverFenceError("Final target semantic mismatch");
       logicalItems.push([candidate.id, digest]);
@@ -8765,7 +8768,7 @@ async function createProtectedFirestoreMigrationContext(...args) {
   } else if (credentialsPresent || oidcPresent) {
     refuse3("Emulator profile refuses mounted production credentials");
   }
-  const mutating = request.action === "activate" || request.action === "adopt" && request.options.dryRun === false;
+  const mutating = request.action === "activate" || request.action === "adopt" && "dryRun" in request.options && request.options.dryRun === false;
   let invocation = null;
   if (oidcBefore !== null && mutating) {
     invocation = assertMutatingClaims(oidcBefore);
@@ -8832,7 +8835,13 @@ async function createProtectedFirestoreMigrationContext(...args) {
     status: "status",
     "verify-active-ownership": "verifyActive"
   };
-  const authorizedOptions = request.action === "verify-active-ownership" ? { migrationManifestDigest: request.options.migrationManifestDigest } : request.options;
+  let authorizedOptions;
+  if (request.action === "verify-active-ownership") {
+    if (!("migrationManifestDigest" in request.options)) throw new CutoverRefusedError("Verify request options are malformed");
+    authorizedOptions = { migrationManifestDigest: request.options.migrationManifestDigest };
+  } else {
+    authorizedOptions = request.options;
+  }
   bindProtectedContext(db, {
     namespace: request.namespace,
     expectedEpoch: request.identity.expectedEpoch,
