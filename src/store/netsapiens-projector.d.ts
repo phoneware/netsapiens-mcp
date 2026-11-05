@@ -10,10 +10,7 @@ export class CutoverFenceError extends Error {
 
 export function codeUnitCompare(a: string, b: string): number;
 
-export function createCodec(root: string | Uint8Array): {
-  id(purpose: string, value: string): string;
-  open<T = unknown>(sealed: unknown, aad: string): T | null;
-};
+export { createCodec, type Codec } from './codec.js';
 
 export const familyAad: (params: { id: string; generation: number }) => string;
 export const upstreamAad: (params: { id: string; grantVersion: number }) => string;
@@ -30,11 +27,11 @@ export interface ProjectorCandidate {
 export function projectSourceLogical(
   candidate: ProjectorCandidate,
   sources: Map<string, Record<string, unknown>>,
-  codec: { id(purpose: string, value: string): string; open<T = unknown>(sealed: unknown, aad: string): T | null },
+  codec: Codec,
 ): Record<string, unknown>;
 
 export function projectTargetLogical(
   candidate: ProjectorCandidate,
   targets: Map<string, Record<string, unknown>>,
-  codec: { id(purpose: string, value: string): string; open<T = unknown>(sealed: unknown, aad: string): T | null },
+  codec: Codec,
 ): Record<string, unknown>;
