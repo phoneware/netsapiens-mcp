@@ -13,6 +13,20 @@ const validSri = (value) => {
   return decoded.length === 64 && `sha512-${decoded.toString("base64")}` === value;
 };
 
+export function validateSubjectDescriptor(namespace, value) {
+  if (namespace === "mcp" || namespace === "readonly_mcp") {
+    if (value !== null) throw new Error("Invalid signed subject descriptor");
+    return;
+  }
+  if (namespace !== "pwmcp" || !exact(value, ["allow", "collection", "extraKey", "field"]) ||
+    typeof value.extraKey !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value.extraKey) ||
+    typeof value.collection !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.collection) ||
+    typeof value.field !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value.field) ||
+    !Array.isArray(value.allow) || value.allow.length < 1 || value.allow.length > 16 ||
+    value.allow.some((item) => typeof item !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(item)) ||
+    value.allow.some((item, index) => index > 0 && value.allow[index - 1] >= item)) throw new Error("Invalid signed subject descriptor");
+}
+
 export function canonicalJson(value) {
   if (value === null || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") {
@@ -90,9 +104,10 @@ export function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
   ]);
   for (const [name, value] of expectedSubjects) if (!exact(subjects.get(name), Object.keys(value)) || canonicalJson(subjects.get(name)) !== canonicalJson(value)) throw new Error("Signed subject differs from protected policy");
   const configuration = predicate.serviceConfiguration;
-  const fields = expected.namespace === "pwmcp" ? ["oauthClientSecretVersion"] : ["platforms", "oauthClientSecretVersion"];
+  const fields = expected.namespace === "pwmcp" ? ["oauthClientSecretVersion", "subjectDescriptor"] : ["platforms", "oauthClientSecretVersion", "subjectDescriptor"];
   if (!exact(configuration, fields) || !decimal(configuration.oauthClientSecretVersion) ||
     (expected.namespace !== "pwmcp" && (typeof configuration.platforms !== "string" || !configuration.platforms))) throw new Error("Invalid signed service configuration");
+  validateSubjectDescriptor(expected.namespace, configuration.subjectDescriptor);
   if (![predicate.assemblyRunId, predicate.assemblyRunAttempt].every(decimal)) throw new Error("Invalid or missing signed assembly run identity");
   if (![predicate.terraformPlanDigest, predicate.terraformSavedPlanDigest, predicate.terraformProjectionDigest].every((value) => sha(value, 64)) ||
     ![predicate.observationRunId, predicate.observationRunAttempt, predicate.observationArtifactId].every(decimal) ||

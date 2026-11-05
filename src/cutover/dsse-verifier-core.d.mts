@@ -5,6 +5,10 @@ export const DSSE_PAYLOAD_TYPE: 'application/vnd.in-toto+json';
 
 export function canonicalJson(value: unknown): string;
 
+// Namespace-bound rule for the approval's subject descriptor. Returns nothing; throws
+// with a fixed message that never echoes the value.
+export function validateSubjectDescriptor(namespace: string, value: unknown): void;
+
 export function formatPAE(payloadType: string, payloadBytes: Uint8Array): Buffer;
 
 export interface DSSEVerifyOptions {

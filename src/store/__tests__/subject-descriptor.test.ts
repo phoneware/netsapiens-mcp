@@ -12,9 +12,8 @@ import {
 } from '../subject-descriptor.js';
 
 // Flat subject descriptor {allow, collection, extraKey, field}, delivered by the verified
-// predicate. The shared validateSubjectDescriptor export does not exist in this tree yet, so
-// validation must refuse closed. These tests assert that refusal and exercise the reference,
-// projection and issuance rules on descriptors built directly, without faking the validator.
+// predicate. Validation goes through the shared verifier's validateSubjectDescriptor, the
+// same export the verifier ships, so these tests assert its real accept and refuse outcomes.
 
 const storeKey = deriveStoreKey('subject-descriptor-test-secret-0123456789abcdef');
 const descriptor: SubjectDescriptor = {
@@ -30,11 +29,31 @@ describe('subject descriptor validation through the shared verifier', () => {
     expect(() => subjectDescriptorFromPredicate('pwmcp', {})).toThrow(CutoverRefusedError);
   });
 
-  it('refuses every descriptor until the shared verifier exports validateSubjectDescriptor', () => {
+  it('refuses a null descriptor for pwmcp, where a flat descriptor is mandatory', () => {
     expect(() => subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: { subjectDescriptor: null } }))
-      .toThrow('validateSubjectDescriptor');
-    expect(() => subjectDescriptorFromEnv('pwmcp', undefined)).toThrow('validateSubjectDescriptor');
-    expect(() => subjectDescriptorFromEnv('mcp', '{}')).toThrow('validateSubjectDescriptor');
+      .toThrow(CutoverRefusedError);
+  });
+
+  it('accepts a valid flat descriptor for pwmcp and returns a frozen copy', () => {
+    const bound = subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: { subjectDescriptor: descriptor } });
+    expect(bound).toEqual(descriptor);
+    expect(Object.isFrozen(bound)).toBe(true);
+  });
+
+  it('refuses a descriptor with an extra key or an unsorted allow list', () => {
+    expect(() => subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: { subjectDescriptor: { ...descriptor, extra: 1 } } }))
+      .toThrow(CutoverRefusedError);
+    expect(() => subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: { subjectDescriptor: { ...descriptor, allow: ['b', 'a'] } } }))
+      .toThrow(CutoverRefusedError);
+  });
+
+  it('accepts null for mcp and refuses any value for mcp', () => {
+    expect(subjectDescriptorFromEnv('mcp', undefined)).toBeNull();
+    expect(() => subjectDescriptorFromEnv('mcp', '{}')).toThrow(CutoverRefusedError);
+  });
+
+  it('refuses a missing env descriptor for pwmcp, where it is mandatory', () => {
+    expect(() => subjectDescriptorFromEnv('pwmcp', undefined)).toThrow(CutoverRefusedError);
   });
 });
 
