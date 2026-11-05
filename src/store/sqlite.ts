@@ -29,6 +29,9 @@ import type {
 type SqlValue = string | number | null;
 type Statement = { run(...values: SqlValue[]): { changes: number | bigint }; get(...values: SqlValue[]): Record<string, SqlValue> | undefined; all(...values: SqlValue[]): Record<string, SqlValue>[] };
 type Database = { exec(sql: string): void; prepare(sql: string): Statement; close(): void };
+// Current on-disk schema version, stored in PRAGMA user_version. Version 2 is the
+// sessions and token layout; version 3 adds family_subject_refs and guard_documents.
+const SQLITE_SCHEMA_VERSION = 3;
 const capabilities: StoreCapabilities = { persistent: true, multiInstance: false, subjectGuards: true, exclusive: true, expiry: 'sweep' };
 
 function accessRow(row: Record<string, SqlValue> | undefined): AccessRow | undefined {
@@ -175,7 +178,7 @@ export class SqliteBackend implements StoreBackend {
       db.exec('PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=0; BEGIN IMMEDIATE; COMMIT;');
       const versionRow = db.prepare('PRAGMA user_version').get();
       const version = (versionRow?.user_version as number) ?? 0;
-      if (version > 2) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
+      if (version > SQLITE_SCHEMA_VERSION) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
 
       if (version === 1) {
         // v1 -> v2 migration inside transaction BEFORE sweep
@@ -285,12 +288,19 @@ export class SqliteBackend implements StoreBackend {
         COMMIT;`);
       }
 
-      // Subject tables are created on every open, so existing version-2 files gain
-      // them without a version bump.
-      db.exec(`BEGIN IMMEDIATE;
-        CREATE TABLE IF NOT EXISTS family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
-        CREATE TABLE IF NOT EXISTS guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
-      COMMIT;`);
+      // Upgrades run one version step at a time. Each step creates its tables and
+      // advances user_version in one transaction, so a crash leaves the file at its
+      // previous version and the step runs again on the next open. A file already at
+      // the current version runs no DDL at all.
+      if (version < 3) {
+        transaction(() => {
+          db.exec(`
+            CREATE TABLE family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
+            CREATE TABLE guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
+          `);
+          db.exec(`PRAGMA user_version=${SQLITE_SCHEMA_VERSION}`);
+        });
+      }
       const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
       if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
       db.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES ('namespace',?)").run(namespace);

@@ -69,7 +69,7 @@ import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
 import { observeFreshIndexes } from './fresh-index-producer.js';
-import type { SignedIndexPolicy } from './index-coverage.js';
+import { concreteFieldPaths, type SignedIndexPolicy } from './index-coverage.js';
 
 export type SupportedNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
 
@@ -1809,6 +1809,92 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   });
 }
 
+// Fields each prospective group writes, from the concrete paths of the plan's
+// documents. The fresh observation must cover exactly these before preparation.
+function requiredFieldsFromPlan(namespace: string, plan: Parameters<typeof prospectiveWrites>[1]): Record<string, string[]> {
+  const required = new Map<string, Set<string>>();
+  for (const write of prospectiveWrites(namespace, plan)) {
+    const paths = required.get(write.group) ?? new Set<string>();
+    for (const path of concreteFieldPaths(write.document).multiplicity.keys()) paths.add(path);
+    required.set(write.group, paths);
+  }
+  return Object.fromEntries([...required].map(([group, paths]) => [group, [...paths].sort()]));
+}
+
+// Reads every distinct source and target collection inside the caller's transaction
+// and builds the candidates, source inventory digest and plan. Both the read-only
+// observation pass and the preparation write transaction use it, so they cannot
+// diverge.
+async function readPreparationInputs(transaction: any, input: {
+  db: any;
+  namespace: string;
+  epoch: number;
+  storeKey: Uint8Array;
+  FieldPath: any;
+  migrationRunId: string;
+  codeSha: string;
+  codeArtifact: string;
+  packageIntegrity: string;
+  protocolDigest: string;
+  assemblyDigest: string;
+  indexSchemaDigest: string;
+}) {
+  const { db, namespace, epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest } = input;
+  const docIdField = FieldPath.documentId();
+  const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
+  const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
+
+  const sourceDocsByKey = new Map<string, any[]>();
+  for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
+
+  const sourcePhysicalToKey: Record<string, string> = {};
+  for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
+  const targetPhysicalToKey: Record<string, string> = {};
+  for (const [k, name] of Object.entries(targetNames)) targetPhysicalToKey[name] = k;
+
+  for (const colName of distinctColNames) {
+    const q = typeof db.collection(colName).orderBy === 'function'
+      ? db.collection(colName).orderBy(docIdField)
+      : db.collection(colName);
+    const snap = await transaction.get(q);
+    const isSourceCol = colName in sourcePhysicalToKey;
+    const isTargetCol = colName in targetPhysicalToKey;
+
+    if (isSourceCol && !isTargetCol) {
+      const colKey = sourcePhysicalToKey[colName];
+      sourceDocsByKey.set(colKey, snap.docs);
+    } else if (isSourceCol && isTargetCol) {
+      const srcKey = sourcePhysicalToKey[colName];
+      const tgtKey = targetPhysicalToKey[colName];
+      const sDocs = [];
+      for (const doc of snap.docs) {
+        const data = doc.data() || {};
+        // Pass physical colName to isTargetFormatRow
+        if (!isTargetFormatRow(colName, data, doc.id)) {
+          sDocs.push(doc);
+        }
+      }
+      sourceDocsByKey.set(srcKey, sDocs);
+    }
+  }
+
+  const { candidates, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
+    sourceDocsByKey,
+    storeKey,
+    namespace,
+    epoch,
+    runId: migrationRunId,
+    codeSha,
+    codeArtifact,
+    packageIntegrity,
+    protocolDigest,
+    assemblyDigest,
+    indexSchemaDigest,
+    now: Date.now(),
+  });
+
+  return { candidates, sourceInventoryDigest, plan };
+}
 export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   dryRun: boolean;
   expectedSourceInventoryDigest: string;
@@ -1855,6 +1941,30 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
+  // Phase 0: a read-only pass builds the plan the preparation would write, so the
+  // fresh observation covers exactly the fields that plan writes. Phase 1 rebuilds
+  // the plan inside its transaction and checks it against that observation again.
+  // A namespace that is not fenced, or whose plan has errors, has nothing to observe.
+  const observed = await db.runTransaction(async (transaction: any) => {
+    const timer = startMonotonicTimer();
+    assertCredentialUnchanged(db);
+    const control = await readCutoverFenceInTransaction(transaction, db, namespace);
+    if (control.epoch !== expectedEpoch || control.state !== 'fenced') return null;
+    const inputs = await readPreparationInputs(transaction, {
+      db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
+      packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
+    });
+    timer.assertUnderDeadline(16_000, 'Preparation observation scan');
+    if (inputs.sourceInventoryDigest !== expectedSourceInventoryDigest) {
+      throw new CutoverFenceError(`Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${inputs.sourceInventoryDigest}`);
+    }
+    const errors = Object.values(inputs.plan.prepared.reasons || {}).reduce((a: number, b: any) => a + (typeof b === 'number' ? b : 0), 0);
+    if (errors > 0) return null;
+    return { sourceInventoryDigest: inputs.sourceInventoryDigest, requiredFields: requiredFieldsFromPlan(namespace, inputs.plan) };
+  });
+  if (observed !== null) {
+    await observeFreshIndexes({ db, purpose: 'preparation', requiredFields: observed.requiredFields, sourceInventoryDigest: observed.sourceInventoryDigest });
+  }
   // Phase 1: Preparation in transaction (supporting restart per Section 5)
   const prepResult = await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
@@ -1908,58 +2018,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       });
     }
 
-    const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
-    const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
 
-    const sourceDocsByKey = new Map<string, any[]>();
-    for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
-
-    const sourcePhysicalToKey: Record<string, string> = {};
-    for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
-    const targetPhysicalToKey: Record<string, string> = {};
-    for (const [k, name] of Object.entries(targetNames)) targetPhysicalToKey[name] = k;
-
-    for (const colName of distinctColNames) {
-      const q = typeof db.collection(colName).orderBy === 'function'
-        ? db.collection(colName).orderBy(docIdField)
-        : db.collection(colName);
-      const snap = await transaction.get(q);
-      const isSourceCol = colName in sourcePhysicalToKey;
-      const isTargetCol = colName in targetPhysicalToKey;
-
-      if (isSourceCol && !isTargetCol) {
-        const colKey = sourcePhysicalToKey[colName];
-        sourceDocsByKey.set(colKey, snap.docs);
-      } else if (isSourceCol && isTargetCol) {
-        const srcKey = sourcePhysicalToKey[colName];
-        const tgtKey = targetPhysicalToKey[colName];
-        const sDocs = [];
-        for (const doc of snap.docs) {
-          const data = doc.data() || {};
-          // Pass physical colName to isTargetFormatRow
-          if (!isTargetFormatRow(colName, data, doc.id)) {
-            sDocs.push(doc);
-          }
-        }
-        sourceDocsByKey.set(srcKey, sDocs);
-      }
-    }
-
-    const { candidates, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
-      sourceDocsByKey,
-      storeKey,
-      namespace,
-      epoch: control.epoch,
-      runId: migrationRunId,
-      codeSha,
-      codeArtifact,
-      packageIntegrity,
-      protocolDigest,
-      assemblyDigest,
-      indexSchemaDigest,
-      now: Date.now(),
+    const { candidates, sourceInventoryDigest, plan } = await readPreparationInputs(transaction, {
+      db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
+      packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
-
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
         `Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${sourceInventoryDigest}`,

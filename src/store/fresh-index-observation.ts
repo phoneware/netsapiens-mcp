@@ -50,42 +50,58 @@ function requireObservation(db: object, purpose: FreshIndexObservation['purpose'
   return observation;
 }
 
-// Conservative TTL hold. Firestore TTL deletes documents on its own clock, and
-// an IAM freeze does not stop them. A prospective document whose TTL timestamp
-// falls inside this window could expire while the protected interval runs, so
-// preparation refuses it. A malformed TTL value also refuses. The window is a
-// planner-owned value pending approval.
-export const TTL_HOLD_WINDOW_MS = 24 * 60 * 60 * 1000;
+// TTL schema for prospective targets. The settled expiry metadata is the row's own
+// stored field: sessions carry ttlAt = retainUntil, auth codes and resume tokens
+// carry ttlAt = expiresAt. Nothing is recomputed or extended here. A record whose
+// group has no TTL rule must carry no ttlAt. The signed policy must agree with the
+// rule, so a TTL policy that is absent or on another field refuses.
+const TTL_RETENTION_FIELD: Record<'sessions' | 'auth_codes' | 'resume_tokens', 'retainUntil' | 'expiresAt'> = {
+  sessions: 'retainUntil',
+  auth_codes: 'expiresAt',
+  resume_tokens: 'expiresAt',
+};
 
-function valueAtPath(document: unknown, fieldPath: string): unknown {
-  let current: unknown = document;
-  for (const segment of fieldPath.split('.')) {
-    if (current === null || typeof current !== 'object' || Array.isArray(current)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
+function ttlRuleFor(group: string): 'retainUntil' | 'expiresAt' | null {
+  for (const suffix of ['sessions', 'auth_codes', 'resume_tokens'] as const) {
+    if (group.endsWith(`_${suffix}`)) return TTL_RETENTION_FIELD[suffix];
   }
-  return current;
+  return null;
 }
 
-function timestampMillis(value: unknown): number | undefined {
-  if (value instanceof Date) return value.getTime();
-  const toMillis = (value as { toMillis?: unknown } | null)?.toMillis;
-  if (typeof toMillis === 'function') return (toMillis as () => number).call(value);
-  return undefined;
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
-export function assertTtlHold(policy: SignedIndexPolicy, group: string, document: unknown, nowMs: number): void {
-  const collection = policy.collections.find((entry) => entry.collectionGroup === group);
-  for (const entry of (collection?.ttl ?? []) as Array<{ fieldPath?: unknown; state?: unknown }>) {
-    if (typeof entry.fieldPath !== 'string' || entry.state !== 'ACTIVE') {
-      throw new CutoverRefusedError('Signed TTL policy entry is malformed');
+export function assertTtlSchema(policy: SignedIndexPolicy, group: string, document: unknown): void {
+  const signed = policy.collections.find((entry) => entry.collectionGroup === group)?.ttl ?? [];
+  for (const entry of signed as Array<{ fieldPath?: unknown; state?: unknown }>) {
+    if (entry.fieldPath !== 'ttlAt' || entry.state !== 'ACTIVE') {
+      throw new CutoverRefusedError('Signed TTL policy entry is malformed or not on ttlAt');
     }
-    const value = valueAtPath(document, entry.fieldPath);
-    if (value === undefined || value === null) continue;
-    const ms = timestampMillis(value);
-    if (ms === undefined || !Number.isFinite(ms)) throw new CutoverRefusedError('TTL-governed field is not a timestamp');
-    if (ms <= nowMs + TTL_HOLD_WINDOW_MS) {
-      throw new CutoverRefusedError('Prospective document could expire under TTL during the protected interval');
+  }
+  const rule = ttlRuleFor(group);
+  const doc = (document !== null && typeof document === 'object' ? document : {}) as Record<string, unknown>;
+  if (rule === null) {
+    if (signed.length > 0) throw new CutoverRefusedError('Signed TTL policy exists for a group without a TTL rule');
+    if (doc.ttlAt !== undefined) throw new CutoverRefusedError('Record in a group without a TTL rule carries ttlAt');
+    return;
+  }
+  if (signed.length !== 1) throw new CutoverRefusedError('Signed TTL policy is missing for a TTL-governed group');
+  if (!isPositiveInteger(doc[rule])) throw new CutoverRefusedError(`${rule} must be a positive integer timestamp`);
+  if (!(doc.ttlAt instanceof Date) || !Number.isFinite(doc.ttlAt.getTime())) {
+    throw new CutoverRefusedError('ttlAt must be a valid timestamp');
+  }
+  if (doc.ttlAt.getTime() !== doc[rule]) throw new CutoverRefusedError(`ttlAt must equal ${rule}`);
+  if (rule === 'retainUntil') {
+    if (!isPositiveInteger(doc.expiresAt) || (doc.retainUntil as number) < doc.expiresAt) {
+      throw new CutoverRefusedError('retainUntil must be at least expiresAt');
     }
+  } else if (group.endsWith('_resume_tokens')) {
+    if (typeof doc.consumedAt !== 'number' || !Number.isSafeInteger(doc.consumedAt) || doc.consumedAt < 0) {
+      throw new CutoverRefusedError('consumedAt must be a non-negative integer timestamp');
+    }
+  } else if (typeof doc.used !== 'boolean') {
+    throw new CutoverRefusedError('Auth code used flag must be boolean');
   }
 }
 
@@ -111,7 +127,7 @@ export function assertPreparationObservation(input: {
       databaseResource: schema.provenance.databaseResource,
       collectionGroup: write.group,
     });
-    assertTtlHold(schema.policy, write.group, write.document, Date.now());
+    assertTtlSchema(schema.policy, write.group, write.document);
     const fresh = observation.coverage.get(write.group);
     const required = observation.requiredFields[write.group];
     if (!fresh || !required) throw new CutoverRefusedError('Prospective collection group is not in the observation');

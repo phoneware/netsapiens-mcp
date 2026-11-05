@@ -123,10 +123,10 @@ describe('SQLite v1 to v2 Migration & Rollback Integrity', () => {
 
     await store.close();
 
-    // Verify schema is now v2
+    // Verify schema is now the current version: v1 -> v2, then v2 -> v3, on the same open
     const verifyDb = new DatabaseSync(path);
     const version = (verifyDb.prepare('PRAGMA user_version').get() as any).user_version;
-    expect(version).toBe(2);
+    expect(version).toBe(3);
     // sessions_v1 should be gone
     const tableNames = (verifyDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[]).map(r => r.name);
     expect(tableNames).not.toContain('sessions_v1');
