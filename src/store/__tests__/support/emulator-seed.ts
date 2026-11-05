@@ -1,6 +1,8 @@
 // Test-only seeding for the Firestore emulator used by the protected preparation runner. Every suite that
 // runs the real runner seeds its legacy state through these helpers, so the emulator state is the one the
 // runner reads. Runs only where containerGateOpen() holds, against the emulator profile below.
+// Suites in this emulator share the supported namespace mcp, so they must run serially: vitest --no-file-parallelism.
+// Running them in parallel lets one file's reset race another file's fence transition (observed as "already in state closing").
 import type { Firestore } from '@google-cloud/firestore';
 import * as canonicalCore from '../../../cutover/canonical-core.mjs';
 import { getCutoverFenceRecord, initializeCutoverFence, transitionCutoverFenceState } from '../../firestore-v2-adoption.js';
