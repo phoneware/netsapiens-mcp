@@ -33,6 +33,9 @@ export interface ProtectedBinding extends ProtectedIdentityFields {
   // SHA-256 of the exact oidc.jwt bytes that STS accepted for this handle.
   // Production only; null for the emulator, which has no credential file.
   readonly credentialDigest: string | null;
+  // SHA-256 of the Admin read token the STS exchange produced. Fresh index
+  // observations must be read with exactly this token. Null for the emulator.
+  readonly adminTokenDigest: string | null;
 }
 
 const CREDENTIAL_PATH = '/run/cutover/oidc.jwt';

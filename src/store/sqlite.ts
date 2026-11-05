@@ -109,6 +109,7 @@ export class SqliteBackend implements StoreBackend {
   atomicRotate!: StoreBackend['atomicRotate'];
   atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
   findFamilyByRetiredId!: NonNullable<StoreBackend['findFamilyByRetiredId']>;
+  findFamilyIdsBySubjectRef!: StoreBackend['findFamilyIdsBySubjectRef'];
 
   putAuthCode!: StoreBackend['putAuthCode'];
   getAuthCode!: StoreBackend['getAuthCode'];

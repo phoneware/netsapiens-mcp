@@ -359,6 +359,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   // across that exchange; their digest then binds every later operation.
   let adminAccess: { getAccessToken: () => Promise<string>; fetchFn: typeof fetch } | null = null;
   let credentialDigest: string | null = null;
+  let adminTokenDigest: string | null = null;
   if (profile === 'production') {
     if (oidcBefore === null) refuse('Production credential bytes were not bound');
     const AdminClient = sdk.v1?.FirestoreAdminClient;
@@ -367,6 +368,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     const token = await client.auth.getAccessToken();
     await client.close();
     if (typeof token !== 'string' || !token) refuse('Admin access token was not obtained');
+    adminTokenDigest = sha256Hex(Buffer.from(token, 'utf8'));
     const oidcAfter = readFixedFile(PATHS.oidc);
     if (!oidcAfter.equals(oidcBefore)) refuse('Credential token bytes changed across the STS exchange');
     credentialDigest = sha256Hex(oidcAfter);
@@ -410,6 +412,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     adminAccess,
     invocation,
     credentialDigest,
+    adminTokenDigest,
   });
 
   return {

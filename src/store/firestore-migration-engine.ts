@@ -68,6 +68,7 @@ import {
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
+import { observeFreshIndexes } from './fresh-index-producer.js';
 import type { SignedIndexPolicy } from './index-coverage.js';
 
 export type SupportedNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
@@ -2586,6 +2587,13 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
   const { db, namespace, expectedEpoch, migrationRunId, key, migrationManifestDigest } = context;
   if (!/^[0-9a-f]{64}$/.test(migrationManifestDigest)) {
     throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
+  }
+  // Only a v3_ready namespace needs a fresh observation. It is read before the
+  // transaction, because Admin REST reads cannot run inside it. The transaction
+  // still refuses when no matching observation is recorded.
+  const fenceBefore = await getCutoverFenceRecord(db, namespace);
+  if (fenceBefore?.state === 'v3_ready') {
+    await observeFreshIndexes({ db, purpose: 'activation', requiredFields: {}, sourceInventoryDigest: null });
   }
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
