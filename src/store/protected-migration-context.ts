@@ -178,6 +178,40 @@ function assertRuntimeScopeFromCore(_namespace: string, _collectionGroups: reado
   refuse('Runtime collection scope requires the synchronized canonical core export');
 }
 
+// Exact dispatch claims for mutating production operations. These are checked
+// on the decoded token; signature and STS acceptance are the host pre-pass.
+const OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
+const OIDC_REQUEST_AUDIENCE = 'projects/859122914438/locations/global/workloadIdentityPools/github/providers/github';
+const OIDC_WORKFLOW_REF = 'phoneware/monorepo/.github/workflows/deploy.yml@refs/heads/main';
+
+function assertMutatingClaims(bytes: Buffer): { runId: string; runAttempt: string } {
+  const parts = bytes.toString('utf8').trim().split('.');
+  if (parts.length !== 3) refuse('OIDC token is not a compact JWT');
+  let claims: unknown;
+  try {
+    claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    refuse('OIDC token payload is not JSON');
+  }
+  if (claims === null || typeof claims !== 'object') refuse('OIDC token payload is not an object');
+  const c = claims as Record<string, unknown>;
+  if (c.iss !== OIDC_ISSUER ||
+    c.aud !== OIDC_REQUEST_AUDIENCE ||
+    c.repository_id !== '1278135054' ||
+    c.repository_owner_id !== '13560178' ||
+    c.repository !== 'phoneware/monorepo' ||
+    c.ref !== 'refs/heads/main' ||
+    c.event_name !== 'workflow_dispatch' ||
+    c.workflow_ref !== OIDC_WORKFLOW_REF ||
+    c.environment !== 'production' ||
+    typeof c.exp !== 'number' || c.exp * 1000 <= Date.now() ||
+    typeof c.run_id !== 'string' || !DECIMAL.test(c.run_id) ||
+    typeof c.run_attempt !== 'string' || !DECIMAL.test(c.run_attempt)) {
+    refuse('OIDC claims do not match the fixed production deploy dispatch');
+  }
+  return { runId: c.run_id, runAttempt: c.run_attempt };
+}
+
 function fetchForProfile(profile: Profile): typeof fetch {
   if (profile === 'production') return fetch;
   return (input: string | URL | Request, init?: RequestInit) => {
@@ -274,12 +308,13 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     refuse('Emulator profile refuses mounted production credentials');
   }
 
-  // Mutating production claims (adopt commit, activate) need the fixed host
-  // audience and STS validation. Neither is available in this build, so those
-  // operations refuse here rather than proceed on decoded claims alone.
+  // Mutating production operations (adopt commit, activate) must carry the fixed
+  // dispatch claims. STS acceptance of the same token is a host pre-pass that
+  // this factory cannot observe; the host must establish it before any write.
   const mutating = request.action === 'activate' || (request.action === 'adopt' && request.options.dryRun === false);
+  let invocation: { runId: string; runAttempt: string } | null = null;
   if (profile === 'production' && mutating) {
-    refuse('Mutating production operations require the synchronized host audience and STS validation');
+    invocation = assertMutatingClaims(readFixedFile(PATHS.oidc));
   }
 
   const approval = parseStrictJson(readFixedFile(PATHS.approval), ['payloadType', 'payload', 'signatures'], 'approval');
@@ -366,7 +401,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     FieldPath: sdk.FieldPath,
     authorized: { operation: operations[request.action], options: { ...authorizedOptions } },
     adminAccess,
-    invocation: null,
+    invocation,
   });
 
   return {
