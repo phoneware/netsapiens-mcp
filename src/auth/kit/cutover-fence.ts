@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/cutover-fence.ts at b22c77fa771b858646b09f000ac77fa3ecbbe959). Edit the canonical file, then re-copy.
+// Legacy 2.4.1 bridge adaptation of the cutover fence. This standalone runtime differs from the canonical cutover-protocol.mjs; keep its protocol behavior aligned.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -95,6 +95,7 @@ export interface LegacyOperationContext {
   clearAmbiguousRemoteOutcome(): void;
   isCompleted(): boolean;
   markCompleted(): void;
+  trackWriter?<T>(work: () => Promise<T>): Promise<T>;
 }
 
 export function getCutoverFenceDocRef(db: Firestore, namespace: string): DocumentReference {

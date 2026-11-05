@@ -2374,6 +2374,9 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     await expect(upstream.put(familyId, { nsAccessToken: 'other' })).rejects.toThrow();
     await expect(upstream.delete(familyId)).rejects.toThrow();
     await expect(store.set({ ...token, nsAccessToken: 'other' })).rejects.toThrow();
+    const { refreshFamilyId: _omittedFamily, ...sameAccessNewFamily } = token;
+    await expect(store.set({ ...sameAccessNewFamily, refreshToken: 'other-refresh' })).rejects.toThrow();
+    await expect(store.update(token.accessToken, { refreshFamilyId: randomUUID(), nsAccessToken: 'other' })).rejects.toThrow();
     await expect(store.update(token.accessToken, { nsAccessToken: 'other' })).rejects.toThrow();
     await expect(store.revokeFamily(familyId)).rejects.toThrow();
     await expect(store.revokeByToken(token.refreshToken)).rejects.toThrow();
@@ -2468,6 +2471,38 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(await delayed).toBeInstanceOf(LeaseLostError);
     expect(grant).not.toHaveBeenCalled();
     expect((await store.upstreamDocRef(token.refreshFamilyId!).get()).data()?.leaseOwner).toBeNull();
+    spy.mockRestore();
+  });
+
+  it('a waiter never treats two rejected claims as successful refresh', async () => {
+    const db = createTestDb();
+    const first = new FirestoreUpstreamGrantStore<{ token: string }>({ db, collection: 'two_rejections', now: () => 0 });
+    const second = new FirestoreUpstreamGrantStore<{ token: string }>({ db, collection: 'two_rejections', now: () => 0 });
+    const familyId = randomUUID();
+    await first.put(familyId, { token: 'original' }, 1);
+    const claimed = deferred(), release = deferred(), waiting = deferred();
+    const originalRun = db.runTransaction.bind(db);
+    const spy = vi.spyOn(db, 'runTransaction').mockImplementation((async (fn: any, ...args: any[]) =>
+      originalRun(async (transaction) => {
+        const result = await fn(transaction);
+        if (result?.status === 'leased') waiting.resolve();
+        return result;
+      }, ...args)) as any);
+    const claim = first.ensureFresh(familyId, async () => {
+      claimed.resolve();
+      await release.promise;
+      throw new UpstreamRequestRejectedError();
+    }, { now: 100, force: true }).catch((error) => error);
+    await claimed.promise;
+    const waiter = second.ensureFresh(familyId, async () => ({ grant: { token: 'unexpected' } }),
+      { now: 100, force: true, pollIntervalMs: 2000, waitMs: 5000 }).catch((error) => error);
+    await waiting.promise;
+    release.resolve();
+    expect(await claim).toBeInstanceOf(UpstreamRequestRejectedError);
+    await expect(first.ensureFresh(familyId, async () => { throw new UpstreamRequestRejectedError(); },
+      { now: 200, force: true })).rejects.toBeInstanceOf(UpstreamRequestRejectedError);
+    expect(await waiter).toBeInstanceOf(UpstreamUnavailableError);
+    expect((await first.get(familyId))?.grant).toEqual({ token: 'original' });
     spy.mockRestore();
   });
 });

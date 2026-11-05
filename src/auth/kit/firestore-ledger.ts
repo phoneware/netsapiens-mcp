@@ -99,6 +99,22 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     return this.db.collection(this.familyCollection);
   }
 
+  private async assertIssueNotPending(transaction: Transaction, token: T, familyId: string): Promise<void> {
+    const access = await transaction.get(this.accessCol().doc(docId(token.accessToken)));
+    const refresh = await transaction.get(this.refreshCol().doc(docId(token.refreshToken)));
+    const families = new Set<string>([familyId]);
+    const accessFamily = access.data()?.refreshFamilyId;
+    const refreshData = refresh.data();
+    if (typeof accessFamily === 'string') families.add(accessFamily);
+    if (typeof refreshData?.familyId === 'string') families.add(refreshData.familyId);
+    if (typeof refreshData?.accessToken === 'string') {
+      const pointerAccess = await transaction.get(this.accessCol().doc(docId(refreshData.accessToken)));
+      const pointerFamily = pointerAccess.data()?.refreshFamilyId;
+      if (typeof pointerFamily === 'string') families.add(pointerFamily);
+    }
+    for (const id of families) await this.assertFamilyNotPending(transaction, id);
+  }
+
   async issue(
     token: T,
     options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
@@ -127,7 +143,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               now: this.nowProvider,
             });
             guardResult = guard;
-            await this.assertFamilyNotPending(transaction, familyId);
+            await this.assertIssueNotPending(transaction, stored, familyId);
             guard.bufferCompletion(this.nowProvider());
             transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
             transaction.set(
@@ -171,7 +187,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       }
 
       await this.db.runTransaction(async (batch) => {
-        await this.assertFamilyNotPending(batch, familyId);
+        await this.assertIssueNotPending(batch, stored, familyId);
       batch.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
       batch.set(
         this.refreshCol().doc(docId(stored.refreshToken)),

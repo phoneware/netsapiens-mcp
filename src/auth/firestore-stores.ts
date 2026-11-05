@@ -21,7 +21,7 @@ import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
 import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
-import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
+import { CutoverFenceError, UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
 import {
   type CutoverFenceConfig,
@@ -334,8 +334,9 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       const existing = accessSnap.data() as StoredToken;
       const updated: StoredToken = { ...existing, ...patch };
       const now = this.localNow();
-    if (updated.refreshFamilyId && (patch.nsAccessToken || patch.nsRefreshToken || patch.nsExpiresAt)) {
-     const upstreamSnap = await transaction.get(this.upstreamDocRef(updated.refreshFamilyId));
+    const families = new Set([existing.refreshFamilyId, updated.refreshFamilyId].filter((id): id is string => !!id));
+    for (const familyId of families) {
+     const upstreamSnap = await transaction.get(this.upstreamDocRef(familyId));
      assertGrantNotPending(upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant> | undefined);
     }
 

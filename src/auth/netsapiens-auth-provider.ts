@@ -41,6 +41,7 @@ import {
  UpstreamUnavailableError,
  UpstreamRequestRejectedError,
  CutoverRefusedError,
+ CutoverFenceError,
  classifyUpstreamTokenResponse,
  toTokenEndpointError,
  kitCodeOf,
@@ -838,6 +839,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       ? 'Invalid NetSapiens token or API key.'
       : 'Authentication failed: Invalid token or connection error.';
      sendPage(res, 200, this.renderLoginPage('/login', msg, refreshedState, 'token'));
+     return;
     }
 
     const nsTokens: NsTokenResponse = {

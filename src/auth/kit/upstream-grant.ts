@@ -376,7 +376,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           leaseUntil: now + leaseMs,
           leaseOwner,
           ambiguousOperationId: this.fence?.enforce && op ? op.id : undefined,
-            updatedAt: Math.max(now, current.updatedAt ?? 0),
         }),
         { merge: true },
       );
@@ -532,6 +531,8 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       }
       throw new UpstreamUnavailableError(err instanceof Error ? err.message : String(err));
     }
+    if (!refreshed) throw new UpstreamUnavailableError('Upstream refresh returned no grant');
+    const committedRefresh = refreshed;
 
     // Remote grant succeeded! Commit locally:
     const commitNow = options?.now ?? this.nowProvider();
@@ -569,8 +570,8 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         transaction.set(
           docRef,
           stripUndefined({
-            grant: refreshed.grant,
-            expiresAt: refreshed.expiresAt,
+              grant: committedRefresh.grant,
+              expiresAt: committedRefresh.expiresAt,
             leaseUntil: isTerminal ? null : (now + leaseMs),
             leaseOwner: isTerminal ? null : leaseOwner,
             ambiguousOutcome: null,
@@ -590,7 +591,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
       }
       commitGuard?.commitCompletion?.();
       return {
-        grant: refreshed.grant,
+        grant: committedRefresh.grant,
         completion: options?.completeOperation === false
           ? { familyId, leaseOwner, operationId }
           : null,
