@@ -332,6 +332,14 @@ function computeCandidateLogicalDigest(storeKey: Uint8Array | Buffer, namespace:
   return H(storeKey, 'logical-record', namespace, epoch, [kind, logicalProjection]);
 }
 
+// Subject spec for a namespace from the bound, signed descriptor policy. Refuses without a
+// protected context; an undeclared namespace refuses inside subjectSpecFor.
+function subjectSpecForDb(db: object, namespace: string, storeKey: Uint8Array) {
+  const binding = getProtectedBinding(db);
+  if (!binding) throw new CutoverRefusedError('Protected migration context required for subject mapping');
+  return subjectSpecFor(binding.subjectDescriptors, namespace, storeKey);
+}
+
 export function extractCandidatesAndPlan(params: {
   sourceDocsByKey: Map<string, any[]>;
   storeKey: Uint8Array | Buffer;
@@ -1675,7 +1683,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       sourceDocsByKey,
       storeKey,
       namespace,
-      subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
+      subject: subjectSpecForDb(db, namespace, storeKey),
       epoch: control.epoch,
       runId: migrationRunId,
       codeSha,
@@ -1889,7 +1897,7 @@ async function readPreparationInputs(transaction: any, input: {
     sourceDocsByKey,
     storeKey,
     namespace,
-    subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
+    subject: subjectSpecForDb(db, namespace, storeKey),
     epoch,
     runId: migrationRunId,
     codeSha,
@@ -2183,7 +2191,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       sourceDocsByKey,
       storeKey,
       namespace,
-      subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
+      subject: subjectSpecForDb(db, namespace, storeKey),
       epoch: expectedEpoch,
       runId: migrationRunId,
       codeSha,

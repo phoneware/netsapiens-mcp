@@ -1,5 +1,4 @@
-import type { Codec } from './codec.js';
-import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
+import { createHmac } from 'node:crypto';
 import { CutoverRefusedError } from './errors.js';
 
 // Subject guard for V1 and keyed subject references for V2 (seat revocation).
@@ -31,11 +30,12 @@ export function subjectGuardAllows(data: Record<string, unknown> | undefined, gu
   return typeof value === 'string' && guard.allow.includes(value);
 }
 
-// Keyed subject reference. It is derived through the store codec's keyed id function
-// (HMAC under the store root's derived id key) over a fixed tuple, so the same subject
-// always maps to the same reference within one namespace. The projector and the store
-// both call this function, so migrated and newly issued families match. The value
-// itself never appears in a row.
-export function subjectRefFor(codec: Codec, namespace: string, extraKey: string, value: string): string {
-  return codec.id('subject', canonicalJson(['netsapiens-mcp/subject', 1, namespace, extraKey, value]));
+// Keyed subject reference: HMAC under the store key over the fixed tuple
+// ["netsapiens-mcp/subject", 1, namespace, extraKey, value]. The same subject always maps
+// to the same reference within one namespace. Issue time and migration both call this
+// function, so migrated and newly issued families match.
+export function subjectRefFor(storeKey: Uint8Array, namespace: string, extraKey: string, value: string): string {
+  return createHmac('sha256', storeKey)
+    .update(JSON.stringify(['netsapiens-mcp/subject', 1, namespace, extraKey, value]))
+    .digest('hex');
 }

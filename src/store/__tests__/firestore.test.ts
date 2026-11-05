@@ -234,7 +234,8 @@ describe.skipIf(!host)('Firestore emulator', () => {
   expect(unattachedSession).toBeDefined();
   expect(unattachedSession?.clientId).toBe('legacy-client');
   expect(unattachedSession?.nsUsername).toBe('legacy@domain.com');
-  expect(unattachedSession?.extra).toEqual({ seatId: 'seat-42' });
+  // The legacy seatId field no longer maps to extra. Only the signed extraKey maps subjects.
+  expect(unattachedSession?.extra).toEqual({});
 
   const v3Cols = firestoreCollections(ns);
   const famSnap = await db.collection(v3Cols.refreshFamilies).doc(famId).get();

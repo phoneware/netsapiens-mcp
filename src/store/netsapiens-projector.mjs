@@ -147,7 +147,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('pr56Families missing required nsUsername');
     }
 
-    const pr56SubjectRefs = subjectRefsForFamily(candidate.subject, curRefDoc.token?.extra ?? tokDoc.extra ?? {}, codec);
+    const pr56SubjectRefs = subjectRefsForFamily(candidate.subject, curRefDoc.token?.extra ?? tokDoc.extra ?? {});
     return {
       familyId,
       generation,
@@ -208,14 +208,14 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('baseFormatTokens missing required nsUsername');
     }
 
-    const familySubjectRefs = subjectRefsForFamily(candidate.subject, tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {}), codec);
+    const familySubjectRefs = subjectRefsForFamily(candidate.subject, tokDoc.extra ?? {});
     return {
       familyId,
       generation: 1,
       status: 'active',
       clientId,
       serverBaseUrl: (tokDoc.serverBaseUrl ?? null),
-      extra: (tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {})),
+      extra: (tokDoc.extra ?? {}),
       activeRefreshId: refreshId,
       currentAccessTokenId: accessId,
       previousRefresh: null,

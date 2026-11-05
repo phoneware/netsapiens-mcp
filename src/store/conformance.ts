@@ -66,7 +66,7 @@ export function runStoreConformance(target: ConformanceTarget): void {
       nsUsername: 'user@domain.com',
       nsExpiresAt: Date.now() + 3_600_000,
       serverBaseUrl: 'https://example.com',
-      extra: { seatId: 'seat-1' },
+      extra: { account: 'account-1' },
     });
     const codeData = () => ({
       pending: { clientId: 'client-1', codeChallenge: 'challenge', redirectUri: 'https://example.com/callback', createdAt: Date.now() },

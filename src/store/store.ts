@@ -705,7 +705,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
             id: familyId,
             generation,
             status: 'active',
-            ...(subject ? { subjectRefs: [subjectRefFor(codec, namespace, subject.extraKey, subject.value)] } : {}),
+            ...(subject ? { subjectRefs: [subjectRefFor(key, namespace, subject.extraKey, subject.value)] } : {}),
             activeRefreshId: refreshId,
             currentAccessTokenId: accessId,
             updatedAt: now,
@@ -795,7 +795,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     revokeSubject: async (extraKey: string, value: string, options: { limit: number }) => {
       if (!backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot revoke by subject');
       if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new CutoverRefusedError('revokeSubject limit must be a positive safe integer');
-      const ref = subjectRefFor(codec, namespace, extraKey, value);
+      const ref = subjectRefFor(key, namespace, extraKey, value);
       const ids = await backend.findActiveFamilyIdsBySubjectRef(ref, options.limit + 1);
       const more = ids.length > options.limit;
       let revoked = 0;

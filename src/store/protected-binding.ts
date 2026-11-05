@@ -38,7 +38,7 @@ export interface ProtectedBinding extends ProtectedIdentityFields {
   // observations must be read with exactly this token. Null for the emulator.
   readonly adminTokenDigest: string | null;
   // Signed subject descriptors from the index schema, validated, and their digest.
-  readonly subjectDescriptors: SubjectDescriptors | null;
+  readonly subjectDescriptors: SubjectDescriptors;
   readonly subjectDescriptorDigest: string;
 }
 

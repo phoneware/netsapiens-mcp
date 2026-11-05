@@ -21,7 +21,7 @@ export function deriveStoreKey(sessionSecret: string): Buffer {
 }
 
 export interface Codec {
-  id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream' | 'subject', value: string): string;
+  id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream', value: string): string;
   seal(value: unknown, aad: string): string;
   open<T>(sealed: string, aad: string): T | undefined;
 }
@@ -31,7 +31,7 @@ export function createCodec(root: Uint8Array): Codec {
   const idKey = Buffer.from(hkdfSync('sha256', rootBuf, '', 'id', 32));
   const encKey = Buffer.from(hkdfSync('sha256', rootBuf, '', 'enc', 32));
   return {
-    id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream' | 'subject', value: string): string {
+    id(purpose: 'session' | 'refresh' | 'code' | 'user' | 'family' | 'successor' | 'upstream', value: string): string {
       return createHmac('sha256', idKey).update(`${purpose}\0${value}`).digest('hex');
     },
     seal(value: unknown, aad: string): string {
