@@ -526,7 +526,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   // subject can only be enforced and recorded inside it. Without it the provider would
   // silently issue unguarded families.
   if (options.subjectForIssuance) {
-   if (!(options.store.authCodes.redeemAndIssue && options.store.authCodes.getEntry)) {
+   if (typeof options.store.authCodes.redeemAndIssue !== 'function' || typeof options.store.authCodes.getEntry !== 'function') {
     throw new Error('subjectForIssuance requires a store with atomic code redemption');
    }
    if (!options.store.capabilities.subjectGuards) {
@@ -1096,136 +1096,136 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   try {
    const now = Date.now();
    const lookup = await this.store.sessions.lookupRefresh(refreshToken, client?.client_id ?? '', now);
-  if (lookup.status === 'missing') {
-   logger.warn('Refresh token presented but unknown: user will be asked to reconnect');
-   throw new InvalidGrantError('Invalid refresh token');
-  }
-
-  if (lookup.status === 'replay') {
-   logger.warn('Refresh token replay detected outside retry window: family revoked', {
-    familyId: lookup.familyId,
-   });
-   throw new InvalidGrantError('Invalid refresh token');
-  }
-
-  const { familyId, generation, session } = lookup;
-
-  if (this.hooks?.onVerify) {
-   try {
-    await this.hooks.onVerify(session);
-   } catch (err: unknown) {
-    if (err instanceof InvalidTokenError) {
-     await this.store.sessions.revokeFamily(familyId);
-     throw new InvalidGrantError(err.message);
-    }
-    logger.warn('Refresh authorization check failed with operational error', {
-     error: err instanceof Error ? err.message : String(err),
-    });
-    throw new TemporarilyUnavailableError('Refresh authorization check temporarily unavailable');
+   if (lookup.status === 'missing') {
+    logger.warn('Refresh token presented but unknown: user will be asked to reconnect');
+    throw new InvalidGrantError('Invalid refresh token');
    }
-  }
 
-  if (lookup.status === 'retry') {
-   logger.info('Refresh token response-lost retry inside grace window returned successor pair', {
-    familyId,
-   });
-   return {
-    access_token: lookup.tokens.accessToken,
-    token_type: 'Bearer',
-    expires_in: Math.max(1, Math.round((session.expiresAt - now) / 1000)),
-    refresh_token: lookup.tokens.refreshToken,
-    scope: session.nsUserRole,
-   };
-  }
+   if (lookup.status === 'replay') {
+    logger.warn('Refresh token replay detected outside retry window: family revoked', {
+     familyId: lookup.familyId,
+    });
+    throw new InvalidGrantError('Invalid refresh token');
+   }
 
-  let refreshedSession: StoredSession;
-  if (session.nsRefreshToken) {
-   try {
-    refreshedSession = await this.store.sessions.refreshUpstream(
+   const { familyId, generation, session } = lookup;
+
+   if (this.hooks?.onVerify) {
+    try {
+     await this.hooks.onVerify(session);
+    } catch (err: unknown) {
+     if (err instanceof InvalidTokenError) {
+      await this.store.sessions.revokeFamily(familyId);
+      throw new InvalidGrantError(err.message);
+     }
+     logger.warn('Refresh authorization check failed with operational error', {
+      error: err instanceof Error ? err.message : String(err),
+     });
+     throw new TemporarilyUnavailableError('Refresh authorization check temporarily unavailable');
+    }
+   }
+
+   if (lookup.status === 'retry') {
+    logger.info('Refresh token response-lost retry inside grace window returned successor pair', {
      familyId,
-     async (current) => {
-      const refreshed = await this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl);
-      return {
-       access_token: refreshed.access_token,
-       refresh_token: refreshed.refresh_token,
-       expires_in: refreshed.expires_in,
-      };
-     },
-     { force: true },
-    );
-   } catch (err: unknown) {
-    if (err instanceof UpstreamGrantRejectedError) {
-     logger.warn('Upstream NS refresh grant rejected definitively by NetSapiens', {
+    });
+    return {
+     access_token: lookup.tokens.accessToken,
+     token_type: 'Bearer',
+     expires_in: Math.max(1, Math.round((session.expiresAt - now) / 1000)),
+     refresh_token: lookup.tokens.refreshToken,
+     scope: session.nsUserRole,
+    };
+   }
+
+   let refreshedSession: StoredSession;
+   if (session.nsRefreshToken) {
+    try {
+     refreshedSession = await this.store.sessions.refreshUpstream(
+      familyId,
+      async (current) => {
+       const refreshed = await this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl);
+       return {
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+        expires_in: refreshed.expires_in,
+       };
+      },
+      { force: true },
+     );
+    } catch (err: unknown) {
+     if (err instanceof UpstreamGrantRejectedError) {
+      logger.warn('Upstream NS refresh grant rejected definitively by NetSapiens', {
+       familyId,
+       username: session.nsUsername,
+       error: err instanceof Error ? err.message : String(err),
+      });
+      throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+     }
+     logger.warn('Upstream NS refresh failed with transient error during refresh', {
       familyId,
       username: session.nsUsername,
       error: err instanceof Error ? err.message : String(err),
      });
-     throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
+     throw new TemporarilyUnavailableError('Upstream token refresh temporarily unavailable, please retry');
     }
-    logger.warn('Upstream NS refresh failed with transient error during refresh', {
-     familyId,
+   } else {
+    logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
      username: session.nsUsername,
-     error: err instanceof Error ? err.message : String(err),
     });
-    throw new TemporarilyUnavailableError('Upstream token refresh temporarily unavailable, please retry');
+    throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
    }
-  } else {
-   logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
-    username: session.nsUsername,
-   });
-   throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
-  }
 
-  const newAccessToken = randomBytes(32).toString('hex');
-  const newRefreshToken = randomBytes(32).toString('hex');
-  const newExpiresAt = now + (this.tokenLifetimeSec * 1000);
+   const newAccessToken = randomBytes(32).toString('hex');
+   const newRefreshToken = randomBytes(32).toString('hex');
+   const newExpiresAt = now + (this.tokenLifetimeSec * 1000);
 
-  const newStoredSession: StoredToken = {
-   clientId: session.clientId,
-   expiresAt: newExpiresAt,
-   nsAccessToken: refreshedSession.nsAccessToken,
-   nsRefreshToken: refreshedSession.nsRefreshToken ?? session.nsRefreshToken,
-   nsExpiresAt: refreshedSession.nsExpiresAt,
-   nsUsername: session.nsUsername,
-   nsUserRole: session.nsUserRole,
-   nsApiUrl: session.nsApiUrl,
-   serverBaseUrl: session.serverBaseUrl,
-   extra: session.extra,
-  };
-
-  const rotationResult = await this.store.sessions.rotate(
-   refreshToken,
-   {
-    tokens: { accessToken: newAccessToken, refreshToken: newRefreshToken },
-    session: newStoredSession,
-   },
-   client.client_id,
-   now,
-  );
-
-  if (rotationResult.status === 'retry') {
-   return {
-    access_token: rotationResult.tokens.accessToken,
-    token_type: 'Bearer',
-    expires_in: Math.max(1, Math.round((rotationResult.session.expiresAt - now) / 1000)),
-    refresh_token: rotationResult.tokens.refreshToken,
-    scope: rotationResult.session.nsUserRole,
-   };
-  }
-
-  if (rotationResult.status === 'claimed') {
-   logger.info('MCP bearer refreshed via refresh_token', {
-    username: session.nsUsername,
+   const newStoredSession: StoredToken = {
     clientId: session.clientId,
-   });
-   return {
-    access_token: newAccessToken,
-    token_type: 'Bearer',
-    expires_in: this.tokenLifetimeSec,
-    refresh_token: newRefreshToken,
-    scope: session.nsUserRole,
+    expiresAt: newExpiresAt,
+    nsAccessToken: refreshedSession.nsAccessToken,
+    nsRefreshToken: refreshedSession.nsRefreshToken ?? session.nsRefreshToken,
+    nsExpiresAt: refreshedSession.nsExpiresAt,
+    nsUsername: session.nsUsername,
+    nsUserRole: session.nsUserRole,
+    nsApiUrl: session.nsApiUrl,
+    serverBaseUrl: session.serverBaseUrl,
+    extra: session.extra,
    };
-  }
+
+   const rotationResult = await this.store.sessions.rotate(
+    refreshToken,
+    {
+     tokens: { accessToken: newAccessToken, refreshToken: newRefreshToken },
+     session: newStoredSession,
+    },
+    client.client_id,
+    now,
+   );
+
+   if (rotationResult.status === 'retry') {
+    return {
+     access_token: rotationResult.tokens.accessToken,
+     token_type: 'Bearer',
+     expires_in: Math.max(1, Math.round((rotationResult.session.expiresAt - now) / 1000)),
+     refresh_token: rotationResult.tokens.refreshToken,
+     scope: rotationResult.session.nsUserRole,
+    };
+   }
+
+   if (rotationResult.status === 'claimed') {
+    logger.info('MCP bearer refreshed via refresh_token', {
+     username: session.nsUsername,
+     clientId: session.clientId,
+    });
+    return {
+     access_token: newAccessToken,
+     token_type: 'Bearer',
+     expires_in: this.tokenLifetimeSec,
+     refresh_token: newRefreshToken,
+     scope: session.nsUserRole,
+    };
+   }
    throw new InvalidGrantError('Invalid refresh token');
   } catch (err: unknown) {
    if (err instanceof InvalidGrantError || err instanceof TemporarilyUnavailableError) {
@@ -1668,7 +1668,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     throw new UpstreamUnavailableError(`Upstream refresh grant transient failure (${status}): ${String(desc)}`, status);
    }
    throw err;
- }
+  }
  }
 
  async invalidateToken(mcpToken: string): Promise<void> {

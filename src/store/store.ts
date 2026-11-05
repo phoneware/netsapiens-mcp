@@ -9,6 +9,7 @@ import type {
   AccessRow,
   AtomicIssueParams,
   AuthCodeData,
+  AuthCodeRow,
   FamilyRow,
   McpStore,
   OAuthTokenPair,
@@ -34,21 +35,21 @@ import {
   encodeOAuthClientsRow,
 } from './row-codec.js';
 import {
-    ACCESS_RETENTION_MS,
-    SESSION_RETENTION_MS,
-    REFRESH_RETRY_WINDOW_MS,
-    MAX_RETIRED_REFRESH_FINGERPRINTS,
-    AUTH_CODE_TTL_MS,
-    RESUME_TOKEN_TTL_MS,
-    REFRESH_WAIT_MS,
-    REFRESH_POLL_MS,
-    REFRESH_LEASE_MS,
-    REFRESH_SKEW_MS,
-    accessAad,
-    refreshAad,
-    familyAad,
-    upstreamAad,
-    sessionAad,
+  ACCESS_RETENTION_MS,
+  SESSION_RETENTION_MS,
+  REFRESH_RETRY_WINDOW_MS,
+  MAX_RETIRED_REFRESH_FINGERPRINTS,
+  AUTH_CODE_TTL_MS,
+  RESUME_TOKEN_TTL_MS,
+  REFRESH_WAIT_MS,
+  REFRESH_POLL_MS,
+  REFRESH_LEASE_MS,
+  REFRESH_SKEW_MS,
+  accessAad,
+  refreshAad,
+  familyAad,
+  upstreamAad,
+  sessionAad,
 } from './row-format.js';
 
 export {
@@ -373,12 +374,12 @@ export function createStore(
         const nextGrantVersion = (upstream?.grantVersion ?? 0) + 1;
         const newUpstreamSealed = replacement.session.nsAccessToken
           ? codec.seal({
-              nsAccessToken: replacement.session.nsAccessToken,
-              nsRefreshToken: replacement.session.nsRefreshToken,
-              nsUsername: replacement.session.nsUsername,
-              nsUserRole: replacement.session.nsUserRole,
-              nsApiUrl: replacement.session.nsApiUrl,
-            } satisfies UpstreamSealedData, upstreamAad({ id: familyId, grantVersion: nextGrantVersion }))
+            nsAccessToken: replacement.session.nsAccessToken,
+            nsRefreshToken: replacement.session.nsRefreshToken,
+            nsUsername: replacement.session.nsUsername,
+            nsUserRole: replacement.session.nsUserRole,
+            nsApiUrl: replacement.session.nsApiUrl,
+          } satisfies UpstreamSealedData, upstreamAad({ id: familyId, grantVersion: nextGrantVersion }))
           : undefined;
 
         const rotateResult = await backend.atomicRotate({
@@ -458,7 +459,7 @@ export function createStore(
 
         // Compatibility fallback
         if (backend.deleteSession) {
-                    await backend.deleteSession(accessId).catch(() => { });
+          await backend.deleteSession(accessId).catch(() => { });
         }
       },
 
@@ -592,13 +593,13 @@ export function createStore(
                   expectedFamilyGeneration: fam.generation,
                   expectedUpstreamGrantVersion: updated.grantVersion,
                   expectedLeaseOwner: owner,
-                                }).catch(() => { });
+                }).catch(() => { });
               }
             }
             await backend.updateUpstream(familyId, (cur) => {
               if (cur.leaseOwner !== owner) return undefined;
               return { ...cur, leaseOwner: undefined, leaseUntil: undefined };
-                        }).catch(() => { });
+            }).catch(() => { });
             throw error;
           }
         }
@@ -626,23 +627,23 @@ export function createStore(
           code,
           {
             pending: {
-              clientId: data.clientId,
-              codeChallenge: data.codeChallenge,
-              redirectUri: data.redirectUri,
-              createdAt: data.createdAt,
-              state: (data as any).state,
-              scopes: (data as any).scopes,
+              clientId: data.pending.clientId,
+              codeChallenge: data.pending.codeChallenge,
+              redirectUri: data.pending.redirectUri,
+              createdAt: data.pending.createdAt,
+              state: data.pending.state,
+              scopes: data.pending.scopes,
             },
             nsTokens: {
-              access_token: (data as any).nsAccessToken || '',
-              refresh_token: (data as any).nsRefreshToken,
-              username: (data as any).nsUsername,
-              nsUserRole: (data as any).nsUserRole,
-              nsApiUrl: (data as any).nsApiUrl,
+              access_token: data.nsTokens.access_token,
+              refresh_token: data.nsTokens.refresh_token,
+              username: data.nsTokens.username,
+              nsUserRole: data.nsTokens.nsUserRole,
+              nsApiUrl: data.nsTokens.nsApiUrl,
             },
-            clientId: data.clientId,
-            serverBaseUrl: (data as any).serverBaseUrl,
-            extra: (data as any).extra,
+            clientId: data.pending.clientId,
+            serverBaseUrl: data.serverBaseUrl,
+            extra: data.extra,
           },
           expiresAt,
           Date.now(),

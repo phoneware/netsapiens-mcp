@@ -339,7 +339,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   // Mutating production operations (adopt commit, activate) must carry the fixed
   // dispatch claims. These are read from the same bytes the exchange below must
   // accept; a decoded claim is never authority on its own.
-  const mutating = request.action === 'activate' || (request.action === 'adopt' && request.options.dryRun === false);
+  const mutating = request.action === 'activate' || (request.action === 'adopt' && 'dryRun' in request.options && request.options.dryRun === false);
   let invocation: { runId: string; runAttempt: string } | null = null;
   if (oidcBefore !== null && mutating) {
     invocation = assertMutatingClaims(oidcBefore);
@@ -424,9 +424,13 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     status: 'status',
     'verify-active-ownership': 'verifyActive',
   };
-  const authorizedOptions = request.action === 'verify-active-ownership'
-    ? { migrationManifestDigest: request.options.migrationManifestDigest }
-    : request.options;
+  let authorizedOptions: Record<string, unknown>;
+  if (request.action === 'verify-active-ownership') {
+    if (!('migrationManifestDigest' in request.options)) throw new CutoverRefusedError('Verify request options are malformed');
+    authorizedOptions = { migrationManifestDigest: request.options.migrationManifestDigest };
+  } else {
+    authorizedOptions = request.options;
+  }
 
   bindProtectedContext(db, {
     namespace: request.namespace,

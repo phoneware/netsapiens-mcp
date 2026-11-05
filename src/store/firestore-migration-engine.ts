@@ -399,8 +399,10 @@ export function extractCandidatesAndPlan(params: {
 
   // Physical vs credential token resolution for access tokens and refresh pointers
   const malformedDocKeys = new Set<string>();
-  const tokensByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
-  const tokensByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
+  // One shape for every credential-keyed legacy entry: its document, data, physical id and credential token.
+  interface LegacyCredentialEntry { doc: any; data: any; physicalId: string; credentialToken: string }
+  const tokensByCredential = new Map<string, LegacyCredentialEntry>();
+  const tokensByPhysicalId = new Map<string, LegacyCredentialEntry>();
   for (const d of tokensDocs) {
     const data = d.data() || {};
     const credToken = data.accessToken ?? data.token?.accessToken;
@@ -431,8 +433,8 @@ export function extractCandidatesAndPlan(params: {
     }
   }
 
-  const refreshByCredential = new Map<string, { doc: any; data: any; physicalId: string }>();
-  const refreshByPhysicalId = new Map<string, { doc: any; data: any; credentialToken: string }>();
+  const refreshByCredential = new Map<string, LegacyCredentialEntry>();
+  const refreshByPhysicalId = new Map<string, LegacyCredentialEntry>();
 
   for (const d of refreshDocs) {
     const data = d.data() || {};
@@ -653,7 +655,7 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'pr56Families', targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
       subject,
@@ -724,7 +726,7 @@ export function extractCandidatesAndPlan(params: {
 
     // Verify logical projection equivalence
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'pr56Families', targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -862,7 +864,7 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'baseFormatTokens', targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
       subject,
@@ -900,7 +902,7 @@ export function extractCandidatesAndPlan(params: {
     postimageByTargetId.set(upTargetId, upRow);
 
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'baseFormatTokens', targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -975,7 +977,7 @@ export function extractCandidatesAndPlan(params: {
     sourcesMap.set('authCodes', safeDocEntry(rawCode, cData));
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'authCodes', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'authCodes', targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
       subject,
@@ -1013,7 +1015,7 @@ export function extractCandidatesAndPlan(params: {
     const targetDocsMap = new Map();
     targetDocsMap.set('authCodes', codeRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'authCodes', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'authCodes', targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -1076,7 +1078,7 @@ export function extractCandidatesAndPlan(params: {
     sourcesMap.set('resumeTokens', safeDocEntry(resId, rData));
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'resumeTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'resumeTokens', targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
       subject,
@@ -1088,7 +1090,7 @@ export function extractCandidatesAndPlan(params: {
     const targetDocsMap = new Map();
     targetDocsMap.set('resumeTokens', resRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'resumeTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'resumeTokens', targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -1208,7 +1210,7 @@ export function extractCandidatesAndPlan(params: {
     sourcesMap.set('clients', safeDocEntry(clientId, authoritativeDoc));
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'clients', targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
       subject,
@@ -1231,7 +1233,7 @@ export function extractCandidatesAndPlan(params: {
     const targetDocsMap = new Map();
     targetDocsMap.set('clients', clientRow);
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'clients', targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -1641,6 +1643,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     if (control.state !== 'fenced') {
       throw new CutoverFenceError(`Inspect requires a fenced namespace: state is '${control.state}'`);
     }
+    const codec = createCodec(storeKey);
 
     const { source: sourceNames, target: targetNames } = getCutoverDistinctCollectionNames(namespace);
     const distinctColNames = Array.from(new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
@@ -1677,7 +1680,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
         for (const doc of snap.docs) {
           const data = doc.data() || {};
           // Pass physical collection name to isTargetFormatRow
-          if (isTargetFormatRow(colName, data, doc.id)) {
+          if (isTargetFormatRow(colName, data)) {
             tDocs.push(doc);
           } else {
             sDocs.push(doc);
@@ -1905,7 +1908,7 @@ async function readPreparationInputs(transaction: any, input: {
       for (const doc of snap.docs) {
         const data = doc.data() || {};
         // Pass physical colName to isTargetFormatRow
-        if (!isTargetFormatRow(colName, data, doc.id)) {
+        if (!isTargetFormatRow(colName, data)) {
           sDocs.push(doc);
         }
       }
@@ -1975,6 +1978,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
   const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(db);
   const storeKey = key;
+  const codec = createCodec(storeKey);
   const docIdField = FieldPath.documentId();
 
   // Phase 0: a read-only pass builds the plan the preparation would write, so the
@@ -2002,7 +2006,12 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     await observeFreshIndexes({ db, purpose: 'preparation', requiredFields: observed.requiredFields, sourceInventoryDigest: observed.sourceInventoryDigest });
   }
   // Phase 1: Preparation in transaction (supporting restart per Section 5)
-  const prepResult = await db.runTransaction(async (transaction: any) => {
+  // The preparation transaction's three outcomes, each with exactly the fields that outcome has.
+  type PrepareResult =
+    | { dryRun: true; scanned: number; migrated: number; skipped: number; errors: number }
+    | { dryRun: false; isResume: true; prepared: any; planSpec: any }
+    | { dryRun: false; isResume: false; candidates: any[]; plan: any; prepared: any };
+  const prepResult: PrepareResult = await db.runTransaction(async (transaction: any): Promise<PrepareResult> => {
     const timer = startMonotonicTimer();
     assertCredentialUnchanged(db);
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
@@ -2170,7 +2179,8 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   }
 
   const { prepared, isResume } = prepResult;
-  let candidates = prepResult.candidates;
+  // A resume rebuilds candidates from the sources before any use (below), so its placeholder is never read.
+  let candidates: any[] = prepResult.isResume ? [] : prepResult.candidates;
   let migratedCount = 0;
   let skippedCount = 0;
 
@@ -2192,7 +2202,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     for (const [k, colName] of Object.entries(sourceNames)) {
       const snap = await db.collection(colName).orderBy(docIdField).get();
       const docs = targetNamesSet.has(colName)
-        ? snap.docs.filter(d => !isTargetFormatRow(colName, d.data(), d.id))
+        ? snap.docs.filter(d => !isTargetFormatRow(colName, d.data()))
         : snap.docs;
       sourceDocsByKey.set(k, docs);
       for (const d of docs) {
@@ -2203,7 +2213,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     for (const [k, colName] of Object.entries(targetNames)) {
       const snap = await db.collection(colName).orderBy(docIdField).get();
       const docs = sourceNamesSet.has(colName)
-        ? snap.docs.filter(d => isTargetFormatRow(colName, d.data(), d.id))
+        ? snap.docs.filter(d => isTargetFormatRow(colName, d.data()))
         : snap.docs;
       for (const d of docs) {
         const id = computeKeyedDocId(storeKey, 'target-id', namespace, expectedEpoch, k, d.id);
@@ -2561,7 +2571,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       for (const d of snap.docs) {
         const data = d.data() || {};
         if (['authCodes', 'resumeTokens', 'oauthClients'].includes(colKey) &&
-          !isTargetFormatRow(physicalName, data, d.id)) continue;
+          !isTargetFormatRow(physicalName, data)) continue;
         const targetId = computeKeyedDocId(storeKey, 'target-id', namespace, control.epoch, colKey, d.id);
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
         targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
@@ -2571,7 +2581,6 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     }
     targetDescriptors.sort(compareDescriptors);
     const logicalItems: Array<[string, string]> = [];
-    const codec = createCodec(storeKey);
     const commitments = prepared.candidateCommitments as Array<{
       id: string; kind: string; logicalDigest: string; targets: Array<{ collection: string; id: string }>;
     }>;

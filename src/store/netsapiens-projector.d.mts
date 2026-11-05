@@ -20,7 +20,6 @@ export const accessAad: (params: { id: string; familyId: string }) => string;
 export interface ProjectorCandidate {
   id: string;
   kind: string;
-  sources: Array<{ collection: string; id: string; recordDigest: string }>;
   targets: Array<{ collection: string; id: string }>;
   logicalDigest: string;
 }

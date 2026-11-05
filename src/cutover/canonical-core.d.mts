@@ -69,7 +69,7 @@ export function assertSupportedCutoverNamespace(namespace: unknown): void;
 export function sanitizeId(id: unknown): string;
 export function validateMapKeysExact(...args: any[]): any;
 export function validateMigrationIdentityFields(...args: any[]): any;
-export function getCutoverDistinctCollectionNames(namespace: string): any;
+export function getCutoverDistinctCollectionNames(namespace: string): { source: Record<string, string>; target: Record<string, string> };
 export function getSourceCollectionAllowlist(...args: any[]): any;
 export function getTargetCollectionAllowlist(...args: any[]): any;
 export function isTargetFormatRow(collection: string, data: unknown): boolean;
