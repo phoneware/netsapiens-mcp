@@ -13,9 +13,9 @@ import type { SubjectDescriptor } from '../subject-descriptor.js';
 // so these run only where containerGateOpen() holds (a disposable container or CI). They never
 // touch an existing /opt/cutover or /run/cutover. The bundle is regenerated first with
 // `npm run bundle:cutover`, because the mounted bytes must be the built artifact.
+import { closedBundleBytes } from './support/closed-bundle.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
 const RUNNER_SOURCE = resolve(here, 'support', 'protected-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', 'node_modules');
 const gateOpen = containerGateOpen();
@@ -89,7 +89,7 @@ describe.skipIf(!gateOpen)('protected migration factory on the emulator profile'
 
   beforeAll(() => {
     assertCanOwnMounts();
-    bundleBytes = readFileSync(BUNDLE_SOURCE);
+    bundleBytes = closedBundleBytes();
     // The mounted bundle must be the built artifact: it must export the protected factory.
     expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
   });

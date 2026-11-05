@@ -51,7 +51,9 @@ const bindings = new WeakMap<object, ProtectedBinding>();
 const consumed = new WeakSet<object>();
 
 function deepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+  // Byte views are leaves: Object.freeze throws on a typed array with elements. The key is a private copy made
+  // by Buffer.from in bindProtectedContext, so it is never shared; the binding object itself is frozen.
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value) && !ArrayBuffer.isView(value)) {
     Object.freeze(value);
     for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
   }

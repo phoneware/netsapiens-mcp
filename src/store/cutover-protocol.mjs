@@ -5582,7 +5582,7 @@ var MAX_CREDENTIAL_BYTES = 64 * 1024;
 var bindings = /* @__PURE__ */ new WeakMap();
 var consumed = /* @__PURE__ */ new WeakSet();
 function deepFreeze(value) {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value) && !ArrayBuffer.isView(value)) {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);
   }
