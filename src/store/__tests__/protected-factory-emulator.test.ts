@@ -42,8 +42,9 @@ function reviewedUnion(namespace: string): string[] {
   if (typeof scopeFn !== 'function') {
     throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent; the emulator harness cannot run until the core sync lands');
   }
-  const scope = (scopeFn as (ns: string) => { complete: boolean; groups: readonly string[] })(namespace);
-  if (scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
+  // Negatives only: the factory is the gate that must refuse an open scope, so the groups are read unchecked here.
+  // Positive suites gate on reviewedScopeClosed() instead.
+  const scope = (scopeFn as (ns: string) => { groups: readonly string[] })(namespace);
   return [...scope.groups];
 }
 
