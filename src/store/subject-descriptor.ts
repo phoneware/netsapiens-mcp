@@ -45,7 +45,8 @@ function validatedCopy(namespace: string, value: unknown): SubjectDescriptor | n
     refuse('Subject descriptor is invalid for this namespace');
   }
   if (value === null) return null;
-  return Object.freeze(JSON.parse(canonicalJson(value)) as SubjectDescriptor);
+  const copy = JSON.parse(canonicalJson(value)) as SubjectDescriptor;
+  return Object.freeze({ ...copy, allow: Object.freeze([...copy.allow]) });
 }
 
 // Reads the one descriptor from a verified predicate's serviceConfiguration. The field must
