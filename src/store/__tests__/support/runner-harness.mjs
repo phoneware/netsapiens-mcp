@@ -1,8 +1,9 @@
-// Test-only harness for the real protected-migration runner path. The mounted runner refuses any mount
-// but its fixed paths, so callers run this only where containerGateOpen() holds (a disposable container
-// or CI). It mounts the synthetic fixture, spawns the runner with the factory's argv and allowlisted
-// environment, and returns the runner's JSON result. It never reads credentials or writes outside the
-// fixed mounts it owns, and it never runs with a host mount it did not create.
+// Test-only harness for the real protected-migration preparation path. The mounted runner refuses any
+// mount but its fixed paths, so callers run this only where containerGateOpen() holds (a disposable
+// container or CI). It mounts the synthetic fixture into /opt/cutover and /run/cutover, copies the
+// preparation runner (prepare-runner.mjs) to /opt/cutover/runner.mjs, runs it with no argv (the action
+// and options come from the mounted request.json), and returns its JSON result. A refusal is returned
+// as data (ok: false) because refusal is an expected outcome the suites assert on, not an exception.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -13,8 +14,7 @@ import { createSyntheticFixture } from './synthetic-dsse-fixture.mjs';
 import { OPT, RUN, releaseMounts } from './mounts.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const BUNDLE_SOURCE = resolve(here, '..', '..', 'cutover-protocol.mjs');
-export const RUNNER_SOURCE = resolve(here, 'protected-runner.mjs');
+export const RUNNER_SOURCE = resolve(here, 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', '..', 'node_modules');
 
 // The reviewed union of collection groups for a namespace, from the reviewed canonical core. It fails
@@ -45,7 +45,7 @@ export function fixtureFor({ bundleBytes, namespace, epoch, action, options = {}
 }
 
 // Writes the fixture's bytes to the fixed mounts. Callers must have passed assertCanOwnMounts() first.
-export function mountFixture(fixture, { bundle, extraRun } = {}) {
+export function mountFixture(fixture, { bundle } = {}) {
   releaseMounts();
   mkdirSync(OPT, { recursive: true, mode: 0o755 });
   mkdirSync(RUN, { recursive: true, mode: 0o700 });
@@ -55,30 +55,27 @@ export function mountFixture(fixture, { bundle, extraRun } = {}) {
   writeFileSync(join(OPT, 'runner.mjs'), readFileSync(RUNNER_SOURCE));
   symlinkSync(REPO_NODE_MODULES, join(OPT, 'node_modules'), 'dir');
   for (const [name, bytes] of Object.entries(fixture.run)) writeFileSync(join(RUN, name), bytes, { mode: 0o600 });
-  for (const [name, bytes] of Object.entries(extraRun ?? {})) writeFileSync(join(RUN, name), bytes, { mode: 0o600 });
 }
 
-// The factory's environment allowlist. Any other variable is refused before a file is read. The emulator
-// host comes from the mounted fixed profile, never from the environment.
-function minimalEnv() {
-  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/root' };
+// The factory's environment. PATH and HOME are required to start Node. The emulator host is passed only
+// when the caller's gate set it; it is never read from a config file.
+function runnerEnv() {
+  const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/root' };
+  if (process.env.FIRESTORE_EMULATOR_HOST) env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST;
+  return env;
 }
 
-// Runs the mounted runner with the factory's argv and returns its JSON result line.
-export function runFactory(action, namespace, { nodeArgs = [] } = {}) {
-  const child = spawnSync(
-    process.execPath,
-    [...nodeArgs, join(OPT, 'runner.mjs'), action, '--namespace', namespace],
-    { env: minimalEnv(), encoding: 'utf8', timeout: 120_000 },
-  );
+// Runs the mounted preparation runner and returns its parsed JSON line plus the exit status.
+export function runFactory() {
+  const child = spawnSync(process.execPath, [join(OPT, 'runner.mjs')], { env: runnerEnv(), encoding: 'utf8', timeout: 120_000 });
   const line = child.stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`runner produced no result; stderr: ${child.stderr}`);
-  return JSON.parse(line);
+  return { ...JSON.parse(line), exitStatus: child.status };
 }
 
-// One protected step: mount the fixture for this action and run it. The runner result carries the
-// report (adopt) or the inspection (inspect); a refusal comes back as ok: false with the runner's message.
+// One protected step: mount the fixture for this action and run it. For adopt, pass the inspect digest in
+// options.expectedSourceInventoryDigest, obtained from a prior inspect run against the same emulator state.
 export function runStep({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null }) {
   mountFixture(fixtureFor({ bundleBytes, namespace, epoch, action, options, nonce, subjectDescriptor }));
-  return runFactory(action, namespace);
+  return runFactory();
 }
