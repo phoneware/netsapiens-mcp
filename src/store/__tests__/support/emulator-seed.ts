@@ -10,10 +10,8 @@ import type { FirestoreLike } from '../../firestore.js';
 
 export const EMULATOR = { projectId: 'demo-netsapiens-cutover', host: '127.0.0.1', port: 8080, ssl: false, ignoreUndefinedProperties: false };
 
-// The fence epoch every runner suite seeds at. The runner's identity carries the same epoch, so an adopt
-// with expectedEpoch equal to this value matches the fence.
-// initializeCutoverFence accepts only epoch 1 for a new namespace (it throws "must be exactly 1").
-export const EPOCH = 1;
+// A fresh namespace initializes at 1; closing -> fenced advances the signed migration epoch to 2.
+export const EPOCH = 2;
 
 // Every collection the preparation can read or write for a namespace, for clearing and snapshots.
 export function groupsFor(namespace: string): string[] {
@@ -32,11 +30,12 @@ export function groupsFor(namespace: string): string[] {
 
 // Clears the namespace and leaves its fence in the fenced state at the given epoch. The subcollections of
 // the fence record are removed by recursiveDelete, so a previous run cannot leak state into this one.
-export async function resetFencedNamespace(db: Firestore, namespace: string, epoch: number = EPOCH): Promise<void> {
+export async function resetFencedNamespace(db: Firestore, namespace: string): Promise<void> {
   for (const group of groupsFor(namespace)) await db.recursiveDelete(db.collection(group));
-  await initializeCutoverFence(db as unknown as FirestoreLike, namespace, { initialEpoch: epoch });
-  await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: epoch });
-  await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: epoch });
+  await initializeCutoverFence(db as unknown as FirestoreLike, namespace, { initialEpoch: 1 });
+  await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+  const fenced = await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+  if (fenced.epoch !== EPOCH) throw new Error(`Unexpected fenced epoch ${fenced.epoch}`);
 }
 
 // Clears the namespace and leaves no fence record, for the fail-closed case.

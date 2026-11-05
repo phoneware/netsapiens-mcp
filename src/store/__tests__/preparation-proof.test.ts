@@ -25,9 +25,8 @@ import type { SubjectDescriptor } from '../subject-descriptor.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const PREPARE_RUNNER = resolve(here, 'support', 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', 'node_modules');
-// initializeCutoverFence accepts only epoch 1 for a new namespace. The fixture's signed identity derives its
-// migration run id from this same epoch, so the fence and the signed binding agree.
-const EPOCH = 1;
+// Initial epoch is 1; closing -> fenced increments it to 2, which binds the signed request.
+const EPOCH = 2;
 const EMULATOR = { projectId: 'demo-netsapiens-cutover', host: '127.0.0.1', port: 8080, ssl: false, ignoreUndefinedProperties: false };
 const DESCRIPTOR: SubjectDescriptor = { allow: ['active'], collection: 'seats', extraKey: 'seatId', field: 'state' };
 const LEGACY_EXPIRY = () => Date.now() + 3_600_000;
@@ -125,9 +124,10 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
   // legacy rows seeded. Clearing uses recursiveDelete so the fence operations subcollection goes too.
   async function reset(namespace: string, options: { malformedSeat?: boolean } = {}): Promise<void> {
     for (const group of groupsFor(namespace)) await db.recursiveDelete(db.collection(group));
-    await initializeCutoverFence(db as unknown as FirestoreLike, namespace, { initialEpoch: EPOCH, initialState: 'legacy_open' });
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: EPOCH });
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: EPOCH });
+    await initializeCutoverFence(db as unknown as FirestoreLike, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+    const fenced = await transitionCutoverFenceState(db as unknown as FirestoreLike, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+    expect(fenced.epoch).toBe(EPOCH);
     await db.collection(`${namespace}_tokens`).doc('legacy-acc-2').set({
       accessToken: 'legacy-acc-2',
       refreshToken: 'legacy-ref-2',

@@ -272,7 +272,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
   it('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready -> v3_active', async () => {
     const now = Date.now();
     await resetNamespaceWithoutFence(db, NS);
-    const init = await initializeCutoverFence(fence(db), NS, { initialEpoch: EPOCH });
+    const init = await initializeCutoverFence(fence(db), NS, { initialEpoch: 1 });
     expect(init.state).toBe('legacy_open');
     expect(init.activeOperations).toBe(0);
     expect(init.irreversible).toBe(false);
@@ -285,7 +285,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
 
     let executedOp = false;
     await withLegacyOperation({ db: fence(db), namespace: NS, identityKey: key, kind: 'token' }, async (ctx) => {
-      expect(ctx.epoch).toBe(EPOCH);
+      expect(ctx.epoch).toBe(1);
       executedOp = true;
       const guard = await db.runTransaction(async (tx: any) => {
         const timer = startMonotonicTimer();
@@ -300,10 +300,11 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     expect(executedOp).toBe(true);
     expect((await getCutoverFenceRecord(fence(db), NS))?.activeOperations).toBe(0);
 
-    await transitionCutoverFenceState(fence(db), NS, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: EPOCH });
+    await transitionCutoverFenceState(fence(db), NS, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
     await expect(withLegacyOperation({ db: fence(db), namespace: NS, identityKey: key, kind: 'token' }, async () => { })).rejects.toThrow(CutoverRefusedError);
 
-    await transitionCutoverFenceState(fence(db), NS, { fromState: 'closing', toState: 'fenced', expectedEpoch: EPOCH });
+    const fenced = await transitionCutoverFenceState(fence(db), NS, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
+    expect(fenced.epoch).toBe(EPOCH);
     await expect(db.runTransaction(async (tx: any) => {
       const timer = startMonotonicTimer();
       await checkMutationGuardInTransaction(tx, { db: fence(db), namespace: NS, timer });
