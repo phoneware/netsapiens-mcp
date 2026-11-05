@@ -184,7 +184,7 @@ const OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
 const OIDC_REQUEST_AUDIENCE = 'https://iam.googleapis.com/projects/859122914438/locations/global/workloadIdentityPools/github/providers/github';
 const OIDC_WORKFLOW_REF = 'phoneware/monorepo/.github/workflows/deploy.yml@refs/heads/main';
 
-function assertMutatingClaims(bytes: Buffer): { runId: string; runAttempt: string } {
+export function assertMutatingClaims(bytes: Buffer): { runId: string; runAttempt: string } {
   const parts = bytes.toString('utf8').trim().split('.');
   if (parts.length !== 3) refuse('OIDC token is not a compact JWT');
   let claims: unknown;
