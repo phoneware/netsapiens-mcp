@@ -48,7 +48,8 @@ describe('mutating production OIDC claims', () => {
     ['wrong environment', { environment: 'staging' }],
     ['expired exp', { exp: Math.floor(Date.now() / 1000) - 60 }],
     ['non-decimal run_id', { run_id: '12a' }],
-    ['non-decimal run_attempt', { run_attempt: '0' }],
+    ['non-decimal run_attempt, zero', { run_attempt: '0' }],
+    ['non-decimal run_attempt, letters', { run_attempt: '1x' }],
   ])('refuses a token with %s', (_label, mutation) => {
     expect(() => assertMutatingClaims(tokenFrom({ ...validClaims(), ...mutation }))).toThrow(/OIDC claims/);
   });
