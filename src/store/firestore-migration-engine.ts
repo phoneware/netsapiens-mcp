@@ -151,10 +151,6 @@ export interface PreparationInputs {
   readonly sourceInventoryDigest: string;
 }
 
-const PREPARATION_IDENTITY_KEYS = [
-  'namespace', 'epoch', 'migrationRunId', 'codeSha', 'codeArtifact',
-  'packageIntegrity', 'protocolDigest', 'assemblyDigest', 'indexSchemaDigest',
-] as const;
 
 // The signed index manifest is the copy the authenticated binding carries. It is the only
 // manifest the observation is checked against, so it is taken from the binding and must hash
@@ -166,11 +162,8 @@ function assertPreparationInputs(db: object, inputs: PreparationInputs): Protect
   const prepared = completePlan.prepared as Record<string, unknown>;
   // Core validates the plan's shape and budgets. These checks cover what the plan was built from.
   validateCompleteMigrationPlan(completePlan);
-  for (const key of PREPARATION_IDENTITY_KEYS) {
-    if (prepared[key] !== expectedIdentity[key]) {
-      throw new CutoverRefusedError(`Prepared plan ${key} differs from the expected identity`);
-    }
-  }
+  // The reviewed core's identity check: the prepared document carries the approved identity field for field.
+  assertPreparedIdentity(prepared, expectedIdentity, expectedIdentity.namespace);
   if (prepared.planDigest !== computePlanDigest(expectedIdentity.namespace, expectedIdentity.epoch, prepared.planSpec as object)) {
     throw new CutoverRefusedError('Prepared plan digest does not match its planSpec');
   }
