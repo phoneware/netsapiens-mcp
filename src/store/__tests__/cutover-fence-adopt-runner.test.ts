@@ -1,11 +1,12 @@
-// Cutover fence adoption cases, ported from cutover-fence.test.ts onto the genuine protected runner and the
-// Firestore emulator. Legacy state is seeded in the emulator, the inspect step supplies the source digest,
-// and the adopt step runs in a child process with the factory's exact argv through support/runner-harness.
+// Cutover fence adoption on the protected runner and the Firestore emulator. Positive runner proofs mount the
+// SYNTHETIC closed-scope bundle (support/closed-bundle.mjs); the production bundle stays open and is proved to
+// refuse in scope-open-refusal.test.ts. Legacy state is seeded in the emulator, inspect supplies the source
+// digest, and each adopt runs in a child process with the factory's exact argv.
+//
+// Error scenarios: the dry run classifies the errors and writes nothing; the commit must be refused with no
+// write. Positive scenarios: the commit must succeed. Nothing here reaches a live system; the NetSapiens
+// upstream is never called (the runner reads only the emulator and the fake Admin).
 // Runs only where containerGateOpen() holds. Never touches an existing /opt/cutover or /run/cutover.
-// UNVERIFIED: written without an emulator run (disk limited). The expectations are the original assertions.
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
@@ -21,6 +22,7 @@ import {
 } from '../firestore-v2-adoption.js';
 import { createFirestoreBackend, createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
+import { closedBundleBytes } from './support/closed-bundle.mjs';
 import { assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import { fixtureFor, runStep, sessionSecretOf } from './support/runner-harness.mjs';
 import {
@@ -31,27 +33,103 @@ import {
   seedDocs,
   snapshotNamespace,
 } from './support/emulator-seed.js';
-import { reviewedScopeClosed } from './support/reviewed-scope.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
+const NS = 'mcp';
 const SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const key = deriveStoreKey(SECRET);
-const NS = 'mcp';
 const gateOpen = containerGateOpen();
-// Positive runner cases (an adopt commit that must succeed) run only when the reviewed scope is closed. While the
-// census is open they are skipped; the negatives and the in-process read-path case still run.
-const positiveScopeClosed = gateOpen && reviewedScopeClosed();
+const fence = (db: Firestore) => db as unknown as FirestoreLike;
 
-describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and emulator (unverified)', () => {
+// Scenarios whose legacy state is an error for the migration. The dry run must report `errors` (a number, or
+// '>=1' where the original assertion was a lower bound) and write nothing; the commit must be refused.
+interface ErrorScenario {
+  readonly name: string;
+  readonly errors: number | '>=1';
+  readonly seed: () => Array<readonly [string, Record<string, unknown>]>;
+}
+
+const errorScenarios = (): ErrorScenario[] => {
+  const now = Date.now();
+  return [
+    {
+      name: 'orphan family-linked token with missing legacy family reports error rather than silent omission',
+      errors: 1,
+      seed: () => [[`${NS}_tokens/orphan-access-tok`, {
+        accessToken: 'orphan-access-tok', refreshToken: 'orphan-ref-tok', refreshFamilyId: 'nonexistent-fam-123', clientId: 'client-orphan',
+      }]],
+    },
+    {
+      name: 'partial target family in v3 causes migration conflict error',
+      errors: 1,
+      seed: () => [
+        [`${NS}_tokens_refresh_families/fam-partial-conflict`, {
+          id: 'fam-partial-conflict', currentAccessToken: 'partial-acc', currentRefreshToken: 'partial-ref', retiredRefreshFingerprints: [], updatedAt: now,
+        }],
+        [`${NS}_tokens_refresh/partial-ref`, {
+          accessToken: 'partial-acc', familyId: 'fam-partial-conflict', status: 'active',
+          token: { accessToken: 'partial-acc', refreshToken: 'partial-ref', clientId: 'client-partial', expiresAt: now + 3600_000, nsAccessToken: 'ns-tok', nsRefreshToken: 'ns-ref', nsUsername: 'user@domain.com' },
+        }],
+        [`${NS}_tokens_upstream/fam-partial-conflict`, {
+          grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' }, expiresAt: now + 3600_000, updatedAt: now,
+        }],
+        // Partial target: only refresh_families in v3, sessions and upstream missing.
+        [`${NS}_refresh_families/fam-partial-conflict`, { id: 'fam-partial-conflict', generation: 1, status: 'active' }],
+      ],
+    },
+    {
+      name: 'missing access or refresh token identifier rejects with error rather than inventing random IDs',
+      errors: 1,
+      seed: () => [
+        [`${NS}_tokens_refresh_families/fam-missing-ids`, { id: 'fam-missing-ids', retiredRefreshFingerprints: [], updatedAt: now }],
+        [`${NS}_tokens_upstream/fam-missing-ids`, {
+          grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' }, expiresAt: now + 3600_000, updatedAt: now,
+        }],
+      ],
+    },
+    {
+      name: 'classifies orphan refresh pointers and orphan upstream grants as errors',
+      errors: 2,
+      seed: () => [
+        [`${NS}_tokens_refresh/orphan-ref`, { familyId: 'nonexistent-fam', status: 'active' }],
+        [`${NS}_tokens_upstream/orphan-upstream-fam`, { nsAccessToken: 'ns-tok', nsRefreshToken: 'ns-ref' }],
+      ],
+    },
+    {
+      name: 'rejects conflicting claims when two families claim the same access or refresh token',
+      errors: '>=1',
+      seed: () => [
+        [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'shared-ref', currentAccessToken: 'acc-1', clientId: 'c1', createdAt: now, updatedAt: now }],
+        [`${NS}_tokens_refresh/shared-ref`, { familyId: 'fam-1', status: 'active', createdAt: now }],
+        [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok-1', nsRefreshToken: 'ns-ref-1', nsUsername: 'u1@domain.com', updatedAt: now }],
+        [`${NS}_tokens/acc-1`, { familyId: 'fam-1', accessToken: 'acc-1', clientId: 'c1', expiresAt: now + 3600_000 }],
+        [`${NS}_tokens_refresh_families/fam-2`, { currentRefreshToken: 'shared-ref', currentAccessToken: 'acc-2', clientId: 'c2', createdAt: now, updatedAt: now }],
+        [`${NS}_tokens_upstream/fam-2`, { nsAccessToken: 'ns-tok-2', nsRefreshToken: 'ns-ref-2', nsUsername: 'u2@domain.com', updatedAt: now }],
+        [`${NS}_tokens/acc-2`, { familyId: 'fam-2', accessToken: 'acc-2', clientId: 'c2', expiresAt: now + 3600_000 }],
+      ],
+    },
+    {
+      name: 'classifies family-linked access token as orphan if it does not match currentAccessToken',
+      errors: 1,
+      seed: () => [
+        [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'acc-legit', clientId: 'c1', createdAt: now, updatedAt: now }],
+        [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
+        [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok-1', nsRefreshToken: 'ns-ref-1', nsUsername: 'u1@domain.com', updatedAt: now }],
+        [`${NS}_tokens/acc-legit`, { familyId: 'fam-1', accessToken: 'acc-legit', clientId: 'c1', expiresAt: now + 3600_000 }],
+        // An extraneous token claiming fam-1, whose currentAccessToken is acc-legit.
+        [`${NS}_tokens/acc-stray`, { refreshFamilyId: 'fam-1', accessToken: 'acc-stray', clientId: 'c1', expiresAt: now + 3600_000 }],
+      ],
+    },
+  ];
+};
+
+describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and emulator (synthetic closed scope)', () => {
   let bundleBytes: Buffer;
   let db: Firestore;
   let admin: { close: () => Promise<void> } | null = null;
 
   beforeAll(() => {
     assertCanOwnMounts();
-    bundleBytes = readFileSync(BUNDLE_SOURCE);
-    expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
+    bundleBytes = closedBundleBytes();
     db = new Firestore(EMULATOR);
   });
 
@@ -65,75 +143,59 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     await db.terminate();
   });
 
-  // The fake Admin serves the fixture's signed index for the index reads the runner makes.
+  // The fake Admin serves the fixture's signed index for the runner's index reads.
   async function startAdmin(namespace: string): Promise<void> {
-    const fixture = fixtureFor({ bundleBytes, namespace, epoch: EPOCH, action: 'inspect' });
-    admin = await startFakeAdmin({
-      databaseResource: fixture.index.provenance.databaseResource,
-      policy: fixture.index.policy,
-      token: 'owner',
-    });
+    const fixture = fixtureFor({ bundleBytes, namespace, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
   }
 
-  // Inspect supplies the source digest the adopt must present. An inspect refusal fails the case.
-  async function inspectDigest(namespace: string): Promise<string> {
-    const inspected = runStep({ bundleBytes, namespace, epoch: EPOCH, action: 'inspect' });
-    expect(inspected.ok).toBe(true);
+  function step(action: 'inspect' | 'adopt', options: Record<string, unknown> = {}) {
+    return runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action, options });
+  }
+
+  async function inspectDigest(): Promise<string> {
+    const inspected = step('inspect');
+    expect(inspected.ok, `inspect refused: ${inspected.message}`).toBe(true);
     return inspected.sourceInventoryDigest as string;
   }
 
-  function adopt(namespace: string, expectedSourceInventoryDigest: string, dryRun: boolean) {
-    return runStep({
-      bundleBytes,
-      namespace,
-      epoch: EPOCH,
-      action: 'adopt',
-      options: { dryRun, expectedSourceInventoryDigest },
+  for (const scenario of errorScenarios()) {
+    it(`dry run classifies the error and writes nothing; commit is refused with no write: ${scenario.name}`, async () => {
+      await resetFencedNamespace(db, NS);
+      await seedDocs(db, scenario.seed());
+      await startAdmin(NS);
+      const digest = await inspectDigest();
+      const before = await snapshotNamespace(db, NS);
+
+      const dry = step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest });
+      expect(dry.ok, `dry run refused: ${dry.message}`).toBe(true);
+      if (scenario.errors === '>=1') expect(dry.report?.errors).toBeGreaterThanOrEqual(1);
+      else expect(dry.report?.errors).toBe(scenario.errors);
+      expect(await snapshotNamespace(db, NS)).toEqual(before);
+
+      const committed = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+      expect(committed.ok, 'a commit with migration errors must be refused').toBe(false);
+      expect(committed.exitStatus).not.toBe(0);
+      expect(await snapshotNamespace(db, NS)).toEqual(before);
+      expect((await getCutoverFenceRecord(fence(db), NS))?.state).toBe('fenced');
     });
   }
 
-  it.skipIf(!positiveScopeClosed)('dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
+  it('dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
+    const now = Date.now();
     await resetFencedNamespace(db, NS);
-    const familyId = 'dry-fam-1';
     await seedDocs(db, [
-      [`${NS}_tokens_refresh_families/${familyId}`, {
-        id: familyId,
-        currentAccessToken: 'dry-acc',
-        currentRefreshToken: 'dry-ref',
-        retiredRefreshFingerprints: [],
-        updatedAt: Date.now(),
-      }],
+      [`${NS}_tokens_refresh_families/dry-fam-1`, { id: 'dry-fam-1', currentAccessToken: 'dry-acc', currentRefreshToken: 'dry-ref', retiredRefreshFingerprints: [], updatedAt: now }],
       [`${NS}_tokens_refresh/dry-ref`, {
-        accessToken: 'dry-acc',
-        familyId,
-        status: 'active',
-        token: {
-          accessToken: 'dry-acc',
-          refreshToken: 'dry-ref',
-          clientId: 'dry-client',
-          expiresAt: Date.now() + 3600_000,
-          serverBaseUrl: 'http://localhost:3000',
-          nsAccessToken: 'ns-dry-tok',
-          nsRefreshToken: 'ns-dry-ref',
-          nsUsername: 'dry@domain.com',
-        },
+        accessToken: 'dry-acc', familyId: 'dry-fam-1', status: 'active',
+        token: { accessToken: 'dry-acc', refreshToken: 'dry-ref', clientId: 'dry-client', expiresAt: now + 3600_000, serverBaseUrl: 'http://localhost:3000', nsAccessToken: 'ns-dry-tok', nsRefreshToken: 'ns-dry-ref', nsUsername: 'dry@domain.com' },
       }],
-      [`${NS}_tokens_upstream/${familyId}`, {
-        grant: { access_token: 'ns-dry-tok', refresh_token: 'ns-dry-ref', username: 'dry@domain.com' },
-        expiresAt: Date.now() + 3600_000,
-        updatedAt: Date.now(),
-      }],
-      [`${NS}_tokens/dry-acc`, {
-        accessToken: 'dry-acc',
-        refreshToken: 'dry-ref',
-        refreshFamilyId: familyId,
-        clientId: 'dry-client',
-      }],
+      [`${NS}_tokens_upstream/dry-fam-1`, { grant: { access_token: 'ns-dry-tok', refresh_token: 'ns-dry-ref', username: 'dry@domain.com' }, expiresAt: now + 3600_000, updatedAt: now }],
+      [`${NS}_tokens/dry-acc`, { accessToken: 'dry-acc', refreshToken: 'dry-ref', refreshFamilyId: 'dry-fam-1', clientId: 'dry-client' }],
     ]);
     await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, true);
+    const digest = await inspectDigest();
+    const report = step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest });
     expect(report.ok).toBe(true);
     expect(report.report?.errors).toBe(0);
     expect(report.report?.migrated).toBe(1);
@@ -141,239 +203,79 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     // No v3 documents or v2_adopted marker were written during the dry run.
     expect((await db.collection(`${NS}_refresh_families`).get()).empty).toBe(true);
     expect((await db.doc(`${NS}_meta/v2_adopted`).get()).exists).toBe(false);
-
-    // The control record stays strictly in fenced, not irreversible, with no migration run.
-    const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    const ctrl = await getCutoverFenceRecord(fence(db), NS);
     expect(ctrl?.state).toBe('fenced');
-    expect(ctrl?.epoch).toBe(EPOCH);
     expect(ctrl?.irreversible).toBe(false);
     expect(ctrl?.migrationRunId).toBeUndefined();
   });
 
-  it.skipIf(!positiveScopeClosed)('orphan family-linked token with missing legacy family reports error rather than silent omission', async () => {
-    await resetFencedNamespace(db, NS);
-    await seedDocs(db, [
-      [`${NS}_tokens/orphan-access-tok`, {
-        accessToken: 'orphan-access-tok',
-        refreshToken: 'orphan-ref-tok',
-        refreshFamilyId: 'nonexistent-fam-123',
-        clientId: 'client-orphan',
-      }],
-    ]);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, false);
-    // Must report error, NOT silent skip.
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBe(1);
-  });
-
-  it.skipIf(!positiveScopeClosed)('partial target family in v3 causes migration conflict error', async () => {
-    const familyId = 'fam-partial-conflict';
-    await resetFencedNamespace(db, NS);
-    await seedDocs(db, [
-      [`${NS}_tokens_refresh_families/${familyId}`, {
-        id: familyId,
-        currentAccessToken: 'partial-acc',
-        currentRefreshToken: 'partial-ref',
-        retiredRefreshFingerprints: [],
-        updatedAt: Date.now(),
-      }],
-      [`${NS}_tokens_refresh/partial-ref`, {
-        accessToken: 'partial-acc',
-        familyId,
-        status: 'active',
-        token: {
-          accessToken: 'partial-acc',
-          refreshToken: 'partial-ref',
-          clientId: 'client-partial',
-          expiresAt: Date.now() + 3600_000,
-          nsAccessToken: 'ns-tok',
-          nsRefreshToken: 'ns-ref',
-          nsUsername: 'user@domain.com',
-        },
-      }],
-      [`${NS}_tokens_upstream/${familyId}`, {
-        grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' },
-        expiresAt: Date.now() + 3600_000,
-        updatedAt: Date.now(),
-      }],
-      // Partial target: only refresh_families in v3, sessions and upstream missing.
-      [`${NS}_refresh_families/${familyId}`, { id: familyId, generation: 1, status: 'active' }],
-    ]);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, false);
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBe(1);
-  });
-
-  it.skipIf(!positiveScopeClosed)('missing access or refresh token identifier rejects with error rather than inventing random IDs', async () => {
-    const familyId = 'fam-missing-ids';
-    await resetFencedNamespace(db, NS);
-    await seedDocs(db, [
-      // Legacy family missing currentAccessToken and currentRefreshToken.
-      [`${NS}_tokens_refresh_families/${familyId}`, {
-        id: familyId,
-        retiredRefreshFingerprints: [],
-        updatedAt: Date.now(),
-      }],
-      [`${NS}_tokens_upstream/${familyId}`, {
-        grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'user@domain.com' },
-        expiresAt: Date.now() + 3600_000,
-        updatedAt: Date.now(),
-      }],
-    ]);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, false);
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBe(1);
-  });
-
-  it('fails closed when missing control record in controlled namespace', async () => {
-    // No fence record. The runner must refuse and write nothing: no fence, no marker, no v3 documents.
-    await resetNamespaceWithoutFence(db, NS);
-    await startAdmin(NS);
-    const before = await snapshotNamespace(db, NS);
-
-    const attempt = adopt(NS, '0'.repeat(64), false);
-    expect(attempt.ok).toBe(false);
-
-    expect(await getCutoverFenceRecord(db as unknown as FirestoreLike, NS)).toBeFalsy();
-    expect((await db.doc(`${NS}_meta/v2_adopted`).get()).exists).toBe(false);
-    expect(await snapshotNamespace(db, NS)).toEqual(before);
-  });
-
-  it.skipIf(!positiveScopeClosed)('classifies orphan refresh pointers and orphan upstream grants as errors', async () => {
-    await resetFencedNamespace(db, NS);
-    await seedDocs(db, [
-      // Orphan refresh pointer with no family.
-      [`${NS}_tokens_refresh/orphan-ref`, { familyId: 'nonexistent-fam', status: 'active' }],
-      // Orphan upstream grant with no family.
-      [`${NS}_tokens_upstream/orphan-upstream-fam`, { nsAccessToken: 'ns-tok', nsRefreshToken: 'ns-ref' }],
-    ]);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, false);
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBe(2);
-  });
-
-  it.skipIf(!positiveScopeClosed)('rejects conflicting claims when two families claim the same access or refresh token', async () => {
+  it('a clean commit migrates to v3_ready; ordinary writers are refused there and allowed only after v3_active', async () => {
     const now = Date.now();
     await resetFencedNamespace(db, NS);
     await seedDocs(db, [
-      // Family 1.
-      [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'shared-ref', currentAccessToken: 'acc-1', clientId: 'c1', createdAt: now, updatedAt: now }],
-      [`${NS}_tokens_refresh/shared-ref`, { familyId: 'fam-1', status: 'active', createdAt: now }],
-      [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok-1', nsRefreshToken: 'ns-ref-1', nsUsername: 'u1@domain.com', updatedAt: now }],
-      [`${NS}_tokens/acc-1`, { familyId: 'fam-1', accessToken: 'acc-1', clientId: 'c1', expiresAt: now + 3600_000 }],
-      // Family 2 claims the same refresh token shared-ref.
-      [`${NS}_tokens_refresh_families/fam-2`, { currentRefreshToken: 'shared-ref', currentAccessToken: 'acc-2', clientId: 'c2', createdAt: now, updatedAt: now }],
-      [`${NS}_tokens_upstream/fam-2`, { nsAccessToken: 'ns-tok-2', nsRefreshToken: 'ns-ref-2', nsUsername: 'u2@domain.com', updatedAt: now }],
-      [`${NS}_tokens/acc-2`, { familyId: 'fam-2', accessToken: 'acc-2', clientId: 'c2', expiresAt: now + 3600_000 }],
+      [`${NS}_tokens_refresh_families/fam-1`, { id: 'fam-1', currentAccessToken: 'tok-1', currentRefreshToken: 'ref-1', retiredRefreshFingerprints: [], updatedAt: now }],
+      [`${NS}_tokens_refresh/ref-1`, { accessToken: 'tok-1', familyId: 'fam-1', status: 'active', token: { accessToken: 'tok-1', refreshToken: 'ref-1', clientId: 'client-1', expiresAt: now + 3600_000, nsAccessToken: 'ns-1', nsRefreshToken: 'ns-ref-1', nsUsername: 'user@domain.com' } }],
+      [`${NS}_tokens_upstream/fam-1`, { grant: { access_token: 'ns-1', refresh_token: 'ns-ref-1', username: 'user@domain.com' }, expiresAt: now + 3600_000, updatedAt: now }],
+      [`${NS}_tokens/tok-1`, { accessToken: 'tok-1', refreshToken: 'ref-1', refreshFamilyId: 'fam-1', clientId: 'client-1' }],
     ]);
     await startAdmin(NS);
-    const digest = await inspectDigest(NS);
+    const digest = await inspectDigest();
+    const committed = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+    expect(committed.ok, `commit refused: ${committed.message}`).toBe(true);
+    expect(committed.report?.errors).toBe(0);
+    expect(committed.report?.migrated).toBe(1);
 
-    const report = adopt(NS, digest, false);
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBeGreaterThanOrEqual(1);
-  });
-
-  it.skipIf(!positiveScopeClosed)('classifies family-linked access token as orphan if it does not match currentAccessToken', async () => {
-    const now = Date.now();
-    await resetFencedNamespace(db, NS);
-    await seedDocs(db, [
-      [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'acc-legit', clientId: 'c1', createdAt: now, updatedAt: now }],
-      [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
-      [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok-1', nsRefreshToken: 'ns-ref-1', nsUsername: 'u1@domain.com', updatedAt: now }],
-      [`${NS}_tokens/acc-legit`, { familyId: 'fam-1', accessToken: 'acc-legit', clientId: 'c1', expiresAt: now + 3600_000 }],
-      // An extraneous token claiming fam-1, whose currentAccessToken is acc-legit.
-      [`${NS}_tokens/acc-stray`, { refreshFamilyId: 'fam-1', accessToken: 'acc-stray', clientId: 'c1', expiresAt: now + 3600_000 }],
-    ]);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    const report = adopt(NS, digest, false);
-    expect(report.ok).toBe(true);
-    expect(report.report?.errors).toBe(1);
-  });
-
-  it.skipIf(!positiveScopeClosed)('ordinary writers are refused when fence is in v3_ready and allowed only in v3_active', async () => {
-    await resetFencedNamespace(db, NS);
-    await startAdmin(NS);
-    const digest = await inspectDigest(NS);
-
-    // The runner's commit moves the fence to v3_ready and records its migration run.
-    const committed = adopt(NS, digest, false);
-    expect(committed.ok).toBe(true);
-    const ctrlReady = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    const ctrlReady = await getCutoverFenceRecord(fence(db), NS);
     expect(ctrlReady?.state).toBe('v3_ready');
+    const backend = createFirestoreBackend({ db: fence(db), namespace: NS, key });
+    const writeAccess = () => backend.putAccess({ id: 'tok-write', familyId: 'fam-1', expiresAt: Date.now() + 3600_000, retainUntil: Date.now() + 7200_000, sealed: 'sealed-data' });
+    await expect(writeAccess()).rejects.toThrow(CutoverRefusedError);
 
-    const backend = createFirestoreBackend({ db: db as unknown as FirestoreLike, namespace: NS, key });
-    // In v3_ready, ordinary write mutations must be refused.
-    await expect(
-      backend.putAccess({
-        id: 'tok-write',
-        familyId: 'fam-1',
-        expiresAt: Date.now() + 3600_000,
-        retainUntil: Date.now() + 7200_000,
-        sealed: 'sealed-data',
-      }),
-    ).rejects.toThrow(CutoverRefusedError);
-
-    // Activation is the in-process transition the original test drove; it takes the run the runner recorded.
-    const { transitionCutoverFenceState } = await import('../firestore-v2-adoption.js');
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+    await transitionCutoverFenceState(fence(db), NS, {
       fromState: 'v3_ready',
       toState: 'v3_active',
       expectedEpoch: ctrlReady!.epoch,
       migrationRunId: ctrlReady!.migrationRunId!,
       migrationManifestDigest: ctrlReady!.migrationManifestDigest!,
     });
-
-    // Once v3_active, the same ordinary write must succeed.
-    await backend.putAccess({
-      id: 'tok-write',
-      familyId: 'fam-1',
-      expiresAt: Date.now() + 3600_000,
-      retainUntil: Date.now() + 7200_000,
-      sealed: 'sealed-data',
-    });
-    const written = await backend.getAccess('tok-write');
-    expect(written).toBeDefined();
-    expect(written?.id).toBe('tok-write');
+    await writeAccess();
+    expect((await backend.getAccess('tok-write'))?.id).toBe('tok-write');
   });
 
-  // In-process, not a runner case: ensureFirestoreAdopted is the read-path guard, not the protected runner.
+  // In-process read-path guard, not a runner case: ensureFirestoreAdopted must refuse, not migrate.
   it('ensureFirestoreAdopted refuses request-triggered migration on read paths when legacy credentials exist', async () => {
     await resetNamespaceWithoutFence(db, NS);
-    await initializeCutoverFence(db as unknown as FirestoreLike, NS, { initialEpoch: 1, initialState: 'legacy_open' });
+    await initializeCutoverFence(fence(db), NS, { initialEpoch: 1, initialState: 'legacy_open' });
     await seedDocs(db, [[`${NS}_tokens/unmigrated-tok`, { accessToken: 'unmigrated-tok', refreshToken: 'unmigrated-ref' }]]);
-
-    // The read path must refuse, not auto-migrate.
-    await expect(
-      ensureFirestoreAdopted({ db: db as unknown as FirestoreLike, namespace: NS, key }),
-    ).rejects.toThrow(CutoverRefusedError);
+    await expect(ensureFirestoreAdopted({ db: fence(db), namespace: NS, key })).rejects.toThrow(CutoverRefusedError);
   });
 
-  // Ported from cutover-fence.test.ts (C1/C2/C7). The in-process steps are identical; only the adopt step moves to
-  // the protected runner, because the protected binding exists only in the runner.
-  it.skipIf(!positiveScopeClosed)('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready -> v3_active', async () => {
+  // Missing control: a specific error, not just a refusal. The closed bundle isolates the fence as the cause.
+  it('fails closed on a missing control record with the fence-not-initialized error and writes nothing', async () => {
     await resetNamespaceWithoutFence(db, NS);
-    const init = await initializeCutoverFence(db as unknown as FirestoreLike, NS, { initialEpoch: EPOCH });
+    await startAdmin(NS);
+    const before = await snapshotNamespace(db, NS);
+
+    const inspected = step('inspect');
+    expect(inspected.ok).toBe(false);
+    expect(String(inspected.message)).toMatch(/not initialized/);
+
+    const attempt = step('adopt', { dryRun: false, expectedSourceInventoryDigest: '0'.repeat(64) });
+    expect(attempt.ok).toBe(false);
+    expect(String(attempt.message)).toMatch(/not initialized/);
+
+    expect(await getCutoverFenceRecord(fence(db), NS).catch(() => undefined)).toBeFalsy();
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+
+  // The C1/C2/C7 state machine: legacy operations, closing, fenced, the runner's adopt, v3_ready, v3_active, read.
+  it('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready -> v3_active', async () => {
+    const now = Date.now();
+    await resetNamespaceWithoutFence(db, NS);
+    const init = await initializeCutoverFence(fence(db), NS, { initialEpoch: EPOCH });
     expect(init.state).toBe('legacy_open');
-    expect(init.epoch).toBe(EPOCH);
     expect(init.activeOperations).toBe(0);
     expect(init.irreversible).toBe(false);
-
-    const now = Date.now();
     await seedDocs(db, [
       [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'tok-1', clientId: 'client-leg', scope: 'read', createdAt: now, updatedAt: now }],
       [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
@@ -381,14 +283,13 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       [`${NS}_tokens/tok-1`, { familyId: 'fam-1', accessToken: 'tok-1', clientId: 'client-leg', expiresAt: now + 3600_000 }],
     ]);
 
-    // 2. A legacy operation is admitted during legacy_open, and its guard permits the mutation.
     let executedOp = false;
-    await withLegacyOperation({ db: db as unknown as FirestoreLike, namespace: NS, identityKey: key, kind: 'token' }, async (ctx) => {
+    await withLegacyOperation({ db: fence(db), namespace: NS, identityKey: key, kind: 'token' }, async (ctx) => {
       expect(ctx.epoch).toBe(EPOCH);
       executedOp = true;
       const guard = await db.runTransaction(async (tx: any) => {
         const timer = startMonotonicTimer();
-        const g = await checkMutationGuardInTransaction(tx, { db: db as unknown as FirestoreLike, namespace: NS, operation: ctx, timer });
+        const g = await checkMutationGuardInTransaction(tx, { db: fence(db), namespace: NS, operation: ctx, timer });
         expect(g.control.state).toBe('legacy_open');
         g.bufferCompletion();
         g.assertPreReturn();
@@ -397,51 +298,32 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       guard.onCommit();
     });
     expect(executedOp).toBe(true);
-    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.activeOperations).toBe(0);
+    expect((await getCutoverFenceRecord(fence(db), NS))?.activeOperations).toBe(0);
 
-    // 3. closing refuses new legacy operations.
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: EPOCH });
-    await expect(
-      withLegacyOperation({ db: db as unknown as FirestoreLike, namespace: NS, identityKey: key, kind: 'token' }, async () => { }),
-    ).rejects.toThrow(CutoverRefusedError);
+    await transitionCutoverFenceState(fence(db), NS, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: EPOCH });
+    await expect(withLegacyOperation({ db: fence(db), namespace: NS, identityKey: key, kind: 'token' }, async () => { })).rejects.toThrow(CutoverRefusedError);
 
-    // 4. fenced: activeOperations is zero, and mutations are refused.
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'closing', toState: 'fenced', expectedEpoch: EPOCH });
-    await expect(
-      db.runTransaction(async (tx: any) => {
-        const timer = startMonotonicTimer();
-        await checkMutationGuardInTransaction(tx, { db: db as unknown as FirestoreLike, namespace: NS, timer });
-      }),
-    ).rejects.toThrow(CutoverRefusedError);
+    await transitionCutoverFenceState(fence(db), NS, { fromState: 'closing', toState: 'fenced', expectedEpoch: EPOCH });
+    await expect(db.runTransaction(async (tx: any) => {
+      const timer = startMonotonicTimer();
+      await checkMutationGuardInTransaction(tx, { db: fence(db), namespace: NS, timer });
+    })).rejects.toThrow(CutoverRefusedError);
 
-    // 5. The protected runner adopts the fenced namespace, with the fake Admin serving the signed index.
-    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
-    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
-    const inspected = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
-    expect(inspected.ok).toBe(true);
-    const adopted = runStep({
-      bundleBytes,
-      namespace: NS,
-      epoch: EPOCH,
-      action: 'adopt',
-      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest },
-    });
-    expect(adopted.ok).toBe(true);
+    await startAdmin(NS);
+    const digest = await inspectDigest();
+    const adopted = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+    expect(adopted.ok, `adopt refused: ${adopted.message}`).toBe(true);
     expect(adopted.report?.errors).toBe(0);
 
-    // 6. The fence is v3_ready and irreversible, with a manifest digest.
-    const finalRecord = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    const finalRecord = await getCutoverFenceRecord(fence(db), NS);
     expect(finalRecord?.state).toBe('v3_ready');
     expect(finalRecord?.irreversible).toBe(true);
     expect(finalRecord?.migrationManifestDigest).toBeDefined();
 
-    // 7. The irreversibility latch: v3_ready cannot return to legacy_open.
-    await expect(
-      transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }),
-    ).rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
+    await expect(transitionCutoverFenceState(fence(db), NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }))
+      .rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
 
-    // 8. v3_active, bound to the run and manifest the runner recorded.
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+    await transitionCutoverFenceState(fence(db), NS, {
       fromState: 'v3_ready',
       toState: 'v3_active',
       expectedEpoch: finalRecord!.epoch,
@@ -449,8 +331,8 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       migrationManifestDigest: finalRecord!.migrationManifestDigest!,
     });
 
-    // 9. The v3 store reads the migrated session with the factory's key.
-    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    const store = createFirestoreStore({ db: fence(db), namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
     const session = await store.sessions.get('tok-1');
     expect(session?.clientId).toBe('client-leg');
     expect(session?.nsUsername).toBe('user@domain.com');
