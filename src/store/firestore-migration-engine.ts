@@ -67,13 +67,8 @@ import {
 } from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertProtectedContext, getProtectedBinding } from './protected-binding.js';
-import {
-  assertConcreteCoverage,
-  assertDocumentBudget,
-  concreteFieldPaths,
-  type FreshCollectionCoverage,
-  type SignedIndexPolicy,
-} from './index-coverage.js';
+import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
+import type { SignedIndexPolicy } from './index-coverage.js';
 
 export type SupportedNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
 
@@ -91,10 +86,9 @@ export interface MigrationContext {
 }
 
 
-// Refuses preparation unless every prospective document has fresh authenticated
-// coverage under the signed policy and fits the settled per-document budgets.
-function assertPreparationCoverage(
-  db: object,
+// Single source of the prospective write list for preparation. Physical group
+// names come from the canonical target registry, never from the request.
+function prospectiveWrites(
   namespace: string,
   plan: {
     readonly prepared: unknown;
@@ -105,12 +99,7 @@ function assertPreparationCoverage(
     }>;
     readonly finalization: { readonly finalUpperBound: unknown; readonly markerUpperBound: unknown; readonly controlUpperBound: unknown };
   },
-): void {
-  const binding = getProtectedBinding(db);
-  if (!binding || !binding.freshCoverage) {
-    throw new CutoverRefusedError('Fresh authenticated index coverage is required before preparation');
-  }
-  const schema = binding.indexSchema as { policy: SignedIndexPolicy; provenance: { databaseResource: string } };
+): Array<{ group: string; document: unknown }> {
   const targets = getCutoverDistinctCollectionNames(namespace).target as Record<string, string>;
   const writes: Array<{ group: string; document: unknown }> = [];
   for (const item of plan.items) {
@@ -130,23 +119,20 @@ function assertPreparationCoverage(
     { group: `${namespace}_meta`, document: plan.finalization.markerUpperBound },
     { group: `${namespace}_meta`, document: plan.finalization.controlUpperBound },
   );
-  for (const write of writes) {
-    assertDocumentBudget({
-      document: write.document,
-      policy: schema.policy,
-      databaseResource: schema.provenance.databaseResource,
-      collectionGroup: write.group,
-    });
-    const fresh = binding.freshCoverage.get(write.group);
-    if (!fresh) throw new CutoverRefusedError('Fresh index coverage is missing for a prospective collection group');
-    assertConcreteCoverage({
-      policy: schema.policy,
-      databaseResource: schema.provenance.databaseResource,
-      collectionGroup: write.group,
-      paths: concreteFieldPaths(write.document).multiplicity,
-      fresh: fresh as FreshCollectionCoverage,
-    });
-  }
+  return writes;
+}
+
+// Preparation gate: fresh observation, inventory digest, budgets and coverage.
+// Refuses when no observation was recorded for this handle.
+function assertPreparationGate(
+  db: object,
+  namespace: string,
+  plan: Parameters<typeof prospectiveWrites>[1],
+  inventoryDigest: string,
+): void {
+  const binding = getProtectedBinding(db);
+  if (!binding) throw new CutoverRefusedError('Protected migration context required for preparation');
+  assertPreparationObservation({ db, binding, inventoryDigest, writes: prospectiveWrites(namespace, plan) });
 }
 
 export function assertValidMigrationContext(options: unknown, extraFields: readonly string[] = []): asserts options is MigrationContext {
@@ -1601,7 +1587,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   };
 }> {
   assertValidMigrationContext(options);
-  assertProtectedContext(options, { operation: 'inspect' });
+  assertProtectedContext(options, { operation: 'inspect', options: {} });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -1832,7 +1818,10 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   errors: number;
 }> {
   assertValidMigrationContext(options, ['dryRun', 'expectedSourceInventoryDigest']);
-  assertProtectedContext(options, { operation: 'adopt' });
+  assertProtectedContext(options, {
+    operation: 'adopt',
+    options: { dryRun: options.dryRun, expectedSourceInventoryDigest: options.expectedSourceInventoryDigest },
+  });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -1979,6 +1968,9 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     if (dryRun) {
       timer.assertUnderDeadline(16_000, 'Dry run inspection');
+      if (totalErrors === 0) {
+        assertPreparationGate(db, namespace, plan, sourceInventoryDigest);
+      }
       return {
         dryRun: true,
         scanned: candidates.length,
@@ -1997,7 +1989,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     timer.assertUnderDeadline(16_000, 'Preparation attempt');
 
     // Write prepared manifest + transition control to migrating
-    assertPreparationCoverage(db, namespace, plan);
+    assertPreparationGate(db, namespace, plan, sourceInventoryDigest);
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
       prepDoc: plan.prepared,
@@ -2544,7 +2536,7 @@ export async function verifyActiveFirestoreMigration(
   context: MigrationContext & { migrationManifestDigest: string },
 ): Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { operation: 'verifyActive', migrationManifestDigest: context.migrationManifestDigest });
+  assertProtectedContext(context, { operation: 'verifyActive', options: { migrationManifestDigest: context.migrationManifestDigest } });
   if (typeof context.migrationManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
     throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
   }
@@ -2568,7 +2560,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
   planDigest: string;
 }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { operation: 'activate', migrationManifestDigest: context.migrationManifestDigest });
+  assertProtectedContext(context, { operation: 'activate', options: { migrationManifestDigest: context.migrationManifestDigest } });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2602,6 +2594,11 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
     }
     if (control.state !== 'v3_ready' && control.state !== 'v3_active') {
       throw new CutoverFenceError(`Cannot activate namespace ${namespace}: state must be v3_ready or v3_active`);
+    }
+    if (control.state === 'v3_ready') {
+      const binding = getProtectedBinding(db);
+      if (!binding) throw new CutoverRefusedError('Protected migration context required for activation');
+      assertActivationObservation(db, binding);
     }
     const finalSnap = await transaction.get(db.collection(`${namespace}_meta`).doc(`migration_manifest_${expectedEpoch}`));
     if (!finalSnap.exists) throw new CutoverFenceError('Final migration manifest is missing');
@@ -2647,7 +2644,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   sourceInventoryDigest?: string;
 }> {
   assertValidMigrationContext(context);
-  assertProtectedContext(context, { operation: 'status' });
+  assertProtectedContext(context, { operation: 'status', options: {} });
   const allowedKeys = new Set([
     'db',
     'FieldPath',

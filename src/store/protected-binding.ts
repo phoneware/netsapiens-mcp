@@ -1,9 +1,13 @@
+import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
 import { CutoverFenceError, CutoverRefusedError } from './errors.js';
 
-// Private provenance for a database handle created by the protected runner
-// factory. Only code inside the canonical module closure can register a
-// binding; the public library façade never exports these functions.
-export interface ProtectedBinding {
+// Private provenance for a database handle created by the protected factory.
+// Module-private state only: the public façade and the bundle entry never
+// export these functions. Each handle runs exactly one protected operation.
+
+export type ProtectedOperation = 'inspect' | 'adopt' | 'activate' | 'status' | 'verifyActive';
+
+export interface ProtectedIdentityFields {
   readonly namespace: string;
   readonly expectedEpoch: number;
   readonly migrationRunId: string;
@@ -11,58 +15,64 @@ export interface ProtectedBinding {
   readonly codeArtifact: string;
   readonly packageIntegrity: string;
   readonly protocolDigest: string;
-  readonly migrationManifestDigest: string;
-  readonly planDigest: string;
+}
+
+export interface ProtectedBinding extends ProtectedIdentityFields {
+  readonly profile: 'production' | 'emulator';
+  readonly assemblyDigest: string;
+  readonly indexSchemaDigest: string;
+  readonly indexPolicyDigest: string;
+  readonly indexSchema: unknown;
   readonly key: Uint8Array;
   readonly FieldPath: unknown;
-  readonly indexSchema: unknown;
-  readonly allowedOperations: ReadonlySet<string>;
-  // Filled only by the authenticated fresh Admin observation adapter. Absent
-  // until that adapter runs, so preparation refuses rather than assuming coverage.
-  freshCoverage?: ReadonlyMap<string, unknown>;
+  readonly authorized: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> };
+  readonly adminAccess: { readonly getAccessToken: () => Promise<string>; readonly fetchFn: typeof fetch } | null;
+  readonly invocation: { readonly runId: string; readonly runAttempt: string } | null;
 }
 
 const bindings = new WeakMap<object, ProtectedBinding>();
+const consumed = new WeakSet<object>();
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
+}
 
 export function bindProtectedContext(db: object, binding: ProtectedBinding): void {
   if (bindings.has(db)) {
     throw new CutoverFenceError('Protected migration database handle is already bound');
   }
-  bindings.set(db, Object.freeze({ ...binding, key: Buffer.from(binding.key) }));
+  bindings.set(db, deepFreeze({ ...binding, key: Buffer.from(binding.key) }));
 }
 
-export function attachFreshIndexCoverage(db: object, coverage: ReadonlyMap<string, unknown>): void {
-  const binding = bindings.get(db);
-  if (!binding) throw new CutoverRefusedError('Protected migration database handle is not bound');
-  if (binding.freshCoverage) throw new CutoverFenceError('Fresh index coverage is already attached');
-  bindings.set(db, Object.freeze({ ...binding, freshCoverage: new Map(coverage) }));
-}
-
-interface ContextFields {
+interface ContextFields extends ProtectedIdentityFields {
   readonly db: object;
   readonly FieldPath: unknown;
   readonly key: Uint8Array;
-  readonly namespace: string;
-  readonly expectedEpoch: number;
-  readonly migrationRunId: string;
-  readonly codeSha: string;
-  readonly codeArtifact: string;
-  readonly packageIntegrity: string;
-  readonly protocolDigest: string;
 }
 
-// Refuses before any Firestore data access unless the caller's context is
-// exactly the one the protected factory authenticated for this database.
+// Refuses before any Firestore data access unless the caller's context is the
+// one this handle was authenticated for, the operation matches, and the
+// options equal the authorized options exactly. Marks the handle consumed.
 export function assertProtectedContext(
   context: ContextFields,
-  options: { operation: string; migrationManifestDigest?: string },
+  request: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> },
 ): ProtectedBinding {
   const binding = bindings.get(context.db);
   if (!binding) {
     throw new CutoverRefusedError('Protected migration context required: database handle is not bound');
   }
-  if (!binding.allowedOperations.has(options.operation)) {
-    throw new CutoverRefusedError('Protected migration operation is not authorized for this context');
+  if (consumed.has(context.db)) {
+    throw new CutoverRefusedError('Protected migration database handle was already used for an operation');
+  }
+  if (binding.authorized.operation !== request.operation) {
+    throw new CutoverRefusedError('Protected migration operation is not the authorized operation');
+  }
+  if (canonicalJson(request.options) !== canonicalJson(binding.authorized.options)) {
+    throw new CutoverRefusedError('Protected migration options do not match the authorized options');
   }
   const mismatch = (
     binding.namespace !== context.namespace ||
@@ -78,9 +88,7 @@ export function assertProtectedContext(
   if (mismatch) {
     throw new CutoverRefusedError('Protected migration context does not match the authenticated binding');
   }
-  if (options.migrationManifestDigest !== undefined && options.migrationManifestDigest !== binding.migrationManifestDigest) {
-    throw new CutoverRefusedError('Protected migration manifest digest does not match the authenticated binding');
-  }
+  consumed.add(context.db);
   return binding;
 }
 
