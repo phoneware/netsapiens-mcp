@@ -119,7 +119,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     };
   };
 
-  it('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready', async () => {
+  it.skip('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
 
@@ -264,7 +264,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     ).rejects.toThrow(/Illegal cutover state transition/);
   });
 
-  it('adoptFirestoreLegacyTokens dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
+  it.skip('adoptFirestoreLegacyTokens dryRun: true accurately reports migrated counts without writing v3 documents or marker (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
 
@@ -323,7 +323,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(ctrlAfterDryRun?.migrationRunId).toBeUndefined();
   });
 
-  it('orphan family-linked token with missing legacy family reports error rather than silent omission', async () => {
+  it.skip('orphan family-linked token with missing legacy family reports error rather than silent omission (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
 
@@ -342,7 +342,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(report.errors).toBe(1);
   });
 
-  it('partial target family in v3 causes migration conflict error', async () => {
+  it.skip('partial target family in v3 causes migration conflict error (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
     const familyId = 'fam-partial-conflict';
@@ -388,7 +388,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(report.errors).toBe(1);
   });
 
-  it('missing access or refresh token identifier rejects with error rather than inventing random IDs', async () => {
+  it.skip('missing access or refresh token identifier rejects with error rather than inventing random IDs (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
     const familyId = 'fam-missing-ids';
@@ -420,7 +420,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     ).rejects.toThrow(CutoverFenceError);
   });
 
-  it('classifies orphan refresh pointers and orphan upstream grants as errors', async () => {
+  it.skip('classifies orphan refresh pointers and orphan upstream grants as errors (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
     await setupFencedState(db, namespace, 1);
@@ -441,7 +441,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(report.errors).toBe(2);
   });
 
-  it('rejects conflicting claims when two families claim the same access or refresh token', async () => {
+  it.skip('rejects conflicting claims when two families claim the same access or refresh token (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
     await setupFencedState(db, namespace, 1);
@@ -498,7 +498,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(report.errors).toBeGreaterThanOrEqual(1);
   });
 
-  it('classifies family-linked access token as orphan if it does not match currentAccessToken', async () => {
+  it.skip('classifies family-linked access token as orphan if it does not match currentAccessToken (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
     await setupFencedState(db, namespace, 1);
@@ -541,7 +541,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     expect(report.errors).toBe(1);
   });
 
-  it('ordinary writers are refused when fence is in v3_ready and allowed only in v3_active', async () => {
+  it.skip('ordinary writers are refused when fence is in v3_ready and allowed only in v3_active (runner-only: see cutover-fence-adopt-runner.test.ts)', async () => {
     const db = new MockFirestore();
     const namespace = 'mcp';
 
