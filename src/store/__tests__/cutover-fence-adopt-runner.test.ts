@@ -9,11 +9,20 @@ import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
-import { CutoverRefusedError, ensureFirestoreAdopted, getCutoverFenceRecord, initializeCutoverFence } from '../firestore-v2-adoption.js';
-import { createFirestoreBackend, type FirestoreLike } from '../firestore.js';
+import {
+  CutoverRefusedError,
+  checkMutationGuardInTransaction,
+  ensureFirestoreAdopted,
+  getCutoverFenceRecord,
+  initializeCutoverFence,
+  startMonotonicTimer,
+  transitionCutoverFenceState,
+  withLegacyOperation,
+} from '../firestore-v2-adoption.js';
+import { createFirestoreBackend, createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
 import { assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
-import { fixtureFor, runStep } from './support/runner-harness.mjs';
+import { fixtureFor, runStep, sessionSecretOf } from './support/runner-harness.mjs';
 import {
   EMULATOR,
   EPOCH,
@@ -348,5 +357,98 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     await expect(
       ensureFirestoreAdopted({ db: db as unknown as FirestoreLike, namespace: NS, key }),
     ).rejects.toThrow(CutoverRefusedError);
+  });
+
+  // Ported from cutover-fence.test.ts (C1/C2/C7). The in-process steps are identical; only the adopt step moves to
+  // the protected runner, because the protected binding exists only in the runner.
+  it('executes full C1/C2/C7 state machine: legacy_open -> closing -> fenced -> migrating -> v3_ready -> v3_active', async () => {
+    await resetNamespaceWithoutFence(db, NS);
+    const init = await initializeCutoverFence(db as unknown as FirestoreLike, NS, { initialEpoch: EPOCH });
+    expect(init.state).toBe('legacy_open');
+    expect(init.epoch).toBe(EPOCH);
+    expect(init.activeOperations).toBe(0);
+    expect(init.irreversible).toBe(false);
+
+    const now = Date.now();
+    await seedDocs(db, [
+      [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'tok-1', clientId: 'client-leg', scope: 'read', createdAt: now, updatedAt: now }],
+      [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
+      [`${NS}_tokens_upstream/fam-1`, { nsAccessToken: 'ns-tok', nsRefreshToken: 'ns-ref', nsUsername: 'user@domain.com', updatedAt: now }],
+      [`${NS}_tokens/tok-1`, { familyId: 'fam-1', accessToken: 'tok-1', clientId: 'client-leg', expiresAt: now + 3600_000 }],
+    ]);
+
+    // 2. A legacy operation is admitted during legacy_open, and its guard permits the mutation.
+    let executedOp = false;
+    await withLegacyOperation({ db: db as unknown as FirestoreLike, namespace: NS, identityKey: key, kind: 'token' }, async (ctx) => {
+      expect(ctx.epoch).toBe(EPOCH);
+      executedOp = true;
+      const guard = await db.runTransaction(async (tx: any) => {
+        const timer = startMonotonicTimer();
+        const g = await checkMutationGuardInTransaction(tx, { db: db as unknown as FirestoreLike, namespace: NS, operation: ctx, timer });
+        expect(g.control.state).toBe('legacy_open');
+        g.bufferCompletion();
+        g.assertPreReturn();
+        return g;
+      });
+      guard.onCommit();
+    });
+    expect(executedOp).toBe(true);
+    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.activeOperations).toBe(0);
+
+    // 3. closing refuses new legacy operations.
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: EPOCH });
+    await expect(
+      withLegacyOperation({ db: db as unknown as FirestoreLike, namespace: NS, identityKey: key, kind: 'token' }, async () => { }),
+    ).rejects.toThrow(CutoverRefusedError);
+
+    // 4. fenced: activeOperations is zero, and mutations are refused.
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'closing', toState: 'fenced', expectedEpoch: EPOCH });
+    await expect(
+      db.runTransaction(async (tx: any) => {
+        const timer = startMonotonicTimer();
+        await checkMutationGuardInTransaction(tx, { db: db as unknown as FirestoreLike, namespace: NS, timer });
+      }),
+    ).rejects.toThrow(CutoverRefusedError);
+
+    // 5. The protected runner adopts the fenced namespace, with the fake Admin serving the signed index.
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    expect(inspected.ok).toBe(true);
+    const adopted = runStep({
+      bundleBytes,
+      namespace: NS,
+      epoch: EPOCH,
+      action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest },
+    });
+    expect(adopted.ok).toBe(true);
+    expect(adopted.report?.errors).toBe(0);
+
+    // 6. The fence is v3_ready and irreversible, with a manifest digest.
+    const finalRecord = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    expect(finalRecord?.state).toBe('v3_ready');
+    expect(finalRecord?.irreversible).toBe(true);
+    expect(finalRecord?.migrationManifestDigest).toBeDefined();
+
+    // 7. The irreversibility latch: v3_ready cannot return to legacy_open.
+    await expect(
+      transitionCutoverFenceState(db as unknown as FirestoreLike, NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }),
+    ).rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
+
+    // 8. v3_active, bound to the run and manifest the runner recorded.
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: finalRecord!.epoch,
+      migrationRunId: finalRecord!.migrationRunId!,
+      migrationManifestDigest: finalRecord!.migrationManifestDigest!,
+    });
+
+    // 9. The v3 store reads the migrated session with the factory's key.
+    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    const session = await store.sessions.get('tok-1');
+    expect(session?.clientId).toBe('client-leg');
+    expect(session?.nsUsername).toBe('user@domain.com');
   });
 });
