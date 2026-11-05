@@ -155,6 +155,15 @@ describe.skipIf(!gateOpen)('protected migration factory on the emulator profile'
     expect(result.message).toBe('DSSE envelope signature verification failed against approved public key');
   });
 
+  it('reaches the session-secret read after valid evidence is authenticated', async () => {
+    const fixture = fixtureFor('mcp');
+    delete fixture.run['session-secret'];
+    mount(fixture);
+    const result = await runFactory('inspect', 'mcp');
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/ENOENT.*session-secret/);
+  });
+
   it('refuses a variable outside the factory environment allowlist before reading any file', async () => { mount(fixtureFor('mcp'));
   const result = await runFactory('inspect', 'mcp', { env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' } })
   expect(result.ok).toBe(false);
