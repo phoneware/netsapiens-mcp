@@ -1601,7 +1601,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   };
 }> {
   assertValidMigrationContext(options);
-  assertProtectedContext(options);
+  assertProtectedContext(options, { operation: 'inspect' });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -1832,7 +1832,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   errors: number;
 }> {
   assertValidMigrationContext(options, ['dryRun', 'expectedSourceInventoryDigest']);
-  assertProtectedContext(options);
+  assertProtectedContext(options, { operation: 'adopt' });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2544,7 +2544,7 @@ export async function verifyActiveFirestoreMigration(
   context: MigrationContext & { migrationManifestDigest: string },
 ): Promise<{ status: 'active'; emptyNamespace: boolean; planDigest: string }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { migrationManifestDigest: context.migrationManifestDigest });
+  assertProtectedContext(context, { operation: 'verifyActive', migrationManifestDigest: context.migrationManifestDigest });
   if (typeof context.migrationManifestDigest !== 'string' || !/^[0-9a-f]{64}$/.test(context.migrationManifestDigest)) {
     throw new CutoverFenceError('migrationManifestDigest must be a 64-character lowercase hex string');
   }
@@ -2568,7 +2568,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
   planDigest: string;
 }> {
   assertValidMigrationContext(context, ['migrationManifestDigest']);
-  assertProtectedContext(context, { migrationManifestDigest: context.migrationManifestDigest });
+  assertProtectedContext(context, { operation: 'activate', migrationManifestDigest: context.migrationManifestDigest });
   const allowedKeys = new Set([
     'db',
     'FieldPath',
@@ -2647,7 +2647,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
   sourceInventoryDigest?: string;
 }> {
   assertValidMigrationContext(context);
-  assertProtectedContext(context);
+  assertProtectedContext(context, { operation: 'status' });
   const allowedKeys = new Set([
     'db',
     'FieldPath',

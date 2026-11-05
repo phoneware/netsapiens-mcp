@@ -254,6 +254,7 @@ export async function createProtectedFirestoreMigrationContext(): Promise<{
     key,
     FieldPath: sdk.FieldPath,
     indexSchema: index,
+    allowedOperations: new Set(['verifyActive']),
   });
 
   return {

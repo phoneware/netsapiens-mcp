@@ -6,6 +6,19 @@ export type SupportedCutoverNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[nu
 
 export function deriveStoreKey(sessionSecret: string): Buffer;
 
+export function createProtectedFirestoreMigrationContext(): Promise<{
+  db: object;
+  FieldPath: unknown;
+  key: Uint8Array;
+  namespace: SupportedCutoverNamespace;
+  expectedEpoch: number;
+  migrationRunId: string;
+  codeSha: string;
+  codeArtifact: string;
+  packageIntegrity: string;
+  protocolDigest: string;
+}>;
+
 export function isSupportedCutoverNamespace(namespace: string): namespace is SupportedCutoverNamespace;
 export function assertSupportedCutoverNamespace(namespace: string): asserts namespace is SupportedCutoverNamespace;
 

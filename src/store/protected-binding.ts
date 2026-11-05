@@ -16,6 +16,7 @@ export interface ProtectedBinding {
   readonly key: Uint8Array;
   readonly FieldPath: unknown;
   readonly indexSchema: unknown;
+  readonly allowedOperations: ReadonlySet<string>;
   // Filled only by the authenticated fresh Admin observation adapter. Absent
   // until that adapter runs, so preparation refuses rather than assuming coverage.
   freshCoverage?: ReadonlyMap<string, unknown>;
@@ -54,11 +55,14 @@ interface ContextFields {
 // exactly the one the protected factory authenticated for this database.
 export function assertProtectedContext(
   context: ContextFields,
-  options: { migrationManifestDigest?: string } = {},
+  options: { operation: string; migrationManifestDigest?: string },
 ): ProtectedBinding {
   const binding = bindings.get(context.db);
   if (!binding) {
     throw new CutoverRefusedError('Protected migration context required: database handle is not bound');
+  }
+  if (!binding.allowedOperations.has(options.operation)) {
+    throw new CutoverRefusedError('Protected migration operation is not authorized for this context');
   }
   const mismatch = (
     binding.namespace !== context.namespace ||
