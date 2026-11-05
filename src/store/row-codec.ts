@@ -76,6 +76,7 @@ export function encodeRefreshFamiliesRow(
   retiredFingerprints: string[],
   status: 'active' | 'revoked',
   now: number,
+  subjectRefs?: string[],
 ): FamilyRow & { v: 2 } {
   const sealed = codec.seal(
     {
@@ -94,6 +95,7 @@ export function encodeRefreshFamiliesRow(
     currentAccessTokenId,
     updatedAt: now,
     sealed,
+    ...(subjectRefs ? { subjectRefs } : {}),
     v: 2,
   };
 }

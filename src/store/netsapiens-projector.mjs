@@ -2,6 +2,16 @@ import { createHash } from 'node:crypto';
 import { createCodec } from './codec.js';
 import { accessAad, familyAad, upstreamAad, codeUnitCompare } from './row-format.js';
 import { CutoverFenceError } from './errors.js';
+import { subjectRefsForFamily } from './subject-descriptor.js';
+
+// Subject reference fields for family logical projections. Absent when the namespace has no
+// signed subject descriptor, so those namespaces keep their existing digests.
+function sourceSubjectFields(refs) {
+  return refs ? { subjectRefs: refs } : {};
+}
+function targetSubjectFields(famData) {
+  return Array.isArray(famData?.subjectRefs) ? { subjectRefs: [...famData.subjectRefs] } : {};
+}
 
 export function sanitizeId(_id) {
   return '[redacted]';
@@ -137,6 +147,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('pr56Families missing required nsUsername');
     }
 
+    const pr56SubjectRefs = subjectRefsForFamily(candidate.subject, curRefDoc.token?.extra ?? tokDoc.extra ?? {}, codec);
     return {
       familyId,
       generation,
@@ -148,6 +159,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       currentAccessTokenId: newAccessId,
       previousRefresh,
       retiredRefreshFingerprints,
+      ...sourceSubjectFields(pr56SubjectRefs),
       upstream: {
         grantVersion: typeof upDoc.grantVersion === 'number' ? upDoc.grantVersion : 1,
         nsAccessToken,
@@ -196,6 +208,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('baseFormatTokens missing required nsUsername');
     }
 
+    const familySubjectRefs = subjectRefsForFamily(candidate.subject, tokDoc.extra ?? (tokDoc.seatId ? { seatId: String(tokDoc.seatId) } : {}), codec);
     return {
       familyId,
       generation: 1,
@@ -207,6 +220,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       currentAccessTokenId: accessId,
       previousRefresh: null,
       retiredRefreshFingerprints: [],
+      ...sourceSubjectFields(familySubjectRefs),
       upstream: {
         grantVersion: 1,
         nsAccessToken,
@@ -480,6 +494,7 @@ export function projectTargetLogical(candidate, targets, codec) {
       currentAccessTokenId: famData.currentAccessTokenId,
       previousRefresh,
       retiredRefreshFingerprints,
+      ...targetSubjectFields(famData),
       upstream: {
         grantVersion,
         nsAccessToken,
@@ -583,6 +598,7 @@ export function projectTargetLogical(candidate, targets, codec) {
       currentAccessTokenId: famData.currentAccessTokenId,
       previousRefresh: null,
       retiredRefreshFingerprints: [],
+      ...targetSubjectFields(famData),
       upstream: {
         grantVersion: 1,
         nsAccessToken,

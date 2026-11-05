@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
 import * as canonicalCore from '../cutover/canonical-core.mjs';
+import { subjectDescriptorDigest, validateSubjectDescriptors } from './subject-descriptor.js';
 import { CutoverRefusedError } from './errors.js';
 import { deriveStoreKey } from './codec.js';
 import { bindProtectedContext, type ProtectedOperation } from './protected-binding.js';
@@ -312,6 +313,8 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     provenance?.paginationComplete !== true) {
     refuse('Index policy binding does not match the protected database profile');
   }
+  // Subject descriptors come only from the signed index schema. Absent means none.
+  const subjectDescriptors = validateSubjectDescriptors(indexBinding.subjectDescriptors);
   const groups = indexBinding.collectionGroups;
   const policyGroups = (index.policy as { collections?: Array<{ collectionGroup?: unknown }> } | undefined)?.collections
     ?.map((entry) => entry.collectionGroup) ?? [];
@@ -444,6 +447,8 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     invocation,
     credentialDigest,
     adminTokenDigest,
+    subjectDescriptors,
+    subjectDescriptorDigest: subjectDescriptorDigest(subjectDescriptors),
   });
 
   return {

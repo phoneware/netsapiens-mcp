@@ -1,3 +1,4 @@
+import type { SubjectDescriptors } from './subject-descriptor.js';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
@@ -36,6 +37,9 @@ export interface ProtectedBinding extends ProtectedIdentityFields {
   // SHA-256 of the Admin read token the STS exchange produced. Fresh index
   // observations must be read with exactly this token. Null for the emulator.
   readonly adminTokenDigest: string | null;
+  // Signed subject descriptors from the index schema, validated, and their digest.
+  readonly subjectDescriptors: SubjectDescriptors | null;
+  readonly subjectDescriptorDigest: string;
 }
 
 const CREDENTIAL_PATH = '/run/cutover/oidc.jwt';

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { createCodec, type Codec } from './codec.js';
+import { subjectSpecFor, type SubjectSpec } from './subject-descriptor.js';
 import {
   accessAad,
   familyAad,
@@ -343,6 +344,7 @@ export function extractCandidatesAndPlan(params: {
   protocolDigest: string;
   assemblyDigest: string;
   indexSchemaDigest: string;
+  subject?: SubjectSpec | null;
   now: number;
 }) {
   const {
@@ -358,6 +360,7 @@ export function extractCandidatesAndPlan(params: {
     assemblyDigest,
     indexSchemaDigest,
     now,
+    subject = null,
   } = params;
 
   const codec = createCodec(storeKey);
@@ -645,7 +648,7 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '', subject },
       sourcesMap,
       codec,
     );
@@ -654,7 +657,7 @@ export function extractCandidatesAndPlan(params: {
     const generation = typeof famData.generation === 'number' ? famData.generation : 1;
     const grantVersion = typeof upstreamById.get(familyId)?.grantVersion === 'number' ? upstreamById.get(familyId).grantVersion : 1;
 
-    const famRow = encodeRefreshFamiliesRow(codec, familyId, generation, newRefreshId, newAccessId, logicalProjection, retiredFingerprints, famData.status, now);
+    const famRow = encodeRefreshFamiliesRow(codec, familyId, generation, newRefreshId, newAccessId, logicalProjection, retiredFingerprints, famData.status, now, logicalProjection.subjectRefs);
     const upRow = encodeUpstreamRow(codec, familyId, grantVersion, {
       nsAccessToken: logicalProjection.upstream.nsAccessToken,
       nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
@@ -714,7 +717,7 @@ export function extractCandidatesAndPlan(params: {
 
     // Verify logical projection equivalence
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '', subject },
       targetDocsMap,
       codec,
     );
@@ -852,13 +855,13 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '', subject },
       sourcesMap,
       codec,
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'baseFormatTokens', logicalProjection);
 
-    const famRow = encodeRefreshFamiliesRow(codec, familyId, 1, refreshId, newAccessId, logicalProjection, [], 'active', now);
+    const famRow = encodeRefreshFamiliesRow(codec, familyId, 1, refreshId, newAccessId, logicalProjection, [], 'active', now, logicalProjection.subjectRefs);
     const upRow = encodeUpstreamRow(codec, familyId, 1, {
       nsAccessToken: logicalProjection.upstream.nsAccessToken,
       nsRefreshToken: logicalProjection.upstream.nsRefreshToken,
@@ -888,7 +891,7 @@ export function extractCandidatesAndPlan(params: {
     postimageByTargetId.set(upTargetId, upRow);
 
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '', subject },
       targetDocsMap,
       codec,
     );
@@ -1672,6 +1675,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       sourceDocsByKey,
       storeKey,
       namespace,
+      subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
       epoch: control.epoch,
       runId: migrationRunId,
       codeSha,
@@ -1885,6 +1889,7 @@ async function readPreparationInputs(transaction: any, input: {
     sourceDocsByKey,
     storeKey,
     namespace,
+    subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
     epoch,
     runId: migrationRunId,
     codeSha,
@@ -2178,6 +2183,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       sourceDocsByKey,
       storeKey,
       namespace,
+      subject: subjectSpecFor(getProtectedBinding(db)?.subjectDescriptors ?? null, namespace),
       epoch: expectedEpoch,
       runId: migrationRunId,
       codeSha,
