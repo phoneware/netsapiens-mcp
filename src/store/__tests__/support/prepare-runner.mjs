@@ -27,6 +27,20 @@ try {
       expectedSourceInventoryDigest: request.options.expectedSourceInventoryDigest,
     });
     reply({ ok: true, report: Object.fromEntries(REPORT_KEYS.filter((key) => key in report).map((key) => [key, report[key]])) });
+  } else if (request.action === 'activate') {
+    const result = await bundle.activateFirestoreMigration({
+      ...context,
+      migrationManifestDigest: request.options.migrationManifestDigest,
+    });
+    reply({
+      ok: true, result: {
+        status: result.status,
+        epoch: result.epoch,
+        migrationRunId: result.migrationRunId,
+        migrationManifestDigest: result.migrationManifestDigest,
+        planDigest: result.planDigest,
+      }
+    });
   } else {
     reply({ ok: false, message: 'unsupported protected action' }, 1);
   }

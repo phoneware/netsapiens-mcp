@@ -52,13 +52,14 @@ export function scopeUnionUnchecked(namespace) {
 const fixtures = new Map();
 export function fixtureFor({ bundleBytes, namespace, epoch, nonce = '1', subjectDescriptor = null, collectionGroups }) {
   const bundleSha = createHash('sha256').update(bundleBytes).digest('hex');
-  const cacheKey = JSON.stringify([bundleSha, namespace, epoch, nonce, subjectDescriptor]);
+  const groups = [...(collectionGroups ?? scopeUnionUnchecked(namespace))].sort();
+  const cacheKey = JSON.stringify([bundleSha, namespace, epoch, nonce, subjectDescriptor, groups]);
   if (!fixtures.has(cacheKey)) {
     fixtures.set(cacheKey, createSyntheticFixture({
       canonicalJson,
       formatPAE,
       bundleBytes,
-      collectionGroups: collectionGroups ?? scopeUnionUnchecked(namespace),
+      collectionGroups: groups,
       namespace,
       epoch,
       action: 'inspect',

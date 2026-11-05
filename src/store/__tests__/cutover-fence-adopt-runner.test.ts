@@ -177,7 +177,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
   }
 
-  function step(action: 'inspect' | 'adopt', options: Record<string, unknown> = {}) {
+  function step(action: 'inspect' | 'adopt' | 'activate', options: Record<string, unknown> = {}) {
     return runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action, options });
   }
 
@@ -259,13 +259,9 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     const writeAccess = () => backend.putAccess({ id: 'tok-write', familyId: 'fam-1', expiresAt: Date.now() + 3600_000, retainUntil: Date.now() + 7200_000, sealed: 'sealed-data' });
     await expect(writeAccess()).rejects.toThrow(CutoverRefusedError);
 
-    await transitionCutoverFenceState(fence(db), NS, {
-      fromState: 'v3_ready',
-      toState: 'v3_active',
-      expectedEpoch: ctrlReady!.epoch,
-      migrationRunId: ctrlReady!.migrationRunId!,
-      migrationManifestDigest: ctrlReady!.migrationManifestDigest!,
-    });
+    const activated = await step('activate', { migrationManifestDigest: ctrlReady!.migrationManifestDigest! });
+    expect(activated.ok, `activation refused: ${activated.message}`).toBe(true);
+    expect(activated.result?.status).toBe('activated');
     await writeAccess();
     expect((await backend.getAccess('tok-write'))?.id).toBe('tok-write');
   });
@@ -352,13 +348,9 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     await expect(transitionCutoverFenceState(fence(db), NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }))
       .rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
 
-    await transitionCutoverFenceState(fence(db), NS, {
-      fromState: 'v3_ready',
-      toState: 'v3_active',
-      expectedEpoch: finalRecord!.epoch,
-      migrationRunId: finalRecord!.migrationRunId!,
-      migrationManifestDigest: finalRecord!.migrationManifestDigest!,
-    });
+    const activated = await step('activate', { migrationManifestDigest: finalRecord!.migrationManifestDigest! });
+    expect(activated.ok, `activation refused: ${activated.message}`).toBe(true);
+    expect(activated.result?.status).toBe('activated');
 
     const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
     const store = createFirestoreStore({ db: fence(db), namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });

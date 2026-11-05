@@ -15,7 +15,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../firestore.js';
-import { getCutoverFenceRecord, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
+import { getCutoverFenceRecord } from '../firestore-v2-adoption.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
 import { OPT, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import { argvFor, fixtureFor, mountFixture, runFactory, runStep, scopeUnionUnchecked, sessionSecretOf } from './support/runner-harness.mjs';
@@ -129,13 +129,16 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(ctrl?.state).toBe('v3_ready');
     expect(ctrl?.irreversible).toBe(true);
     // Reads are served only once the fence is v3_active; v3_ready is the post-commit, pre-activation state.
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
-      fromState: 'v3_ready',
-      toState: 'v3_active',
-      expectedEpoch: ctrl!.epoch,
-      migrationRunId: ctrl!.migrationRunId!,
-      migrationManifestDigest: ctrl!.migrationManifestDigest!,
+    const activated = await runStep({
+      bundleBytes: closedBundle,
+      namespace: NS,
+      epoch: EPOCH,
+      action: 'activate',
+      options: { migrationManifestDigest: ctrl!.migrationManifestDigest! },
+      collectionGroups,
     });
+    expect(activated.ok, `activation refused: ${activated.message}`).toBe(true);
+    expect(activated.result?.status).toBe('activated');
     expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_active');
 
     // The v3 store reads the migrated session with the factory's key, from the same synthetic bundle's secret.
@@ -145,5 +148,16 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(session?.nsUsername).toBe('closed@domain.com');
     const mutatedKeyStore = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: Buffer.alloc(32) });
     expect(await mutatedKeyStore.sessions.get('closed-acc')).toBeUndefined();
+    await store.clients.registerClient({ redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
+    const retry = await runStep({
+      bundleBytes: closedBundle,
+      namespace: NS,
+      epoch: EPOCH,
+      action: 'activate',
+      options: { migrationManifestDigest: ctrl!.migrationManifestDigest! },
+      collectionGroups,
+    });
+    expect(retry.ok, `activation retry refused: ${retry.message}`).toBe(true);
+    expect(retry.result?.status).toBe('already_active');
   });
 });
