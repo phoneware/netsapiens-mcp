@@ -5,7 +5,7 @@ import {
   getCutoverFenceRecord,
   transitionCutoverFenceState,
   withLegacyOperation,
-    startMonotonicTimer,
+  startMonotonicTimer,
   checkMutationGuardInTransaction,
   markIrreversibleInTransaction,
   CutoverFenceError,
@@ -29,6 +29,17 @@ class MockFirestore implements FirestoreLike {
 
   collection(path: string): any {
     const col = this.getCol(path);
+    // Firestore query snapshots carry size; bare collection references carry limit.
+    const snapshot = (entries: [string, Record<string, unknown>][], withRef = false) => ({
+      empty: entries.length === 0,
+      size: entries.length,
+      docs: entries.map(([id, data]) => ({
+        id,
+        exists: true,
+        data: () => data,
+        ...(withRef ? { ref: { delete: async () => col.delete(id), set: async (d: any) => col.set(id, d) } } : {}),
+      })),
+    });
     return {
       doc: (id: string) => ({
         id,
@@ -49,50 +60,21 @@ class MockFirestore implements FirestoreLike {
         },
         collection: (sub: string) => this.collection(`${path}/${id}/${sub}`),
       }),
-      get: async () => ({
-        empty: col.size === 0,
-        docs: Array.from(col.entries()).map(([id, data]) => ({
-          id,
-          exists: true,
-          data: () => data,
-          ref: {
-            delete: async () => col.delete(id),
-            set: async (d: any) => col.set(id, d),
-          },
-        })),
+      get: async () => snapshot(Array.from(col.entries()), true),
+      limit: (n: number) => ({
+        get: async () => snapshot(Array.from(col.entries()).slice(0, n), true),
       }),
-      where: (field: string, _op: string, value: any) => ({
-        get: async () => {
-          const matched = Array.from(col.entries()).filter(([, d]) => {
+      where: (field: string, _op: string, value: any) => {
+        const matches = () =>
+          Array.from(col.entries()).filter(([, d]) => {
             if (_op === 'in' && Array.isArray(value)) return value.includes(d[field]);
             return d[field] === value;
           });
-          return {
-            empty: matched.length === 0,
-            docs: matched.map(([id, data]) => ({
-              id,
-              exists: true,
-              data: () => data,
-            })),
-          };
-        },
-        limit: (_n: number) => ({
-          get: async () => {
-            const matched = Array.from(col.entries()).filter(([, d]) => {
-              if (_op === 'in' && Array.isArray(value)) return value.includes(d[field]);
-              return d[field] === value;
-            });
-            return {
-              empty: matched.length === 0,
-              docs: matched.slice(0, 1).map(([id, data]) => ({
-                id,
-                exists: true,
-                data: () => data,
-              })),
-            };
-          },
-        }),
-      }),
+        return {
+          get: async () => snapshot(matches()),
+          limit: (n: number) => ({ get: async () => snapshot(matches().slice(0, n)) }),
+        };
+      },
     };
   }
 
@@ -119,10 +101,10 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     const ctrl = await getCutoverFenceRecord(db, namespace);
     const epoch = (opts.expectedEpoch as number | undefined) ?? ctrl?.epoch ?? 1;
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
-            await computeSourceInventoryDigest(db, namespace, key, epoch);
+      await computeSourceInventoryDigest(db, namespace, key, epoch);
     return {
       db,
-            FieldPath: { documentId: () => '__name__' },
+      FieldPath: { documentId: () => '__name__' },
       namespace,
       key,
       expectedEpoch: epoch,
@@ -131,9 +113,9 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
-            dryRun: false,
+      dryRun: false,
       expectedSourceInventoryDigest: digest,
-            ...opts,
+      ...opts,
     };
   };
 
@@ -177,20 +159,20 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
     // 2. withLegacyOperation admits operation during legacy_open
     let executedOp = false;
-        await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async (ctx) => {
+    await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async (ctx) => {
       expect(ctx.epoch).toBe(1);
       executedOp = true;
 
       // Inside transaction, checkMutationGuardInTransaction permits mutation
-            const guard = await db.runTransaction(async (tx) => {
-                const timer = startMonotonicTimer();
-                const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
+      const guard = await db.runTransaction(async (tx) => {
+        const timer = startMonotonicTimer();
+        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
-                guard.assertPreReturn();
-                return guard;
+        guard.assertPreReturn();
+        return guard;
       });
-            guard.onCommit();
+      guard.onCommit();
     });
     expect(executedOp).toBe(true);
 
@@ -205,7 +187,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     });
 
     await expect(
-            withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
+      withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to 'fenced': requires activeOperations === 0
@@ -218,7 +200,8 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     // In 'fenced': mutations refused
     await expect(
       db.runTransaction(async (tx) => {
-        await checkMutationGuardInTransaction(tx, { db, namespace });
+        const timer = startMonotonicTimer();
+        await checkMutationGuardInTransaction(tx, { db, namespace, timer });
       }),
     ).rejects.toThrow(CutoverRefusedError);
 
@@ -274,11 +257,11 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
     // Skipping states (legacy_open -> fenced directly without closing) throws
     await expect(
       transitionCutoverFenceState(db, namespace, {
-        fromState: 'closing', // currently legacy_open!
+        fromState: 'legacy_open', // skipping closing: the precondition holds, the graph refuses fenced
         toState: 'fenced',
         expectedEpoch: 1,
       }),
-    ).rejects.toThrow(/Invalid state transition/);
+    ).rejects.toThrow(/Illegal cutover state transition/);
   });
 
   it('adoptFirestoreLegacyTokens dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
@@ -322,7 +305,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       clientId: 'dry-client',
     });
 
-        const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { dryRun: true, expectedEpoch: 2 }));
+    const report = await adoptFirestoreLegacyTokens(await defaultAdoptOpts(db, namespace, { dryRun: true, expectedEpoch: 2 }));
     expect(report.errors).toBe(0);
     expect(report.migrated).toBe(1);
 

@@ -11,7 +11,7 @@ import type { McpStore } from '../store/types.js';
 const key = deriveStoreKey('subject-issuance-test-secret-0123456789abcdef');
 const base = {
   nsApiUrl: 'https://ns.example.test',
-  platforms: [] as const,
+  platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://ns.example.test' }],
   nsClientId: 'client-id',
   nsClientSecret: 'client-secret',
   serverBaseUrl: 'https://mcp.example.test',

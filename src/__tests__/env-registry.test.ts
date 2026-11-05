@@ -12,6 +12,12 @@ function sourceFiles(dir: string): string[] {
  });
 }
 
+// Reviewed whole-environment enumerations. The fail-closed check in protected-migration-context.ts
+// refuses every variable outside its allowlist, so this site adds no registered name.
+const REVIEWED_ENV_ENUMERATIONS: ReadonlyArray<{ file: string; expression: string }> = [
+ { file: 'src/store/protected-migration-context.ts', expression: 'Object.keys(process.env)' },
+];
+
 function envNames(text: string, file = 'fixture.ts'): Set<string> {
  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
  const names = new Set<string>();
@@ -20,6 +26,7 @@ function envNames(text: string, file = 'fixture.ts'): Set<string> {
    const property = ts.isPropertyAccessExpression(node) ? node.name.text : ts.isStringLiteral(node.argumentExpression) ? node.argumentExpression.text : undefined;
    const target = node.expression.getText(source);
    if (property === 'env' && (target === 'process' || target === 'globalThis.process')) {
+    if (REVIEWED_ENV_ENUMERATIONS.some((site) => file.endsWith(site.file) && node.parent.getText(source) === site.expression)) return;
     const parent = node.parent;
     const staticAccess = (ts.isPropertyAccessExpression(parent) && parent.expression === node && !parent.questionDotToken)
      ? parent.name.text

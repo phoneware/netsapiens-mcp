@@ -2,6 +2,7 @@ import type { SubjectDescriptor } from './subject-descriptor.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { PendingAuthorization } from '../auth/types.js';
 import { createCodec, type Codec, LeaseLostError, RetryableRefreshError } from './codec.js';
 import { CutoverRefusedError } from './errors.js';
 import { subjectRefFor, type SubjectGuard } from './subject-guard.js';
@@ -83,6 +84,17 @@ export function createRegisteredClient(client: Omit<OAuthClientInformationFull, 
   return full;
 }
 
+// The stored row carries storage metadata (v, _mcp_format) and null placeholders. Every path
+// hands out the same OAuth client projection, so registration and lookup agree.
+function oauthClientFromRow(row: object): OAuthClientInformationFull {
+  const client: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key === 'v' || key === '_mcp_format' || value === null) continue;
+    client[key] = value;
+  }
+  return client as OAuthClientInformationFull;
+}
+
 interface FamilySealedData {
   clientId: string;
   serverBaseUrl?: string;
@@ -143,11 +155,15 @@ export function createStore(
 
   const decodeCode = (row: AuthCodeRow | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
     if (!row || row.expiresAt <= Date.now() || row.used) return undefined;
-    const data = codec.open<AuthCodeData & { used?: boolean }>(row.sealed, `code:${row.id}`);
+    // The sealed payload stores pending.resource as its href string; the contract returns a URL.
+    type SealedAuthCode = Omit<AuthCodeData, 'pending'> & { pending: Omit<PendingAuthorization, 'resource'> & { resource?: string }; used?: boolean };
+    const data = codec.open<SealedAuthCode>(row.sealed, `code:${row.id}`);
     if (!data || data.used) return undefined;
     if ((data.serverBaseUrl || expected.serverBaseUrl) && (!data.serverBaseUrl || !expected.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase())) return undefined;
     if (expected.clientId && (data.clientId ?? data.pending.clientId) !== expected.clientId) return undefined;
-    return data;
+    const { pending, ...rest } = data;
+    const { resource, ...pendingRest } = pending;
+    return { ...rest, pending: resource === undefined ? pendingRest : { ...pendingRest, resource: new URL(resource) } };
   };
 
   return {
@@ -633,6 +649,7 @@ export function createStore(
               createdAt: data.pending.createdAt,
               state: data.pending.state,
               scopes: data.pending.scopes,
+              resource: data.pending.resource?.href,
             },
             nsTokens: {
               access_token: data.nsTokens.access_token,
@@ -640,6 +657,8 @@ export function createStore(
               username: data.nsTokens.username,
               nsUserRole: data.nsTokens.nsUserRole,
               nsApiUrl: data.nsTokens.nsApiUrl,
+              expires_in: data.nsTokens.expires_in,
+              scope: data.nsTokens.scope,
             },
             clientId: data.pending.clientId,
             serverBaseUrl: data.serverBaseUrl,
@@ -784,13 +803,14 @@ export function createStore(
 
     clients: {
       async getClient(id: string): Promise<OAuthClientInformationFull | undefined> {
-        return backend.getClient(id);
+        const row = await backend.getClient(id);
+        return row ? oauthClientFromRow(row) : undefined;
       },
       async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
         const full = createRegisteredClient(client);
         const row = encodeOAuthClientsRow(full.client_id, full, Date.now());
         await backend.putClient(row as any);
-        return full;
+        return oauthClientFromRow(row);
       },
     },
 

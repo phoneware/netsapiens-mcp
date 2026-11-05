@@ -8,7 +8,7 @@ const candidate = { id: 'candidate', kind: 'baseFormatTokens', subject: null };
 describe('legacy credential projection', () => {
   it('refuses to turn an access credential into a missing refresh credential', () => {
     const sources = new Map([['tokens', { accessToken: 'access-only' }]]);
-    expect(() => projectSourceLogical(candidate, sources, codec)).toThrow(/missing raw access or refresh credential/);
+    expect(() => projectSourceLogical(candidate, sources, codec, candidate.subject)).toThrow(/missing raw access or refresh credential/);
   });
 
   it('derives the target refresh identity from the original refresh credential', () => {
@@ -16,7 +16,7 @@ describe('legacy credential projection', () => {
       accessToken: 'access-original', refreshToken: 'refresh-original', clientId: 'client',
       expiresAt: 4102444800000, nsAccessToken: 'upstream-access', nsUsername: 'user@example.test',
     }]]);
-    const projected = projectSourceLogical(candidate, sources, codec);
+    const projected = projectSourceLogical(candidate, sources, codec, candidate.subject);
     expect(projected.activeRefreshId).toBe(codec.id('refresh', 'refresh-original'));
     expect(projected.activeRefreshId).not.toBe(codec.id('refresh', 'access-original'));
   });

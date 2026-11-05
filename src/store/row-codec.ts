@@ -182,6 +182,7 @@ export function encodeAuthCodesRow(
       createdAt: number;
       state?: string | null;
       scopes?: string[];
+      resource?: string | null;
     };
     nsTokens: {
       access_token: string;
@@ -189,6 +190,8 @@ export function encodeAuthCodesRow(
       username?: string | null;
       nsUserRole?: string | null;
       nsApiUrl?: string | null;
+      expires_in?: number | null;
+      scope?: string | null;
     };
     clientId: string;
     serverBaseUrl?: string | null;
