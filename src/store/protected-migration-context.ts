@@ -182,7 +182,8 @@ function assertArgv(request: ProtectedRequestV2): void {
 // unresolved, or not an exact match for the signed groups, the context refuses.
 // Namespace import: the bundle must still link while the export is absent.
 function assertRuntimeScopeFromCore(namespace: string, collectionGroups: readonly string[]): void {
-  const scopeFn = (canonicalCore as Record<string, unknown>).getCutoverRuntimeCollectionScope;
+  const core = canonicalCore as Record<string, unknown>;
+  const scopeFn = core.getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== 'function') {
     refuse('Runtime collection scope requires the reviewed canonical core export getCutoverRuntimeCollectionScope');
   }
@@ -190,17 +191,34 @@ function assertRuntimeScopeFromCore(namespace: string, collectionGroups: readonl
   if (scope === null || typeof scope !== 'object' || scope.complete !== true) {
     refuse('Runtime collection scope is incomplete');
   }
+  // unscanned lists sources the reviewed census has not covered. Any entry, or a missing list, means the scope is
+  // not a proof, so the factory refuses independently of complete.
+  if (!Array.isArray(scope.unscanned) || scope.unscanned.length !== 0) {
+    refuse('Runtime collection scope has unscanned sources');
+  }
   for (const [key, value] of Object.entries(scope)) {
     if (/unresolved|dynamic/i.test(key) && (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== false)) {
       refuse('Runtime collection scope has an unresolved dynamic collection');
     }
   }
-  if (!Array.isArray(scope.union) || scope.union.some((name) => typeof name !== 'string')) {
-    refuse('Runtime collection scope union is malformed');
+  // The core's closure rule is the same as the checks above. Requiring it here means an older bundle that lacks
+  // the rule refuses, rather than silently skipping it.
+  if (typeof core.assertRuntimeScopeClosed !== 'function') {
+    refuse('Runtime collection scope requires the reviewed closure check assertRuntimeScopeClosed');
   }
-  const union = scope.union as string[];
-  if (new Set(union).size !== union.length) refuse('Runtime collection scope union has duplicates');
-  if (canonicalJson([...union].sort()) !== canonicalJson([...collectionGroups].sort())) {
+  try {
+    (core.assertRuntimeScopeClosed as (s: unknown) => void)(scope);
+  } catch {
+    refuse('Runtime collection scope is not closed');
+  }
+  // Compare the signed groups against the core's groups list, the only mapping the signed-policy check uses.
+  const groups = scope.groups;
+  if (!Array.isArray(groups) || groups.some((name) => typeof name !== 'string')) {
+    refuse('Runtime collection scope groups are malformed');
+  }
+  const names = groups as string[];
+  if (new Set(names).size !== names.length) refuse('Runtime collection scope groups have duplicates');
+  if (canonicalJson([...names].sort()) !== canonicalJson([...collectionGroups].sort())) {
     refuse('Signed index collection groups differ from the reviewed runtime collection scope');
   }
 }
