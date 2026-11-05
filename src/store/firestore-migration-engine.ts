@@ -698,12 +698,14 @@ export function extractCandidatesAndPlan(params: {
     let prevRefreshRow: any = null;
     if (prevRefEntry) {
       const prevRefId = codec.id('refresh', prevRefEntry.credentialToken);
+      const previousRefresh = logicalProjection.previousRefresh;
+      if (!previousRefresh) throw new CutoverFenceError(`Previous refresh projection missing for candidate ${sanitizeId(candidateId)}`);
       prevRefreshRow = {
         id: prevRefId,
         familyId,
         status: 'consumed' as const,
         generation: Math.max(1, generation - 1),
-        consumedAt: logicalProjection.previousRefresh.consumedAt,
+        consumedAt: previousRefresh.consumedAt,
         successorSealed: codec.seal({ accessToken: accessId, refreshToken: currentRefToken }, `successor:${prevRefId}`),
         v: 2,
       };
@@ -2585,7 +2587,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       id: string; kind: string; logicalDigest: string; targets: Array<{ collection: string; id: string }>;
     }>;
     for (const candidate of commitments) {
-      const targets = new Map<string, unknown>();
+      const targets = new Map<string, Record<string, unknown>>();
       const retiredIds: string[] = [];
       const rows = candidate.targets.map(ref => {
         const row = targetRowsById.get(`${ref.collection}:${ref.id}`);

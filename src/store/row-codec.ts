@@ -24,7 +24,7 @@ export function encodeSessionsRow(
   session: {
     expiresAt: number;
     clientId: string;
-    serverBaseUrl?: string;
+    serverBaseUrl?: string | null;
     extra?: Record<string, string>;
   },
   now: number,
@@ -70,7 +70,7 @@ export function encodeRefreshFamiliesRow(
   currentAccessTokenId: string,
   session: {
     clientId: string;
-    serverBaseUrl?: string;
+    serverBaseUrl?: string | null;
     extra?: Record<string, string>;
   },
   retiredFingerprints: string[],
@@ -116,11 +116,11 @@ export function encodeUpstreamRow(
   grantVersion: number,
   upstream: {
     nsAccessToken: string;
-    nsRefreshToken?: string;
+    nsRefreshToken?: string | null;
     nsUsername: string;
-    nsUserRole?: string;
-    nsApiUrl?: string;
-    nsExpiresAt?: number;
+    nsUserRole?: string | null;
+    nsApiUrl?: string | null;
+    nsExpiresAt?: number | null;
   },
   now: number,
 ): UpstreamGrantRow & { v: 2 } {
@@ -137,7 +137,7 @@ export function encodeUpstreamRow(
   return {
     id: familyId,
     grantVersion,
-    nsExpiresAt: upstream.nsExpiresAt,
+    nsExpiresAt: upstream.nsExpiresAt ?? undefined,
     updatedAt: now,
     sealed,
     v: 2,

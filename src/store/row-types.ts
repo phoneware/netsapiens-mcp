@@ -3,22 +3,22 @@
 
 export interface UpstreamSealedData {
   nsAccessToken: string;
-  nsRefreshToken?: string;
+  nsRefreshToken?: string | null;
   nsUsername: string;
-  nsUserRole?: string;
-  nsApiUrl?: string;
+  nsUserRole?: string | null;
+  nsApiUrl?: string | null;
 }
 
 export interface AccessSealedData {
   familyId: string;
   clientId: string;
-  serverBaseUrl?: string;
+  serverBaseUrl?: string | null;
   extra?: Record<string, string>;
 }
 
 export interface FamilySealedData {
   clientId: string;
-  serverBaseUrl?: string;
+  serverBaseUrl?: string | null;
   extra?: Record<string, string>;
   retiredRefreshIds?: string[];
 }
