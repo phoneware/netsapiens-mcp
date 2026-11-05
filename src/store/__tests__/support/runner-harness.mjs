@@ -1,9 +1,10 @@
 // Test-only harness for the real protected-migration preparation path. The mounted runner refuses any
 // mount but its fixed paths, so callers run this only where containerGateOpen() holds (a disposable
 // container or CI). It mounts the synthetic fixture into /opt/cutover and /run/cutover, copies the
-// preparation runner (prepare-runner.mjs) to /opt/cutover/runner.mjs, runs it with no argv (the action
-// and options come from the mounted request.json), and returns its JSON result. A refusal is returned
-// as data (ok: false) because refusal is an expected outcome the suites assert on, not an exception.
+// preparation runner (prepare-runner.mjs) to /opt/cutover/runner.mjs, runs it with the factory's exact
+// argv, and returns its JSON result. The runner reads the action and options from the mounted
+// request.json. A refusal is returned as data (ok: false, exitStatus) because suites assert on it.
+// Callers must also start the fake Admin (support/fake-admin.mjs) before a step that reads the index.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -45,13 +46,11 @@ export function fixtureFor({ bundleBytes, namespace, epoch, action, options = {}
 }
 
 // Writes the fixture's bytes to the fixed mounts. Callers must have passed assertCanOwnMounts() first.
-export function mountFixture(fixture, { bundle } = {}) {
+export function mountFixture(fixture) {
   releaseMounts();
   mkdirSync(OPT, { recursive: true, mode: 0o755 });
   mkdirSync(RUN, { recursive: true, mode: 0o700 });
-  for (const [name, bytes] of Object.entries(fixture.opt)) {
-    writeFileSync(join(OPT, name), name === 'cutover-protocol.mjs' && bundle ? bundle : bytes);
-  }
+  for (const [name, bytes] of Object.entries(fixture.opt)) writeFileSync(join(OPT, name), bytes);
   writeFileSync(join(OPT, 'runner.mjs'), readFileSync(RUNNER_SOURCE));
   symlinkSync(REPO_NODE_MODULES, join(OPT, 'node_modules'), 'dir');
   for (const [name, bytes] of Object.entries(fixture.run)) writeFileSync(join(RUN, name), bytes, { mode: 0o600 });
@@ -65,17 +64,25 @@ function runnerEnv() {
   return env;
 }
 
-// Runs the mounted preparation runner and returns its parsed JSON line plus the exit status.
-export function runFactory() {
-  const child = spawnSync(process.execPath, [join(OPT, 'runner.mjs')], { env: runnerEnv(), encoding: 'utf8', timeout: 120_000 });
+// The factory's exact argv: inspect takes no mode; adopt names its mode.
+export function argvFor(action, namespace, options = {}) {
+  if (action === 'adopt') return ['adopt', '--namespace', namespace, '--mode', options.dryRun ? 'dry-run' : 'commit'];
+  return [action, '--namespace', namespace];
+}
+
+// Runs the mounted preparation runner with the factory's argv and returns its parsed JSON line plus the
+// exit status.
+export function runFactory(argv) {
+  const child = spawnSync(process.execPath, [join(OPT, 'runner.mjs'), ...argv], { env: runnerEnv(), encoding: 'utf8', timeout: 180_000 });
   const line = child.stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`runner produced no result; stderr: ${child.stderr}`);
   return { ...JSON.parse(line), exitStatus: child.status };
 }
 
-// One protected step: mount the fixture for this action and run it. For adopt, pass the inspect digest in
-// options.expectedSourceInventoryDigest, obtained from a prior inspect run against the same emulator state.
+// One protected step: mount the fixture for this action and run it with the factory's argv. For adopt,
+// pass the inspect digest in options.expectedSourceInventoryDigest, from a prior inspect against the same
+// emulator state.
 export function runStep({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null }) {
   mountFixture(fixtureFor({ bundleBytes, namespace, epoch, action, options, nonce, subjectDescriptor }));
-  return runFactory();
+  return runFactory(argvFor(action, namespace, options));
 }
