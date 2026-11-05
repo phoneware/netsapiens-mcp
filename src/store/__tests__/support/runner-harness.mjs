@@ -2,9 +2,11 @@
 // mount but its fixed paths, so callers run this only where containerGateOpen() holds (a disposable
 // container or CI). It mounts the synthetic fixture into /opt/cutover and /run/cutover, copies the
 // preparation runner (prepare-runner.mjs) to /opt/cutover/runner.mjs, runs it with the factory's exact
-// argv, and returns its JSON result. The runner reads the action and options from the mounted
-// request.json. A refusal is returned as data (ok: false, exitStatus) because suites assert on it.
-// Callers must also start the fake Admin (support/fake-admin.mjs) before a step that reads the index.
+// argv, and returns its JSON result. A refusal is returned as data (ok: false, exitStatus).
+//
+// One fixture holds one signing keypair. The fake Admin serves its index and every step mounts its trust
+// policy, so all steps of a test share one fixture (cached below) and only request.json changes per step.
+// Callers must start the fake Admin (support/fake-admin.mjs) before a step that reads the index.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -28,46 +30,61 @@ export function reviewedUnion(namespace) {
   return scope.union.map((entry) => (typeof entry === 'string' ? entry : entry.name));
 }
 
-// Builds a fixture whose identity is derived by the production formula from the approval payload, the
-// namespace and the epoch. Only the nonce varies the payload, so distinct approvals get distinct run ids.
-export function fixtureFor({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null }) {
-  return createSyntheticFixture({
-    canonicalJson,
-    formatPAE,
-    bundleBytes,
-    collectionGroups: reviewedUnion(namespace),
-    namespace,
-    epoch,
-    action,
-    options,
-    nonce,
-    subjectDescriptor,
-  });
+// One fixture per (namespace, epoch, nonce, descriptor) for this process, so the fake Admin and every step
+// share one signing keypair. The action and options are not part of the cache key: each step rewrites them.
+const fixtures = new Map();
+export function fixtureFor({ bundleBytes, namespace, epoch, nonce = '1', subjectDescriptor = null }) {
+  const cacheKey = JSON.stringify([namespace, epoch, nonce, subjectDescriptor]);
+  if (!fixtures.has(cacheKey)) {
+    fixtures.set(cacheKey, createSyntheticFixture({
+      canonicalJson,
+      formatPAE,
+      bundleBytes,
+      collectionGroups: reviewedUnion(namespace),
+      namespace,
+      epoch,
+      action: 'inspect',
+      options: {},
+      nonce,
+      subjectDescriptor,
+    }));
+  }
+  return fixtures.get(cacheKey);
 }
 
-// Writes the fixture's bytes to the fixed mounts. Callers must have passed assertCanOwnMounts() first.
-export function mountFixture(fixture) {
-  releaseMounts();
-  mkdirSync(OPT, { recursive: true, mode: 0o755 });
-  mkdirSync(RUN, { recursive: true, mode: 0o700 });
-  for (const [name, bytes] of Object.entries(fixture.opt)) writeFileSync(join(OPT, name), bytes);
-  writeFileSync(join(OPT, 'runner.mjs'), readFileSync(RUNNER_SOURCE));
-  symlinkSync(REPO_NODE_MODULES, join(OPT, 'node_modules'), 'dir');
-  for (const [name, bytes] of Object.entries(fixture.run)) writeFileSync(join(RUN, name), bytes, { mode: 0o600 });
-}
-
-// The factory's environment. PATH and HOME are required to start Node. The emulator host is passed only
-// when the caller's gate set it; it is never read from a config file.
-function runnerEnv() {
-  const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/root' };
-  if (process.env.FIRESTORE_EMULATOR_HOST) env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST;
-  return env;
+// The exact session secret the factory mounts. The factory derives the store key from these bytes with no
+// trimming and no fallback, so a test that reads sealed rows must derive its key from this same string.
+export function sessionSecretOf(fixture) {
+  return fixture.run['session-secret'].toString('utf8');
 }
 
 // The factory's exact argv: inspect takes no mode; adopt names its mode.
 export function argvFor(action, namespace, options = {}) {
   if (action === 'adopt') return ['adopt', '--namespace', namespace, '--mode', options.dryRun ? 'dry-run' : 'commit'];
   return [action, '--namespace', namespace];
+}
+
+// Writes the fixture's bytes and this step's request to the fixed mounts. Callers must have passed
+// assertCanOwnMounts() first. Only the request carries the step's action and options.
+export function mountFixture(fixture, action, options) {
+  releaseMounts();
+  mkdirSync(OPT, { recursive: true, mode: 0o755 });
+  mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  for (const [name, bytes] of Object.entries(fixture.opt)) writeFileSync(join(OPT, name), bytes);
+  writeFileSync(join(OPT, 'runner.mjs'), readFileSync(RUNNER_SOURCE));
+  symlinkSync(REPO_NODE_MODULES, join(OPT, 'node_modules'), 'dir');
+  const body = canonicalJson({ ...fixture.request, action, options });
+  for (const [name, bytes] of Object.entries(fixture.run)) {
+    writeFileSync(join(RUN, name), name === 'request.json' ? Buffer.from(body) : bytes, { mode: 0o600 });
+  }
+}
+
+// The factory's environment allowlist, read from src/store/protected-migration-context.ts (ENV_ALLOW):
+// HOME, HOSTNAME, NODE_VERSION, PATH, YARN_VERSION. The factory refuses any other variable, so this passes
+// only PATH and HOME. The emulator host is fixed in the factory's emulator profile (127.0.0.1:8080), so no
+// emulator variable is needed.
+function runnerEnv() {
+  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/root' };
 }
 
 // Runs the mounted preparation runner with the factory's argv and returns its parsed JSON line plus the
@@ -79,10 +96,11 @@ export function runFactory(argv) {
   return { ...JSON.parse(line), exitStatus: child.status };
 }
 
-// One protected step: mount the fixture for this action and run it with the factory's argv. For adopt,
-// pass the inspect digest in options.expectedSourceInventoryDigest, from a prior inspect against the same
-// emulator state.
+// One protected step: mount this fixture with the step's action and options, then run it with the factory's
+// argv. For adopt, pass the inspect digest in options.expectedSourceInventoryDigest, from a prior inspect
+// against the same emulator state.
 export function runStep({ bundleBytes, namespace, epoch, action, options = {}, nonce = '1', subjectDescriptor = null }) {
-  mountFixture(fixtureFor({ bundleBytes, namespace, epoch, action, options, nonce, subjectDescriptor }));
+  const fixture = fixtureFor({ bundleBytes, namespace, epoch, nonce, subjectDescriptor });
+  mountFixture(fixture, action, options);
   return runFactory(argvFor(action, namespace, options));
 }
