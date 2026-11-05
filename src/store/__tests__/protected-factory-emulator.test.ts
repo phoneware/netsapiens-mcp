@@ -6,23 +6,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as canonicalCore from '../../cutover/canonical-core.mjs';
 import { canonicalJson, formatPAE } from '../../cutover/dsse-verifier-core.mjs';
 import { createSyntheticFixture } from './support/synthetic-dsse-fixture.mjs';
+import { OPT, RUN, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import type { SubjectDescriptor } from '../subject-descriptor.js';
 
 // Genuine protected-factory emulator fixtures. The factory refuses any mount but its fixed paths,
-// so these tests run only in a disposable container with root, /opt/cutover and /run/cutover
-// writable, and the Firestore emulator on 127.0.0.1:8080. Set NETSAPIENS_CUTOVER_CONTAINER=1 to
-// run them. Without that variable the suite is skipped, and nothing touches the host's mounts.
-//
-// Before running: regenerate the bundle with `npm run bundle:cutover`. The bundle mounted here is
-// src/store/cutover-protocol.mjs, the same bytes `npm run build` copies into build/store.
+// so these run only where containerGateOpen() holds (a disposable container or CI). They never
+// touch an existing /opt/cutover or /run/cutover. The bundle is regenerated first with
+// `npm run bundle:cutover`, because the mounted bytes must be the built artifact.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
 const RUNNER_SOURCE = resolve(here, 'support', 'protected-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', 'node_modules');
-const OPT = '/opt/cutover';
-const RUN = '/run/cutover';
-const inContainer = process.env.NETSAPIENS_CUTOVER_CONTAINER === '1';
+const gateOpen = containerGateOpen();
 
 interface RunResult {
   readonly ok: boolean;
@@ -39,9 +35,8 @@ function minimalEnv(extra: Record<string, string> = {}): Record<string, string> 
   };
 }
 
-// The reviewed union of collection groups for a namespace. The export is the reviewed canonical
-// core's getCutoverRuntimeCollectionScope. Until the core sync lands it is absent, and this
-// fails closed rather than inventing the set.
+// The reviewed union of collection groups for a namespace, from the reviewed canonical core's
+// getCutoverRuntimeCollectionScope. Until the core sync lands it is absent, and this fails closed.
 function reviewedUnion(namespace: string): string[] {
   const scopeFn = (canonicalCore as Record<string, unknown>).getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== 'function') {
@@ -52,18 +47,13 @@ function reviewedUnion(namespace: string): string[] {
   return [...scope.union];
 }
 
-function clearMounts(): void {
-  rmSync(OPT, { recursive: true, force: true });
-  rmSync(RUN, { recursive: true, force: true });
-}
-
 // Writes the fixture's bytes to the fixed mounts. The bundle may be replaced to test a digest
 // mismatch, and extra run-directory files may be added to test refusals.
 function mount(
   fixture: { opt: Record<string, Buffer>; run: Record<string, Buffer> },
   options: { bundle?: Buffer; extraRun?: Record<string, Buffer> } = {},
 ): void {
-  clearMounts();
+  releaseMounts();
   mkdirSync(OPT, { recursive: true, mode: 0o755 });
   mkdirSync(RUN, { recursive: true, mode: 0o700 });
   for (const [name, bytes] of Object.entries(fixture.opt)) {
@@ -93,17 +83,18 @@ function runFactory(
   return JSON.parse(line) as RunResult;
 }
 
-describe.skipIf(!inContainer)('protected migration factory on the emulator profile', () => {
+describe.skipIf(!gateOpen)('protected migration factory on the emulator profile', () => {
   let bundleBytes: Buffer;
 
   beforeAll(() => {
+    assertCanOwnMounts();
     bundleBytes = readFileSync(BUNDLE_SOURCE);
     // The mounted bundle must be the built artifact: it must export the protected factory.
     expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
   });
 
   afterAll(() => {
-    clearMounts();
+    releaseMounts();
   });
 
   function fixtureFor(namespace: string, subjectDescriptor: SubjectDescriptor | null = null) {
