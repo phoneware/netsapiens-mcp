@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawnRunner } from './support/spawn-runner.mjs';
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,15 +69,14 @@ function mount(
 
 // Runs the mounted runner in a child with the factory's required argv and environment. The factory
 // refuses node execution arguments and a runner path other than /opt/cutover/runner.mjs.
-function runFactory(
+async function runFactory(
   action: string,
   namespace: string,
   options: { env?: Record<string, string>; nodeArgs?: string[] } = {},
-): RunResult {
-  const child = spawnSync(
-    process.execPath,
+): Promise<RunResult> {
+  const child = await spawnRunner(
     [...(options.nodeArgs ?? []), join(OPT, 'runner.mjs'), action, '--namespace', namespace],
-    { env: minimalEnv(options.env), encoding: 'utf8', timeout: 60_000 },
+    { env: minimalEnv(options.env), timeout: 60_000 },
   );
   const line = child.stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`runner produced no result; stderr: ${child.stderr}`);
@@ -110,47 +109,35 @@ describe.skipIf(!gateOpen)('protected migration factory on the emulator profile'
     }) as { opt: Record<string, Buffer>; run: Record<string, Buffer> };
   }
 
-  it('mounts the real bundle and returns the ten-field protected context (mcp, no subject descriptor)', () => {
-    mount(fixtureFor('mcp'));
-    const result = runFactory('inspect', 'mcp');
-    expect(result.ok).toBe(true);
-    expect(result.fields).toEqual(expect.arrayContaining(['db', 'FieldPath', 'key']));
-    expect(result.fields).toHaveLength(10);
-  });
+  it('mounts the real bundle and returns the ten-field protected context (mcp, no subject descriptor)', async () => { mount(fixtureFor('mcp'));
+  const result = await runFactory('inspect', 'mcp')
+  expect(result.ok).toBe(true);
+  expect(result.fields).toEqual(expect.arrayContaining(['db', 'FieldPath', 'key']));
+  expect(result.fields).toHaveLength(10); });
 
-  it('binds a verified pwmcp subject descriptor before any read', () => {
-    const descriptor: SubjectDescriptor = { allow: ['active'], collection: 'seats', extraKey: 'seat', field: 'state' };
-    mount(fixtureFor('pwmcp', descriptor));
-    const result = runFactory('inspect', 'pwmcp');
-    expect(result.ok).toBe(true);
-    expect(result.fields).toHaveLength(10);
-  });
+  it('binds a verified pwmcp subject descriptor before any read', async () => { const descriptor: SubjectDescriptor = { allow: ['active'], collection: 'seats', extraKey: 'seat', field: 'state' };
+  mount(fixtureFor('pwmcp', descriptor));
+  const result = await runFactory('inspect', 'pwmcp')
+  expect(result.ok).toBe(true);
+  expect(result.fields).toHaveLength(10); });
 
-  it('refuses a mounted bundle whose bytes differ from the approved protocol digest', () => {
-    mount(fixtureFor('mcp'), { bundle: Buffer.concat([bundleBytes, Buffer.from('\n// tampered\n')]) });
-    const result = runFactory('inspect', 'mcp');
-    expect(result.ok).toBe(false);
-    expect(result.message).toBe('Bundle digest does not match the approved protocol digest');
-  });
+  it('refuses a mounted bundle whose bytes differ from the approved protocol digest', async () => { mount(fixtureFor('mcp'), { bundle: Buffer.concat([bundleBytes, Buffer.from('\n// tampered\n')]) });
+  const result = await runFactory('inspect', 'mcp')
+  expect(result.ok).toBe(false);
+  expect(result.message).toBe('Bundle digest does not match the approved protocol digest'); });
 
-  it('refuses mounted production credentials on the emulator profile', () => {
-    mount(fixtureFor('mcp'), { extraRun: { 'credentials.json': Buffer.from('{}') } });
-    const result = runFactory('inspect', 'mcp');
-    expect(result.ok).toBe(false);
-    expect(result.message).toBe('Emulator profile refuses mounted production credentials');
-  });
+  it('refuses mounted production credentials on the emulator profile', async () => { mount(fixtureFor('mcp'), { extraRun: { 'credentials.json': Buffer.from('{}') } });
+  const result = await runFactory('inspect', 'mcp')
+  expect(result.ok).toBe(false);
+  expect(result.message).toBe('Emulator profile refuses mounted production credentials'); });
 
-  it('refuses a variable outside the factory environment allowlist before reading any file', () => {
-    mount(fixtureFor('mcp'));
-    const result = runFactory('inspect', 'mcp', { env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' } });
-    expect(result.ok).toBe(false);
-    expect(result.message).toBe('Protected runner environment contains a disallowed variable');
-  });
+  it('refuses a variable outside the factory environment allowlist before reading any file', async () => { mount(fixtureFor('mcp'));
+  const result = await runFactory('inspect', 'mcp', { env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' } })
+  expect(result.ok).toBe(false);
+  expect(result.message).toBe('Protected runner environment contains a disallowed variable'); });
 
-  it('refuses node execution arguments', () => {
-    mount(fixtureFor('mcp'));
-    const result = runFactory('inspect', 'mcp', { nodeArgs: ['--no-warnings'] });
-    expect(result.ok).toBe(false);
-    expect(result.message).toBe('Protected runner refuses node execution arguments');
-  });
+  it('refuses node execution arguments', async () => { mount(fixtureFor('mcp'));
+  const result = await runFactory('inspect', 'mcp', { nodeArgs: ['--no-warnings'] })
+  expect(result.ok).toBe(false);
+  expect(result.message).toBe('Protected runner refuses node execution arguments'); });
 });

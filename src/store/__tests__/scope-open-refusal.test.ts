@@ -43,16 +43,16 @@ describe.skipIf(!containerGateOpen())('production bundle with the reviewed scope
     const before = await snapshotNamespace(db, NS);
     const groups = scopeUnionUnchecked(NS);
 
-    const inspected = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups: groups });
+    const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups: groups })
     expect(inspected.ok).toBe(false);
     expect(String(inspected.message)).toMatch(OPEN_REFUSAL);
 
     const digest = '0'.repeat(64);
-    const dry = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt', options: { dryRun: true, expectedSourceInventoryDigest: digest }, collectionGroups: groups });
+    const dry = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt', options: { dryRun: true, expectedSourceInventoryDigest: digest }, collectionGroups: groups })
     expect(dry.ok).toBe(false);
     expect(String(dry.message)).toMatch(OPEN_REFUSAL);
 
-    const commit = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt', options: { dryRun: false, expectedSourceInventoryDigest: digest }, collectionGroups: groups });
+    const commit = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt', options: { dryRun: false, expectedSourceInventoryDigest: digest }, collectionGroups: groups })
     expect(commit.ok).toBe(false);
     expect(String(commit.message)).toMatch(OPEN_REFUSAL);
 

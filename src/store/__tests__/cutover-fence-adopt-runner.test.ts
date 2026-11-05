@@ -154,7 +154,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
   }
 
   async function inspectDigest(): Promise<string> {
-    const inspected = step('inspect');
+    const inspected = await step('inspect')
     expect(inspected.ok, `inspect refused: ${inspected.message}`).toBe(true);
     return inspected.sourceInventoryDigest as string;
   }
@@ -167,13 +167,13 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       const digest = await inspectDigest();
       const before = await snapshotNamespace(db, NS);
 
-      const dry = step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest });
+      const dry = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest })
       expect(dry.ok, `dry run refused: ${dry.message}`).toBe(true);
       if (scenario.errors === '>=1') expect(dry.report?.errors).toBeGreaterThanOrEqual(1);
       else expect(dry.report?.errors).toBe(scenario.errors);
       expect(await snapshotNamespace(db, NS)).toEqual(before);
 
-      const committed = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+      const committed = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
       expect(committed.ok, 'a commit with migration errors must be refused').toBe(false);
       expect(committed.exitStatus).not.toBe(0);
       expect(await snapshotNamespace(db, NS)).toEqual(before);
@@ -195,7 +195,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     ]);
     await startAdmin(NS);
     const digest = await inspectDigest();
-    const report = step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest });
+    const report = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest })
     expect(report.ok).toBe(true);
     expect(report.report?.errors).toBe(0);
     expect(report.report?.migrated).toBe(1);
@@ -220,7 +220,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     ]);
     await startAdmin(NS);
     const digest = await inspectDigest();
-    const committed = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+    const committed = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
     expect(committed.ok, `commit refused: ${committed.message}`).toBe(true);
     expect(committed.report?.errors).toBe(0);
     expect(committed.report?.migrated).toBe(1);
@@ -256,11 +256,11 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     await startAdmin(NS);
     const before = await snapshotNamespace(db, NS);
 
-    const inspected = step('inspect');
+    const inspected = await step('inspect')
     expect(inspected.ok).toBe(false);
     expect(String(inspected.message)).toMatch(/not initialized/);
 
-    const attempt = step('adopt', { dryRun: false, expectedSourceInventoryDigest: '0'.repeat(64) });
+    const attempt = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: '0'.repeat(64) })
     expect(attempt.ok).toBe(false);
     expect(String(attempt.message)).toMatch(/not initialized/);
 
@@ -311,7 +311,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
 
     await startAdmin(NS);
     const digest = await inspectDigest();
-    const adopted = step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+    const adopted = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
     expect(adopted.ok, `adopt refused: ${adopted.message}`).toBe(true);
     expect(adopted.report?.errors).toBe(0);
 

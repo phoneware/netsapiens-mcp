@@ -5397,8 +5397,8 @@ function assertValidMigrationContext(options) {
   if (typeof options.db !== "object" || typeof options.db.collection !== "function" || typeof options.db.runTransaction !== "function") {
     throw new CutoverFenceError("MigrationContext db must be a Firestore-like object with collection and runTransaction methods");
   }
-  if (typeof options.FieldPath !== "object" || typeof options.FieldPath.documentId !== "function") {
-    throw new CutoverFenceError("MigrationContext FieldPath must be an adapter object with documentId() method");
+  if (typeof options.FieldPath !== "object" && typeof options.FieldPath !== "function" || typeof options.FieldPath.documentId !== "function") {
+    throw new CutoverFenceError("MigrationContext FieldPath must be an adapter object or class with documentId() method");
   }
   if (!Buffer.isBuffer(options.key) && !(options.key instanceof Uint8Array)) {
     throw new CutoverFenceError("MigrationContext key must be a Uint8Array or Buffer");
@@ -6189,7 +6189,7 @@ function assertValidMigrationContext2(options, extraFields = []) {
   if (typeof opts.db !== "object" || typeof opts.db.collection !== "function" || typeof opts.db.runTransaction !== "function") {
     throw new CutoverFenceError("MigrationContext db must be a Firestore-like object with collection and runTransaction methods");
   }
-  if (typeof opts.FieldPath !== "object" || typeof opts.FieldPath.documentId !== "function") {
+  if (typeof opts.FieldPath !== "object" && typeof opts.FieldPath !== "function" || typeof opts.FieldPath.documentId !== "function") {
     throw new CutoverFenceError("MigrationContext FieldPath must be an adapter object with documentId() method");
   }
   if (!Buffer.isBuffer(opts.key) && !(opts.key instanceof Uint8Array)) {

@@ -9,7 +9,7 @@
 // The fixture binds the bundle's bytes through protocolDigest, so the cache is keyed by the bundle hash too:
 // a mutated bundle never reuses a fixture bound to the original bytes.
 // Callers must start the fake Admin (support/fake-admin.mjs) before a step that reads the index.
-import { spawnSync } from 'node:child_process';
+import { spawnRunner } from './spawn-runner.mjs';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -107,8 +107,8 @@ function runnerEnv() {
 
 // Runs the mounted preparation runner with the factory's argv and returns its parsed JSON line plus the
 // exit status.
-export function runFactory(argv) {
-  const child = spawnSync(process.execPath, [join(OPT, 'runner.mjs'), ...argv], { env: runnerEnv(), encoding: 'utf8', timeout: 180_000 });
+export async function runFactory(argv) {
+  const child = await spawnRunner([join(OPT, 'runner.mjs'), ...argv], { env: runnerEnv(), timeout: 180_000 });
   const line = child.stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`runner produced no result; stderr: ${child.stderr}`);
   return { ...JSON.parse(line), exitStatus: child.status };

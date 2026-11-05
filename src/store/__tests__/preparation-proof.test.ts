@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawnRunner } from './support/spawn-runner.mjs';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +74,7 @@ function groupsFor(namespace: string): string[] {
 }
 
 // Writes the step's request and the fixture's bytes to the fixed mounts, then runs the preparation runner.
-function runStep(fixture: any, namespace: string, bundleBytes: Buffer, request: StepRequest): StepResult {
+async function runStep(fixture: any, namespace: string, bundleBytes: Buffer, request: StepRequest): Promise<StepResult> {
   const options = request.action === 'adopt'
     ? { dryRun: request.dryRun, expectedSourceInventoryDigest: request.expectedSourceInventoryDigest }
     : {};
@@ -93,7 +93,7 @@ function runStep(fixture: any, namespace: string, bundleBytes: Buffer, request: 
   const argv = request.action === 'adopt'
     ? ['adopt', '--namespace', namespace, '--mode', request.dryRun ? 'dry-run' : 'commit']
     : [request.action, '--namespace', namespace];
-  const child = spawnSync(process.execPath, [join(OPT, 'runner.mjs'), ...argv], { env: minimalEnv(), encoding: 'utf8', timeout: 180_000 });
+  const child = await spawnRunner([join(OPT, 'runner.mjs'), ...argv], { env: minimalEnv(), timeout: 180_000 });
   const line = child.stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`preparation runner produced no result; stderr: ${child.stderr}`);
   return JSON.parse(line) as StepResult;
@@ -193,18 +193,18 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     const fixture = fixtureFor('mcp', null);
     await startAdmin(fixture);
 
-    const inspected = runStep(fixture, 'mcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'mcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     const beforeDry = await snapshot('mcp');
-    const dry = runStep(fixture, 'mcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: digest });
+    const dry = await runStep(fixture, 'mcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: digest })
     expect(dry.ok).toBe(true);
     expect(dry.report?.dryRun).toBe(true);
     expect(dry.report?.errors).toBe(0);
     expect(await snapshot('mcp')).toEqual(beforeDry);
 
-    const commit = runStep(fixture, 'mcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest });
+    const commit = await runStep(fixture, 'mcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest })
     expect(commit.ok).toBe(true);
     expect(commit.report?.errors).toBe(0);
     expect(commit.report?.migrated).toBeGreaterThan(0);
@@ -216,11 +216,11 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     const fixture = fixtureFor('pwmcp', DESCRIPTOR);
     await startAdmin(fixture);
 
-    const inspected = runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
-    const commit = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest });
+    const commit = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest })
     expect(commit.ok).toBe(true);
     expect(commit.report?.errors).toBe(0);
     expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, 'pwmcp'))?.state).toBe('v3_ready');
@@ -237,9 +237,9 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     });
 
     const beforeDry = await snapshot('pwmcp');
-    const inspected = runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
-    const dry = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string });
+    const dry = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string })
     expect(dry.ok).toBe(false);
     expect(dry.message).toBe('Fresh index policy differs from the signed index policy');
     expect(await snapshot('pwmcp')).toEqual(beforeDry);
@@ -258,9 +258,9 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     });
 
     const beforeDry = await snapshot('pwmcp');
-    const inspected = runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
-    const dry = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string });
+    const dry = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string })
     expect(dry.ok).toBe(false);
     expect(dry.message).toBe('Fresh index policy differs from the signed index policy');
     expect(await snapshot('pwmcp')).toEqual(beforeDry);
@@ -273,17 +273,17 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     const fixture = fixtureFor('pwmcp', DESCRIPTOR);
     await startAdmin(fixture);
 
-    const inspected = runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     const beforeDry = await snapshot('pwmcp');
-    const dry = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: digest });
+    const dry = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: digest })
     expect(dry.ok).toBe(true);
     expect(Number(dry.report?.errors)).toBeGreaterThan(0);
     expect(await snapshot('pwmcp')).toEqual(beforeDry);
 
-    const commit = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest });
+    const commit = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest })
     expect(commit.ok).toBe(false);
     expect(commit.message?.startsWith('Cannot prepare migration for namespace pwmcp')).toBe(true);
     expect(await snapshot('pwmcp')).toEqual(beforeDry);
@@ -296,7 +296,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     const fixture = fixtureFor('pwmcp', DESCRIPTOR);
     await startAdmin(fixture);
 
-    const inspected = runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' });
+    const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
     expect(inspected.ok).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
@@ -313,7 +313,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     });
 
     const beforeCommit = await snapshot('pwmcp');
-    const commit = runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest });
+    const commit = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest })
     expect(commit.ok).toBe(false);
     expect(commit.message?.includes('Source inventory digest mismatch')).toBe(true);
     expect(await snapshot('pwmcp')).toEqual(beforeCommit);

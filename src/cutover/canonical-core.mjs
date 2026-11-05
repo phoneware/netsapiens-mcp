@@ -4705,8 +4705,8 @@ export function assertValidMigrationContext(options) {
   if (typeof options.db !== 'object' || typeof options.db.collection !== 'function' || typeof options.db.runTransaction !== 'function') {
     throw new CutoverFenceError('MigrationContext db must be a Firestore-like object with collection and runTransaction methods');
   }
-  if (typeof options.FieldPath !== 'object' || typeof options.FieldPath.documentId !== 'function') {
-    throw new CutoverFenceError('MigrationContext FieldPath must be an adapter object with documentId() method');
+  if ((typeof options.FieldPath !== 'object' && typeof options.FieldPath !== 'function') || typeof options.FieldPath.documentId !== 'function') {
+    throw new CutoverFenceError('MigrationContext FieldPath must be an adapter object or class with documentId() method');
   }
   if (!Buffer.isBuffer(options.key) && !(options.key instanceof Uint8Array)) {
     throw new CutoverFenceError('MigrationContext key must be a Uint8Array or Buffer');

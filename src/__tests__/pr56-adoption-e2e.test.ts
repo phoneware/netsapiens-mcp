@@ -105,15 +105,15 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
     });
 
     // 7. Inspect supplies the digest, then the runner adopts in commit mode.
-    const inspected = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' })
     expect(inspected.ok).toBe(true);
-    const adopted = runStep({
+    const adopted = await runStep({
       bundleBytes,
       namespace: NS,
       epoch: EPOCH,
       action: 'adopt',
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest },
-    });
+    })
     expect(adopted.ok).toBe(true);
     expect(adopted.report?.errors).toBe(0);
     expect(adopted.report?.migrated).toBe(1);

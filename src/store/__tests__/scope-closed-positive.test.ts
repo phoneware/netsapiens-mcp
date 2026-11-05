@@ -8,7 +8,7 @@
 // text changes. It is a proof that the factory and the migration engine accept a closed, correctly signed scope;
 // it is not a claim that production can close, which the census owner decides.
 // Runs only where containerGateOpen() holds. Never touches an existing /opt/cutover or /run/cutover.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
@@ -17,8 +17,8 @@ import { deriveStoreKey } from '../codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
-import { assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
-import { fixtureFor, runStep, scopeUnionUnchecked, sessionSecretOf } from './support/runner-harness.mjs';
+import { OPT, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
+import { argvFor, fixtureFor, mountFixture, runFactory, runStep, scopeUnionUnchecked, sessionSecretOf } from './support/runner-harness.mjs';
 import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from './support/emulator-seed.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -96,33 +96,31 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       token: 'owner',
     });
 
-    const inspected = runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups })
     expect(inspected.ok, `inspect refused: ${inspected.message}`).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
     expect(digest).toMatch(/^[0-9a-f]{64}$/);
 
     // The dry run writes nothing: the fence stays fenced and no v3 document appears.
-    const dry = runStep({
+    const dry = await runStep({
       bundleBytes: closedBundle,
       namespace: NS,
       epoch: EPOCH,
       action: 'adopt',
       options: { dryRun: true, expectedSourceInventoryDigest: digest },
       collectionGroups,
-    });
+    })
     expect(dry.ok, `dry run refused: ${dry.message}`).toBe(true);
     expect(dry.report?.errors).toBe(0);
     expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('fenced');
 
-    // The commit migrates the family and moves the fence to v3_ready.
-    const committed = runStep({
-      bundleBytes: closedBundle,
-      namespace: NS,
-      epoch: EPOCH,
-      action: 'adopt',
-      options: { dryRun: false, expectedSourceInventoryDigest: digest },
-      collectionGroups,
-    });
+    // Pause the actual Firestore SDK transaction after the real engine has authorized the signed request,
+    // mutate the caller's key, then release the SDK transaction. Later reads prove original-key persistence.
+    const options = { dryRun: false, expectedSourceInventoryDigest: digest };
+    mountFixture(fixture, 'adopt', options);
+    writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'key-race-runner.mjs')));
+    const committed = await runFactory(argvFor('adopt', NS, options));
+    expect(committed.paused).toBe(true);
     expect(committed.ok, `commit refused: ${committed.message}`).toBe(true);
     expect(committed.report?.errors).toBe(0);
     expect(committed.report?.migrated).toBe(1);
@@ -145,5 +143,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const session = await store.sessions.get('closed-acc');
     expect(session?.clientId).toBe('closed-client');
     expect(session?.nsUsername).toBe('closed@domain.com');
+    const mutatedKeyStore = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: Buffer.alloc(32) });
+    expect(await mutatedKeyStore.sessions.get('closed-acc')).toBeUndefined();
   });
 });

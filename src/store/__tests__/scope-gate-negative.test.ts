@@ -124,7 +124,7 @@ describe.skipIf(!gateOpen)('runtime scope gate negative proof (signed factory fi
       token: 'owner',
     });
     try {
-      const result = runStep({ bundleBytes: mutated, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+      const result = await runStep({ bundleBytes: mutated, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups })
       expect(result.ok).toBe(false);
       expect(result.exitStatus).not.toBe(0);
       expect(String(result.message)).toMatch(refusal);

@@ -221,7 +221,7 @@ export function assertValidMigrationContext(options: unknown, extraFields: reado
   if (typeof opts.db !== 'object' || typeof (opts.db as any).collection !== 'function' || typeof (opts.db as any).runTransaction !== 'function') {
     throw new CutoverFenceError('MigrationContext db must be a Firestore-like object with collection and runTransaction methods');
   }
-  if (typeof opts.FieldPath !== 'object' || typeof (opts.FieldPath as any).documentId !== 'function') {
+  if ((typeof opts.FieldPath !== 'object' && typeof opts.FieldPath !== 'function') || typeof (opts.FieldPath as any).documentId !== 'function') {
     throw new CutoverFenceError('MigrationContext FieldPath must be an adapter object with documentId() method');
   }
   if (!Buffer.isBuffer(opts.key) && !(opts.key instanceof Uint8Array)) {
