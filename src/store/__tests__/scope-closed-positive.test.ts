@@ -130,6 +130,15 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
     expect(ctrl?.state).toBe('v3_ready');
     expect(ctrl?.irreversible).toBe(true);
+    // Reads are served only once the fence is v3_active; v3_ready is the post-commit, pre-activation state.
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+      fromState: 'v3_ready',
+      toState: 'v3_active',
+      expectedEpoch: ctrl!.epoch,
+      migrationRunId: ctrl!.migrationRunId!,
+      migrationManifestDigest: ctrl!.migrationManifestDigest!,
+    });
+    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_active');
 
     // The v3 store reads the migrated session with the factory's key, from the same synthetic bundle's secret.
     const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
