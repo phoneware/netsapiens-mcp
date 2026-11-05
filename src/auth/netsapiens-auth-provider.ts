@@ -1,3 +1,4 @@
+import type { SubjectGuard } from '../store/subject-guard.js';
 /**
  * OAuth 2.1 Server Provider for the NetSapiens MCP Server.
  *
@@ -461,6 +462,27 @@ export interface NetSapiensAuthProviderOptions {
  renderPages?: RenderPagesOptions;
  /** Optional clients store override */
  clientsStore?: OAuthRegisteredClientsStore;
+ /**
+  * Optional subject for each new issuance. Resolved from the authorized request before
+  * the code is redeemed, so the guard and the family reference are written in the same
+  * atomic step as the tokens. Returning undefined issues without a subject. Requires an
+  * atomic store with subject-guard support; the provider refuses to start otherwise.
+  */
+ subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
+}
+
+/** Authorized request facts a subject resolver may use. */
+export interface SubjectIssuanceInput {
+ readonly clientId: string;
+ readonly username: string;
+ readonly extra: Readonly<Record<string, string>> | undefined;
+}
+
+/** A subject for issuance: a key, its value, and an optional guard document. */
+export interface SubjectIssuance {
+ readonly extraKey: string;
+ readonly value: string;
+ readonly guard?: SubjectGuard;
 }
 
 interface MfaChallenge {
@@ -482,6 +504,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private platforms: readonly NetSapiensPlatform[];
  private nsClientId: string;
  private nsClientSecret: string;
+ private subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
  private tokenLifetimeSec: number;
  private serverBaseUrl?: string;
 
@@ -499,6 +522,18 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   this.hooks = options.hooks;
   this.renderPages = options.renderPages;
   this._clientsStore = options.clientsStore ?? new LoopbackTolerantClientsStore(options.store.clients);
+  // Fail closed at startup: a subject resolver needs the atomic redeem path, because a
+  // subject can only be enforced and recorded inside it. Without it the provider would
+  // silently issue unguarded families.
+  if (options.subjectForIssuance) {
+   if (!(options.store.authCodes.redeemAndIssue && options.store.authCodes.getEntry)) {
+    throw new Error('subjectForIssuance requires a store with atomic code redemption');
+   }
+   if (!options.store.capabilities.subjectGuards) {
+    throw new Error('subjectForIssuance requires a store that supports subject guards');
+   }
+  }
+  this.subjectForIssuance = options.subjectForIssuance;
  }
 
  private renderLoginPage(
@@ -1020,12 +1055,20 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     serverBaseUrl: this.serverBaseUrl,
    };
 
+   // Resolved from the authorized request before the code is consumed. The atomic redeem
+   // checks the guard and writes the reference in the same transaction as the tokens.
+   const subject = this.subjectForIssuance?.({
+    clientId: preview.data.pending.clientId,
+    username,
+    extra: preview.data.extra,
+   });
    const redeemed = await this.store.authCodes.redeemAndIssue(
     authorizationCode,
     expected,
     { accessToken, refreshToken },
     stored,
     preview.sealed,
+    subject,
    );
    if (!redeemed) {
     throw new InvalidGrantError('Invalid authorization code');

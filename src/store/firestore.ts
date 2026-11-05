@@ -234,7 +234,10 @@ export class FirestoreBackend implements StoreBackend {
 
     const accessData = ({ id: _id, ...row }: AccessRow) => defined({ ...row, v: 2, ttlAt: new Date(row.retainUntil) });
     const refreshData = ({ id: _id, ...row }: RefreshPointerRow) => defined({ ...row, v: 2 });
-    const familyData = ({ id: _id, ...row }: FamilyRow) => defined({ ...row, v: 2 });
+    // A revoked family drops its subject references in the same write, so the reference
+    // index never returns it again. Writes replace the whole document, so omitting the
+    // field removes it.
+    const familyData = ({ id: _id, ...row }: FamilyRow) => defined({ ...(row.status === 'revoked' ? { ...row, subjectRefs: undefined } : row), v: 2 });
     const upstreamData = ({ id: _id, ...row }: UpstreamGrantRow) => defined({ ...row, v: 2 });
     const codeData = ({ id: _id, ...row }: AuthCodeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
     const resumeData = ({ id: _id, ...row }: ResumeRow) => defined({ ...row, v: 2, ttlAt: new Date(row.expiresAt) });
@@ -330,11 +333,17 @@ export class FirestoreBackend implements StoreBackend {
         });
       },
 
-      async findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
+      // Revoked families drop their subject references on write (familyData), so the
+      // reference query returns active families only. A returned revoked family would
+      // breach that invariant, so it refuses rather than being skipped silently.
+      async findActiveFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<string[]> {
         await assertV3Active();
         await ensureAdopted();
         const snap = await refreshFamilies.where('subjectRefs', 'array-contains', subjectRef).limit(limit).get();
-        return snap.docs.map((doc) => ({ id: doc.id, status: doc.data()?.status === 'active' ? 'active' : 'revoked' }));
+        return snap.docs.map((doc) => {
+          if (doc.data()?.status !== 'active') throw new CutoverFenceError('Subject reference index returned a revoked family');
+          return doc.id;
+        });
       },
       async getFamily(id) {
         await assertV3Active();

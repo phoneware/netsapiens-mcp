@@ -788,19 +788,19 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
       },
     },
 
-    // Revokes active families carrying the keyed subject reference. Repeating
-    // the call finds only already-revoked families and changes nothing. `more`
-    // reports that the bounded page was full, so the caller repeats.
+    // Revokes up to `limit` active families carrying the keyed subject reference. `more`
+    // reports that further active families may remain. Each revoke removes a family from
+    // the active set, so repeating the call always makes progress, and an already-revoked
+    // family is never returned, so repeats change nothing.
     revokeSubject: async (extraKey: string, value: string, options: { limit: number }) => {
       if (!backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot revoke by subject');
       if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new CutoverRefusedError('revokeSubject limit must be a positive safe integer');
       const ref = subjectRefFor(key, namespace, extraKey, value);
-      const page = await backend.findFamilyIdsBySubjectRef(ref, options.limit + 1);
-      const more = page.length > options.limit;
+      const ids = await backend.findActiveFamilyIdsBySubjectRef(ref, options.limit + 1);
+      const more = ids.length > options.limit;
       let revoked = 0;
-      for (const family of page.slice(0, options.limit)) {
-        if (family.status !== 'active') continue;
-        if (await backend.atomicRevokeFamily(family.id) === 'revoked') revoked++;
+      for (const id of ids.slice(0, options.limit)) {
+        if (await backend.atomicRevokeFamily(id) === 'revoked') revoked++;
       }
       return { revoked, more };
     },

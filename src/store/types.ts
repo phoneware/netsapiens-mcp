@@ -246,7 +246,9 @@ export interface StoreBackend {
     familyId: string,
     condition?: RevokeCondition,
   ): Promise<'revoked' | 'stale' | 'missing'>;
-  findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>>;
+  // Active families only, bounded by limit. A revoke removes a family from this set,
+  // so repeated bounded calls make progress without a cursor.
+  findActiveFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<string[]>;
   // Guard documents are written here only by backends that own them (memory and
   // sqlite). Firestore guard documents belong to the application and are read
   // inside the credential transaction, never written by the store.

@@ -112,7 +112,7 @@ export class SqliteBackend implements StoreBackend {
   atomicRotate!: StoreBackend['atomicRotate'];
   atomicRevokeFamily!: StoreBackend['atomicRevokeFamily'];
   findFamilyByRetiredId!: NonNullable<StoreBackend['findFamilyByRetiredId']>;
-  findFamilyIdsBySubjectRef!: StoreBackend['findFamilyIdsBySubjectRef'];
+  findActiveFamilyIdsBySubjectRef!: StoreBackend['findActiveFamilyIdsBySubjectRef'];
 
   putAuthCode!: StoreBackend['putAuthCode'];
   getAuthCode!: StoreBackend['getAuthCode'];
@@ -271,28 +271,34 @@ export class SqliteBackend implements StoreBackend {
 
           db.exec('DROP TABLE sessions_v1; PRAGMA user_version=2;');
         });
-      } else {
-        // v0 -> v2 initialization
-        db.exec(`BEGIN IMMEDIATE;
-          CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY CHECK(length(id)=64), family_id TEXT NOT NULL, expires_at INTEGER NOT NULL, retain_until INTEGER NOT NULL CHECK(retain_until >= expires_at), sealed TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS refresh_families (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, status TEXT NOT NULL, active_refresh_id TEXT NOT NULL, current_access_token_id TEXT NOT NULL, revoked_at INTEGER, updated_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS refresh_tokens (id TEXT PRIMARY KEY CHECK(length(id)=64), family_id TEXT NOT NULL, status TEXT NOT NULL, generation INTEGER NOT NULL, consumed_at INTEGER, successor_sealed TEXT) STRICT;
-          CREATE TABLE IF NOT EXISTS upstream_grants (id TEXT PRIMARY KEY, grant_version INTEGER NOT NULL, ns_expires_at INTEGER, lease_owner TEXT, lease_until INTEGER, updated_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS retired_refresh_tokens (refresh_id TEXT PRIMARY KEY CHECK(length(refresh_id)=64), family_id TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS auth_codes (id TEXT PRIMARY KEY CHECK(length(id)=64), expires_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS resume_tokens (id TEXT PRIMARY KEY CHECK(length(id)=64), consumed_at INTEGER NOT NULL, expires_at INTEGER NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-          CREATE TABLE IF NOT EXISTS usage (user_hash TEXT NOT NULL CHECK(length(user_hash)=64), tool_name TEXT NOT NULL, count INTEGER NOT NULL, last_used INTEGER NOT NULL, PRIMARY KEY(user_hash, tool_name)) STRICT;
-          PRAGMA user_version=2;
-        COMMIT;`);
       }
 
-      // Upgrades run one version step at a time. Each step creates its tables and
-      // advances user_version in one transaction, so a crash leaves the file at its
-      // previous version and the step runs again on the next open. A file already at
-      // the current version runs no DDL at all.
-      if (version < 3) {
+      if (version === 0) {
+        // New file: create the complete current schema in one transaction.
+        transaction(() => {
+          db.exec(`
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+            CREATE TABLE sessions (id TEXT PRIMARY KEY CHECK(length(id)=64), family_id TEXT NOT NULL, expires_at INTEGER NOT NULL, retain_until INTEGER NOT NULL CHECK(retain_until >= expires_at), sealed TEXT NOT NULL) STRICT;
+            CREATE TABLE refresh_families (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, status TEXT NOT NULL, active_refresh_id TEXT NOT NULL, current_access_token_id TEXT NOT NULL, revoked_at INTEGER, updated_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
+            CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY CHECK(length(id)=64), family_id TEXT NOT NULL, status TEXT NOT NULL, generation INTEGER NOT NULL, consumed_at INTEGER, successor_sealed TEXT) STRICT;
+            CREATE TABLE upstream_grants (id TEXT PRIMARY KEY, grant_version INTEGER NOT NULL, ns_expires_at INTEGER, lease_owner TEXT, lease_until INTEGER, updated_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
+            CREATE TABLE retired_refresh_tokens (refresh_id TEXT PRIMARY KEY CHECK(length(refresh_id)=64), family_id TEXT NOT NULL) STRICT;
+            CREATE TABLE auth_codes (id TEXT PRIMARY KEY CHECK(length(id)=64), expires_at INTEGER NOT NULL, sealed TEXT NOT NULL) STRICT;
+            CREATE TABLE resume_tokens (id TEXT PRIMARY KEY CHECK(length(id)=64), consumed_at INTEGER NOT NULL, expires_at INTEGER NOT NULL) STRICT;
+            CREATE TABLE oauth_clients (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+            CREATE TABLE usage (user_hash TEXT NOT NULL CHECK(length(user_hash)=64), tool_name TEXT NOT NULL, count INTEGER NOT NULL, last_used INTEGER NOT NULL, PRIMARY KEY(user_hash, tool_name)) STRICT;
+            CREATE TABLE family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
+            CREATE TABLE guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
+          `);
+          db.exec(`PRAGMA user_version=${SQLITE_SCHEMA_VERSION}`);
+        });
+      }
+
+      // Upgrade from version 2, directly or after the version-1 migration above, to the
+      // current version. The step creates its tables and advances user_version in one
+      // transaction, so a crash reruns it. A new file was created at the current
+      // version above, and a version-3 file runs no DDL and writes nothing here.
+      if (version === 1 || version === 2) {
         transaction(() => {
           db.exec(`
             CREATE TABLE family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
@@ -536,10 +542,10 @@ export class SqliteBackend implements StoreBackend {
 
       async putAuthCode(row: AuthCodeRow) { db.prepare('INSERT OR REPLACE INTO auth_codes(id,expires_at,sealed) VALUES(?,?,?)').run(row.id, row.expiresAt, row.sealed); },
       async getAuthCode(id: string) { return code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); },
-      async findFamilyIdsBySubjectRef(subjectRef: string, limit: number) {
-        return db.prepare('SELECT f.id AS id, f.status AS status FROM family_subject_refs r JOIN refresh_families f ON f.id = r.family_id WHERE r.ref = ? ORDER BY f.id LIMIT ?')
+      async findActiveFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<string[]> {
+        return db.prepare("SELECT f.id AS id FROM family_subject_refs r JOIN refresh_families f ON f.id = r.family_id WHERE r.ref = ? AND f.status = 'active' ORDER BY f.id LIMIT ?")
           .all(subjectRef, limit)
-          .map(row => ({ id: row.id as string, status: (row.status === 'active' ? 'active' : 'revoked') as 'active' | 'revoked' }));
+          .map(row => row.id as string);
       },
       async takeAuthCode(id: string) { return transaction(() => { const row = code(db.prepare('SELECT * FROM auth_codes WHERE id=?').get(id)); db.prepare('DELETE FROM auth_codes WHERE id=?').run(id); return row; }); },
       async atomicRedeemCodeAndIssue(params: AtomicRedeemAndIssueParams): Promise<AuthCodeRow | undefined> {

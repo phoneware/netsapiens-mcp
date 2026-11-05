@@ -57,12 +57,13 @@ export class MemoryBackend implements StoreBackend {
   async deleteGuardDocument(collection: string, id: string): Promise<void> {
     this.state.guardDocuments.delete(`${collection}\0${id}`);
   }
-  // Finds families by keyed subject reference. The memory store keeps them in its own map.
-  async findFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<Array<{ id: string; status: 'active' | 'revoked' }>> {
-    const matches: Array<{ id: string; status: 'active' | 'revoked' }> = [];
+  // Active families carrying the reference, bounded. Revoked families never match, so
+  // a revoke removes one from later results.
+  async findActiveFamilyIdsBySubjectRef(subjectRef: string, limit: number): Promise<string[]> {
+    const matches: string[] = [];
     for (const family of this.state.families.values()) {
-      if (Array.isArray(family.subjectRefs) && family.subjectRefs.includes(subjectRef)) {
-        matches.push({ id: family.id, status: family.status === 'active' ? 'active' : 'revoked' });
+      if (family.status === 'active' && Array.isArray(family.subjectRefs) && family.subjectRefs.includes(subjectRef)) {
+        matches.push(family.id);
         if (matches.length >= limit) break;
       }
     }
