@@ -1,5 +1,118 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/cutover/canonical-core.mjs
+var canonical_core_exports = {};
+__export(canonical_core_exports, {
+  ALLOWED_STATE_TRANSITIONS: () => ALLOWED_STATE_TRANSITIONS,
+  APPROVED_GRAPH_PROJECTOR_ID: () => APPROVED_GRAPH_PROJECTOR_ID,
+  APPROVED_GRAPH_PROJECTOR_VERSION: () => APPROVED_GRAPH_PROJECTOR_VERSION,
+  C: () => C,
+  CANDIDATE_KIND_TO_CLASSIFICATION: () => CANDIDATE_KIND_TO_CLASSIFICATION,
+  CLASSIFICATION_KEYS: () => CLASSIFICATION_KEYS,
+  CUTOVER_OPERATIONS_GROUP: () => CUTOVER_OPERATIONS_GROUP,
+  CutoverFenceError: () => CutoverFenceError,
+  CutoverRefusedError: () => CutoverRefusedError,
+  D: () => D,
+  F: () => F,
+  FIRESTORE_MAX_DOCUMENT_SIZE_BYTES: () => FIRESTORE_MAX_DOCUMENT_SIZE_BYTES,
+  FIRESTORE_MAX_FIELD_TRANSFORMS: () => FIRESTORE_MAX_FIELD_TRANSFORMS,
+  FIRESTORE_MAX_INDEX_BYTES: () => FIRESTORE_MAX_INDEX_BYTES,
+  FIRESTORE_MAX_INDEX_ENTRIES: () => FIRESTORE_MAX_INDEX_ENTRIES,
+  FIRESTORE_MAX_NESTING_DEPTH: () => FIRESTORE_MAX_NESTING_DEPTH,
+  FIRESTORE_MAX_REQUEST_SIZE_BYTES: () => FIRESTORE_MAX_REQUEST_SIZE_BYTES,
+  FIRESTORE_TRANSACTION_READ_DEADLINE_MS: () => FIRESTORE_TRANSACTION_READ_DEADLINE_MS,
+  H: () => H,
+  NONEMPTY_PROJECTOR_KEYS: () => NONEMPTY_PROJECTOR_KEYS,
+  PHYSICAL_COUNT_KEYS: () => PHYSICAL_COUNT_KEYS,
+  PREFLIGHT_MAX_DOC_BYTES: () => PREFLIGHT_MAX_DOC_BYTES,
+  PREFLIGHT_MAX_FIELD_TRANSFORMS: () => PREFLIGHT_MAX_FIELD_TRANSFORMS,
+  PREFLIGHT_MAX_INDEX_BYTES: () => PREFLIGHT_MAX_INDEX_BYTES,
+  PREFLIGHT_MAX_INDEX_ENTRIES: () => PREFLIGHT_MAX_INDEX_ENTRIES,
+  PREFLIGHT_MAX_NESTING_DEPTH: () => PREFLIGHT_MAX_NESTING_DEPTH,
+  PREFLIGHT_MAX_REQUEST_BYTES: () => PREFLIGHT_MAX_REQUEST_BYTES,
+  REASON_KEYS: () => REASON_KEYS,
+  REQUIRED_CANDIDATE_KEYS: () => REQUIRED_CANDIDATE_KEYS,
+  REQUIRED_FINAL_MANIFEST_KEYS: () => REQUIRED_FINAL_MANIFEST_KEYS,
+  REQUIRED_IDENTITY_KEYS: () => REQUIRED_IDENTITY_KEYS,
+  REQUIRED_OWNERSHIP_MARKER_KEYS: () => REQUIRED_OWNERSHIP_MARKER_KEYS,
+  REQUIRED_PLAN_SPEC_KEYS: () => REQUIRED_PLAN_SPEC_KEYS,
+  REQUIRED_PREPARED_MANIFEST_KEYS: () => REQUIRED_PREPARED_MANIFEST_KEYS,
+  REQUIRED_RECEIPT_KEYS: () => REQUIRED_RECEIPT_KEYS,
+  SUPPORTED_CUTOVER_NAMESPACES: () => SUPPORTED_CUTOVER_NAMESPACES,
+  TARGET_COUNT_KEYS: () => TARGET_COUNT_KEYS,
+  activateMigrationInTransaction: () => activateMigrationInTransaction,
+  assertPreparedIdentity: () => assertPreparedIdentity,
+  assertRuntimeScopeClosed: () => assertRuntimeScopeClosed,
+  assertSubjectRefsPresent: () => assertSubjectRefsPresent,
+  assertSupportedCutoverNamespace: () => assertSupportedCutoverNamespace,
+  assertValidMigrationContext: () => assertValidMigrationContext,
+  canonicalCompare: () => canonicalCompare,
+  canonicalJsonStringify: () => canonicalJsonStringify,
+  checkMutationGuardInTransaction: () => checkMutationGuardInTransaction,
+  checkV3MutationGuardInTransaction: () => checkV3MutationGuardInTransaction,
+  claimUpstreamGrantInTransaction: () => claimUpstreamGrantInTransaction,
+  computeEstimatedFirestoreDocSize: () => computeEstimatedFirestoreDocSize,
+  computeKeyedDocId: () => computeKeyedDocId,
+  computeLogicalInventoryDigest: () => computeLogicalInventoryDigest,
+  computeManifestDigest: () => computeManifestDigest,
+  computePlanDigest: () => computePlanDigest,
+  computeProtocolDigest: () => computeProtocolDigest,
+  computeReceiptDigest: () => computeReceiptDigest,
+  computeReceiptSetDigest: () => computeReceiptSetDigest,
+  computeSourceInventoryDigest: () => computeSourceInventoryDigest,
+  computeSourceRecordDigest: () => computeSourceRecordDigest,
+  computeTargetInventoryDigest: () => computeTargetInventoryDigest,
+  computeTargetRecordDigest: () => computeTargetRecordDigest,
+  deriveKey: () => deriveKey,
+  finalizeMigrationInTransaction: () => finalizeMigrationInTransaction,
+  frame: () => frame,
+  getCutoverCollectionRegistry: () => getCutoverCollectionRegistry,
+  getCutoverDistinctCollectionNames: () => getCutoverDistinctCollectionNames,
+  getCutoverFenceDocRef: () => getCutoverFenceDocRef,
+  getCutoverFenceRecord: () => getCutoverFenceRecord,
+  getCutoverOperationDocRef: () => getCutoverOperationDocRef,
+  getCutoverOperationsColRef: () => getCutoverOperationsColRef,
+  getCutoverRuntimeCollectionScope: () => getCutoverRuntimeCollectionScope,
+  getSourceCollectionAllowlist: () => getSourceCollectionAllowlist,
+  getTargetCollectionAllowlist: () => getTargetCollectionAllowlist,
+  initializeCutoverFence: () => initializeCutoverFence,
+  isCutoverFenceError: () => isCutoverFenceError,
+  isCutoverRefusedError: () => isCutoverRefusedError,
+  isLegacyMutationPermittedInTransaction: () => isLegacyMutationPermittedInTransaction,
+  isMonotonicTimer: () => isMonotonicTimer,
+  isSupportedCutoverNamespace: () => isSupportedCutoverNamespace,
+  isTargetFormatRow: () => isTargetFormatRow,
+  markIrreversibleInTransaction: () => markIrreversibleInTransaction,
+  markOperationAmbiguous: () => markOperationAmbiguous,
+  normalizeValue: () => normalizeValue,
+  operationStorageId: () => operationStorageId,
+  parseCutoverFenceRecord: () => parseCutoverFenceRecord,
+  prepareMigrationInTransaction: () => prepareMigrationInTransaction,
+  readCutoverFenceInTransaction: () => readCutoverFenceInTransaction,
+  reconcileUpstreamGrantInTransaction: () => reconcileUpstreamGrantInTransaction,
+  releaseLegacyOperation: () => releaseLegacyOperation,
+  rfc8785CanonicalJson: () => rfc8785CanonicalJson,
+  sanitizeId: () => sanitizeId2,
+  startMonotonicTimer: () => startMonotonicTimer,
+  transitionCutoverFenceState: () => transitionCutoverFenceState,
+  validateCandidateCommitments: () => validateCandidateCommitments,
+  validateCompleteMigrationPlan: () => validateCompleteMigrationPlan,
+  validateCompleteMigrationPlanForIdentity: () => validateCompleteMigrationPlanForIdentity,
+  validateMapKeysExact: () => validateMapKeysExact,
+  validateMigrationIdentityFields: () => validateMigrationIdentityFields,
+  validateMigrationPreflightLimits: () => validateMigrationPreflightLimits,
+  validateProspectiveDocBudget: () => validateProspectiveDocBudget,
+  validateReceipt: () => validateReceipt,
+  validateTransactionBudgetPlan: () => validateTransactionBudgetPlan,
+  verifyActiveMigrationInTransaction: () => verifyActiveMigrationInTransaction,
+  verifyIndexManifestDigests: () => verifyIndexManifestDigests,
+  withLegacyOperation: () => withLegacyOperation
+});
 
 // src/cutover/dsse-verifier-core.mjs
 import { constants, createPublicKey, verify } from "node:crypto";
@@ -3533,9 +3646,11 @@ function verifyIndexManifestDigests(manifest, expected) {
   if (JSON.stringify(groups) !== JSON.stringify(policyGroups)) {
     throw new CutoverFenceError("Index binding collectionGroups must equal the policy collection groups");
   }
-  for (const entry of getCutoverRuntimeCollectionScope(expected.namespace).union) {
-    if (!groups.includes(entry.name)) {
-      throw new CutoverFenceError(`Index binding omits runtime collection group ${entry.name}`);
+  const runtimeScope = getCutoverRuntimeCollectionScope(expected.namespace);
+  assertRuntimeScopeClosed(runtimeScope);
+  for (const name of runtimeScope.groups) {
+    if (!groups.includes(name)) {
+      throw new CutoverFenceError(`Index binding omits runtime collection group ${name}`);
     }
   }
   if (sha2(manifest) !== expected.indexSchemaDigest) {
@@ -5244,10 +5359,20 @@ function getCutoverRuntimeCollectionScope(namespace) {
     runtime: Object.freeze(runtime),
     union: Object.freeze([...byName.values()].sort((a, b) => a.name.localeCompare(b.name))),
     migrationNames: Object.freeze([...migrationNames].sort()),
+    // The one mapping the signed policy is checked against: every union name, once, sorted. Object union stays internal.
+    groups: Object.freeze([...new Set(byName.keys())].sort()),
+    // Collections whose names could not be resolved to a literal. Empty means every name is literal and known.
+    unresolved: Object.freeze([]),
     siblingWriters: SIBLING_WRITERS
   });
 }
 __name(getCutoverRuntimeCollectionScope, "getCutoverRuntimeCollectionScope");
+function assertRuntimeScopeClosed(scope) {
+  if (scope.complete !== true || !Array.isArray(scope.unscanned) || scope.unscanned.length !== 0 || !Array.isArray(scope.unresolved) || scope.unresolved.length !== 0) {
+    throw new CutoverRefusedError("Runtime collection scope is not closed: the census of unscanned surfaces is incomplete");
+  }
+}
+__name(assertRuntimeScopeClosed, "assertRuntimeScopeClosed");
 function assertValidMigrationContext(options) {
   if (!options || typeof options !== "object") {
     throw new CutoverFenceError("MigrationContext must be a non-null object");
@@ -8647,7 +8772,8 @@ function assertArgv(request) {
 }
 __name(assertArgv, "assertArgv");
 function assertRuntimeScopeFromCore(namespace, collectionGroups) {
-  const scopeFn = getCutoverRuntimeCollectionScope;
+  const core = canonical_core_exports;
+  const scopeFn = core.getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== "function") {
     refuse3("Runtime collection scope requires the reviewed canonical core export getCutoverRuntimeCollectionScope");
   }
@@ -8655,17 +8781,27 @@ function assertRuntimeScopeFromCore(namespace, collectionGroups) {
   if (scope === null || typeof scope !== "object" || scope.complete !== true) {
     refuse3("Runtime collection scope is incomplete");
   }
-  for (const [key, value] of Object.entries(scope)) {
-    if (/unresolved|dynamic/i.test(key) && (Array.isArray(value) ? value.length > 0 : value !== void 0 && value !== null && value !== false)) {
-      refuse3("Runtime collection scope has an unresolved dynamic collection");
-    }
+  if (!Array.isArray(scope.unscanned) || scope.unscanned.length !== 0) {
+    refuse3("Runtime collection scope has unscanned sources");
   }
-  if (!Array.isArray(scope.union) || scope.union.some((name) => typeof name !== "string")) {
-    refuse3("Runtime collection scope union is malformed");
+  if (!Array.isArray(scope.unresolved) || scope.unresolved.length !== 0) {
+    refuse3("Runtime collection scope has unresolved collections");
   }
-  const union = scope.union;
-  if (new Set(union).size !== union.length) refuse3("Runtime collection scope union has duplicates");
-  if (canonicalJson([...union].sort()) !== canonicalJson([...collectionGroups].sort())) {
+  if (typeof core.assertRuntimeScopeClosed !== "function") {
+    refuse3("Runtime collection scope requires the reviewed closure check assertRuntimeScopeClosed");
+  }
+  try {
+    core.assertRuntimeScopeClosed(scope);
+  } catch {
+    refuse3("Runtime collection scope is not closed");
+  }
+  const groups = scope.groups;
+  if (!Array.isArray(groups) || groups.some((name) => typeof name !== "string")) {
+    refuse3("Runtime collection scope groups are malformed");
+  }
+  const names = groups;
+  if (new Set(names).size !== names.length) refuse3("Runtime collection scope groups have duplicates");
+  if (canonicalJson([...names].sort()) !== canonicalJson([...collectionGroups].sort())) {
     refuse3("Signed index collection groups differ from the reviewed runtime collection scope");
   }
 }
