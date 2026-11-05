@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
-import { getCutoverDistinctCollectionNames } from '../cutover/canonical-core.mjs';
+import * as canonicalCore from '../cutover/canonical-core.mjs';
 import { CutoverRefusedError } from './errors.js';
 import { deriveStoreKey } from './codec.js';
 import { bindProtectedContext, type ProtectedOperation } from './protected-binding.js';
@@ -173,14 +173,34 @@ function assertArgv(request: ProtectedRequestV2): void {
   }
 }
 
-// Runtime collection scope is the canonical core's distinct collection set for the
-// namespace, plus the namespace's _meta group that the migration reads and writes.
-// The signed index policy must name exactly that set, or the context refuses.
-// Every profile takes this same check; nothing here is an independent list.
+// Runtime collection scope is the reviewed canonical core's
+// getCutoverRuntimeCollectionScope(namespace), used exactly. Its union covers the
+// migration collections, the shared operations and usage collections, the pwmcp
+// governance and seat-cleanup collections, and sibling writes. This build does not
+// guess that set. When the reviewed export is absent, or its result is incomplete,
+// unresolved, or not an exact match for the signed groups, the context refuses.
+// Namespace import: the bundle must still link while the export is absent.
 function assertRuntimeScopeFromCore(namespace: string, collectionGroups: readonly string[]): void {
-  const expected = [...getCutoverDistinctCollectionNames(namespace).distinct, `${namespace}_meta`].sort();
-  if (canonicalJson(expected) !== canonicalJson([...collectionGroups].sort())) {
-    refuse('Signed index collection groups differ from the canonical core runtime scope');
+  const scopeFn = (canonicalCore as Record<string, unknown>).getCutoverRuntimeCollectionScope;
+  if (typeof scopeFn !== 'function') {
+    refuse('Runtime collection scope requires the reviewed canonical core export getCutoverRuntimeCollectionScope');
+  }
+  const scope = (scopeFn as (ns: string) => unknown)(namespace) as Record<string, unknown> | null;
+  if (scope === null || typeof scope !== 'object' || scope.complete !== true) {
+    refuse('Runtime collection scope is incomplete');
+  }
+  for (const [key, value] of Object.entries(scope)) {
+    if (/unresolved|dynamic/i.test(key) && (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== false)) {
+      refuse('Runtime collection scope has an unresolved dynamic collection');
+    }
+  }
+  if (!Array.isArray(scope.union) || scope.union.some((name) => typeof name !== 'string')) {
+    refuse('Runtime collection scope union is malformed');
+  }
+  const union = scope.union as string[];
+  if (new Set(union).size !== union.length) refuse('Runtime collection scope union has duplicates');
+  if (canonicalJson([...union].sort()) !== canonicalJson([...collectionGroups].sort())) {
+    refuse('Signed index collection groups differ from the reviewed runtime collection scope');
   }
 }
 
