@@ -405,6 +405,13 @@ export function extractCandidatesAndPlan(params: {
   const tokensByPhysicalId = new Map<string, LegacyCredentialEntry>();
   for (const d of tokensDocs) {
     const data = d.data() || {};
+    // Conflicting family ownership is never a valid source, including when one family selects
+    // the token by currentAccessToken. Exclude it before indexing or claiming it.
+    if (data.familyId != null && data.refreshFamilyId != null && data.familyId !== data.refreshFamilyId) {
+      malformedDocKeys.add(`tokens:${d.id}`);
+      reasons.conflictingClaims++;
+      continue;
+    }
     const credToken = data.accessToken ?? data.token?.accessToken;
     if (typeof credToken === 'string' && credToken.length > 0) {
       const expId = legacyDocId(credToken);
