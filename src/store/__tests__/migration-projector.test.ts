@@ -3,7 +3,7 @@ import { createCodec, deriveStoreKey } from '../codec.js';
 import { projectSourceLogical } from '../netsapiens-projector.mjs';
 
 const codec = createCodec(deriveStoreKey('test secret with at least thirty two characters'));
-const candidate = { id: 'candidate', kind: 'baseFormatTokens' };
+const candidate = { id: 'candidate', kind: 'baseFormatTokens', subject: null };
 
 describe('legacy credential projection', () => {
   it('refuses to turn an access credential into a missing refresh credential', () => {

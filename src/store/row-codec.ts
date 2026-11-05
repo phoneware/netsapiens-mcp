@@ -95,7 +95,7 @@ export function encodeRefreshFamiliesRow(
     currentAccessTokenId,
     updatedAt: now,
     sealed,
-    ...(subjectRefs ? { subjectRefs } : {}),
+    ...(subjectRefs && status === 'active' ? { subjectRefs } : {}),
     v: 2,
   };
 }

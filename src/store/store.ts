@@ -1,3 +1,4 @@
+import type { SubjectDescriptor } from './subject-descriptor.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
@@ -133,7 +134,10 @@ async function decodeCurrentSession(
   };
 }
 
-export function createStore(backend: StoreBackend, { namespace, key }: { namespace: string; key: Uint8Array }): McpStore {
+export function createStore(
+  backend: StoreBackend,
+  { namespace, key, subjectDescriptor = null }: { namespace: string; key: Uint8Array; subjectDescriptor?: SubjectDescriptor | null },
+): McpStore {
   const codec = createCodec(key);
 
   const decodeCode = (row: AuthCodeRow | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
@@ -668,6 +672,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
         expectedSealed?: string,
         subject?: { extraKey: string; value: string; guard?: SubjectGuard },
       ): Promise<AuthCodeData | undefined> {
+        if (subject && (!subjectDescriptor || subject.extraKey !== subjectDescriptor.extraKey)) throw new CutoverRefusedError('Subject does not match the bound descriptor');
         if (subject && !backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot enforce a subject guard');
         const codeId = codec.id('code', code);
         const row = await backend.getAuthCode(codeId);
@@ -793,6 +798,7 @@ export function createStore(backend: StoreBackend, { namespace, key }: { namespa
     // the active set, so repeating the call always makes progress, and an already-revoked
     // family is never returned, so repeats change nothing.
     revokeSubject: async (extraKey: string, value: string, options: { limit: number }) => {
+      if (!subjectDescriptor || subjectDescriptor.extraKey !== extraKey) throw new CutoverRefusedError('This store has no subject descriptor for that key');
       if (!backend.capabilities.subjectGuards) throw new CutoverRefusedError('This store cannot revoke by subject');
       if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new CutoverRefusedError('revokeSubject limit must be a positive safe integer');
       const ref = subjectRefFor(key, namespace, extraKey, value);

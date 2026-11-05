@@ -1,4 +1,4 @@
-import { CutoverFenceError, CutoverRefusedError } from './errors.js';
+import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
 import { assertConcreteCoverage, assertDocumentBudget, concreteFieldPaths, type FreshCollectionCoverage, type SignedIndexPolicy } from './index-coverage.js';
 import type { ProtectedBinding } from './protected-binding.js';
 
@@ -113,9 +113,21 @@ export function assertPreparationObservation(input: {
   readonly binding: ProtectedBinding;
   readonly inventoryDigest: string;
   readonly writes: ReadonlyArray<{ readonly group: string; readonly document: unknown }>;
+  readonly subjectRefsGroup?: string;
 }): void {
-  const { db, binding, inventoryDigest, writes } = input;
+  const { db, binding, inventoryDigest, writes, subjectRefsGroup } = input;
   const observation = requireObservation(db, 'preparation', binding);
+  if (subjectRefsGroup !== undefined) {
+    // The bound descriptor's runtime query needs the subjectRefs field, required in this group,
+    // with a collection array-contains index. Refuse unless the observation shows both.
+    const fresh = observation.coverage.get(subjectRefsGroup);
+    const field = fresh?.effectiveFields.find((entry) => entry.fieldPath === 'subjectRefs');
+    const requiredSubjectRefs = (observation.requiredFields[subjectRefsGroup] ?? []).includes('subjectRefs');
+    const arrayContains = field?.indexes.some((index) => canonicalJson(index) === canonicalJson({ queryScope: 'COLLECTION', arrayConfig: 'CONTAINS' })) ?? false;
+    if (!fresh || !field || !requiredSubjectRefs || !arrayContains) {
+      throw new CutoverRefusedError('Subject reference index is not covered by the fresh observation');
+    }
+  }
   if (observation.sourceInventoryDigest !== inventoryDigest) {
     throw new CutoverRefusedError('Source inventory digest differs from the observed inventory');
   }

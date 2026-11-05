@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { createCodec, type Codec } from './codec.js';
-import { subjectSpecFor, type SubjectSpec } from './subject-descriptor.js';
+import { subjectRefsForFamily, subjectSpecFor, type SubjectSpec } from './subject-descriptor.js';
 import {
   accessAad,
   familyAad,
@@ -134,7 +134,7 @@ function assertPreparationGate(
 ): void {
   const binding = getProtectedBinding(db);
   if (!binding) throw new CutoverRefusedError('Protected migration context required for preparation');
-  assertPreparationObservation({ db, binding, inventoryDigest, writes: prospectiveWrites(namespace, plan) });
+  assertPreparationObservation({ db, binding, inventoryDigest, writes: prospectiveWrites(namespace, plan), subjectRefsGroup: binding.subjectDescriptor !== null ? `${namespace}_refresh_families` : undefined });
 }
 
 export function assertValidMigrationContext(options: unknown, extraFields: readonly string[] = []): asserts options is MigrationContext {
@@ -337,7 +337,8 @@ function computeCandidateLogicalDigest(storeKey: Uint8Array | Buffer, namespace:
 function subjectSpecForDb(db: object, namespace: string, storeKey: Uint8Array) {
   const binding = getProtectedBinding(db);
   if (!binding) throw new CutoverRefusedError('Protected migration context required for subject mapping');
-  return subjectSpecFor(binding.subjectDescriptors, namespace, storeKey);
+  if (binding.namespace !== namespace) throw new CutoverRefusedError('Subject descriptor is bound to a different namespace');
+  return subjectSpecFor(binding.subjectDescriptor, namespace, storeKey);
 }
 
 export function extractCandidatesAndPlan(params: {
@@ -660,6 +661,7 @@ export function extractCandidatesAndPlan(params: {
       sourcesMap,
       codec,
     );
+    if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'pr56Families', logicalProjection);
 
     const generation = typeof famData.generation === 'number' ? famData.generation : 1;
@@ -867,6 +869,7 @@ export function extractCandidatesAndPlan(params: {
       sourcesMap,
       codec,
     );
+    if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'baseFormatTokens', logicalProjection);
 
     const famRow = encodeRefreshFamiliesRow(codec, familyId, 1, refreshId, newAccessId, logicalProjection, [], 'active', now, logicalProjection.subjectRefs);
@@ -1826,12 +1829,19 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
 // Fields each prospective group writes, from the concrete paths of the plan's
 // documents. The fresh observation must cover exactly these before preparation.
-function requiredFieldsFromPlan(namespace: string, plan: Parameters<typeof prospectiveWrites>[1]): Record<string, string[]> {
+function requiredFieldsFromPlan(namespace: string, plan: Parameters<typeof prospectiveWrites>[1], subjectBound: boolean): Record<string, string[]> {
   const required = new Map<string, Set<string>>();
   for (const write of prospectiveWrites(namespace, plan)) {
     const paths = required.get(write.group) ?? new Set<string>();
     for (const path of concreteFieldPaths(write.document).multiplicity.keys()) paths.add(path);
     required.set(write.group, paths);
+  }
+  // A bound descriptor always needs the subject reference field, whether or not this run writes rows.
+  if (subjectBound) {
+    const refreshFamilies = `${namespace}_refresh_families`;
+    const paths = required.get(refreshFamilies) ?? new Set<string>();
+    paths.add('subjectRefs');
+    required.set(refreshFamilies, paths);
   }
   return Object.fromEntries([...required].map(([group, paths]) => [group, [...paths].sort()]));
 }
@@ -1976,7 +1986,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     }
     const errors = Object.values(inputs.plan.prepared.reasons || {}).reduce((a: number, b: any) => a + (typeof b === 'number' ? b : 0), 0);
     if (errors > 0) return null;
-    return { sourceInventoryDigest: inputs.sourceInventoryDigest, requiredFields: requiredFieldsFromPlan(namespace, inputs.plan) };
+    return { sourceInventoryDigest: inputs.sourceInventoryDigest, requiredFields: requiredFieldsFromPlan(namespace, inputs.plan, subjectSpecForDb(db, namespace, storeKey) !== null) };
   });
   if (observed !== null) {
     await observeFreshIndexes({ db, purpose: 'preparation', requiredFields: observed.requiredFields, sourceInventoryDigest: observed.sourceInventoryDigest });

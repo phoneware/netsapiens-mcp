@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
 import * as canonicalCore from '../cutover/canonical-core.mjs';
-import { assertSubjectDeclared, subjectDescriptorDigest, validateSubjectDescriptors } from './subject-descriptor.js';
+import { subjectDescriptorFromPredicate } from './subject-descriptor.js';
 import { CutoverRefusedError } from './errors.js';
 import { deriveStoreKey } from './codec.js';
 import { bindProtectedContext, type ProtectedOperation } from './protected-binding.js';
@@ -313,10 +313,6 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     provenance?.paginationComplete !== true) {
     refuse('Index policy binding does not match the protected database profile');
   }
-  // Every protected namespace needs an explicit signed subject policy (null is an explicit
-  // "no subject"). An absent or malformed declaration refuses before any read.
-  const subjectDescriptors = validateSubjectDescriptors(indexBinding.subjectDescriptors);
-  assertSubjectDeclared(subjectDescriptors, request.namespace);
   const groups = indexBinding.collectionGroups;
   const policyGroups = (index.policy as { collections?: Array<{ collectionGroup?: unknown }> } | undefined)?.collections
     ?.map((entry) => entry.collectionGroup) ?? [];
@@ -375,6 +371,9 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   if (!Buffer.from(verified.payloadBytes).equals(attestationBytes)) {
     refuse('Verified approval payload is not the attestation manifest bytes');
   }
+
+  // Subject descriptor authority: the verified predicate only, bound module-private before any read.
+  const subjectDescriptor = subjectDescriptorFromPredicate(request.namespace, verified.statement.predicate);
 
   // The session secret is used exactly as stored: no trimming and no fallback.
   const key = deriveStoreKey(readFixedFile(PATHS.sessionSecret).toString('utf8'));
@@ -449,8 +448,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     invocation,
     credentialDigest,
     adminTokenDigest,
-    subjectDescriptors,
-    subjectDescriptorDigest: subjectDescriptorDigest(subjectDescriptors),
+    subjectDescriptor,
   });
 
   return {

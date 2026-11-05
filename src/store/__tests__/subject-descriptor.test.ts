@@ -1,127 +1,97 @@
 import { describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
-import { CutoverFenceError, CutoverRefusedError } from '../errors.js';
+import { CutoverRefusedError } from '../errors.js';
 import { subjectRefFor } from '../subject-guard.js';
 import {
-  assertSubjectDeclared,
-  subjectDescriptorDigest,
+  subjectDescriptorFromEnv,
+  subjectDescriptorFromPredicate,
   subjectIssuanceFromDescriptor,
   subjectRefsForFamily,
   subjectSpecFor,
-  validateSubjectDescriptors,
+  type SubjectDescriptor,
 } from '../subject-descriptor.js';
 
-// Public subject descriptor ABI. Neutral values only: a deployment's signed approval
-// supplies the real namespace, key, collection and field names.
+// Flat subject descriptor {allow, collection, extraKey, field}, delivered by the verified
+// predicate. The shared validateSubjectDescriptor export does not exist in this tree yet, so
+// validation must refuse closed. These tests assert that refusal and exercise the reference,
+// projection and issuance rules on descriptors built directly, without faking the validator.
 
 const storeKey = deriveStoreKey('subject-descriptor-test-secret-0123456789abcdef');
-const signed = {
-  alpha: { extraKey: 'subjectKey', required: true, guard: { collection: 'example_subjects', field: 'status', allow: ['active'] } },
-  beta: null,
+const descriptor: SubjectDescriptor = {
+  allow: ['active'],
+  collection: 'example_subjects',
+  extraKey: 'subjectKey',
+  field: 'status',
 };
 
-describe('subject descriptor declaration', () => {
-  it('refuses an absent or non-object declaration', () => {
-    expect(() => validateSubjectDescriptors(undefined)).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors(null)).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors('policy')).toThrow(CutoverRefusedError);
+describe('subject descriptor validation through the shared verifier', () => {
+  it('refuses a predicate that does not declare subjectDescriptor explicitly', () => {
+    expect(() => subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: {} })).toThrow(CutoverRefusedError);
+    expect(() => subjectDescriptorFromPredicate('pwmcp', {})).toThrow(CutoverRefusedError);
   });
 
-  it('accepts an explicit empty declaration and explicit null per namespace', () => {
-    expect(validateSubjectDescriptors({})).toEqual({});
-    expect(validateSubjectDescriptors({ beta: null })).toEqual({ beta: null });
-  });
-
-  it('accepts the signed shape and freezes it', () => {
-    const valid = validateSubjectDescriptors(signed);
-    expect(valid).toEqual(signed);
-    expect(Object.isFrozen(valid)).toBe(true);
-  });
-
-  it('refuses malformed namespaces, unknown keys and malformed fields', () => {
-    expect(() => validateSubjectDescriptors({ 'Bad Name': null })).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors({ alpha: { extraKey: 'k', required: true, extra: 1 } })).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors({ alpha: { extraKey: 'bad-key', required: true } })).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors({ alpha: { extraKey: 'k', required: 'yes' } })).toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors({ alpha: { extraKey: 'k', required: true, guard: { collection: 'a/b', field: 'status', allow: ['x'] } } }))
-      .toThrow(CutoverRefusedError);
-    expect(() => validateSubjectDescriptors({ alpha: { extraKey: 'k', required: true, guard: { collection: 'c', field: 'status', allow: [] } } }))
-      .toThrow(CutoverRefusedError);
-  });
-
-  it('refuses a namespace that is not explicitly declared', () => {
-    expect(() => assertSubjectDeclared(validateSubjectDescriptors(signed), 'gamma')).toThrow(CutoverRefusedError);
-    expect(() => assertSubjectDeclared(validateSubjectDescriptors(signed), 'beta')).not.toThrow();
+  it('refuses every descriptor until the shared verifier exports validateSubjectDescriptor', () => {
+    expect(() => subjectDescriptorFromPredicate('pwmcp', { serviceConfiguration: { subjectDescriptor: null } }))
+      .toThrow('validateSubjectDescriptor');
+    expect(() => subjectDescriptorFromEnv('pwmcp', undefined)).toThrow('validateSubjectDescriptor');
+    expect(() => subjectDescriptorFromEnv('mcp', '{}')).toThrow('validateSubjectDescriptor');
   });
 });
 
 describe('migrated family subject references', () => {
-  it('derives the reference as the store key HMAC over the fixed tuple', () => {
-    const spec = subjectSpecFor(validateSubjectDescriptors(signed), 'alpha', storeKey);
+  it('writes the store-key HMAC reference for an active family', () => {
+    const spec = subjectSpecFor(descriptor, 'pwmcp', storeKey);
     expect(spec?.extraKey).toBe('subjectKey');
-    expect(spec?.refFor('value-1')).toBe(subjectRefFor(storeKey, 'alpha', 'subjectKey', 'value-1'));
-    expect(subjectRefsForFamily(spec, { subjectKey: 'value-1' })).toEqual([subjectRefFor(storeKey, 'alpha', 'subjectKey', 'value-1')]);
-    expect(subjectRefsForFamily(spec, { subjectKey: 'value-1' })?.[0]).not.toContain('value-1');
+    const result = subjectRefsForFamily(spec, { subjectKey: 'value-1' }, 'active');
+    expect(result).toEqual({ refs: [subjectRefFor(storeKey, 'pwmcp', 'subjectKey', 'value-1')] });
+    expect(result.refs?.[0]).not.toContain('value-1');
   });
 
-  it('keys the reference by namespace, so two namespaces never share a reference', () => {
-    const a = subjectSpecFor(validateSubjectDescriptors({ alpha: { extraKey: 'k', required: true }, beta: { extraKey: 'k', required: true } }), 'alpha', storeKey);
-    const b = subjectSpecFor(validateSubjectDescriptors({ alpha: { extraKey: 'k', required: true }, beta: { extraKey: 'k', required: true } }), 'beta', storeKey);
+  it('writes no subject field for a revoked family', () => {
+    const spec = subjectSpecFor(descriptor, 'pwmcp', storeKey);
+    expect(subjectRefsForFamily(spec, { subjectKey: 'value-1' }, 'revoked')).toEqual({});
+  });
+
+  it('counts a missing, empty or non-string value on an active family, never silently', () => {
+    const spec = subjectSpecFor(descriptor, 'pwmcp', storeKey);
+    expect(subjectRefsForFamily(spec, {}, 'active')).toEqual({ problem: 'subject_value_missing' });
+    expect(subjectRefsForFamily(spec, undefined, 'active')).toEqual({ problem: 'subject_value_missing' });
+    expect(subjectRefsForFamily(spec, { subjectKey: '' }, 'active')).toEqual({ problem: 'subject_value_missing' });
+    expect(subjectRefsForFamily(spec, { subjectKey: 7 }, 'active')).toEqual({ problem: 'subject_value_missing' });
+  });
+
+  it('writes nothing for a namespace whose descriptor is null', () => {
+    expect(subjectSpecFor(null, 'mcp', storeKey)).toBeNull();
+    expect(subjectRefsForFamily(null, { subjectKey: 'v' }, 'active')).toEqual({});
+  });
+
+  it('keys the reference by namespace', () => {
+    const a = subjectSpecFor(descriptor, 'pwmcp', storeKey);
+    const b = subjectSpecFor(descriptor, 'other_ns', storeKey);
     expect(a?.refFor('v')).not.toBe(b?.refFor('v'));
   });
 
-  it('holds for a required namespace when the value is missing', () => {
-    const spec = subjectSpecFor(validateSubjectDescriptors(signed), 'alpha', storeKey);
-    expect(() => subjectRefsForFamily(spec, {})).toThrow(CutoverFenceError);
-    expect(() => subjectRefsForFamily(spec, undefined)).toThrow(CutoverFenceError);
-  });
-
-  it('holds on an ambiguous value: empty, numeric or other non-string', () => {
-    const spec = subjectSpecFor(validateSubjectDescriptors(signed), 'alpha', storeKey);
-    expect(() => subjectRefsForFamily(spec, { subjectKey: '' })).toThrow(CutoverFenceError);
-    expect(() => subjectRefsForFamily(spec, { subjectKey: 7 })).toThrow(CutoverFenceError);
-    expect(() => subjectRefsForFamily(spec, { subjectKey: ['a'] })).toThrow(CutoverFenceError);
-  });
-
-  it('omits the reference for a non-required namespace when the value is missing', () => {
-    const spec = subjectSpecFor(validateSubjectDescriptors({ alpha: { extraKey: 'k', required: false } }), 'alpha', storeKey);
-    expect(subjectRefsForFamily(spec, {})).toBeUndefined();
-  });
-
-  it('writes no reference for a namespace declared as no subject', () => {
-    expect(subjectSpecFor(validateSubjectDescriptors(signed), 'beta', storeKey)).toBeNull();
-    expect(subjectRefsForFamily(null, { subjectKey: 'v' })).toBeUndefined();
-  });
-
-  it('never reads a fallback key: only the signed extraKey maps', () => {
-    const spec = subjectSpecFor(validateSubjectDescriptors(signed), 'alpha', storeKey);
-    expect(() => subjectRefsForFamily(spec, { seatId: 'v' })).toThrow(CutoverFenceError);
+  it('maps only the signed extraKey, never a fallback key', () => {
+    const spec = subjectSpecFor(descriptor, 'pwmcp', storeKey);
+    expect(subjectRefsForFamily(spec, { seatId: 'v' }, 'active')).toEqual({ problem: 'subject_value_missing' });
   });
 });
 
-describe('issuance subject from the signed descriptor', () => {
-  it('builds the guard with the subject value as its document id', () => {
-    const subject = subjectIssuanceFromDescriptor(validateSubjectDescriptors(signed), 'alpha', { subjectKey: 'value-2' });
-    expect(subject).toEqual({
+describe('issuance subject from the same bound descriptor', () => {
+  it('builds the flat guard with the subject value as its document id', () => {
+    expect(subjectIssuanceFromDescriptor(descriptor, { subjectKey: 'value-2' })).toEqual({
       extraKey: 'subjectKey',
       value: 'value-2',
       guard: { collection: 'example_subjects', documentId: 'value-2', field: 'status', allow: ['active'] },
     });
   });
 
-  it('refuses when a required value is absent or ambiguous, and returns undefined when not required', () => {
-    const descriptors = validateSubjectDescriptors(signed);
-    expect(() => subjectIssuanceFromDescriptor(descriptors, 'alpha', {})).toThrow(CutoverRefusedError);
-    expect(() => subjectIssuanceFromDescriptor(descriptors, 'alpha', { subjectKey: '' })).toThrow(CutoverRefusedError);
-    expect(subjectIssuanceFromDescriptor(descriptors, 'beta', {})).toBeUndefined();
+  it('refuses an absent or ambiguous value under a configured descriptor, without echoing it', () => {
+    expect(() => subjectIssuanceFromDescriptor(descriptor, {})).toThrow(CutoverRefusedError);
+    expect(() => subjectIssuanceFromDescriptor(descriptor, { subjectKey: '' })).toThrow(CutoverRefusedError);
   });
-});
 
-describe('subject descriptor digest', () => {
-  it('is stable for the same declaration and changes when it changes', () => {
-    const a = subjectDescriptorDigest(validateSubjectDescriptors(signed));
-    expect(a).toBe(subjectDescriptorDigest(validateSubjectDescriptors(JSON.parse(JSON.stringify(signed)))));
-    expect(a).not.toBe(subjectDescriptorDigest(validateSubjectDescriptors({ alpha: { extraKey: 'other', required: true } })));
-    expect(subjectDescriptorDigest(validateSubjectDescriptors({}))).toMatch(/^[0-9a-f]{64}$/);
+  it('issues without a subject when the descriptor is null', () => {
+    expect(subjectIssuanceFromDescriptor(null, { subjectKey: 'v' })).toBeUndefined();
   });
 });

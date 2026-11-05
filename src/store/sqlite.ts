@@ -1,3 +1,4 @@
+import type { SubjectDescriptor } from './subject-descriptor.js';
 import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import { closeSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -633,6 +634,6 @@ export function createSqliteBackend(options: { path: string; namespace: string; 
   return new SqliteBackend(options);
 }
 
-export function createSqliteStore(options: { path: string; namespace: string; key: Uint8Array; sweepIntervalMs?: number }): McpStore {
-  return createStore(createSqliteBackend(options), { namespace: options.namespace, key: options.key });
+export function createSqliteStore(options: { path: string; namespace: string; key: Uint8Array; sweepIntervalMs?: number; subjectDescriptor?: SubjectDescriptor | null }): McpStore {
+  return createStore(createSqliteBackend(options), { namespace: options.namespace, key: options.key, subjectDescriptor: options.subjectDescriptor ?? null });
 }

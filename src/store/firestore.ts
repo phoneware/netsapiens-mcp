@@ -1,3 +1,4 @@
+import type { SubjectDescriptor } from './subject-descriptor.js';
 import type { CutoverFenceControlRecord } from './cutover-protocol.mjs';
 import {
   getCutoverFenceDocRef,
@@ -808,8 +809,8 @@ export function createFirestoreBackend(options: { db: FirestoreLike; namespace: 
   return new FirestoreBackend(options);
 }
 
-export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array }): McpStore {
-  return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key });
+export function createFirestoreStore(options: { db: FirestoreLike; namespace: string; key: Uint8Array; subjectDescriptor?: SubjectDescriptor | null }): McpStore {
+  return createStore(createFirestoreBackend(options), { namespace: options.namespace, key: options.key, subjectDescriptor: options.subjectDescriptor ?? null });
 }
 export {
   adoptFirestoreLegacyTokens,

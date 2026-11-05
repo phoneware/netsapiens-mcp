@@ -5,15 +5,17 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
 import { createMemoryStore } from '../memory.js';
 import { createSqliteStore } from '../sqlite.js';
+import type { SubjectDescriptor } from '../subject-descriptor.js';
 import type { AuthCodeData, McpStore, StoredToken } from '../types.js';
 
-// Subject guards and keyed subject references on the stores that own their
-// guard documents. Firestore reads guard documents owned by the application and
-// is covered by its own emulator suite.
+// Subject guards and keyed subject references on the stores that own their guard
+// documents. The store is constructed with the bound descriptor, as the runtime does.
+// Firestore reads application-owned guard documents and has its own emulator suite.
 
 const key = deriveStoreKey('subject-guard-test-secret-0123456789abcdef');
+const descriptor: SubjectDescriptor = { allow: ['active'], collection: 'seats', extraKey: 'seat', field: 'state' };
 const dirs: string[] = [];
-const freshDir = () => { const dir = mkdtempSync(join(tmpdir(), 'subject-guard-')); dirs.push(dir); return dir; };
+const freshPath = () => { const dir = mkdtempSync(join(tmpdir(), 'subject-guard-')); dirs.push(dir); return join(dir, 'store.sqlite'); };
 afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
 
 const guard = (documentId: string) => ({ collection: 'seats', documentId, field: 'state', allow: ['active'] });
@@ -36,7 +38,7 @@ async function redeemFor(store: McpStore, code: string, seat: string, token: str
 
 describe('subject guard on memory store', () => {
   it('refuses issuance until the guard allows the subject, and does not consume the code', async () => {
-    const store = createMemoryStore({ namespace: 'mcp', key });
+    const store = createMemoryStore({ namespace: 'mcp', key, subjectDescriptor: descriptor });
     try {
       expect(await redeemFor(store, 'code-guard-1', 'seat-g1', 'g1')).toBeUndefined();
       await store.putGuardDocument('seats', 'seat-g1', { state: 'active' });
@@ -47,7 +49,7 @@ describe('subject guard on memory store', () => {
   });
 
   it('revokes a subject in bounded, idempotent pages and leaves other subjects alone', async () => {
-    const store = createMemoryStore({ namespace: 'mcp', key });
+    const store = createMemoryStore({ namespace: 'mcp', key, subjectDescriptor: descriptor });
     try {
       await store.putGuardDocument('seats', 'seat-r1', { state: 'active' });
       await store.putGuardDocument('seats', 'seat-r2', { state: 'active' });
@@ -66,10 +68,19 @@ describe('subject guard on memory store', () => {
   });
 
   it('refuses a new issuance for a subject whose guard no longer allows it', async () => {
-    const store = createMemoryStore({ namespace: 'mcp', key });
+    const store = createMemoryStore({ namespace: 'mcp', key, subjectDescriptor: descriptor });
     try {
       await store.putGuardDocument('seats', 'seat-x', { state: 'revoked' });
       expect(await redeemFor(store, 'code-x-1', 'seat-x', 'x1')).toBeUndefined();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('refuses revocation when the store was built without a descriptor', async () => {
+    const store = createMemoryStore({ namespace: 'mcp', key });
+    try {
+      await expect(store.revokeSubject('seat', 'seat-n', { limit: 1 })).rejects.toThrow('no subject descriptor');
     } finally {
       await store.close();
     }
@@ -78,7 +89,7 @@ describe('subject guard on memory store', () => {
 
 describe('subject guard on sqlite store', () => {
   it('refuses issuance until the stored guard allows the subject', async () => {
-    const store = createSqliteStore({ path: join(freshDir(), 'guard.sqlite'), namespace: 'mcp', key });
+    const store = createSqliteStore({ path: freshPath(), namespace: 'mcp', key, subjectDescriptor: descriptor });
     try {
       expect(await redeemFor(store, 'code-s-1', 'seat-s', 's1')).toBeUndefined();
       await store.putGuardDocument('seats', 'seat-s', { state: 'active' });
@@ -89,13 +100,13 @@ describe('subject guard on sqlite store', () => {
   });
 
   it('persists the guard and subject references across reopen, and revokes after reopen', async () => {
-    const path = join(freshDir(), 'subject.sqlite');
-    const first = createSqliteStore({ path, namespace: 'mcp', key });
+    const path = freshPath();
+    const first = createSqliteStore({ path, namespace: 'mcp', key, subjectDescriptor: descriptor });
     await first.putGuardDocument('seats', 'seat-p', { state: 'active' });
     expect(await redeemFor(first, 'code-p-1', 'seat-p', 'p1')).toBeDefined();
     await first.close();
 
-    const second = createSqliteStore({ path, namespace: 'mcp', key });
+    const second = createSqliteStore({ path, namespace: 'mcp', key, subjectDescriptor: descriptor });
     try {
       expect(await second.revokeSubject('seat', 'seat-p', { limit: 10 })).toEqual({ revoked: 1, more: false });
       expect(await second.sessions.get('acc-p1')).toBeUndefined();

@@ -1,3 +1,4 @@
+import type { SubjectDescriptor } from './subject-descriptor.js';
 import { CutoverRefusedError } from './errors.js';
 import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
 import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
@@ -306,6 +307,6 @@ export class MemoryBackend implements StoreBackend {
 }
 
 export function createMemoryBackend(): MemoryBackend { return new MemoryBackend(); }
-export function createMemoryStore({ namespace, key }: { namespace: string; key: Uint8Array }): McpStore {
-  return createStore(createMemoryBackend(), { namespace, key });
+export function createMemoryStore({ namespace, key, subjectDescriptor = null }: { namespace: string; key: Uint8Array; subjectDescriptor?: SubjectDescriptor | null }): McpStore {
+  return createStore(createMemoryBackend(), { namespace, key, subjectDescriptor });
 }

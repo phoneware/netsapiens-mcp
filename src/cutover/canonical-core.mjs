@@ -91,6 +91,7 @@ export const REASON_KEYS = [
   'missingRefreshPointers',
   'partialTargets',
   'malformedRecords',
+  'subject_value_missing',
 ];
 
 export const ALLOWED_STATE_TRANSITIONS = {
