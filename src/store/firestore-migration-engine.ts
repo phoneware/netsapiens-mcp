@@ -66,7 +66,7 @@ import {
   validateMigrationIdentityFields,
 } from '../cutover/canonical-core.mjs';
 import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
-import type { FirestoreLike } from './firestore.js';
+import type { FirestoreLike } from './firestore-like.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';

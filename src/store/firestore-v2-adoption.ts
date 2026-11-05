@@ -20,7 +20,7 @@ import {
   isCutoverFenceError,
   isCutoverRefusedError,
 } from './errors.js';
-import type { FirestoreLike } from './firestore.js';
+import type { FirestoreLike } from './firestore-like.js';
 
 export {
   type MigrationContext,
@@ -50,7 +50,7 @@ export {
   checkMutationGuardInTransaction,
   isLegacyMutationPermittedInTransaction,
 } from '../cutover/canonical-core.mjs';
-export type { CutoverFenceControlRecord, CutoverFenceState } from './cutover-protocol.mjs';
+export type { CutoverFenceControlRecord, CutoverFenceState } from '../cutover/canonical-core.mjs';
 
 export async function computeSourceInventoryDigest(
   db: any,

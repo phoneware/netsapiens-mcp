@@ -1,5 +1,5 @@
 import type { SubjectDescriptor } from './subject-descriptor.js';
-import type { CutoverFenceControlRecord } from './cutover-protocol.mjs';
+import type { CutoverFenceControlRecord } from '../cutover/canonical-core.mjs';
 import {
   getCutoverFenceDocRef,
   isSupportedCutoverNamespace,
@@ -31,48 +31,9 @@ import type {
   StoreCapabilities,
   UpstreamGrantRow,
 } from './types.js';
+import type { CollectionLike, DocumentReferenceLike, DocumentSnapshotLike, FirestoreLike, QueryLike, QuerySnapshotLike, TransactionLike } from './firestore-like.js';
+export type { FirestoreLike } from './firestore-like.js';
 
-interface DocumentSnapshotLike {
-  readonly id: string;
-  readonly exists: boolean;
-  data(): Record<string, unknown> | undefined;
-}
-interface QuerySnapshotLike {
-  readonly empty: boolean;
-  readonly docs: DocumentSnapshotLike[];
-}
-interface DocumentReferenceLike {
-  readonly id: string;
-  get(): Promise<DocumentSnapshotLike>;
-  set(data: Record<string, unknown>, options?: { merge?: boolean }): Promise<unknown>;
-  delete(): Promise<unknown>;
-  collection?(path: string): CollectionLike;
-}
-interface QueryLike {
-  get(): Promise<QuerySnapshotLike>;
-  limit(count: number): QueryLike;
-  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt(...fieldValues: any[]): QueryLike;
-  endBefore(...fieldValues: any[]): QueryLike;
-  where(field: string, op: any, value: any): QueryLike;
-}
-interface CollectionLike extends QueryLike {
-  doc(id: string): DocumentReferenceLike;
-  where(field: string, op: any, value: any): QueryLike;
-  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt(...fieldValues: any[]): QueryLike;
-  endBefore(...fieldValues: any[]): QueryLike;
-}
-interface TransactionLike {
-  get(ref: DocumentReferenceLike | QueryLike): Promise<any>;
-  set(ref: DocumentReferenceLike, data: Record<string, unknown>, options?: { merge?: boolean }): unknown;
-  delete(ref: DocumentReferenceLike): unknown;
-}
-export interface FirestoreLike {
-  collection(path: string): CollectionLike;
-  // readOnly transactions take no write locks. Inspect, verify and status use them.
-  runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
-}
 
 export interface FirestoreCollections {
   sessions: string;

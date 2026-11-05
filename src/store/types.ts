@@ -2,6 +2,7 @@ import type { SubjectGuard } from './subject-guard.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { PendingAuthorization, NsTokenResponse } from '../auth/types.js';
+import type { AccessRow, AccessSealedData, AuthCodeRow, FamilyRow, FamilySealedData, RefreshPointerRow, ResumeRow, SessionRow, UpstreamGrantRow, UpstreamSealedData } from './row-types.js';
 
 export interface StoredToken {
   clientId: string;
@@ -149,75 +150,7 @@ export interface McpStore {
   deleteGuardDocument(collection: string, id: string): Promise<void>;
   close(): Promise<void>;
 }
-export interface UpstreamSealedData {
-  nsAccessToken: string;
-  nsRefreshToken?: string;
-  nsUsername: string;
-  nsUserRole?: string;
-  nsApiUrl?: string;
-}
-
-export interface AccessSealedData {
-  familyId: string;
-  clientId: string;
-  serverBaseUrl?: string;
-  extra?: Record<string, string>;
-}
-
-export interface FamilySealedData {
-  clientId: string;
-  serverBaseUrl?: string;
-  extra?: Record<string, string>;
-  retiredRefreshIds?: string[];
-}
-
-export interface AccessRow {
-  id: string;
-  familyId: string;
-  expiresAt: number;
-  retainUntil: number;
-  sealed: string;
-}
-export interface RefreshPointerRow {
-  id: string;
-  familyId: string;
-  status: 'active' | 'consumed';
-  generation: number;
-  consumedAt?: number;
-  successorSealed?: string;
-}
-export interface FamilyRow {
-  id: string;
-  generation: number;
-  status: 'active' | 'revoked';
-  activeRefreshId: string;
-  currentAccessTokenId: string;
-  subjectRefs?: string[];
-  revokedAt?: number;
-  updatedAt: number;
-  sealed: string;
-}
-export interface UpstreamGrantRow {
-  id: string;
-  grantVersion: number;
-  nsExpiresAt?: number;
-  leaseOwner?: string;
-  leaseUntil?: number;
-  updatedAt: number;
-  sealed: string;
-}
-export interface SessionRow {
-  id: string;
-  refreshId: string;
-  expiresAt: number;
-  retainUntil: number;
-  nsExpiresAt?: number;
-  leaseOwner?: string;
-  leaseUntil?: number;
-  sealed: string;
-}
-export interface AuthCodeRow { id: string; expiresAt: number; sealed: string; used?: boolean; }
-export interface ResumeRow { id: string; consumedAt: number; expiresAt: number; }
+export type { AccessRow, AccessSealedData, AuthCodeRow, FamilyRow, FamilySealedData, RefreshPointerRow, ResumeRow, SessionRow, UpstreamGrantRow, UpstreamSealedData } from './row-types.js';
 export interface StoreBackend {
   readonly name: string;
   readonly capabilities: StoreCapabilities;

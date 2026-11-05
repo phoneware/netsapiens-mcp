@@ -56,7 +56,7 @@ export type {
   WithLegacyOperationOptions,
   ClaimUpstreamGrantOptions,
   ReconcileUpstreamGrantOptions,
-} from './store/cutover-protocol.mjs';
+} from './cutover/canonical-core.mjs';
 export type { GenericApiClient } from './generated/types.js';
 export type { CuratedTool, CuratedResult } from './tools/curated/types.js';
 export type { UserRole } from './auth/roles.js';

@@ -15,7 +15,7 @@ import type {
   ResumeRow,
   UpstreamGrantRow,
   UpstreamSealedData,
-} from './types.js';
+} from './row-types.js';
 
 export function encodeSessionsRow(
   codec: Codec,
