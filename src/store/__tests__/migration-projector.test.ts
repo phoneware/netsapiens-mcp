@@ -20,4 +20,15 @@ describe('legacy credential projection', () => {
     expect(projected.activeRefreshId).toBe(codec.id('refresh', 'refresh-original'));
     expect(projected.activeRefreshId).not.toBe(codec.id('refresh', 'access-original'));
   });
+
+  it('projects and sorts PR56 retired fingerprints without inventing an identifier', () => {
+    const sources = new Map<string, Record<string, unknown>>([
+      ['families', { id: 'fam', currentRefreshToken: 'refresh', currentAccessToken: 'access', retiredRefreshFingerprints: ['z', 'a'] }],
+      ['refresh', { id: 'refresh', status: 'active', token: { clientId: 'client', expiresAt: 4102444800000 } }],
+      ['upstream', { nsAccessToken: 'upstream', nsUsername: 'user@example.test' }],
+      ['tokens', { accessToken: 'access' }],
+    ]);
+    const projected = projectSourceLogical({ id: 'family', kind: 'pr56Families' }, sources, codec, null);
+    expect(projected.retiredRefreshFingerprints).toEqual(['a', 'z']);
+  });
 });

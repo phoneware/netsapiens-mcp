@@ -168,7 +168,7 @@ export function projectSourceLogical(candidate, sources, codec, subject) {
       activeRefreshId: newRefreshId,
       currentAccessTokenId: newAccessId,
       previousRefresh,
-      retiredRefreshFingerprints,
+      retiredRefreshFingerprints: retiredFingerprints,
       ...sourceSubjectFields(pr56SubjectRefs),
       upstream: {
         grantVersion: typeof upDoc.grantVersion === 'number' ? upDoc.grantVersion : 1,
@@ -188,12 +188,12 @@ export function projectSourceLogical(candidate, sources, codec, subject) {
     const tokDoc = sources.get('tokens');
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
 
-        const accessToken = tokDoc.accessToken;
-        const refreshToken = tokDoc.refreshToken;
-        if (typeof accessToken !== 'string' || accessToken.length === 0 ||
-            typeof refreshToken !== 'string' || refreshToken.length === 0) {
-            throw new CutoverFenceError('baseFormatTokens missing raw access or refresh credential');
-        }
+    const accessToken = tokDoc.accessToken;
+    const refreshToken = tokDoc.refreshToken;
+    if (typeof accessToken !== 'string' || accessToken.length === 0 ||
+      typeof refreshToken !== 'string' || refreshToken.length === 0) {
+      throw new CutoverFenceError('baseFormatTokens missing raw access or refresh credential');
+    }
     const familyId = codec.id('family', accessToken);
     const accessId = codec.id('session', accessToken);
     const refreshId = codec.id('refresh', refreshToken);
