@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { DocumentReference, Firestore } from '@google-cloud/firestore';
+import { FieldValue, type DocumentReference, type Firestore } from '@google-cloud/firestore';
 import {
   CutoverFenceError,
   CutoverRefusedError,
@@ -66,6 +66,7 @@ export interface EnsureFreshOptions {
   pollIntervalMs?: number;
   now?: number;
   expectedRefresh?: { ref: DocumentReference; clientId: string };
+  expectedAccess?: { ref: DocumentReference; familyId: string };
 }
 
 export interface UpstreamGrantStore<G> {
@@ -315,6 +316,13 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           completeOperation: false,
         });
         }
+        if (options?.expectedAccess) {
+          const accessSnap = await transaction.get(options.expectedAccess.ref);
+          const access = accessSnap.data();
+          if (!access || access.refreshFamilyId !== options.expectedAccess.familyId || familyId !== options.expectedAccess.familyId) {
+            throw new RefreshSupersededError('Access token changed before upstream claim');
+          }
+        }
         if (options?.expectedRefresh) {
           const refreshSnap = await transaction.get(options.expectedRefresh.ref);
           const refreshRecord = refreshSnap.data();
@@ -368,7 +376,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           leaseUntil: now + leaseMs,
           leaseOwner,
           ambiguousOperationId: this.fence?.enforce && op ? op.id : undefined,
-          updatedAt: now,
+            updatedAt: Math.max(now, current.updatedAt ?? 0),
         }),
         { merge: true },
       );
@@ -395,8 +403,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             `Upstream grant has an unresolved ambiguous outcome: ${checkData.ambiguousReason ?? 'pending reconciliation'}`,
           );
         }
-        const refreshedCommitted = !checkData.leaseUntil;
+        const refreshedCommitted = !checkData.leaseOwner && !checkData.leaseUntil && !checkData.ambiguousOperationId;
         if (refreshedCommitted) {
+          if ((checkData.updatedAt ?? 0) <= (claimResult.current.updatedAt ?? 0)) {
+            throw new UpstreamUnavailableError('Upstream refresh ended without a replacement grant');
+          }
           return { grant: checkData.grant, completion: null };
         }
       }
@@ -463,7 +474,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           transaction.set(docRef, { leaseOwner: null, leaseUntil: null, ambiguousOperationId: null }, { merge: true });
           if (operationId && this.fence?.enforce) {
             transaction.set(getCutoverOperationDocRef(this.db, this.fence.namespace, operationId),
-              { phase: 'admitted', ambiguousRemoteOutcome: false, familyId: null, updatedAt: this.nowProvider() }, { merge: true });
+              { phase: 'admitted', ambiguousRemoteOutcome: false, familyId: FieldValue.delete(), updatedAt: this.nowProvider() }, { merge: true });
           }
         });
         if (op?.trackWriter) await op.trackWriter(release); else await release();
@@ -566,7 +577,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             ambiguousReason: null,
             ambiguousAt: null,
               ambiguousOperationId: isTerminal ? null : operationId,
-            updatedAt: commitNow,
+              updatedAt: Math.max(commitNow, (current.updatedAt ?? 0) + 1),
           }),
           { merge: true },
         );

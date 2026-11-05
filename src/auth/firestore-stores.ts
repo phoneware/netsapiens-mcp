@@ -19,7 +19,7 @@ import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
+import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
@@ -438,9 +438,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         pollIntervalMs: opts?.pollIntervalMs ?? 150,
         completeOperation: false,
         force: opts?.force ?? false,
+     expectedAccess: { ref: this.accessDocRef(accessToken), familyId },
       },
     );
   } catch (err) {
+   if (err instanceof RefreshSupersededError) throw new LeaseLostError(err.message);
     if (err instanceof Error && (err.message.includes('Lease owner changed') || err.message.includes('lease expired') || err instanceof LeaseLostError)) {
       throw new LeaseLostError(err.message);
     }
@@ -514,7 +516,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
             ambiguousReason: null,
             ambiguousAt: null,
             ambiguousOperationId: null,
-            updatedAt: this.localNow(),
+       updatedAt: Math.max(this.localNow(), (upstreamRecord.updatedAt ?? 0) + 1),
           },
           { merge: true },
         );

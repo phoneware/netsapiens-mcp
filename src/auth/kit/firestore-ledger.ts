@@ -127,6 +127,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               now: this.nowProvider,
             });
             guardResult = guard;
+            await this.assertFamilyNotPending(transaction, familyId);
             guard.bufferCompletion(this.nowProvider());
             transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
             transaction.set(
@@ -169,7 +170,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         return stored;
       }
 
-      const batch = this.db.batch();
+      await this.db.runTransaction(async (batch) => {
+        await this.assertFamilyNotPending(batch, familyId);
       batch.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
       batch.set(
         this.refreshCol().doc(docId(stored.refreshToken)),
@@ -201,7 +203,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
       }
 
-      await batch.commit();
+      });
       return stored;
     } catch (err) {
       this.wrapError(err);
@@ -873,7 +875,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 ambiguousReason: null,
                 ambiguousAt: null,
                 ambiguousOperationId: null,
-                updatedAt: now,
+                updatedAt: Math.max(now, (upstreamRecord?.updatedAt ?? 0) + 1),
               }), { merge: true });
           }
         }

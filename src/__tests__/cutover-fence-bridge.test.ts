@@ -26,6 +26,7 @@ import {
   FirestoreTokenStore,
   FirestoreClientsStore,
   FirestoreAuthCodeStore,
+  LeaseLostError,
 } from '../auth/firestore-stores.js';
 import {
   NetSapiensAuthProvider,
@@ -2372,6 +2373,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect((await store.get(token.accessToken))?.nsAccessToken).toBe('committed');
     await expect(upstream.put(familyId, { nsAccessToken: 'other' })).rejects.toThrow();
     await expect(upstream.delete(familyId)).rejects.toThrow();
+    await expect(store.set({ ...token, nsAccessToken: 'other' })).rejects.toThrow();
     await expect(store.update(token.accessToken, { nsAccessToken: 'other' })).rejects.toThrow();
     await expect(store.revokeFamily(familyId)).rejects.toThrow();
     await expect(store.revokeByToken(token.refreshToken)).rejects.toThrow();
@@ -2386,18 +2388,86 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       db, collection: 'mcp_tokens_upstream', fence: { namespace: 'mcp', enforce: true },
     });
     const familyId = randomUUID();
+    const rejectedOperationId = randomUUID();
     await withLegacyOperation({ db, namespace: 'mcp', kind: 'seed' }, async (op) => {
       await upstream.put(familyId, { token: 'original' }, 1, { operation: op });
     });
-    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh' }, async (op) =>
+    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh', operationId: rejectedOperationId }, async (op) =>
       upstream.ensureFresh(familyId, async () => { throw new UpstreamRequestRejectedError(); },
         { operation: op, force: true }),
     )).rejects.toBeInstanceOf(UpstreamRequestRejectedError);
     expect((await upstream.get(familyId))?.leaseOwner).toBeNull();
+    expect((await getCutoverOperationDocRef(db, 'mcp', rejectedOperationId).get()).data()).not.toHaveProperty('familyId');
     expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
     const recovered = await withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh' }, async (op) =>
       upstream.ensureFresh(familyId, async () => ({ grant: { token: 'recovered' } }), { operation: op, force: true }),
     );
     expect(recovered.grant.token).toBe('recovered');
+  });
+
+  it('does not expose or revoke a session when a waiting refresh sees a rejected claim', async () => {
+    const db = createTestDb();
+    const store1 = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const store2 = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const token = await store1.issue({
+      accessToken: 'wait-access', refreshToken: 'wait-refresh', clientId: 'wait-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns',
+      nsRefreshToken: 'old-ns-refresh', nsExpiresAt: Date.now() - 1000, nsUsername: 'user',
+    });
+    const claimed = deferred();
+    const release = deferred();
+    const waiting = deferred();
+    const runTransaction = db.runTransaction.bind(db);
+    const transactionSpy = vi.spyOn(db, 'runTransaction').mockImplementation((async (fn: any, ...args: any[]) =>
+      runTransaction(async (transaction) => {
+        const result = await fn(transaction);
+        if (result?.status === 'leased') waiting.resolve();
+        return result;
+      }, ...args)) as any);
+    const claimant = store1.refreshNsToken(token.accessToken, async () => {
+      claimed.resolve();
+      await release.promise;
+      throw new UpstreamRequestRejectedError();
+    }).catch((error) => error);
+    await claimed.promise;
+    const waiterGrant = vi.fn(async () => ({ access_token: 'unexpected' }));
+    const waiter = store2.refreshNsToken(token.accessToken, waiterGrant, { pollIntervalMs: 10 }).catch((error) => error);
+    await waiting.promise;
+    release.resolve();
+    expect(await claimant).toBeInstanceOf(UpstreamRequestRejectedError);
+    expect(await waiter).toBeInstanceOf(UpstreamUnavailableError);
+    expect(waiterGrant).not.toHaveBeenCalled();
+    expect((await store1.get(token.accessToken))?.nsAccessToken).toBe('old-ns');
+    expect((await store1.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
+    transactionSpy.mockRestore();
+});
+
+  it('does not call upstream when a bearer was rotated after it was read', async () => {
+    const db = createTestDb();
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const token = await store.issue({
+      accessToken: 'delayed-access', refreshToken: 'delayed-refresh', clientId: 'delayed-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns', nsUsername: 'user',
+    });
+    const read = deferred();
+    const resume = deferred();
+    const get = store.getByAccessToken.bind(store);
+    const spy = vi.spyOn(store, 'getByAccessToken').mockImplementation(async (...args) => {
+      const result = await get(...args);
+      read.resolve();
+      await resume.promise;
+      return result;
+    });
+    const grant = vi.fn(async () => ({ access_token: 'unexpected' }));
+    const delayed = store.refreshNsToken(token.accessToken, grant, { force: true }).catch((error) => error);
+    await read.promise;
+    await store.rotate(token.refreshToken, {
+      ...token, accessToken: 'new-access', refreshToken: 'new-refresh', nsAccessToken: 'new-ns',
+    }, token.clientId);
+    resume.resolve();
+    expect(await delayed).toBeInstanceOf(LeaseLostError);
+    expect(grant).not.toHaveBeenCalled();
+    expect((await store.upstreamDocRef(token.refreshFamilyId!).get()).data()?.leaseOwner).toBeNull();
+    spy.mockRestore();
   });
 });
