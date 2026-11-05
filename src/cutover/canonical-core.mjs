@@ -3471,13 +3471,11 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
   const prepRef = db.collection(`${namespace}_meta`).doc(`migration_prepared_${control.epoch}`);
   const prepSnap = await transaction.get(prepRef);
   if (prepSnap.exists) {
-    const existing = prepSnap.data();
-    if (C(existing) !== C(prepDoc)) {
-      throw new CutoverFenceError(
-        'Prepared manifest already exists for this epoch with different content; immutable retry violation',
-      );
-    }
-    return control;
+    // Prepare writes the prepared manifest and the migrating control in one transaction, so a prepared manifest under a
+    // fenced control is an inconsistent state. Return success only after the transition has been written; never here.
+    throw new CutoverFenceError(
+      'Prepared manifest exists while the fence is fenced; the state is inconsistent and is held for review, not treated as prepared',
+    );
   }
 
   timer.assertUnderDeadline('prepareMigrationInTransaction reads and verification');
