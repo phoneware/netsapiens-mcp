@@ -69,6 +69,8 @@ import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
+import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
+import type { ProtectedBinding } from './protected-binding.js';
 import { observeFreshIndexes } from './fresh-index-producer.js';
 import { concreteFieldPaths, type SignedIndexPolicy } from './index-coverage.js';
 
@@ -124,17 +126,77 @@ function prospectiveWrites(
   return writes;
 }
 
-// Preparation gate: fresh observation, inventory digest, budgets and coverage.
-// Refuses when no observation was recorded for this handle.
-function assertPreparationGate(
-  db: object,
-  namespace: string,
-  plan: Parameters<typeof prospectiveWrites>[1],
-  inventoryDigest: string,
-): void {
+// Preparation snapshot. The complete plan, the expected identity, the signed index manifest
+// and the authenticated binding must describe one snapshot before any write is budgeted.
+// Nothing here reads the request. Any mismatch refuses; nothing is repaired.
+export interface PreparationIdentity {
+  readonly namespace: string;
+  readonly epoch: number;
+  readonly migrationRunId: string;
+  readonly codeSha: string;
+  readonly codeArtifact: string;
+  readonly packageIntegrity: string;
+  readonly protocolDigest: string;
+  readonly assemblyDigest: string;
+  readonly indexSchemaDigest: string;
+}
+
+export interface PreparationInputs {
+  readonly completePlan: Parameters<typeof prospectiveWrites>[1];
+  readonly expectedIdentity: PreparationIdentity;
+  readonly sourceInventoryDigest: string;
+}
+
+const PREPARATION_IDENTITY_KEYS = [
+  'namespace', 'epoch', 'migrationRunId', 'codeSha', 'codeArtifact',
+  'packageIntegrity', 'protocolDigest', 'assemblyDigest', 'indexSchemaDigest',
+] as const;
+
+// The signed index manifest is the copy the authenticated binding carries. It is the only
+// manifest the observation is checked against, so it is taken from the binding and must hash
+// to the identity's indexSchemaDigest. Returns the binding for the observation check.
+function assertPreparationInputs(db: object, inputs: PreparationInputs): ProtectedBinding {
   const binding = getProtectedBinding(db);
   if (!binding) throw new CutoverRefusedError('Protected migration context required for preparation');
-  assertPreparationObservation({ db, binding, inventoryDigest, writes: prospectiveWrites(namespace, plan), subjectRefsGroup: binding.subjectDescriptor !== null ? `${namespace}_refresh_families` : undefined });
+  const { completePlan, expectedIdentity, sourceInventoryDigest } = inputs;
+  const prepared = completePlan.prepared as Record<string, unknown>;
+  // Core validates the plan's shape and budgets. These checks cover what the plan was built from.
+  validateCompleteMigrationPlan(completePlan);
+  for (const key of PREPARATION_IDENTITY_KEYS) {
+    if (prepared[key] !== expectedIdentity[key]) {
+      throw new CutoverRefusedError(`Prepared plan ${key} differs from the expected identity`);
+    }
+  }
+  if (prepared.planDigest !== computePlanDigest(expectedIdentity.namespace, expectedIdentity.epoch, prepared.planSpec as object)) {
+    throw new CutoverRefusedError('Prepared plan digest does not match its planSpec');
+  }
+  if (prepared.sourceInventoryDigest !== sourceInventoryDigest) {
+    throw new CutoverRefusedError('Prepared plan source inventory differs from the snapshot');
+  }
+  if (expectedIdentity.namespace !== binding.namespace || expectedIdentity.epoch !== binding.expectedEpoch ||
+    expectedIdentity.migrationRunId !== binding.migrationRunId || expectedIdentity.codeSha !== binding.codeSha ||
+    expectedIdentity.codeArtifact !== binding.codeArtifact || expectedIdentity.packageIntegrity !== binding.packageIntegrity ||
+    expectedIdentity.protocolDigest !== binding.protocolDigest || expectedIdentity.assemblyDigest !== binding.assemblyDigest ||
+    expectedIdentity.indexSchemaDigest !== binding.indexSchemaDigest) {
+    throw new CutoverRefusedError('Expected identity differs from the authenticated binding');
+  }
+  const manifestText = canonicalJson(binding.indexSchema);
+  if (createHash('sha256').update(Buffer.from(manifestText, 'utf8')).digest('hex') !== expectedIdentity.indexSchemaDigest) {
+    throw new CutoverRefusedError('Signed index manifest does not match the expected index schema digest');
+  }
+  return binding;
+}
+
+// Preparation gate: the snapshot first, then fresh observation, inventory digest, budgets and coverage.
+function assertPreparationGate(db: object, inputs: PreparationInputs): void {
+  const binding = assertPreparationInputs(db, inputs);
+  assertPreparationObservation({
+    db,
+    binding,
+    inventoryDigest: inputs.sourceInventoryDigest,
+    writes: prospectiveWrites(inputs.expectedIdentity.namespace, inputs.completePlan),
+    subjectRefsGroup: binding.subjectDescriptor !== null ? `${inputs.expectedIdentity.namespace}_refresh_families` : undefined,
+  });
 }
 
 export function assertValidMigrationContext(options: unknown, extraFields: readonly string[] = []): asserts options is MigrationContext {
@@ -2049,6 +2111,11 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
       packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
+
+    const preparationIdentity: PreparationIdentity = {
+      namespace, epoch: control.epoch, migrationRunId, codeSha, codeArtifact, packageIntegrity,
+      protocolDigest, assemblyDigest, indexSchemaDigest,
+    };
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
         `Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${sourceInventoryDigest}`,
@@ -2060,7 +2127,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     if (dryRun) {
       timer.assertUnderDeadline(16_000, 'Dry run inspection');
       if (totalErrors === 0) {
-        assertPreparationGate(db, namespace, plan, sourceInventoryDigest);
+        assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
       }
       return {
         dryRun: true,
@@ -2080,7 +2147,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     timer.assertUnderDeadline(16_000, 'Preparation attempt');
 
     // Write prepared manifest + transition control to migrating
-    assertPreparationGate(db, namespace, plan, sourceInventoryDigest);
+    assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
       prepDoc: plan.prepared,
