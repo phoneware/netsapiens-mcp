@@ -196,10 +196,10 @@ function assertRuntimeScopeFromCore(namespace: string, collectionGroups: readonl
   if (!Array.isArray(scope.unscanned) || scope.unscanned.length !== 0) {
     refuse('Runtime collection scope has unscanned sources');
   }
-  for (const [key, value] of Object.entries(scope)) {
-    if (/unresolved|dynamic/i.test(key) && (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== false)) {
-      refuse('Runtime collection scope has an unresolved dynamic collection');
-    }
+  // unresolved lists collections the census could not name. It is an explicit field of the reviewed scope; the
+  // factory requires it to be present and empty, and the core's closure assertion checks the same rule.
+  if (!Array.isArray(scope.unresolved) || scope.unresolved.length !== 0) {
+    refuse('Runtime collection scope has unresolved collections');
   }
   // The core's closure rule is the same as the checks above. Requiring it here means an older bundle that lacks
   // the rule refuses, rather than silently skipping it.
