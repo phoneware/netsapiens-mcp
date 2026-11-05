@@ -117,9 +117,11 @@ __export(canonical_core_exports, {
 // src/cutover/dsse-verifier-core.mjs
 import { constants, createPublicKey, verify } from "node:crypto";
 var DSSE_PAYLOAD_TYPE = "application/vnd.in-toto+json";
-var EXPECTED_FIELDS = ["codeSha", "publicPackageSourceSha", "privateRunnerSha", "workflowSourceSha", "assemblyDigest", "sessionSecretVersion", "image", "packageIntegrity", "indexSchemaDigest", "indexPolicyDigest", "project", "database", "namespace", "protocolDigest"];
+var MCP_CUTOVER_PREDICATE_TYPE = "https://phoneware.us/mcp-cutover/v2";
+var EXPECTED_FIELDS = ["codeSha", "publicPackageSourceSha", "privateRunnerSha", "workflowSourceSha", "assemblyDigest", "sessionSecretVersion", "image", "packageIntegrity", "indexSchemaDigest", "indexPolicyDigest", "project", "database", "namespace", "protocolDigest", "writerCensusDigest", "writerInventoryDigest", "collectionInventoryDigest"];
 var SUBJECTS = ["cutover-protocol.mjs", "image", "package", "git-commit", "cutover-runner-image"];
-var OPTIONAL_PREDICATE = ["serviceConfiguration", "builder", "assembledAt", "terraformPlanDigest", "terraformSavedPlanDigest", "terraformProjectionDigest", "observationRunId", "observationRunAttempt", "observationArtifactId", "observationArtifactDigest", "assemblyRunId", "assemblyRunAttempt"];
+var REQUIRED_PREDICATE = [...EXPECTED_FIELDS, "keyVersion", "runner", "serviceConfiguration", "terraformPlanDigest", "terraformSavedPlanDigest", "terraformProjectionDigest", "observationRunId", "observationRunAttempt", "observationArtifactId", "observationArtifactDigest", "assemblyRunId", "assemblyRunAttempt"];
+var OPTIONAL_PREDICATE = ["builder", "assembledAt"];
 var exact = /* @__PURE__ */ __name((object, keys) => object && typeof object === "object" && !Array.isArray(object) && JSON.stringify(Object.keys(object).sort()) === JSON.stringify([...keys].sort()), "exact");
 var sha = /* @__PURE__ */ __name((value, length) => typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value), "sha");
 var decimal = /* @__PURE__ */ __name((value) => typeof value === "string" && /^[1-9][0-9]*$/.test(value), "decimal");
@@ -166,10 +168,48 @@ function decodeBase64(value) {
   return decoded;
 }
 __name(decodeBase64, "decodeBase64");
+function validateCutoverStatement(statement) {
+  if (!exact(statement, ["_type", "subject", "predicateType", "predicate"]) || statement._type !== "https://in-toto.io/Statement/v1" || statement.predicateType !== MCP_CUTOVER_PREDICATE_TYPE || !Array.isArray(statement.subject) || statement.subject.length !== SUBJECTS.length) throw new Error("Invalid v2 statement");
+  const p = statement.predicate;
+  if (!p || typeof p !== "object" || Array.isArray(p) || REQUIRED_PREDICATE.some((key) => !Object.hasOwn(p, key)) || Object.keys(p).some((key) => !REQUIRED_PREDICATE.includes(key) && !OPTIONAL_PREDICATE.includes(key)) || EXPECTED_FIELDS.some((key) => typeof p[key] !== "string" || !p[key]) || ![p.codeSha, p.publicPackageSourceSha, p.privateRunnerSha, p.workflowSourceSha].every((v) => sha(v, 40)) || p.codeSha !== p.publicPackageSourceSha || ![
+    p.assemblyDigest,
+    p.indexSchemaDigest,
+    p.indexPolicyDigest,
+    p.protocolDigest,
+    p.writerCensusDigest,
+    p.writerInventoryDigest,
+    p.collectionInventoryDigest,
+    p.terraformPlanDigest,
+    p.terraformSavedPlanDigest,
+    p.terraformProjectionDigest
+  ].every((v) => sha(v, 64)) || ![p.sessionSecretVersion, p.observationRunId, p.observationRunAttempt, p.observationArtifactId, p.assemblyRunId, p.assemblyRunAttempt].every(decimal) || !/^sha256:[0-9a-f]{64}$/.test(p.observationArtifactDigest ?? "") || !/^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/.test(p.image) || !validSri(p.packageIntegrity) || !["mcp", "pwmcp", "readonly_mcp"].includes(p.namespace) || typeof p.keyVersion !== "string" || !p.keyVersion) throw new Error("Invalid v2 predicate");
+  const r = p.runner;
+  if (!exact(r, ["image", "childManifestDigest", "configDigest", "archiveSha256"]) || !/^sha256:[0-9a-f]{64}$/.test(r.childManifestDigest ?? "") || !/^sha256:[0-9a-f]{64}$/.test(r.configDigest ?? "") || !sha(r.archiveSha256, 64) || typeof r.image !== "string" || !r.image.endsWith(`@${r.childManifestDigest}`)) throw new Error("Invalid signed runner descriptor");
+  const config = p.serviceConfiguration;
+  const fields = p.namespace === "pwmcp" ? ["oauthClientSecretVersion", "subjectDescriptor"] : ["platforms", "oauthClientSecretVersion", "subjectDescriptor"];
+  if (!exact(config, fields) || !decimal(config.oauthClientSecretVersion) || p.namespace !== "pwmcp" && (typeof config.platforms !== "string" || !config.platforms)) throw new Error("Invalid signed service configuration");
+  validateSubjectDescriptor(p.namespace, config.subjectDescriptor);
+  if (p.builder !== void 0 && (typeof p.builder !== "string" || !p.builder)) throw new Error("Invalid builder metadata");
+  if (p.assembledAt !== void 0 && (typeof p.assembledAt !== "string" || !Number.isFinite(Date.parse(p.assembledAt)))) throw new Error("Invalid assembly timestamp");
+  const subjects = /* @__PURE__ */ new Map();
+  for (const subject of statement.subject) {
+    if (!exact(subject, ["name", "digest"]) || !SUBJECTS.includes(subject.name) || subjects.has(subject.name)) throw new Error("Invalid signed subject set");
+    subjects.set(subject.name, subject.digest);
+  }
+  const expectedSubjects = /* @__PURE__ */ new Map([
+    ["cutover-protocol.mjs", { sha256: p.protocolDigest }],
+    ["image", { sha256: p.image.slice(-64) }],
+    ["package", { sha512: Buffer.from(p.packageIntegrity.slice(7), "base64").toString("hex") }],
+    ["git-commit", { sha1: p.codeSha }],
+    ["cutover-runner-image", { sha256: r.childManifestDigest.slice(7) }]
+  ]);
+  for (const [name, digest] of expectedSubjects) if (!exact(subjects.get(name), Object.keys(digest)) || canonicalJson(subjects.get(name)) !== canonicalJson(digest)) throw new Error("Signed subject differs from predicate");
+}
+__name(validateCutoverStatement, "validateCutoverStatement");
 function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
-  if (!exact(options, ["expectedKeyVersion", "expectedPredicateType", "runnerRepository", "expectedPredicate"]) || typeof options.expectedKeyVersion !== "string" || !options.expectedKeyVersion || typeof options.expectedPredicateType !== "string" || !options.expectedPredicateType || typeof options.runnerRepository !== "string" || !options.runnerRepository || !exact(options.expectedPredicate, EXPECTED_FIELDS)) throw new Error("Incomplete protected DSSE policy");
+  if (!exact(options, ["expectedKeyVersion", "expectedPredicateType", "runnerRepository", "expectedPredicate"]) || typeof options.expectedKeyVersion !== "string" || !options.expectedKeyVersion || options.expectedPredicateType !== MCP_CUTOVER_PREDICATE_TYPE || typeof options.runnerRepository !== "string" || !options.runnerRepository || !exact(options.expectedPredicate, EXPECTED_FIELDS)) throw new Error("Incomplete protected DSSE policy");
   const expected = options.expectedPredicate;
-  if (EXPECTED_FIELDS.some((key2) => typeof expected[key2] !== "string" || !expected[key2]) || ![expected.codeSha, expected.publicPackageSourceSha, expected.privateRunnerSha, expected.workflowSourceSha].every((value) => sha(value, 40)) || expected.codeSha !== expected.publicPackageSourceSha || ![expected.assemblyDigest, expected.indexSchemaDigest, expected.indexPolicyDigest, expected.protocolDigest].every((value) => sha(value, 64)) || !decimal(expected.sessionSecretVersion) || !/^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/.test(expected.image) || !validSri(expected.packageIntegrity) || !["mcp", "pwmcp", "readonly_mcp"].includes(expected.namespace)) throw new Error("Malformed protected DSSE identity");
+  if (EXPECTED_FIELDS.some((key2) => typeof expected[key2] !== "string" || !expected[key2]) || ![expected.codeSha, expected.publicPackageSourceSha, expected.privateRunnerSha, expected.workflowSourceSha].every((value) => sha(value, 40)) || expected.codeSha !== expected.publicPackageSourceSha || ![expected.assemblyDigest, expected.indexSchemaDigest, expected.indexPolicyDigest, expected.protocolDigest, expected.writerCensusDigest, expected.writerInventoryDigest, expected.collectionInventoryDigest].every((value) => sha(value, 64)) || !decimal(expected.sessionSecretVersion) || !/^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/.test(expected.image) || !validSri(expected.packageIntegrity) || !["mcp", "pwmcp", "readonly_mcp"].includes(expected.namespace)) throw new Error("Malformed protected DSSE identity");
   if (!exact(envelope, ["payloadType", "payload", "signatures"]) || envelope.payloadType !== DSSE_PAYLOAD_TYPE || !Array.isArray(envelope.signatures) || envelope.signatures.length !== 1 || !exact(envelope.signatures[0], ["keyid", "sig"]) || envelope.signatures[0].keyid !== options.expectedKeyVersion) throw new Error("Invalid DSSE envelope or signature identity");
   const key = createPublicKey(publicKeyPem);
   if (key.asymmetricKeyType !== "rsa") throw new Error("Invalid public key type: expected rsa");
@@ -178,6 +218,7 @@ function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
   if (!verify("sha256", formatPAE(envelope.payloadType, payloadBytes), { key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }, signatureBytes)) throw new Error("DSSE envelope signature verification failed against approved public key");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
   const statement = JSON.parse(text);
+  validateCutoverStatement(statement);
   if (canonicalJson(statement) !== text || !exact(statement, ["_type", "subject", "predicateType", "predicate"]) || statement._type !== "https://in-toto.io/Statement/v1" || statement.predicateType !== options.expectedPredicateType || !Array.isArray(statement.subject) || statement.subject.length !== SUBJECTS.length) throw new Error("Invalid canonical in-toto statement");
   const subjects = /* @__PURE__ */ new Map();
   for (const subject of statement.subject) {
@@ -185,7 +226,7 @@ function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
     subjects.set(subject.name, subject.digest);
   }
   const predicate = statement.predicate;
-  if (!predicate || typeof predicate !== "object" || Array.isArray(predicate) || Object.keys(predicate).some((key2) => !EXPECTED_FIELDS.includes(key2) && !OPTIONAL_PREDICATE.includes(key2) && key2 !== "keyVersion" && key2 !== "runner") || predicate.keyVersion !== options.expectedKeyVersion || EXPECTED_FIELDS.some((key2) => predicate[key2] !== expected[key2])) throw new Error("Signed predicate differs from protected policy");
+  if (!predicate || typeof predicate !== "object" || Array.isArray(predicate) || REQUIRED_PREDICATE.some((key2) => !Object.hasOwn(predicate, key2)) || Object.keys(predicate).some((key2) => !REQUIRED_PREDICATE.includes(key2) && !OPTIONAL_PREDICATE.includes(key2)) || predicate.keyVersion !== options.expectedKeyVersion || EXPECTED_FIELDS.some((key2) => predicate[key2] !== expected[key2])) throw new Error("Signed predicate differs from protected policy");
   const runner = predicate.runner;
   if (!exact(runner, ["image", "childManifestDigest", "configDigest", "archiveSha256"]) || !/^sha256:[0-9a-f]{64}$/.test(runner.childManifestDigest ?? "") || !/^sha256:[0-9a-f]{64}$/.test(runner.configDigest ?? "") || !sha(runner.archiveSha256, 64) || runner.image !== `${options.runnerRepository}@${runner.childManifestDigest}`) throw new Error("Invalid signed runner descriptor");
   const imageDigest = /@sha256:([0-9a-f]{64})$/.exec(expected.image)[1];
@@ -624,7 +665,7 @@ function projectSourceLogical(candidate, sources, codec, subject) {
       activeRefreshId: newRefreshId,
       currentAccessTokenId: newAccessId,
       previousRefresh,
-      retiredRefreshFingerprints,
+      retiredRefreshFingerprints: retiredFingerprints,
       ...sourceSubjectFields(pr56SubjectRefs),
       upstream: {
         grantVersion: typeof upDoc.grantVersion === "number" ? upDoc.grantVersion : 1,
@@ -891,7 +932,7 @@ function projectTargetLogical(candidate, targets, codec) {
     const rawRetired = targets.get("retiredRefresh");
     const retiredIds = Array.isArray(rawRetired?.ids) ? rawRetired.ids : [];
     const seenTgtFp = /* @__PURE__ */ new Set();
-    const retiredRefreshFingerprints2 = [];
+    const retiredRefreshFingerprints = [];
     for (const fp of retiredIds) {
       if (typeof fp !== "string" || fp.length === 0) {
         throw new CutoverFenceError(`Target retired refresh token fingerprint must be a non-empty string in family ${sanitizeId(familyId)}`);
@@ -900,9 +941,9 @@ function projectTargetLogical(candidate, targets, codec) {
         throw new CutoverFenceError(`Duplicate target retired refresh token fingerprint detected in family ${sanitizeId(familyId)}`);
       }
       seenTgtFp.add(fp);
-      retiredRefreshFingerprints2.push(fp);
+      retiredRefreshFingerprints.push(fp);
     }
-    retiredRefreshFingerprints2.sort(codeUnitCompare);
+    retiredRefreshFingerprints.sort(codeUnitCompare);
     return {
       familyId,
       generation,
@@ -913,7 +954,7 @@ function projectTargetLogical(candidate, targets, codec) {
       activeRefreshId: famData.activeRefreshId,
       currentAccessTokenId: famData.currentAccessTokenId,
       previousRefresh,
-      retiredRefreshFingerprints: retiredRefreshFingerprints2,
+      retiredRefreshFingerprints,
       ...targetSubjectFields(famData),
       upstream: {
         grantVersion,
@@ -6347,6 +6388,11 @@ function extractCandidatesAndPlan(params) {
   const tokensByPhysicalId = /* @__PURE__ */ new Map();
   for (const d of tokensDocs) {
     const data = d.data() || {};
+    if (data.familyId != null && data.refreshFamilyId != null && data.familyId !== data.refreshFamilyId) {
+      malformedDocKeys.add(`tokens:${d.id}`);
+      reasons.conflictingClaims++;
+      continue;
+    }
     const credToken = data.accessToken ?? data.token?.accessToken;
     if (typeof credToken === "string" && credToken.length > 0) {
       const expId = legacyDocId(credToken);
@@ -6463,6 +6509,15 @@ function extractCandidatesAndPlan(params) {
     }
     if (!accessId || typeof accessId !== "string" || !accessId.trim() || !accessEntry) {
       reasons.missingAccessTokens++;
+      continue;
+    }
+    const owners = [accessEntry.data.familyId, accessEntry.data.refreshFamilyId].filter((value) => value != null);
+    if (owners.some((value) => typeof value !== "string")) {
+      reasons.malformedRecords++;
+      continue;
+    }
+    if (owners.some((value) => value !== familyId)) {
+      reasons.conflictingClaims++;
       continue;
     }
     if (claimedAccessIds.has(accessEntry.credentialToken)) {
@@ -6698,6 +6753,7 @@ function extractCandidatesAndPlan(params) {
     if (claimedAccessIds.has(tokEntry.credentialToken)) continue;
     claimedAccessIds.add(tokEntry.credentialToken);
     const tokData = tokEntry.data || {};
+    if (tokData.refreshFamilyId != null || tokData.familyId != null) continue;
     if (typeof tokData.refreshToken !== "string" || tokData.refreshToken.length === 0) {
       malformedDocKeys.add(`tokens:${tokEntry.doc.id}`);
       reasons.malformedRecords++;
@@ -8531,8 +8587,794 @@ async function getFirestoreMigrationStatus(context) {
 }
 __name(getFirestoreMigrationStatus, "getFirestoreMigrationStatus");
 
-// src/store/protected-request.ts
+// src/cutover/writer-census-contract.mjs
 import { createHash as createHash6 } from "node:crypto";
+var CENSUS_SCHEMA = 2;
+var OBSERVED_SCHEMA = 2;
+var PROJECT = "phoneware-edge";
+var PROJECT_NUMBER = "859122914438";
+var DATABASE = "(default)";
+var PRODUCTION_INVENTORY_BINDING = Object.freeze({ profile: "production", project: PROJECT, projectNumber: PROJECT_NUMBER, database: DATABASE });
+var EMULATOR_INVENTORY_BINDING = Object.freeze({ profile: "emulator", project: "demo-netsapiens-cutover", projectNumber: null, database: "(default)" });
+function assertInventoryBinding(binding) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding) || JSON.stringify(Object.keys(binding).sort()) !== JSON.stringify(["database", "profile", "project", "projectNumber"])) throw new Error("Invalid inventory binding");
+  const expected = binding.profile === "production" ? PRODUCTION_INVENTORY_BINDING : binding.profile === "emulator" ? EMULATOR_INVENTORY_BINDING : null;
+  if (!expected || Object.keys(expected).some((key) => binding[key] !== expected[key])) throw new Error("Invalid inventory binding");
+  return expected;
+}
+__name(assertInventoryBinding, "assertInventoryBinding");
+var NAMESPACE_PATTERN = /^(mcp_|pwmcp_|readonly_mcp_)|^operations$/;
+var DEFAULT_BOUNDS = Object.freeze({ namespaceMaxDocuments: 2e6, fullPassMaxDocuments: 2e6, maxServiceAccounts: 500 });
+var sha256 = /* @__PURE__ */ __name((text) => createHash6("sha256").update(text).digest("hex"), "sha256");
+var WRITE_PERMISSION_PATTERNS = Object.freeze([
+  /^datastore\.(entities|databases|indexes|fields|backups)\.(create|update|delete)$/,
+  /^datastore\.databases\.(import|bulkDelete)$/,
+  /^firebaserules\.(releases|rulesets)\.(create|update|delete)$/,
+  /^firebase\.[A-Za-z.]+\.(create|update|delete)$/
+]);
+var CONTROL_PERMISSION_PATTERNS = Object.freeze([
+  /^iam\.serviceAccounts\.(actAs|getAccessToken|getOpenIdToken|getIdToken|signBlob|signJwt|implicitDelegation|setIamPolicy|create|delete|update|enable|undelete)$/,
+  /^iam\.serviceAccountKeys\.(create|enable)$/,
+  /^iam\.(roles|workloadIdentityPools|workloadIdentityPoolProviders)\.(create|update|delete|undelete|setIamPolicy)$/,
+  /^resourcemanager\.(projects|folders|organizations)\.setIamPolicy$/,
+  /^(run\.(services|jobs)|cloudfunctions\.functions|compute\.instances)\.(create|update|setIamPolicy)$/,
+  /^run\.jobs\.(run|runWithOverrides)$/,
+  /^compute\.instances\.(setMetadata|setServiceAccount)$/,
+  /^compute\.projects\.setCommonInstanceMetadata$/,
+  /^cloudbuild\.builds\.create$/,
+  /^artifactregistry\.(repositories\.uploadArtifacts|tags\.(create|update))$/,
+  /^appengine\.versions\.(create|update)$/,
+  /^workflows\.workflows\.(create|update)$/,
+  /^container\.pods\.(create|exec)$/
+]);
+var IMPERSONATION_PERMISSIONS = Object.freeze([
+  "iam.serviceAccounts.getAccessToken",
+  "iam.serviceAccounts.getOpenIdToken",
+  "iam.serviceAccounts.signBlob",
+  "iam.serviceAccounts.signJwt",
+  "iam.serviceAccounts.implicitDelegation",
+  "iam.serviceAccounts.actAs",
+  "iam.serviceAccounts.setIamPolicy",
+  "iam.serviceAccountKeys.create"
+]);
+var BASIC_ROLES = Object.freeze({
+  "roles/owner": Object.freeze({ writer: true, controller: true, impersonation: true }),
+  "roles/editor": Object.freeze({ writer: true, controller: true, impersonation: true }),
+  "roles/viewer": Object.freeze({ writer: false, controller: false, impersonation: false })
+});
+var SERVICE_AGENT_PATTERNS = Object.freeze([
+  /^service-\d+@[a-z0-9-]+\.iam\.gserviceaccount\.com$/,
+  /@gcp-sa-[a-z0-9-]+\.iam\.gserviceaccount\.com$/,
+  /^\d+@cloudservices\.gserviceaccount\.com$/,
+  /@firebase-sa-management\.iam\.gserviceaccount\.com$/
+]);
+var MACHINE_EMAIL_PATTERN = /@([a-z0-9-]+\.iam|developer|appspot|cloudbuild|cloudservices)\.gserviceaccount\.com$/;
+var EMAIL_IN_TEXT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+var TOKEN_IN_TEXT = /ya29\.[A-Za-z0-9._-]+|Bearer\s+\S+/;
+var CONDITIONAL_SURFACES = Object.freeze({
+  "run-services": "run.googleapis.com",
+  "run-revisions": "run.googleapis.com",
+  "run-jobs": "run.googleapis.com",
+  "cloud-functions": "cloudfunctions.googleapis.com",
+  "compute-instances": "compute.googleapis.com",
+  "app-engine": "appengine.googleapis.com",
+  "workflows": "workflows.googleapis.com",
+  "cloud-build-triggers": "cloudbuild.googleapis.com"
+});
+var COMPUTE_CAPABLE_APIS = Object.freeze({
+  "run.googleapis.com": ["run-services", "run-revisions", "run-jobs"],
+  "cloudfunctions.googleapis.com": ["cloud-functions"],
+  "compute.googleapis.com": ["compute-instances"],
+  "appengine.googleapis.com": ["app-engine"],
+  "workflows.googleapis.com": ["workflows"],
+  "cloudbuild.googleapis.com": ["cloud-build-triggers"],
+  "container.googleapis.com": null,
+  "batch.googleapis.com": null,
+  "dataflow.googleapis.com": null,
+  "composer.googleapis.com": null,
+  "dataproc.googleapis.com": null,
+  "aiplatform.googleapis.com": null,
+  "cloudscheduler.googleapis.com": null,
+  "cloudtasks.googleapis.com": null,
+  "notebooks.googleapis.com": null
+});
+var SURFACES = Object.freeze([
+  "iam-ancestry",
+  "iam-project-policy",
+  "iam-ancestor-policies",
+  "iam-role-definitions",
+  "service-accounts",
+  "service-account-iam-policies",
+  "service-account-keys",
+  "enabled-services",
+  "run-services",
+  "run-revisions",
+  "run-jobs",
+  "cloud-functions",
+  "compute-instances",
+  "app-engine",
+  "workflows",
+  "cloud-build-triggers",
+  "unsupported-compute",
+  "image-attribution",
+  "wif-pools",
+  "wif-providers",
+  "ci-admitted-state",
+  "firestore-top-level",
+  "firestore-namespace-walk",
+  "firestore-full-pass",
+  "firestore-ttl-fields",
+  "firebase-rules-releases",
+  "firebase-rulesets",
+  "firebase-rules-tests"
+]);
+var lower = /* @__PURE__ */ __name((text) => text.toLowerCase(), "lower");
+var humanSha = /* @__PURE__ */ __name((type, email) => sha256(`principal:${type}:${lower(email)}`), "humanSha");
+function principalRecord(rawMember) {
+  if (typeof rawMember !== "string" || !rawMember) throw new Error("principal must be a non-empty string");
+  let member = rawMember;
+  let deleted = false;
+  if (member.startsWith("deleted:")) {
+    deleted = true;
+    member = member.slice("deleted:".length);
+  }
+  member = member.replace(/\?uid=[^?]*$/, "");
+  const colon = member.indexOf(":");
+  const prefix = colon > 0 ? member.slice(0, colon + 1) : "";
+  const value = colon > 0 ? member.slice(colon + 1) : "";
+  if (member.startsWith("principal://") || member.startsWith("principalSet://")) {
+    if (member.includes("/locations/global/workforcePools/")) {
+      return { kind: "human", type: "workforce", domain: null, sha256: sha256(`principal:workforce:${lower(member)}`), deleted };
+    }
+    if (member.includes("/workloadIdentityPools/")) return { kind: "workload", member };
+    throw new Error("unknown principal:// scope");
+  }
+  if (member === "allUsers" || member === "allAuthenticatedUsers") return { kind: "public", member };
+  if (["projectOwner:", "projectEditor:", "projectViewer:"].includes(prefix)) return { kind: "convenience", member };
+  if (prefix === "user:" || prefix === "group:") {
+    const at = value.lastIndexOf("@");
+    if (at < 0) throw new Error("human principal without a domain");
+    const domain = lower(value.slice(at + 1));
+    return { kind: "human", type: prefix.slice(0, -1), domain, sha256: humanSha(prefix.slice(0, -1), value), deleted };
+  }
+  if (prefix === "domain:") {
+    return { kind: "human", type: "domain", domain: lower(value), sha256: sha256(`principal:domain:${lower(value)}`), deleted };
+  }
+  if (prefix === "serviceAccount:") {
+    return { kind: "serviceAccount", email: lower(value), agent: SERVICE_AGENT_PATTERNS.some((re) => re.test(lower(value))), deleted };
+  }
+  throw new Error("unknown principal prefix");
+}
+__name(principalRecord, "principalRecord");
+function conditionRecord(condition) {
+  if (condition === null || condition === void 0) return null;
+  if (typeof condition.title !== "string" || typeof condition.expression !== "string") throw new Error("malformed condition");
+  return { title: condition.title, expression: condition.expression, expressionSha256: sha256(condition.expression) };
+}
+__name(conditionRecord, "conditionRecord");
+function classifyRole(roleId, permissions) {
+  if (Object.hasOwn(BASIC_ROLES, roleId)) {
+    return { ...BASIC_ROLES[roleId], matched: [roleId], definition: "basic" };
+  }
+  if (permissions === null || permissions === void 0) {
+    return { writer: true, controller: true, impersonation: true, matched: ["*unreadable*"], definition: "unreadable" };
+  }
+  if (!Array.isArray(permissions) || permissions.some((p) => typeof p !== "string")) throw new Error("malformed permission list");
+  const writer = permissions.some((p) => WRITE_PERMISSION_PATTERNS.some((re) => re.test(p)));
+  const controller = permissions.some((p) => CONTROL_PERMISSION_PATTERNS.some((re) => re.test(p)));
+  const impersonation = permissions.some((p) => IMPERSONATION_PERMISSIONS.includes(p));
+  const matched = [...new Set(permissions.filter((p) => WRITE_PERMISSION_PATTERNS.some((re) => re.test(p)) || CONTROL_PERMISSION_PATTERNS.some((re) => re.test(p)) || IMPERSONATION_PERMISSIONS.includes(p)))].sort();
+  return { writer, controller, impersonation, matched, definition: "read" };
+}
+__name(classifyRole, "classifyRole");
+function closedListsDigest() {
+  return sha256(canonicalJson({
+    write: WRITE_PERMISSION_PATTERNS.map((p) => p.source),
+    control: CONTROL_PERMISSION_PATTERNS.map((p) => p.source),
+    impersonation: [...IMPERSONATION_PERMISSIONS].sort(),
+    basic: Object.fromEntries(Object.entries(BASIC_ROLES).map(([id, v]) => [id, { writer: v.writer, controller: v.controller, impersonation: v.impersonation }])),
+    serviceAgents: SERVICE_AGENT_PATTERNS.map((p) => p.source),
+    machineEmail: MACHINE_EMAIL_PATTERN.source,
+    computeCapable: COMPUTE_CAPABLE_APIS,
+    namespace: NAMESPACE_PATTERN.source,
+    conditional: CONDITIONAL_SURFACES,
+    surfaces: [...SURFACES],
+    inventoryBindings: [PRODUCTION_INVENTORY_BINDING, EMULATOR_INVENTORY_BINDING]
+  }));
+}
+__name(closedListsDigest, "closedListsDigest");
+function computeWriterSet(identity) {
+  const set = /* @__PURE__ */ new Set();
+  for (const entry of identity?.principals ?? []) {
+    if ((entry.writer || entry.controller) && entry.principal.kind === "serviceAccount") set.add(entry.principal.email);
+  }
+  return set;
+}
+__name(computeWriterSet, "computeWriterSet");
+var isStr = /* @__PURE__ */ __name((v) => typeof v === "string" && v.length > 0, "isStr");
+var isBool = /* @__PURE__ */ __name((v) => typeof v === "boolean", "isBool");
+var isInt = /* @__PURE__ */ __name((v) => Number.isSafeInteger(v) && v >= 0, "isInt");
+var isHex40 = /* @__PURE__ */ __name((v) => typeof v === "string" && /^[0-9a-f]{40}$/.test(v), "isHex40");
+var isHex64 = /* @__PURE__ */ __name((v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v), "isHex64");
+var isDigest = /* @__PURE__ */ __name((v) => typeof v === "string" && /^sha256:[0-9a-f]{64}$/.test(v), "isDigest");
+var isAnyStr = /* @__PURE__ */ __name((v) => typeof v === "string", "isAnyStr");
+var isServiceAccountEmail = /* @__PURE__ */ __name((v) => typeof v === "string" && /^[a-z0-9][a-z0-9._%+-]*@[a-z0-9.-]+\.gserviceaccount\.com$/.test(v), "isServiceAccountEmail");
+var PRINCIPAL = {
+  oneOf: [
+    { obj: { kind: { literal: "human" }, type: { enumOf: ["user", "group", "domain", "workforce"] }, domain: { nullable: isAnyStr }, sha256: isHex64, deleted: isBool } },
+    { obj: { kind: { literal: "serviceAccount" }, email: isStr, agent: isBool, deleted: isBool } },
+    { obj: { kind: { literal: "workload" }, member: isStr } },
+    { obj: { kind: { literal: "public" }, member: { enumOf: ["allUsers", "allAuthenticatedUsers"] } } },
+    { obj: { kind: { literal: "convenience" }, member: isStr } }
+  ]
+};
+var CONDITION = { nullable: { obj: { title: isAnyStr, expression: isAnyStr, expressionSha256: isHex64 } } };
+var OBSERVED_SPEC = {
+  obj: {
+    schemaVersion: { literal: OBSERVED_SCHEMA },
+    project: { literal: PROJECT },
+    projectNumber: { literal: PROJECT_NUMBER },
+    database: { literal: DATABASE },
+    identity: {
+      obj: {
+        ancestry: { arr: isStr },
+        policies: { arr: { obj: { resource: isStr, read: isBool } } },
+        roles: { arr: { obj: { role: isStr, definition: { enumOf: ["read", "basic", "unreadable"] }, writer: isBool, controller: isBool, impersonation: isBool, matched: { arr: isStr } } } },
+        grants: { arr: { obj: { resource: isStr, role: isStr, principal: PRINCIPAL, condition: CONDITION } } },
+        principals: { arr: { obj: { principal: PRINCIPAL, writer: isBool, controller: isBool, via: { arr: isStr } } } },
+        serviceAccounts: {
+          arr: {
+            obj: {
+              email: isStr,
+              projectOwned: isBool,
+              agent: isBool,
+              disabled: { nullable: isBool },
+              policyRead: isBool,
+              keysRead: isBool,
+              keys: { arr: { obj: { keyId: isStr, disabled: isBool, validAfterTime: isStr, validBeforeTime: { nullable: isStr }, keyOrigin: isStr } } }
+            }
+          }
+        }
+      }
+    },
+    workload: {
+      obj: {
+        enabledServices: { arr: isStr },
+        workloads: {
+          arr: {
+            obj: {
+              kind: { enumOf: ["run-revision", "run-job", "function", "compute-instance", "app-engine-version", "workflow"] },
+              location: isStr,
+              name: isStr,
+              parent: { nullable: isStr },
+              serving: { nullable: { obj: { percent: isInt, tags: { arr: isStr }, latestReady: isBool } } },
+              serviceAccount: isServiceAccountEmail,
+              environment: { nullable: { enumOf: ["GEN_1", "GEN_2"] } },
+              images: { arr: { obj: { container: isStr, repository: isStr, digest: { nullable: isDigest }, digestSource: { enumOf: ["revision-status", "pinned", "registry-tag", "none"] } } } }
+            }
+          }
+        },
+        attribution: { arr: { obj: { digest: isDigest, repository: isStr, method: { enumOf: ["cloud-build", "ar-tag", "unmapped"] }, sourceRepository: { nullable: isStr }, commit: { nullable: isHex40 } } } }
+      }
+    },
+    ci: {
+      obj: {
+        wifPools: { arr: { obj: { pool: isStr, state: isStr, disabled: isBool } } },
+        wifProviders: {
+          arr: {
+            obj: {
+              pool: isStr,
+              provider: isStr,
+              state: isStr,
+              disabled: isBool,
+              issuer: { nullable: isStr },
+              allowedAudiences: { arr: isStr },
+              attributeMapping: { map: isAnyStr },
+              attributeCondition: { nullable: isAnyStr },
+              attributeConditionSha256: { nullable: isHex64 },
+              admitted: { nullable: { arr: { obj: { repository: isStr, workflowPath: isStr, ref: isStr } } } }
+            }
+          }
+        },
+        admittedState: { arr: { obj: { repository: isStr, ref: isStr, readable: isBool, headCommit: { nullable: isHex40 }, workflows: { arr: { obj: { path: isStr, blobSha: isHex40 } } } } } },
+        buildTriggers: { arr: { obj: { location: isStr, name: isStr, serviceAccount: isServiceAccountEmail, disabled: isBool, source: isAnyStr, filter: isAnyStr, configSha256: { nullable: isHex64 } } } }
+      }
+    },
+    data: {
+      obj: {
+        topLevel: { obj: { namespace: { arr: isStr } } },
+        namespacePatterns: { arr: isStr },
+        fullPass: { obj: { complete: isBool } },
+        foreignParentPrefixed: { arr: isStr },
+        sharedGroupIds: { arr: isStr },
+        ttlFields: { arr: { obj: { collectionGroup: isStr, field: isStr } } }
+      }
+    },
+    rules: {
+      obj: {
+        releases: { arr: { obj: { release: isStr, ruleset: isStr, files: { arr: { obj: { name: isStr, sha256: isHex64 } } } } } },
+        matchesCommitted: isBool,
+        reachability: { enumOf: ["none", "reachable", "unresolved"] },
+        tests: { arr: { obj: { group: isStr, auth: { enumOf: ["none", "synthetic"] }, method: { literal: "create" }, result: { enumOf: ["deny", "allow"] } } } }
+      }
+    }
+  }
+};
+function validateShape(value, spec, at = "observed") {
+  const problems = [];
+  const plain = /* @__PURE__ */ __name((v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype, "plain");
+  const visit = /* @__PURE__ */ __name((v, s, p) => {
+    if (typeof s === "function") {
+      if (!s(v)) problems.push({ at: p, kind: "shape" });
+      return;
+    }
+    if ("literal" in s) {
+      if (v !== s.literal) problems.push({ at: p, kind: "shape" });
+      return;
+    }
+    if ("enumOf" in s) {
+      if (!s.enumOf.includes(v)) problems.push({ at: p, kind: "shape" });
+      return;
+    }
+    if ("nullable" in s) {
+      if (v !== null) visit(v, s.nullable, p);
+      return;
+    }
+    if ("arr" in s) {
+      if (!Array.isArray(v)) {
+        problems.push({ at: p, kind: "shape" });
+        return;
+      }
+      v.forEach((item, i) => visit(item, s.arr, `${p}[${i}]`));
+      return;
+    }
+    if ("map" in s) {
+      if (!plain(v)) {
+        problems.push({ at: p, kind: "shape" });
+        return;
+      }
+      for (const [k, child] of Object.entries(v)) visit(child, s.map, `${p}.${k}`);
+      return;
+    }
+    if ("any" in s) return;
+    if ("oneOf" in s) {
+      const ok = s.oneOf.some((option) => validateShape(v, option, p).length === 0);
+      if (!ok) problems.push({ at: p, kind: "shape" });
+      return;
+    }
+    if ("obj" in s) {
+      if (!plain(v)) {
+        problems.push({ at: p, kind: "shape" });
+        return;
+      }
+      const expected = Object.keys(s.obj).sort();
+      const actual = Object.keys(v).sort();
+      if (JSON.stringify(expected) !== JSON.stringify(actual)) problems.push({ at: p, kind: "keys", missing: expected.filter((k) => !actual.includes(k)), extra: actual.filter((k) => !expected.includes(k)) });
+      for (const key of expected) if (Object.hasOwn(v, key)) visit(v[key], s.obj[key], `${p}.${key}`);
+      return;
+    }
+    throw new Error("unknown schema node");
+  }, "visit");
+  visit(value, spec, at);
+  return problems;
+}
+__name(validateShape, "validateShape");
+var POSITIONAL = /* @__PURE__ */ new Set(["ancestry", "policies"]);
+var BY_EMAIL = /* @__PURE__ */ new Set(["serviceAccounts"]);
+function checkSorted(value, path, problems) {
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => checkSorted(item, `${path}[${i}]`, problems));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      if (Array.isArray(child) && !POSITIONAL.has(key)) {
+        if (BY_EMAIL.has(key)) {
+          const emails = child.map((item) => item.email);
+          if (JSON.stringify(emails) !== JSON.stringify([...emails].sort())) problems.push({ at: `${path}.${key}`, kind: "unsorted-email" });
+        } else {
+          const keys = child.map((item) => canonicalJson(item));
+          if (JSON.stringify(keys) !== JSON.stringify([...keys].sort())) problems.push({ at: `${path}.${key}`, kind: "unsorted" });
+        }
+      }
+      checkSorted(child, `${path}.${key}`, problems);
+    }
+  }
+}
+__name(checkSorted, "checkSorted");
+function canonicalizeObserved(value, key = null) {
+  if (Array.isArray(value)) {
+    if (POSITIONAL.has(key)) return value.map((item) => canonicalizeObserved(item));
+    if (BY_EMAIL.has(key)) {
+      return value.map((item) => canonicalizeObserved(item)).sort((a, b) => a.email < b.email ? -1 : a.email > b.email ? 1 : 0);
+    }
+    return value.map((item) => canonicalizeObserved(item)).map((item) => ({ item, text: canonicalJson(item) })).sort((a, b) => a.text < b.text ? -1 : a.text > b.text ? 1 : 0).map(({ item }) => item);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, child]) => [k, canonicalizeObserved(child, k)]));
+  }
+  return value;
+}
+__name(canonicalizeObserved, "canonicalizeObserved");
+function patternProblems(pattern) {
+  const parts = pattern.split("/");
+  if (parts.length % 2 === 0) return ["even-segment-count"];
+  const problems = [];
+  parts.forEach((segment, i) => {
+    if (i % 2 === 1 && segment !== "*") problems.push("document-position-not-wildcard");
+    if (i % 2 === 0 && segment === "*") problems.push("collection-position-wildcard");
+  });
+  return problems;
+}
+__name(patternProblems, "patternProblems");
+function validateObserved(observed, binding) {
+  const policy = assertInventoryBinding(binding);
+  const spec = { obj: { ...OBSERVED_SPEC.obj, project: { literal: policy.project }, projectNumber: { literal: policy.projectNumber }, database: { literal: policy.database } } };
+  const problems = validateShape(observed, spec);
+  if (problems.length) return problems;
+  checkSorted(observed, "observed", problems);
+  for (const pattern of [...observed.data.namespacePatterns, ...observed.data.foreignParentPrefixed]) {
+    for (const kind of patternProblems(pattern)) problems.push({ at: `data.pattern:${pattern}`, kind });
+  }
+  const leaks = findRawLeaks(observed, "observed");
+  if (leaks.length) problems.push({ at: "observed", kind: "raw-leak", paths: leaks });
+  const machineEmail = "[a-z0-9._%+-]+@(?:[a-z0-9-]+\\.iam|developer|appspot|cloudbuild|cloudservices)\\.gserviceaccount\\.com";
+  const VIA_DIRECT = new RegExp(`^direct:((projects|folders|organizations)/[0-9]+|serviceAccounts/${machineEmail})$`);
+  const VIA_IMPERSONATION = new RegExp(`^impersonation:${machineEmail}$`);
+  const writerSet = computeWriterSet(observed.identity);
+  for (const p of observed.identity.principals) {
+    for (const via of p.via) {
+      if (!VIA_DIRECT.test(via) && !VIA_IMPERSONATION.test(via)) problems.push({ at: "identity.principals.via", kind: "via-pattern" });
+      if (via.startsWith("impersonation:") && !writerSet.has(via.slice("impersonation:".length))) problems.push({ at: "identity.principals.via", kind: "via-target-not-in-writer-set" });
+    }
+  }
+  for (const a of observed.workload.attribution) {
+    if (a.method === "unmapped") {
+      if (a.sourceRepository !== null || a.commit !== null) problems.push({ at: "workload.attribution", kind: "unmapped-with-source" });
+    } else if (!a.sourceRepository || !a.commit) {
+      problems.push({ at: "workload.attribution", kind: "attribution-missing-source" });
+    }
+  }
+  for (const entry of observed.identity.principals) {
+    if (!entry.writer && !entry.controller) problems.push({ at: "identity.principals", kind: "not-writer-or-controller" });
+  }
+  const writers = [...computeWriterSet(observed.identity)].sort();
+  const accounts = observed.identity.serviceAccounts.map((sa) => sa.email);
+  if (JSON.stringify(writers) !== JSON.stringify(accounts)) problems.push({ at: "identity.serviceAccounts", kind: "not-writer-set" });
+  return problems;
+}
+__name(validateObserved, "validateObserved");
+function findRawLeaks(value, path = "$") {
+  const leaks = [];
+  const scanText = /* @__PURE__ */ __name((text, at) => {
+    if (/^(deleted:)?(user|group|domain):/.test(text)) leaks.push(at);
+    if (TOKEN_IN_TEXT.test(text)) leaks.push(at);
+    for (const match of text.match(EMAIL_IN_TEXT) ?? []) if (!MACHINE_EMAIL_PATTERN.test(match)) leaks.push(at);
+  }, "scanText");
+  const walk = /* @__PURE__ */ __name((node, at) => {
+    if (typeof node === "string") {
+      scanText(node, at);
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((child, i) => walk(child, `${at}[${i}]`));
+      return;
+    }
+    if (node && typeof node === "object") {
+      const patternKeys = /* @__PURE__ */ new Set(["namespacePatterns", "foreignParentPrefixed"]);
+      for (const [key, child] of Object.entries(node)) {
+        scanText(key, `${at}.<key>`);
+        if (patternKeys.has(key) && Array.isArray(child)) {
+          for (const pattern of child) if (typeof pattern === "string" && patternProblems(pattern).length) leaks.push(`${at}.${key}`);
+        }
+        if (key === "documentCounts" && child && typeof child === "object") {
+          for (const docKey of Object.keys(child)) if (patternProblems(docKey).length) leaks.push(`${at}.${key}.<key>`);
+        }
+        walk(child, `${at}.${key}`);
+      }
+    }
+  }, "walk");
+  walk(value, path);
+  return [...new Set(leaks)].sort();
+}
+__name(findRawLeaks, "findRawLeaks");
+var ASSUMPTION_IDS = Object.freeze([
+  "human-principals",
+  "org-folder-allow-unobserved",
+  "service-account-unobserved",
+  "user-managed-key",
+  "google-managed",
+  "image-tag-attribution",
+  "unattributable-workload",
+  "ci-plane-unreadable",
+  "ci-unbounded",
+  "client-writes",
+  "rules-not-committed",
+  "foreign-parent-subtrees",
+  "dynamic-name",
+  "post-observation-window"
+]);
+function emittedAssumptions(observed, census) {
+  const out = /* @__PURE__ */ new Map();
+  const add = /* @__PURE__ */ __name((id, subjects) => {
+    const unique = [...new Set(subjects)].sort();
+    if (unique.length) out.set(id, unique);
+  }, "add");
+  const writers = computeWriterSet(observed.identity);
+  const wt = observed.identity.principals.filter((p) => p.writer || p.controller);
+  add("human-principals", wt.flatMap((p) => {
+    if (p.principal.kind === "human") return [`human:${p.principal.sha256}`];
+    if (p.principal.kind === "convenience") return [`convenience:${p.principal.member}`];
+    return [];
+  }));
+  add("org-folder-allow-unobserved", observed.identity.policies.filter((p) => !p.read).map((p) => p.resource));
+  add("service-account-unobserved", observed.identity.serviceAccounts.filter((sa) => !sa.policyRead || !sa.keysRead).map((sa) => sa.email));
+  add("user-managed-key", observed.identity.serviceAccounts.filter((sa) => writers.has(sa.email)).flatMap((sa) => sa.keys.map((k) => `${sa.email}/${k.keyId}`)));
+  add("google-managed", [
+    ...wt.filter((p) => p.principal.kind === "serviceAccount" && p.principal.agent).map((p) => p.principal.email),
+    ...observed.data.ttlFields.map((t) => `ttl:${t.collectionGroup}/${t.field}`)
+  ]);
+  const attribution = new Map(observed.workload.attribution.map((a) => [a.digest, a]));
+  const wtWorkloads = observed.workload.workloads.filter((w) => writers.has(w.serviceAccount));
+  add("image-tag-attribution", wtWorkloads.flatMap((w) => w.images.map((i) => i.digest).filter(Boolean)).filter((d) => attribution.get(d)?.method === "ar-tag"));
+  add("unattributable-workload", [
+    ...wtWorkloads.filter((w) => w.images.length === 0 || w.images.some((i) => !i.digest || attribution.get(i.digest)?.method === "unmapped") || w.kind === "function" && w.environment === "GEN_1").map((w) => `${w.kind}/${w.location}/${w.name}`),
+    ...observed.ci.buildTriggers.filter((t) => !t.disabled && writers.has(t.serviceAccount)).map((t) => `cloud-build-trigger/${t.location}/${t.name}`)
+  ]);
+  add("ci-plane-unreadable", observed.ci.admittedState.filter((a) => !a.readable).map((a) => a.repository));
+  add("ci-unbounded", observed.ci.wifProviders.flatMap((p) => (p.admitted ?? []).filter((a) => a.ref === "*").map((a) => `${p.pool}/${p.provider}:${a.repository}`)));
+  add("client-writes", observed.rules.reachability === "reachable" || observed.rules.tests.some((t) => t.result === "allow") ? observed.rules.releases.map((r) => r.release) : []);
+  add("rules-not-committed", observed.rules.matchesCommitted ? [] : observed.rules.releases.map((r) => r.release));
+  add("foreign-parent-subtrees", observed.data.fullPass.complete ? [] : [DATABASE]);
+  const dynamic = (census?.codeCensus ?? []).flatMap((repo) => repo.writeSites.filter((s) => s.dynamic && s.dynamic.resolved === false).map((s) => `${repo.repository}@${repo.commit}:${s.file}:${s.line}`));
+  add("dynamic-name", dynamic);
+  add("post-observation-window", census?.mode?.runnerAuditReread === false ? ["runner"] : []);
+  return [...out.entries()].map(([id, subjects]) => ({ id, subjects })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+__name(emittedAssumptions, "emittedAssumptions");
+var ROLES = ["migration", "meta", "operations", "runtime", "governance"];
+var FENCES = ["runner", "guard", "none"];
+var CENSUS_SPEC = {
+  obj: {
+    schemaVersion: { literal: CENSUS_SCHEMA },
+    kind: { literal: "netsapiens-writer-census" },
+    closedListsSha256: isHex64,
+    bounds: { obj: { namespaceMaxDocuments: isInt, fullPassMaxDocuments: isInt, maxServiceAccounts: isInt } },
+    mode: { obj: { runnerAuditReread: isBool } },
+    union: { arr: isStr },
+    exclusions: { arr: { obj: { pattern: isStr, reason: isStr } } },
+    codeCensus: {
+      arr: {
+        obj: {
+          repository: isStr,
+          commit: isHex40,
+          writeSites: {
+            arr: {
+              obj: {
+                file: isStr,
+                line: isInt,
+                group: { nullable: isStr },
+                role: { enumOf: ROLES },
+                fence: { enumOf: FENCES },
+                dynamic: { nullable: { obj: { source: isStr, resolved: isBool, value: { nullable: isStr } } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    acceptedAssumptions: { arr: { obj: { id: { enumOf: [...ASSUMPTION_IDS] }, subjects: { arr: isStr } } } },
+    observed: { any: true },
+    review: { obj: { reviewedBy: isStr, reviewedAt: isStr, instructionRef: isStr } }
+  }
+};
+function validateCensus(census, binding) {
+  assertInventoryBinding(binding);
+  const problems = validateShape(census, CENSUS_SPEC, "census");
+  if (problems.length) return problems;
+  if (census.closedListsSha256 !== closedListsDigest()) problems.push({ at: "census.closedListsSha256", kind: "closed-lists-changed" });
+  if (!isSortedUnique(census.union)) problems.push({ at: "census.union", kind: "unsorted" });
+  for (const [key, value] of Object.entries(census.bounds)) if (!Number.isSafeInteger(value) || value <= 0) problems.push({ at: `census.bounds.${key}`, kind: "bound" });
+  for (const a of census.acceptedAssumptions) if (!isSortedUnique(a.subjects)) problems.push({ at: "census.acceptedAssumptions", kind: "unsorted" });
+  return problems;
+}
+__name(validateCensus, "validateCensus");
+function isSortedUnique(list) {
+  return JSON.stringify(list) === JSON.stringify([...new Set(list)].sort());
+}
+__name(isSortedUnique, "isSortedUnique");
+function normalizeAssumptions(list) {
+  return list.map((a) => ({ id: a.id, subjects: [...new Set(a.subjects)].sort() })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+__name(normalizeAssumptions, "normalizeAssumptions");
+function surfaceProblems(surfaces, observed) {
+  const problems = [];
+  const incomplete = [];
+  for (const name of SURFACES) {
+    const entry = surfaces?.[name];
+    if (!entry) {
+      incomplete.push(name);
+      continue;
+    }
+    if (entry.status === "ok") continue;
+    if (entry.status === "absent" && Object.hasOwn(CONDITIONAL_SURFACES, name)) {
+      const api = CONDITIONAL_SURFACES[name];
+      const enabled = observed?.workload?.enabledServices?.includes(api);
+      const appEngine404 = name === "app-engine" && entry.reason === "404";
+      if (appEngine404 || !enabled) continue;
+    }
+    incomplete.push(name);
+  }
+  if (incomplete.length) problems.push({ kind: "incomplete-surfaces", surfaces: incomplete });
+  return problems;
+}
+__name(surfaceProblems, "surfaceProblems");
+function dataProblems(observed, census) {
+  const problems = [];
+  const union = new Set(census.union);
+  const exclusionPatterns = new Set(census.exclusions.map((e) => e.pattern));
+  const shared = new Set(observed.data.sharedGroupIds);
+  for (const id of observed.data.topLevel.namespace) if (!union.has(id)) problems.push({ kind: "namespace-outside-union", id });
+  for (const pattern of observed.data.namespacePatterns) {
+    const last = pattern.split("/").at(-1);
+    if (!union.has(last) && !exclusionPatterns.has(pattern)) problems.push({ kind: "namespace-pattern-outside-union", pattern });
+    if (shared.has(last) && !exclusionPatterns.has(pattern)) problems.push({ kind: "shared-group-pattern-not-excluded", pattern });
+  }
+  for (const pattern of observed.data.foreignParentPrefixed) if (!exclusionPatterns.has(pattern)) problems.push({ kind: "foreign-parent-not-excluded", pattern });
+  for (const id of observed.data.sharedGroupIds) if (union.has(id)) problems.push({ kind: "shared-group-in-union", id });
+  return problems;
+}
+__name(dataProblems, "dataProblems");
+function workloadProblems(observed, census, accepted) {
+  const problems = [];
+  const writers = computeWriterSet(observed.identity);
+  const attribution = new Map(observed.workload.attribution.map((a) => [a.digest, a]));
+  const codeSites = new Set(census.codeCensus.map((c) => `${c.repository}@${c.commit}`));
+  const unattributable = new Set(accepted.find((a) => a.id === "unattributable-workload")?.subjects ?? []);
+  for (const w of observed.workload.workloads) {
+    if (!writers.has(w.serviceAccount)) continue;
+    const subject = `${w.kind}/${w.location}/${w.name}`;
+    for (const image of w.images) {
+      if (!image.digest) {
+        if (!unattributable.has(subject)) problems.push({ kind: "unattributed-image", subject });
+        continue;
+      }
+      const a = attribution.get(image.digest);
+      if (!a || a.method === "unmapped") {
+        if (!unattributable.has(subject)) problems.push({ kind: "unattributed-image", subject });
+        continue;
+      }
+      if (!a.commit || !a.sourceRepository) {
+        if (!unattributable.has(subject)) problems.push({ kind: "unattributed-image", subject });
+        continue;
+      }
+      if (!codeSites.has(`${a.sourceRepository}@${a.commit}`)) problems.push({ kind: "attributed-commit-not-in-code-census", subject });
+    }
+  }
+  for (const row of observed.ci.admittedState) {
+    if (row.readable && !codeSites.has(`${row.repository}@${row.headCommit}`)) problems.push({ kind: "admitted-commit-not-in-code-census", subject: `${row.repository}@${row.ref}` });
+  }
+  for (const repo of census.codeCensus) {
+    for (const site of repo.writeSites) {
+      if ((site.role === "migration" || site.role === "meta" || site.role === "operations") && site.fence === "none") {
+        problems.push({ kind: "unfenced-write-site", repository: repo.repository, file: site.file, line: site.line });
+      }
+    }
+  }
+  return problems;
+}
+__name(workloadProblems, "workloadProblems");
+function compareCensus(input) {
+  assertInventoryBinding(input?.binding);
+  const { census, observed, measurements, surfaces, scopeGroups, binding } = input;
+  const problems = [];
+  const surfaceIssues = surfaceProblems(surfaces, observed);
+  const incomplete = surfaceIssues.find((p) => p.kind === "incomplete-surfaces")?.surfaces ?? [];
+  problems.push(...surfaceIssues);
+  const census2 = census && census.schemaVersion === CENSUS_SCHEMA ? census : null;
+  if (!census2) problems.push({ kind: "census-missing-or-invalid" });
+  else {
+    problems.push(...validateCensus(census2, binding).map((p) => ({ kind: "census-shape", at: p.at, detail: p.kind })));
+  }
+  const observedProblems = observed ? validateObserved(observed, binding) : [{ kind: "observation-missing" }];
+  problems.push(...observedProblems.map((p) => ({ kind: "observed-shape", at: p.at, detail: p.kind })));
+  if (census2 && census2.observed) {
+    problems.push(...validateObserved(census2.observed, binding).map((p) => ({ kind: "census-observed-shape", at: p.at, detail: p.kind })));
+  }
+  if (census2 && observed && canonicalJson(census2.observed) !== canonicalJson(observed)) problems.push({ kind: "observed-mismatch" });
+  if (census2 && observed && observedProblems.length === 0) {
+    const emitted = normalizeAssumptions(emittedAssumptions(observed, census2));
+    const accepted = normalizeAssumptions(census2.acceptedAssumptions);
+    if (canonicalJson(emitted) !== canonicalJson(accepted)) problems.push({ kind: "assumptions-not-accepted" });
+    problems.push(...dataProblems(observed, census2));
+    problems.push(...workloadProblems(observed, census2, accepted));
+  }
+  const leakSurfaces = Object.fromEntries(Object.entries(surfaces ?? {}).map(([k, v]) => [k, v.error ?? null]));
+  const leaks = [
+    ...findRawLeaks(observed ?? null, "observed"),
+    ...findRawLeaks(measurements ?? null, "measurements"),
+    ...findRawLeaks(leakSurfaces, "surfaces")
+  ];
+  if (leaks.length) problems.push({ kind: "raw-leak", paths: leaks });
+  if (!Array.isArray(scopeGroups)) problems.push({ kind: "scope-missing-or-invalid" });
+  else if (census2) {
+    const union = [...census2.union].sort();
+    const scope = [...scopeGroups].sort();
+    if (JSON.stringify(union) !== JSON.stringify(scope)) problems.push({ kind: "union-not-scope" });
+  }
+  return { decision: problems.length === 0 ? "match" : "fail", incomplete, problems };
+}
+__name(compareCensus, "compareCensus");
+
+// src/cutover/writer-inventory-format.mjs
+var isFirestore = /* @__PURE__ */ __name((name) => name.startsWith("firestore-"), "isFirestore");
+var exact2 = /* @__PURE__ */ __name((value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort()), "exact");
+function parseProtectedJson(bytes) {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error("Protected inventory JSON is invalid");
+  }
+}
+__name(parseProtectedJson, "parseProtectedJson");
+function assertSafeObservation(value, binding) {
+  assertInventoryBinding(binding);
+  const { observed, measurements, surfaces } = value;
+  const leaks = [...findRawLeaks(observed, "observed"), ...findRawLeaks(measurements, "measurements"), ...findRawLeaks(surfaces, "surfaces")];
+  if (leaks.length) throw new Error(`Inventory output rejected: ${leaks.length} unsafe field paths`);
+  const problems = validateObserved(observed, binding);
+  if (problems.length) throw new Error(`Inventory shape rejected: ${problems.length} invalid fields`);
+}
+__name(assertSafeObservation, "assertSafeObservation");
+function splitForFiles(value, binding) {
+  assertSafeObservation(value, binding);
+  const { observed, measurements, surfaces } = value;
+  const writer = {
+    schemaVersion: 2,
+    kind: "netsapiens-writer-inventory",
+    identity: observed.identity,
+    workload: observed.workload,
+    ci: observed.ci,
+    rules: observed.rules,
+    surfaces: Object.fromEntries(Object.entries(surfaces).filter(([k]) => !isFirestore(k))),
+    measurements: Object.fromEntries(Object.entries(measurements).filter(([k]) => k !== "data"))
+  };
+  const collection = {
+    schemaVersion: 2,
+    kind: "netsapiens-collection-inventory",
+    data: observed.data,
+    surfaces: Object.fromEntries(Object.entries(surfaces).filter(([k]) => isFirestore(k))),
+    measurements: { data: measurements.data }
+  };
+  return { "writer-inventory.json": writer, "collection-inventory.json": collection };
+}
+__name(splitForFiles, "splitForFiles");
+function joinFromFiles(writer, collection, binding) {
+  const policy = assertInventoryBinding(binding);
+  if (!exact2(writer, ["schemaVersion", "kind", "identity", "workload", "ci", "rules", "surfaces", "measurements"]) || !exact2(collection, ["schemaVersion", "kind", "data", "surfaces", "measurements"]) || writer.schemaVersion !== 2 || writer.kind !== "netsapiens-writer-inventory" || collection.schemaVersion !== 2 || collection.kind !== "netsapiens-collection-inventory") throw new Error("Invalid inventory file kind");
+  if (!writer.surfaces || !collection.surfaces || Object.keys(writer.surfaces).some(isFirestore) || Object.keys(collection.surfaces).some((k) => !isFirestore(k)) || !writer.measurements || !collection.measurements || Object.keys(collection.measurements).join(",") !== "data" || Object.hasOwn(writer.measurements, "data")) throw new Error("Invalid inventory file partition");
+  const result = {
+    observed: {
+      schemaVersion: OBSERVED_SCHEMA,
+      project: policy.project,
+      projectNumber: policy.projectNumber,
+      database: policy.database,
+      identity: writer.identity,
+      workload: writer.workload,
+      ci: writer.ci,
+      rules: writer.rules,
+      data: collection.data
+    },
+    measurements: { ...writer.measurements, ...collection.measurements },
+    surfaces: { ...writer.surfaces, ...collection.surfaces }
+  };
+  assertSafeObservation(result, binding);
+  return result;
+}
+__name(joinFromFiles, "joinFromFiles");
+
+// src/store/protected-request.ts
+import { createHash as createHash7 } from "node:crypto";
 var REQUEST_MAX_BYTES = 65536;
 var REQUEST_KIND = "netsapiens-protected-migration-request";
 var PROTECTED_ACTIONS = ["inspect", "adopt", "activate", "status", "verify-active-ownership"];
@@ -8562,7 +9404,7 @@ function migrationRunIdFor(approvalPayloadSha256, namespace, epoch) {
 ${approvalPayloadSha256}
 ${namespace}
 ${String(epoch)}`;
-  return `nsm-${createHash6("sha256").update(Buffer.from(material, "utf8")).digest("hex").slice(0, 40)}`;
+  return `nsm-${createHash7("sha256").update(Buffer.from(material, "utf8")).digest("hex").slice(0, 40)}`;
 }
 __name(migrationRunIdFor, "migrationRunIdFor");
 function argvFor(request) {
@@ -8653,7 +9495,7 @@ function parseProtectedRequestV2(bytes) {
 __name(parseProtectedRequestV2, "parseProtectedRequestV2");
 
 // src/store/protected-migration-context.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { existsSync, lstatSync as lstatSync2, readFileSync as readFileSync2 } from "node:fs";
 var RUN_DIR = "/run/cutover";
 var OPT_DIR = "/opt/cutover";
@@ -8665,6 +9507,9 @@ var PATHS = {
   approval: `${RUN_DIR}/approval.dsse.json`,
   attestation: `${RUN_DIR}/attestation-manifest.json`,
   indexSchema: `${RUN_DIR}/index-schema.json`,
+  writerCensus: `${RUN_DIR}/writer-census.json`,
+  writerInventory: `${RUN_DIR}/writer-inventory.json`,
+  collectionInventory: `${RUN_DIR}/collection-inventory.json`,
   credentials: `${RUN_DIR}/credentials.json`,
   oidc: `${RUN_DIR}/oidc.jwt`,
   sessionSecret: `${RUN_DIR}/session-secret`,
@@ -8714,7 +9559,7 @@ function refuse3(message) {
 }
 __name(refuse3, "refuse");
 function sha256Hex2(bytes) {
-  return createHash7("sha256").update(bytes).digest("hex");
+  return createHash8("sha256").update(bytes).digest("hex");
 }
 __name(sha256Hex2, "sha256Hex");
 function exactKeys2(value, keys) {
@@ -8873,7 +9718,7 @@ async function createProtectedFirestoreMigrationContext(...args) {
     "assemblyDigest",
     "profile"
   ], "build-info");
-  if (buildInfo.schemaVersion !== 2 || typeof buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] !== "string" || !buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] || typeof buildInfo.sessionSecretVersion !== "string" || !DECIMAL.test(buildInfo.sessionSecretVersion) || typeof buildInfo.publicPackageSourceSha !== "string" || !SHA1_HEX.test(buildInfo.publicPackageSourceSha) || typeof buildInfo.privateRunnerSha !== "string" || !SHA1_HEX.test(buildInfo.privateRunnerSha) || typeof buildInfo.workflowSourceSha !== "string" || !SHA1_HEX.test(buildInfo.workflowSourceSha) || typeof buildInfo.assemblyDigest !== "string" || !SHA256_HEX.test(buildInfo.assemblyDigest) || buildInfo.profile !== "production" && buildInfo.profile !== "emulator") {
+  if (buildInfo.schemaVersion !== 2 || buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] !== MCP_CUTOVER_PREDICATE_TYPE || typeof buildInfo.sessionSecretVersion !== "string" || !DECIMAL.test(buildInfo.sessionSecretVersion) || typeof buildInfo.publicPackageSourceSha !== "string" || !SHA1_HEX.test(buildInfo.publicPackageSourceSha) || typeof buildInfo.privateRunnerSha !== "string" || !SHA1_HEX.test(buildInfo.privateRunnerSha) || typeof buildInfo.workflowSourceSha !== "string" || !SHA1_HEX.test(buildInfo.workflowSourceSha) || typeof buildInfo.assemblyDigest !== "string" || !SHA256_HEX.test(buildInfo.assemblyDigest) || buildInfo.profile !== "production" && buildInfo.profile !== "emulator") {
     refuse3("Protected build information is malformed");
   }
   const profile = buildInfo.profile;
@@ -8902,22 +9747,35 @@ async function createProtectedFirestoreMigrationContext(...args) {
     refuse3("Index policy collection groups are not the signed set");
   }
   assertRuntimeScopeFromCore(request.namespace, groups);
+  const inventoryBinding = profile === "production" ? PRODUCTION_INVENTORY_BINDING : EMULATOR_INVENTORY_BINDING;
+  if (inventoryBinding.project !== row.project || inventoryBinding.database !== row.database) {
+    refuse3("Inventory binding does not match the protected database profile");
+  }
+  const censusBytes = readFixedFile(PATHS.writerCensus);
+  const writerBytes = readFixedFile(PATHS.writerInventory);
+  const collectionBytes = readFixedFile(PATHS.collectionInventory);
+  let census;
+  let writer;
+  let collection;
+  try {
+    census = parseProtectedJson(censusBytes);
+    writer = parseProtectedJson(writerBytes);
+    collection = parseProtectedJson(collectionBytes);
+    if (canonicalJson(writer) !== new TextDecoder("utf-8", { fatal: true }).decode(writerBytes) || canonicalJson(collection) !== new TextDecoder("utf-8", { fatal: true }).decode(collectionBytes)) {
+      refuse3("Protected inventory files are not canonical JSON");
+    }
+    const inventory = joinFromFiles(writer, collection, inventoryBinding);
+    if (compareCensus({ census, ...inventory, scopeGroups: groups, binding: inventoryBinding }).decision !== "match") {
+      refuse3("Protected inventory does not match the approved census");
+    }
+  } catch {
+    refuse3("Protected inventory evidence is invalid");
+  }
+  const writerCensusDigest = sha256Hex2(censusBytes);
+  const writerInventoryDigest = sha256Hex2(writerBytes);
+  const collectionInventoryDigest = sha256Hex2(collectionBytes);
   const indexSchemaDigest = sha256Hex2(Buffer.from(canonicalJson(index), "utf8"));
   const indexPolicyDigest = sha256Hex2(Buffer.from(canonicalJson(index.policy), "utf8"));
-  const credentialsPresent = existsSync(PATHS.credentials);
-  const oidcPresent = existsSync(PATHS.oidc);
-  let oidcBefore = null;
-  if (profile === "production") {
-    assertCredentialFile(readFixedFile(PATHS.credentials));
-    oidcBefore = readFixedFile(PATHS.oidc);
-  } else if (credentialsPresent || oidcPresent) {
-    refuse3("Emulator profile refuses mounted production credentials");
-  }
-  const mutating = request.action === "activate" || request.action === "adopt" && "dryRun" in request.options && request.options.dryRun === false;
-  let invocation = null;
-  if (oidcBefore !== null && mutating) {
-    invocation = assertMutatingClaims(oidcBefore);
-  }
   const approval = parseStrictJson(readFixedFile(PATHS.approval), ["payloadType", "payload", "signatures"], "approval");
   const expectedKeyVersion = policy.keyVersion;
   const verified = verifyDSSEEnvelope(approval, policy.publicKeyPem, {
@@ -8938,11 +9796,28 @@ async function createProtectedFirestoreMigrationContext(...args) {
       project: row.project,
       database: row.database,
       namespace: request.namespace,
-      protocolDigest: request.identity.protocolDigest
+      protocolDigest: request.identity.protocolDigest,
+      writerCensusDigest,
+      writerInventoryDigest,
+      collectionInventoryDigest
     }
   });
   if (!Buffer.from(verified.payloadBytes).equals(attestationBytes)) {
     refuse3("Verified approval payload is not the attestation manifest bytes");
+  }
+  const credentialsPresent = existsSync(PATHS.credentials);
+  const oidcPresent = existsSync(PATHS.oidc);
+  let oidcBefore = null;
+  if (profile === "production") {
+    assertCredentialFile(readFixedFile(PATHS.credentials));
+    oidcBefore = readFixedFile(PATHS.oidc);
+  } else if (credentialsPresent || oidcPresent) {
+    refuse3("Emulator profile refuses mounted production credentials");
+  }
+  const mutating = request.action === "activate" || request.action === "adopt" && "dryRun" in request.options && request.options.dryRun === false;
+  let invocation = null;
+  if (oidcBefore !== null && mutating) {
+    invocation = assertMutatingClaims(oidcBefore);
   }
   const subjectDescriptor = subjectDescriptorFromPredicate(request.namespace, verified.statement.predicate);
   const key = deriveStoreKey(readFixedFile(PATHS.sessionSecret).toString("utf8"));

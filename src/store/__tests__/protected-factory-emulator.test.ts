@@ -131,6 +131,30 @@ describe.skipIf(!gateOpen)('protected migration factory on the emulator profile'
   expect(result.ok).toBe(false);
   expect(result.message).toBe('Emulator profile refuses mounted production credentials'); });
 
+  it('refuses modified inventory bytes before accessing the session secret', async () => {
+    const fixture = fixtureFor('mcp');
+    fixture.run['writer-inventory.json'] = Buffer.from('{}');
+    delete fixture.run['session-secret'];
+    mount(fixture);
+    const result = await runFactory('inspect', 'mcp');
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe('Protected inventory evidence is invalid');
+  });
+
+  it('refuses an invalid approval before accessing the session secret', async () => {
+    const fixture = fixtureFor('mcp');
+    const envelope = JSON.parse(fixture.run['approval.dsse.json'].toString());
+    const signature = Buffer.from(envelope.signatures[0].sig, 'base64');
+    signature[0] ^= 1;
+    envelope.signatures[0].sig = signature.toString('base64');
+    fixture.run['approval.dsse.json'] = Buffer.from(JSON.stringify(envelope));
+    delete fixture.run['session-secret'];
+    mount(fixture);
+    const result = await runFactory('inspect', 'mcp');
+    expect(result.ok).toBe(false);
+    expect(result.message).not.toMatch(/session-secret|ENOENT/);
+  });
+
   it('refuses a variable outside the factory environment allowlist before reading any file', async () => { mount(fixtureFor('mcp'));
   const result = await runFactory('inspect', 'mcp', { env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' } })
   expect(result.ok).toBe(false);
