@@ -2751,9 +2751,11 @@ export function verifyIndexManifestDigests(manifest, expected) {
   if (JSON.stringify(groups) !== JSON.stringify(policyGroups)) {
     throw new CutoverFenceError('Index binding collectionGroups must equal the policy collection groups');
   }
-  for (const entry of getCutoverRuntimeCollectionScope(expected.namespace).union) {
-    if (!groups.includes(entry.name)) {
-      throw new CutoverFenceError(`Index binding omits runtime collection group ${entry.name}`);
+  const runtimeScope = getCutoverRuntimeCollectionScope(expected.namespace);
+  assertRuntimeScopeClosed(runtimeScope);
+  for (const name of runtimeScope.groups) {
+    if (!groups.includes(name)) {
+      throw new CutoverFenceError(`Index binding omits runtime collection group ${name}`);
     }
   }
   if (sha(manifest) !== expected.indexSchemaDigest) {
@@ -4660,8 +4662,23 @@ export function getCutoverRuntimeCollectionScope(namespace) {
     runtime: Object.freeze(runtime),
     union: Object.freeze([...byName.values()].sort((a, b) => a.name.localeCompare(b.name))),
     migrationNames: Object.freeze([...migrationNames].sort()),
+    // The one mapping the signed policy is checked against: every union name, once, sorted. Object union stays internal.
+    groups: Object.freeze([...new Set(byName.keys())].sort()),
+    // Collections whose names could not be resolved to a literal. Empty means every name is literal and known.
+    unresolved: Object.freeze([]),
     siblingWriters: SIBLING_WRITERS,
   });
+}
+
+// G0: the scope may be used only when the census is closed. Nonempty unscanned surfaces refuse, as does complete:false.
+export function assertRuntimeScopeClosed(scope) {
+  if (
+    scope.complete !== true ||
+    !Array.isArray(scope.unscanned) || scope.unscanned.length !== 0 ||
+    !Array.isArray(scope.unresolved) || scope.unresolved.length !== 0
+  ) {
+    throw new CutoverRefusedError('Runtime collection scope is not closed: the census of unscanned surfaces is incomplete');
+  }
 }
 
 export function assertValidMigrationContext(options) {
