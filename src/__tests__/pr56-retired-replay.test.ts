@@ -1,96 +1,44 @@
-import { describe, expect, it, vi } from 'vitest';
-import { createHash, randomUUID } from 'node:crypto';
-import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
-import { createMemoryBackend } from '../store/memory.js';
-import { createStore } from '../store/store.js';
+// PR56 retired refresh token replay, ported from the MockFirestore test onto the genuine protected runner and
+// the Firestore emulator. The legacy family carries a SHA-256 base64url fingerprint of a retired token; the
+// runner adopts it and writes the retired row; presenting the old token must report replay and revoke the
+// family. Runs only where containerGateOpen() holds. Never touches an existing /opt/cutover or /run/cutover.
+// UNVERIFIED until run under the gate.
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Firestore } from '@google-cloud/firestore';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../store/codec.js';
-import {
-  initializeCutoverFence,
-  getCutoverFenceRecord,
-  transitionCutoverFenceState,
-} from '../store/firestore-v2-adoption.js';
-import { adoptFirestoreLegacyTokens, computeSourceInventoryDigest } from '../store/firestore-v2-adoption.js';
+import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
+import { getCutoverFenceRecord, transitionCutoverFenceState } from '../store/firestore-v2-adoption.js';
+import { startFakeAdmin } from './support/fake-admin.mjs';
+import { assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
+import { fixtureFor, runStep, sessionSecretOf } from './support/runner-harness.mjs';
+import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from './support/emulator-seed.js';
 
-class MockFirestore implements FirestoreLike {
-  private collections = new Map<string, Map<string, Record<string, unknown>>>();
+const here = dirname(fileURLToPath(import.meta.url));
+const BUNDLE_SOURCE = resolve(here, '..', 'store', 'cutover-protocol.mjs');
+const NS = 'mcp';
+const gateOpen = containerGateOpen();
 
-  private getCol(name: string): Map<string, Record<string, unknown>> {
-    if (!this.collections.has(name)) {
-      this.collections.set(name, new Map());
-    }
-    return this.collections.get(name)!;
-  }
+describe.skipIf(!gateOpen)('PR56 Retired Refresh Token Replay Detection (emulator, runner)', () => {
+  let bundleBytes: Buffer;
+  let db: Firestore;
 
-  collection(path: string): any {
-    const col = this.getCol(path);
-    return {
-      doc: (id: string) => ({
-        id,
-        get: async () => ({
-          id,
-          exists: col.has(id),
-          data: () => col.get(id),
-        }),
-        set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
-          if (opts?.merge && col.has(id)) {
-            col.set(id, { ...col.get(id), ...data });
-          } else {
-            col.set(id, data);
-          }
-        },
-        delete: async () => {
-          col.delete(id);
-        },
-      }),
-      get: async () => ({
-        empty: col.size === 0,
-        docs: Array.from(col.entries()).map(([id, data]) => ({
-          id,
-          exists: true,
-          data: () => data,
-        })),
-      }),
-      where: (field: string, op: string, value: any) => {
-        const query = {
-          limit: (_n: number) => query,
-          get: async () => {
-            const matched = Array.from(col.entries()).filter(([, d]) => {
-              if (op === 'in' && Array.isArray(value)) return value.includes(d[field]);
-              return d[field] === value;
-            });
-            return {
-              empty: matched.length === 0,
-              docs: matched.map(([id, data]) => ({
-                id,
-                exists: true,
-                data: () => data,
-              })),
-            };
-          },
-        };
-        return query;
-      },
-    };
-  }
+  beforeAll(() => {
+    assertCanOwnMounts();
+    bundleBytes = readFileSync(BUNDLE_SOURCE);
+    expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
+    db = new Firestore(EMULATOR);
+  });
 
-  async runTransaction<T>(cb: (tx: any) => Promise<T>): Promise<T> {
-    const tx = {
-      get: async (docRef: any) => docRef.get(),
-      set: (docRef: any, data: any, opts?: { merge?: boolean }) => docRef.set(data, opts),
-      delete: (docRef: any) => docRef.delete(),
-    };
-    return cb(tx);
-  }
-}
-
-describe('PR56 Retired Refresh Token Replay Detection', () => {
-  const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-  const key = deriveStoreKey(secret);
+  afterAll(async () => {
+    releaseMounts();
+    await db.terminate();
+  });
 
   it('detects replay when an old PR56 retired token (SHA-256 base64url fingerprint) is presented and revokes family', async () => {
-    const db = new MockFirestore();
-    const namespace = 'mcp';
-
     const oldRetiredToken = 'old-pr56-token-123';
     const legacyShaFingerprint = createHash('sha256').update(oldRetiredToken).digest('base64url');
 
@@ -99,91 +47,93 @@ describe('PR56 Retired Refresh Token Replay Detection', () => {
     const familyId = 'fam-with-retired-history';
     const clientId = 'pr56-client';
 
-    // 1. Seed PR56 legacy family with retiredRefreshFingerprints containing the SHA-256 fingerprint
-    await db.collection(`${namespace}_tokens_refresh_families`).doc(familyId).set({
-      id: familyId,
-      currentAccessToken: currentActiveAccess,
-      currentRefreshToken: currentActiveRefresh,
-      retiredRefreshFingerprints: [legacyShaFingerprint],
-      updatedAt: Date.now(),
-    });
-
-    // 2. Seed active refresh pointer
-    await db.collection(`${namespace}_tokens_refresh`).doc(currentActiveRefresh).set({
-      accessToken: currentActiveAccess,
-      familyId,
-      status: 'active',
-      token: {
+    // 1. Fenced namespace at the runner epoch, then the legacy family with the retired fingerprint.
+    await resetFencedNamespace(db, NS);
+    await seedDocs(db, [
+      [`${NS}_tokens_refresh_families/${familyId}`, {
+        id: familyId,
+        currentAccessToken: currentActiveAccess,
+        currentRefreshToken: currentActiveRefresh,
+        retiredRefreshFingerprints: [legacyShaFingerprint],
+        updatedAt: Date.now(),
+      }],
+      // 2. Active refresh pointer.
+      [`${NS}_tokens_refresh/${currentActiveRefresh}`, {
         accessToken: currentActiveAccess,
-        refreshToken: currentActiveRefresh,
-        clientId,
+        familyId,
+        status: 'active',
+        token: {
+          accessToken: currentActiveAccess,
+          refreshToken: currentActiveRefresh,
+          clientId,
+          expiresAt: Date.now() + 3600_000,
+          nsAccessToken: 'ns-tok',
+          nsRefreshToken: 'ns-ref',
+          nsUsername: 'alice@domain.com',
+        },
+      }],
+      // 3. Upstream grant.
+      [`${NS}_tokens_upstream/${familyId}`, {
+        grant: { access_token: 'ns-tok', refresh_token: 'ns-ref', username: 'alice@domain.com' },
         expiresAt: Date.now() + 3600_000,
-        nsAccessToken: 'ns-tok',
-        nsRefreshToken: 'ns-ref',
-        nsUsername: 'alice@domain.com',
-      },
-    });
+        updatedAt: Date.now(),
+      }],
+    ]);
 
-    // 3. Seed upstream grant
-    await db.collection(`${namespace}_tokens_upstream`).doc(familyId).set({
-      grant: {
-        access_token: 'ns-tok',
-        refresh_token: 'ns-ref',
-        username: 'alice@domain.com',
-      },
-      expiresAt: Date.now() + 3600_000,
-      updatedAt: Date.now(),
+    // 4. The fake Admin serves the fixture's signed index; inspect supplies the digest; the runner adopts.
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    const admin = await startFakeAdmin({
+      databaseResource: fixture.index.provenance.databaseResource,
+      policy: fixture.index.policy,
+      token: 'owner',
     });
-    // 4. Initialize fence in fenced state, execute adoption, and transition to v3_active
-    await initializeCutoverFence(db, namespace, { initialEpoch: 1 });
-    await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
-    await transitionCutoverFenceState(db, namespace, { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 });
-    const ctrlFenced = await getCutoverFenceRecord(db, namespace);
-    const report = await adoptFirestoreLegacyTokens({
-      db,
-      FieldPath: { documentId: () => '__name__' },
-      namespace,
-      key,
-      dryRun: false,
-      expectedEpoch: ctrlFenced!.epoch,
-      migrationRunId: 'pr56-retired-run',
-      codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
-      codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
-      packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
-      protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
-      expectedSourceInventoryDigest: await computeSourceInventoryDigest(db, namespace, key, ctrlFenced!.epoch),
-    });
-    expect(report.errors).toBe(0);
-    expect(report.migrated).toBe(1);
-    const retiredRow = await db.collection(`${namespace}_retired_refresh`).doc(legacyShaFingerprint).get();
-    expect(retiredRow.exists).toBe(true);
-    expect(retiredRow.data()).toEqual({ familyId });
+    try {
+      const inspected = runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+      expect(inspected.ok).toBe(true);
+      const adopted = runStep({
+        bundleBytes,
+        namespace: NS,
+        epoch: EPOCH,
+        action: 'adopt',
+        options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest },
+      });
+      expect(adopted.ok).toBe(true);
+      expect(adopted.report?.errors).toBe(0);
+      expect(adopted.report?.migrated).toBe(1);
 
-    const ctrl = await getCutoverFenceRecord(db, namespace);
-    await transitionCutoverFenceState(db, namespace, {
+      // The runner writes the retired fingerprint as a row that points at the family.
+      const retiredRow = await db.collection(`${NS}_retired_refresh`).doc(legacyShaFingerprint).get();
+      expect(retiredRow.exists).toBe(true);
+      expect(retiredRow.data()).toEqual({ familyId });
+    } finally {
+      await admin.close();
+    }
+
+    // 5. Move to v3_active with the run the runner recorded, then open the v3 store with the factory's key.
+    const key = deriveStoreKey(sessionSecretOf(fixture));
+    const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    expect(ctrl?.state).toBe('v3_ready');
+    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
       fromState: 'v3_ready',
       toState: 'v3_active',
       expectedEpoch: ctrl!.epoch,
       migrationRunId: ctrl!.migrationRunId!,
       migrationManifestDigest: ctrl!.migrationManifestDigest!,
     });
+    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key });
 
-    // Open v3 store
-    const store = createFirestoreStore({ db, namespace, key });
-    // 5. Present the old retired token (from before cutover)
+    // 6. Presenting the old retired token is detected as replay for its family.
     const replayLookup = await store.sessions.lookupRefresh(oldRetiredToken, clientId, Date.now());
-
-    // Must be detected as replay!
     expect(replayLookup.status).toBe('replay');
     if (replayLookup.status === 'replay') {
       expect(replayLookup.familyId).toBe(familyId);
     }
 
-    // 6. Verify family is now REVOKED and upstream credentials deleted
+    // 7. The family is revoked: the active refresh no longer resolves, and its session is gone.
     const activeLookup = await store.sessions.lookupRefresh(currentActiveRefresh, clientId, Date.now());
-    expect(activeLookup.status).toBe('missing'); // Family was revoked!
+    expect(activeLookup.status).toBe('missing');
 
     const session = await store.sessions.get(currentActiveAccess);
-    expect(session).toBeUndefined(); // Active session deleted on revocation!
+    expect(session).toBeUndefined();
   });
 });
