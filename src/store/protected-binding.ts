@@ -22,6 +22,9 @@ export interface ProtectedIdentityFields {
 
 export interface ProtectedBinding extends ProtectedIdentityFields {
   readonly profile: 'production' | 'emulator';
+  // The fixed profile row's project and database. The core's manifest check compares both (spec §2).
+  readonly project: string;
+  readonly database: string;
   readonly assemblyDigest: string;
   readonly indexSchemaDigest: string;
   readonly indexPolicyDigest: string;

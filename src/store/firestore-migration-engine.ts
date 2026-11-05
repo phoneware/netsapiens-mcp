@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, existsSync } from 'node:fs';
 import { createCodec, type Codec } from './codec.js';
 import { subjectRefsForFamily, subjectSpecFor, type SubjectSpec } from './subject-descriptor.js';
 import {
@@ -27,6 +26,7 @@ import {
 import {
   CutoverFenceError,
   CutoverRefusedError,
+  isCutoverFenceError,
 } from './errors.js';
 import {
   startMonotonicTimer,
@@ -68,9 +68,9 @@ import {
 import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
-import { assertActivationObservation, assertPreparationObservation, isRecordedObservation, recordedPreparationObservation } from './fresh-index-observation.js';
+import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
-import { APPROVED_GRAPH_PROJECTOR_ID, APPROVED_GRAPH_PROJECTOR_VERSION } from '../cutover/canonical-core.mjs';
+import { PROJECTOR_ID, PROJECTOR_VERSION } from './netsapiens-projector.mjs';
 import type { ProtectedBinding } from './protected-binding.js';
 import { observeFreshIndexes } from './fresh-index-producer.js';
 import { concreteFieldPaths, type SignedIndexPolicy } from './index-coverage.js';
@@ -140,6 +140,8 @@ export interface PreparationIdentity {
   readonly protocolDigest: string;
   readonly assemblyDigest: string;
   readonly indexSchemaDigest: string;
+  readonly indexPolicyDigest: string;
+  readonly encoderVersion: number;
 }
 
 export interface PreparationInputs {
@@ -273,79 +275,12 @@ export function assertValidMigrationContext(options: unknown, extraFields: reado
   }
 }
 
-interface BootstrapBindings {
-  assemblyDigest: string;
-  indexSchemaDigest: string;
-}
-
-function resolveProtectedBootstrap(namespace: SupportedNamespace, expectedProtocolDigest: string): BootstrapBindings {
-  const baseDir = (process.env.NODE_ENV === 'test' && process.env.CUTOVER_BOOTSTRAP_DIR)
-    ? process.env.CUTOVER_BOOTSTRAP_DIR
-    : '/run/cutover';
-  const indexPath = `${baseDir}/index-schema.json`;
-  const assemblyPath = `${baseDir}/assembly.json`;
-
-  if (!existsSync(indexPath)) {
-    if (process.env.NODE_ENV === 'test') {
-      const testSchema = JSON.stringify({ schemaVersion: 1, allowedNamespaces: ['mcp', 'pwmcp', 'readonly_mcp'] });
-      const testAssembly = JSON.stringify({ schemaVersion: 1, protocolDigest: expectedProtocolDigest });
-      return {
-        assemblyDigest: createHash('sha256').update(testAssembly).digest('hex'),
-        indexSchemaDigest: createHash('sha256').update(testSchema).digest('hex'),
-      };
-    }
-    throw new CutoverFenceError(`Trusted bootstrap refused: protected index schema missing at ${indexPath}`);
-  }
-
-  let indexContent: string;
-  let indexSchema: any;
-  try {
-    indexContent = readFileSync(indexPath, 'utf8');
-    indexSchema = JSON.parse(indexContent);
-  } catch (err: any) {
-    throw new CutoverFenceError(`Trusted bootstrap refused: malformed ${indexPath}: ${err.message}`);
-  }
-
-  if (!indexSchema || typeof indexSchema !== 'object') {
-    throw new CutoverFenceError(`Trusted bootstrap refused: ${indexPath} root must be an object`);
-  }
-  if (!Array.isArray(indexSchema.allowedNamespaces) || !indexSchema.allowedNamespaces.includes(namespace)) {
-    throw new CutoverFenceError(`Trusted bootstrap refused: namespace '${namespace}' not permitted by ${indexPath}`);
-  }
-
-  // Canonical JSON, the same form the protected factory and the reviewed core digest. Non-canonical bytes are refused.
-  if (canonicalJson(indexSchema) !== indexContent) {
-    throw new CutoverFenceError(`Trusted bootstrap refused: ${indexPath} is not canonical JSON`);
-  }
-  const indexSchemaDigest = createHash('sha256').update(Buffer.from(canonicalJson(indexSchema), 'utf8')).digest('hex');
-
-  let assemblyContent: string;
-  let assembly: any;
-  if (!existsSync(assemblyPath)) {
-    if (process.env.NODE_ENV === 'test') {
-      assemblyContent = JSON.stringify({ schemaVersion: 1, protocolDigest: expectedProtocolDigest });
-    } else {
-      throw new CutoverFenceError(`Trusted bootstrap refused: protected assembly manifest missing at ${assemblyPath}`);
-    }
-  } else {
-    try {
-      assemblyContent = readFileSync(assemblyPath, 'utf8');
-      assembly = JSON.parse(assemblyContent);
-    } catch (err: any) {
-      throw new CutoverFenceError(`Trusted bootstrap refused: malformed ${assemblyPath}: ${err.message}`);
-    }
-  }
-
-  if (!assembly || assembly.protocolDigest !== expectedProtocolDigest) {
-    throw new CutoverFenceError('Trusted bootstrap refused: assembly protocolDigest mismatch or missing');
-  }
-
-  const assemblyDigest = createHash('sha256').update(assemblyContent).digest('hex');
-
-  return {
-    assemblyDigest,
-    indexSchemaDigest,
-  };
+// The bootstrap digests come only from the authenticated protected binding for this handle (spec N2, P3).
+// The legacy file loader and its test fallbacks are gone. A handle without a protected context refuses.
+function protectedBootstrapBindings(db: object): { assemblyDigest: string; indexSchemaDigest: string } {
+  const binding = getProtectedBinding(db);
+  if (!binding) throw new CutoverRefusedError('Protected migration context required for bootstrap bindings');
+  return { assemblyDigest: binding.assemblyDigest, indexSchemaDigest: binding.indexSchemaDigest };
 }
 
 function legacyDocId(token: string): string {
@@ -724,9 +659,10 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '', subject },
+      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
+      subject,
     );
     if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'pr56Families', logicalProjection);
@@ -794,7 +730,7 @@ export function extractCandidatesAndPlan(params: {
 
     // Verify logical projection equivalence
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '', subject },
+      { id: candidateId, kind: 'pr56Families', sources: candSources, targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -932,9 +868,10 @@ export function extractCandidatesAndPlan(params: {
     }
 
     const logicalProjection = projectSourceLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '', subject },
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
+      subject,
     );
     if (subjectRefsForFamily(subject, logicalProjection.extra, logicalProjection.status).problem) reasons.subject_value_missing++;
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'baseFormatTokens', logicalProjection);
@@ -969,7 +906,7 @@ export function extractCandidatesAndPlan(params: {
     postimageByTargetId.set(upTargetId, upRow);
 
     const targetLogicalProjection = projectTargetLogical(
-      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '', subject },
+      { id: candidateId, kind: 'baseFormatTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
       targetDocsMap,
       codec,
     );
@@ -1047,6 +984,7 @@ export function extractCandidatesAndPlan(params: {
       { id: candidateId, kind: 'authCodes', sources: candSources, targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
+      subject,
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'authCodes', logicalProjection);
 
@@ -1147,6 +1085,7 @@ export function extractCandidatesAndPlan(params: {
       { id: candidateId, kind: 'resumeTokens', sources: candSources, targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
+      subject,
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'resumeTokens', logicalProjection);
 
@@ -1278,6 +1217,7 @@ export function extractCandidatesAndPlan(params: {
       { id: candidateId, kind: 'clients', sources: candSources, targets: candTargets, logicalDigest: '' },
       sourcesMap,
       codec,
+      subject,
     );
     const logicalDigest = computeCandidateLogicalDigest(storeKey, namespace, epoch, 'clients', logicalProjection);
 
@@ -1444,7 +1384,7 @@ export function extractCandidatesAndPlan(params: {
     // Record-bearing plans carry the approved projector identity. The reviewed core requires this exact
     // triple once records exist, and requires projectorDigest to equal protocolDigest.
     ...(totalPhysicalRecords > 0
-      ? { projectorId: APPROVED_GRAPH_PROJECTOR_ID, projectorVersion: APPROVED_GRAPH_PROJECTOR_VERSION, projectorDigest: protocolDigest }
+      ? { projectorId: PROJECTOR_ID, projectorVersion: PROJECTOR_VERSION, projectorDigest: protocolDigest }
       : {}),
   };
 
@@ -1694,7 +1634,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
   }
 
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+  const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(db);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -1852,9 +1792,20 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
         continue;
       }
 
-      // A projection refusal is a refusal, not a partial target. It propagates so the report cannot hide it.
-      const decodedLogical = projectTargetLogical(c, targetMap, codec);
-      const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
+      // Only a stored-target decode or projection refusal is a partial target. Everything else propagates.
+      let derivedDigest: string;
+      try {
+        const decodedLogical = projectTargetLogical(c, targetMap, codec);
+        derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
+      } catch (err) {
+        if (!isCutoverFenceError(err)) throw err;
+        reasons.partialTargets++;
+        for (const t of c.targets) {
+          const key = `${t.collection}:${t.rawId}`;
+          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
+        }
+        continue;
+      }
       if (derivedDigest === c.logicalDigest) {
         prospectiveRetained++;
         for (const t of c.targets) {
@@ -2028,7 +1979,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   }
 
   const { db, FieldPath, key, namespace, expectedEpoch, migrationRunId, codeSha, codeArtifact, packageIntegrity, protocolDigest, dryRun, expectedSourceInventoryDigest } = options;
-  const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+  const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(db);
   const storeKey = key;
   const docIdField = FieldPath.documentId();
 
@@ -2115,9 +2066,21 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
 
+    const preparationBinding = getProtectedBinding(db);
+    if (!preparationBinding) throw new CutoverRefusedError('Protected migration context required for preparation');
+    // Every identity field comes from the authenticated binding. The gate compares the prepared plan against it.
     const preparationIdentity: PreparationIdentity = {
-      namespace, epoch: control.epoch, migrationRunId, codeSha, codeArtifact, packageIntegrity,
-      protocolDigest, assemblyDigest, indexSchemaDigest,
+      namespace: preparationBinding.namespace,
+      epoch: preparationBinding.expectedEpoch,
+      migrationRunId: preparationBinding.migrationRunId,
+      codeSha: preparationBinding.codeSha,
+      codeArtifact: preparationBinding.codeArtifact,
+      packageIntegrity: preparationBinding.packageIntegrity,
+      protocolDigest: preparationBinding.protocolDigest,
+      assemblyDigest: preparationBinding.assemblyDigest,
+      indexSchemaDigest: preparationBinding.indexSchemaDigest,
+      indexPolicyDigest: preparationBinding.indexPolicyDigest,
+      encoderVersion: 1,
     };
     if (sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(
@@ -2151,21 +2114,21 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     // Write prepared manifest + transition control to migrating
     assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
-    const preparationBinding = getProtectedBinding(db);
-    if (!preparationBinding) throw new CutoverRefusedError('Protected migration context required for preparation');
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
       prepDoc: plan.prepared,
       storeKey,
       FieldPath,
       timer,
-      // The real protected inputs. The gate above validated them in this snapshot; the seam receives them unchanged.
       completePlan: plan,
       expectedIdentity: preparationIdentity,
       indexManifest: preparationBinding.indexSchema,
-      protectedBinding: preparationBinding,
-      freshObservation: recordedPreparationObservation(db, preparationBinding),
-      isRecordedObservation: (observation: unknown) => isRecordedObservation(db, observation),
+      protectedBinding: {
+        profile: preparationBinding.profile,
+        project: preparationBinding.project,
+        database: preparationBinding.database,
+        subjectDescriptor: preparationBinding.subjectDescriptor,
+      },
     });
 
     timer.assertUnderDeadline(16_000, 'Preparation commit');
@@ -2796,7 +2759,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
       throw new CutoverFenceError('Final migration manifest digest or plan binding mismatch');
     }
     if (control.state === 'v3_ready') {
-      const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, context.protocolDigest);
+      const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(context.db);
       if (finalDoc.assemblyDigest !== assemblyDigest || finalDoc.indexSchemaDigest !== indexSchemaDigest) {
         throw new CutoverFenceError('Final migration manifest bootstrap bindings mismatch');
       }
@@ -2875,7 +2838,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
 
       // Verify bootstrap bindings only when v3_ready (before activation)
       if (control.state === 'v3_ready') {
-        const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+        const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(context.db);
         if (marker.assemblyDigest !== assemblyDigest || marker.indexSchemaDigest !== indexSchemaDigest) {
           throw new CutoverFenceError('Immutable migration marker bootstrap bindings mismatch');
         }
@@ -2886,7 +2849,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       if (finalSnap.exists) {
         const f = finalSnap.data() as Record<string, unknown>;
         if (control.state === 'v3_ready') {
-          const { assemblyDigest, indexSchemaDigest } = resolveProtectedBootstrap(namespace, protocolDigest);
+          const { assemblyDigest, indexSchemaDigest } = protectedBootstrapBindings(context.db);
           if (f.assemblyDigest !== assemblyDigest || f.indexSchemaDigest !== indexSchemaDigest) {
             throw new CutoverFenceError('Final migration manifest bootstrap bindings mismatch');
           }

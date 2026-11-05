@@ -1,6 +1,7 @@
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
 import { assertConcreteCoverage, assertDocumentBudget, concreteFieldPaths, type FreshCollectionCoverage, type SignedIndexPolicy } from './index-coverage.js';
 import type { ProtectedBinding } from './protected-binding.js';
+import { CutoverFenceError, CutoverRefusedError } from './errors.js';
 
 // Fresh authenticated Admin observation. fresh-index-producer.ts records it, reading
 // with the handle's authenticated token. Without a recorded observation for this
@@ -149,6 +150,18 @@ export function assertPreparationObservation(input: {
     throw new CutoverRefusedError('Source inventory digest differs from the observed inventory');
   }
   const schema = binding.indexSchema as { policy: SignedIndexPolicy; provenance: { databaseResource: string } };
+  if (subjectRefsGroup !== undefined) {
+    // N3: the observed subjectRefs must also resolve to the signed root, not only show a CONTAINS entry.
+    const fresh = observation.coverage.get(subjectRefsGroup);
+    if (!fresh) throw new CutoverRefusedError('Subject reference index is not covered by the fresh observation');
+    assertConcreteCoverage({
+      policy: schema.policy,
+      databaseResource: schema.provenance.databaseResource,
+      collectionGroup: subjectRefsGroup,
+      paths: new Map([['subjectRefs', 1]]),
+      fresh,
+    });
+  }
   for (const write of writes) {
     assertDocumentBudget({
       document: write.document,

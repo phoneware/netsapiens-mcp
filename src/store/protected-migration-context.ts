@@ -437,6 +437,8 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     packageIntegrity: request.identity.packageIntegrity,
     protocolDigest: request.identity.protocolDigest,
     profile,
+    project: row.project,
+    database: row.database,
     assemblyDigest: buildInfo.assemblyDigest as string,
     indexSchemaDigest,
     indexPolicyDigest,

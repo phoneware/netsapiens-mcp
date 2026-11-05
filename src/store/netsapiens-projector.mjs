@@ -3,6 +3,7 @@ import { createCodec } from './codec.js';
 import { accessAad, familyAad, upstreamAad, codeUnitCompare } from './row-format.js';
 import { CutoverFenceError } from './errors.js';
 import { subjectRefsForFamily } from './subject-descriptor.js';
+export { subjectSpecFor } from './subject-descriptor.js';
 
 // Subject reference fields for family logical projections. Absent when the namespace has no
 // signed subject descriptor, so those namespaces keep their existing digests.
@@ -12,11 +13,12 @@ function sourceSubjectFields(refs) {
 function targetSubjectFields(famData) {
   return Array.isArray(famData?.subjectRefs) && famData.status === 'active' ? { subjectRefs: [...famData.subjectRefs] } : {};
 }
-// A family candidate must state its subject policy explicitly: a signed descriptor, or null.
-// An absent declaration refuses, so no family is projected under an unstated policy.
-function requireSubjectPolicy(candidate) {
-  if (!Object.prototype.hasOwnProperty.call(candidate, 'subject')) {
-    throw new CutoverFenceError(`Family candidate ${sanitizeId(candidate.id)} has no explicit subject policy`);
+// The subject policy is an in-memory parameter taken from the binding (spec §3.1). null or a spec is accepted.
+// undefined refuses with fixed text, so no projection runs under an unstated policy. No value is echoed.
+function requireSubjectParameter(subject) {
+  if (subject === undefined) throw new CutoverFenceError('Subject policy parameter is required');
+  if (subject !== null && (typeof subject !== 'object' || typeof subject.refFor !== 'function' || typeof subject.extraKey !== 'string')) {
+    throw new CutoverFenceError('Subject policy parameter is malformed');
   }
 }
 
@@ -61,8 +63,8 @@ export function getTimestampMs(val) {
   return null;
 }
 
-export function projectSourceLogical(candidate, sources, codec) {
-  if (candidate.kind === 'pr56Families' || candidate.kind === 'baseFormatTokens') requireSubjectPolicy(candidate);
+export function projectSourceLogical(candidate, sources, codec, subject) {
+  requireSubjectParameter(subject);
   if (candidate.kind === 'pr56Families') {
     const famDoc = sources.get('families');
     if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families source`);
@@ -155,7 +157,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('pr56Families missing required nsUsername');
     }
 
-    const pr56SubjectRefs = subjectRefsForFamily(candidate.subject, curRefDoc.token?.extra ?? tokDoc.extra ?? {}, famData.status === 'revoked' ? 'revoked' : 'active').refs;
+    const pr56SubjectRefs = subjectRefsForFamily(subject, curRefDoc.token?.extra ?? tokDoc.extra ?? {}, famData.status === 'revoked' ? 'revoked' : 'active').refs;
     return {
       familyId,
       generation,
@@ -216,7 +218,7 @@ export function projectSourceLogical(candidate, sources, codec) {
       throw new CutoverFenceError('baseFormatTokens missing required nsUsername');
     }
 
-    const familySubjectRefs = subjectRefsForFamily(candidate.subject, tokDoc.extra ?? {}, 'active').refs;
+    const familySubjectRefs = subjectRefsForFamily(subject, tokDoc.extra ?? {}, 'active').refs;
     return {
       familyId,
       generation: 1,
@@ -363,7 +365,6 @@ export function projectSourceLogical(candidate, sources, codec) {
 }
 
 export function projectTargetLogical(candidate, targets, codec) {
-  if (candidate.kind === 'pr56Families' || candidate.kind === 'baseFormatTokens') requireSubjectPolicy(candidate);
   if (candidate.kind === 'pr56Families') {
     const famDoc = targets.get('families');
     if (!famDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing families target document`);
