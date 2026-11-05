@@ -46,3 +46,6 @@ export {
   verifyActiveFirestoreMigration,
   getFirestoreMigrationStatus,
 } from '../store/firestore-migration-engine.js';
+
+// Runner-only zero-selector factory. lib.ts must never re-export it.
+export { createProtectedFirestoreMigrationContext } from '../store/protected-migration-context.js';
