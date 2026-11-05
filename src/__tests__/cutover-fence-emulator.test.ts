@@ -1,11 +1,12 @@
-import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, beforeAll, beforeEach } from 'vitest';
+import { connect } from 'node:net';
 import { FieldPath, Firestore } from '@google-cloud/firestore';
 import {
   initializeCutoverFence,
   getCutoverFenceRecord,
   transitionCutoverFenceState,
   withLegacyOperation,
-    startMonotonicTimer,
+  startMonotonicTimer,
   checkMutationGuardInTransaction,
   markIrreversibleInTransaction,
   CutoverFenceError,
@@ -17,10 +18,30 @@ import {
 import { createFirestoreStore, createFirestoreBackend } from '../store/firestore.js';
 import { deriveStoreKey, createCodec } from '../store/codec.js';
 
-const EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || 'localhost:18080';
+const host = process.env.FIRESTORE_EMULATOR_HOST;
+const required = process.env.NSMCP_REQUIRE_FIRESTORE_EMULATOR === '1';
+const EMULATOR_HOST = host ?? '';
+
+// Same gate as firestore.test.ts: a configured or required emulator must be reachable. The suite never
+// falls back to a default host or to live Firestore.
+async function checkEmulator(): Promise<void> {
+  if (!host) throw new Error('FIRESTORE_EMULATOR_HOST is required when NSMCP_REQUIRE_FIRESTORE_EMULATOR=1');
+  const url = new URL(`http://${host}`);
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const socket = connect({ host: url.hostname, port: Number(url.port) });
+  socket.setTimeout(2000);
+  socket.once('connect', () => { socket.destroy(); resolve(); });
+  socket.once('error', (error) => { socket.destroy(); reject(new Error(`Firestore emulator unreachable at ${host}: ${error.message}`)); });
+  socket.once('timeout', () => { socket.destroy(); reject(new Error(`Firestore emulator unreachable at ${host}: timeout`)); });
+  await promise;
+}
 const PROJECT_ID = 'nsmcp-cutover-fence-isolated';
 
-describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Namespace "mcp")', () => {
+describe('Firestore emulator availability for the cutover fence', () => {
+  it('requires a reachable emulator when requested', async () => { if (required || host) await checkEmulator(); });
+});
+
+describe.skipIf(!host)('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Namespace "mcp")', () => {
   let db: Firestore;
   const namespace = 'mcp'; // strictly supported namespace
   const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -28,12 +49,9 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
   const codec = createCodec(key);
 
   const clearEmulator = async () => {
-    try {
-      const url = `http://${EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
-      await fetch(url, { method: 'DELETE' });
-    } catch {
-      // Ignored if emulator endpoint reset is unavailable
-    }
+    const url = `http://${EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+    const response = await fetch(url, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Firestore emulator reset failed at ${EMULATOR_HOST}: HTTP ${response.status}`);
   };
 
   const setupFencedState = async (epoch: number = 1): Promise<void> => {
@@ -46,10 +64,10 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     const ctrl = await getCutoverFenceRecord(db, namespace);
     const epoch = (opts.expectedEpoch as number | undefined) ?? ctrl?.epoch ?? 1;
     const digest = (opts.expectedSourceInventoryDigest as string | undefined) ??
-            await computeSourceInventoryDigest(db, namespace, key, epoch);
+      await computeSourceInventoryDigest(db, namespace, key, epoch);
     return {
       db,
-            FieldPath,
+      FieldPath,
       namespace,
       key,
       expectedEpoch: epoch,
@@ -57,16 +75,21 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
       codeSha: '3edf8a262e9d06f4849318b1e0d09f197738bff9',
       codeArtifact: 'us-docker.pkg.dev/project/image@sha256:' + 'a'.repeat(64),
       packageIntegrity: 'sha512-' + 'b'.repeat(86) + '==',
-            dryRun: false,
+      dryRun: false,
       protocolDigest: '85fabba35757a2b2596f54774a6bfcf28dc9efbab89b506206baedc1f889b452',
       expectedSourceInventoryDigest: digest,
-            ...opts,
+      ...opts,
     };
   };
   beforeAll(async () => {
+    await checkEmulator();
     process.env.FIRESTORE_EMULATOR_HOST = EMULATOR_HOST;
     db = new Firestore({ projectId: PROJECT_ID });
     await clearEmulator();
+  });
+
+  afterAll(async () => {
+    await db?.terminate();
   });
 
   beforeEach(async () => {
@@ -108,29 +131,29 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     // 2. withLegacyOperation admits operation during legacy_open in real Firestore
-        const callerId = 'arbitrary/secret-like-id';
-        let storageId = '';
+    const callerId = 'arbitrary/secret-like-id';
+    let storageId = '';
     let executedOp = false;
-        await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token', operationId: callerId }, async (ctx) => {
-            expect(ctx.id).toBe(callerId);
-            expect(ctx.storageId).toMatch(/^op1_[0-9a-f]{64}$/);
-            storageId = ctx.storageId;
+    await withLegacyOperation({ db, namespace, identityKey: key, kind: 'token', operationId: callerId }, async (ctx) => {
+      expect(ctx.id).toBe(callerId);
+      expect(ctx.storageId).toMatch(/^op1_[0-9a-f]{64}$/);
+      storageId = ctx.storageId;
       expect(ctx.epoch).toBe(1);
       executedOp = true;
-            const guard = await db.runTransaction(async (tx) => {
-                const timer = startMonotonicTimer();
-                const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
+      const guard = await db.runTransaction(async (tx) => {
+        const timer = startMonotonicTimer();
+        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
-                guard.assertPreReturn();
-                return guard;
+        guard.assertPreReturn();
+        return guard;
       });
-            guard.onCommit();
+      guard.onCommit();
     });
     expect(executedOp).toBe(true);
-        const durable = await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').doc(storageId).get();
-        expect(durable.exists).toBe(true);
-        expect(JSON.stringify(durable.data())).not.toContain(callerId);
+    const durable = await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').doc(storageId).get();
+    expect(durable.exists).toBe(true);
+    expect(JSON.stringify(durable.data())).not.toContain(callerId);
 
     // 3. Transition to closing: new admissions refused
     await transitionCutoverFenceState(db, namespace, {
@@ -140,7 +163,7 @@ describe('Real Firestore Emulator Cutover Fence & Adoption Proof (Supported Name
     });
 
     await expect(
-            withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
+      withLegacyOperation({ db, namespace, identityKey: key, kind: 'token' }, async () => { }),
     ).rejects.toThrow(CutoverRefusedError);
 
     // 4. Transition to fenced
