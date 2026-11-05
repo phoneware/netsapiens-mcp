@@ -68,8 +68,9 @@ import {
 import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
-import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
+import { assertActivationObservation, assertPreparationObservation, recordedFreshIndexObservation } from './fresh-index-observation.js';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
+import { APPROVED_GRAPH_PROJECTOR_ID, APPROVED_GRAPH_PROJECTOR_VERSION } from '../cutover/canonical-core.mjs';
 import type { ProtectedBinding } from './protected-binding.js';
 import { observeFreshIndexes } from './fresh-index-producer.js';
 import { concreteFieldPaths, type SignedIndexPolicy } from './index-coverage.js';
@@ -312,7 +313,11 @@ function resolveProtectedBootstrap(namespace: SupportedNamespace, expectedProtoc
     throw new CutoverFenceError(`Trusted bootstrap refused: namespace '${namespace}' not permitted by ${indexPath}`);
   }
 
-  const indexSchemaDigest = createHash('sha256').update(indexContent).digest('hex');
+  // Canonical JSON, the same form the protected factory and the reviewed core digest. Non-canonical bytes are refused.
+  if (canonicalJson(indexSchema) !== indexContent) {
+    throw new CutoverFenceError(`Trusted bootstrap refused: ${indexPath} is not canonical JSON`);
+  }
+  const indexSchemaDigest = createHash('sha256').update(Buffer.from(canonicalJson(indexSchema), 'utf8')).digest('hex');
 
   let assemblyContent: string;
   let assembly: any;
@@ -1436,6 +1441,11 @@ export function extractCandidatesAndPlan(params: {
     sourceInventoryDigest,
     sourceLogicalDigest,
     candidateCommitments,
+    // Record-bearing plans carry the approved projector identity. The reviewed core requires this exact
+    // triple once records exist, and requires projectorDigest to equal protocolDigest.
+    ...(totalPhysicalRecords > 0
+      ? { projectorId: APPROVED_GRAPH_PROJECTOR_ID, projectorVersion: APPROVED_GRAPH_PROJECTOR_VERSION, projectorDigest: protocolDigest }
+      : {}),
   };
 
   const preparation = {
@@ -1842,22 +1852,15 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
         continue;
       }
 
-      try {
-        const decodedLogical = projectTargetLogical(c, targetMap, codec);
-        const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
-        if (derivedDigest === c.logicalDigest) {
-          prospectiveRetained++;
-          for (const t of c.targets) {
-            claimedTargetIds.add(`${t.collection}:${t.rawId}`);
-          }
-        } else {
-          reasons.partialTargets++;
-          for (const t of c.targets) {
-            const key = `${t.collection}:${t.rawId}`;
-            if (targetDocMapById.has(key)) claimedTargetIds.add(key);
-          }
+      // A projection refusal is a refusal, not a partial target. It propagates so the report cannot hide it.
+      const decodedLogical = projectTargetLogical(c, targetMap, codec);
+      const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
+      if (derivedDigest === c.logicalDigest) {
+        prospectiveRetained++;
+        for (const t of c.targets) {
+          claimedTargetIds.add(`${t.collection}:${t.rawId}`);
         }
-      } catch {
+      } else {
         reasons.partialTargets++;
         for (const t of c.targets) {
           const key = `${t.collection}:${t.rawId}`;
@@ -2148,12 +2151,20 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
     // Write prepared manifest + transition control to migrating
     assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
+    const preparationBinding = getProtectedBinding(db);
+    if (!preparationBinding) throw new CutoverRefusedError('Protected migration context required for preparation');
     await prepareMigrationInTransaction(transaction, db, {
       namespace,
       prepDoc: plan.prepared,
       storeKey,
       FieldPath,
       timer,
+      // The real protected inputs. The gate above validated them in this snapshot; the seam receives them unchanged.
+      completePlan: plan,
+      expectedIdentity: preparationIdentity,
+      indexManifest: preparationBinding.indexSchema,
+      protectedBinding: preparationBinding,
+      freshObservation: recordedFreshIndexObservation(db),
     });
 
     timer.assertUnderDeadline(16_000, 'Preparation commit');

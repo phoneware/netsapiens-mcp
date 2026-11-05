@@ -50,6 +50,14 @@ function requireObservation(db: object, purpose: FreshIndexObservation['purpose'
   return observation;
 }
 
+// The recorded observation for this handle, passed to the preparation seam unchanged. Refuses when
+// none was recorded, so the seam never receives an absent or invented observation.
+export function recordedFreshIndexObservation(db: object): FreshIndexObservation {
+  const observation = observations.get(db);
+  if (!observation) throw new CutoverRefusedError('Fresh authenticated index observation is required');
+  return observation;
+}
+
 // TTL schema for prospective targets. The settled expiry metadata is the row's own
 // stored field: sessions carry ttlAt = retainUntil, auth codes and resume tokens
 // carry ttlAt = expiresAt. Nothing is recomputed or extended here. A record whose
