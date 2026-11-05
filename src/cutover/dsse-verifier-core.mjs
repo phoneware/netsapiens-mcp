@@ -3,7 +3,7 @@ import { constants, createPublicKey, verify } from "node:crypto";
 export const DSSE_PAYLOAD_TYPE = "application/vnd.in-toto+json";
 const EXPECTED_FIELDS = ["codeSha", "publicPackageSourceSha", "privateRunnerSha", "workflowSourceSha", "assemblyDigest", "sessionSecretVersion", "image", "packageIntegrity", "indexSchemaDigest", "indexPolicyDigest", "project", "database", "namespace", "protocolDigest"];
 const SUBJECTS = ["cutover-protocol.mjs", "image", "package", "git-commit", "cutover-runner-image"];
-const OPTIONAL_PREDICATE = ["readonlyServiceConfiguration", "builder", "assembledAt", "terraformPlanDigest", "terraformSavedPlanDigest", "terraformProjectionDigest", "observationRunId", "observationRunAttempt", "observationArtifactId", "observationArtifactDigest"];
+const OPTIONAL_PREDICATE = ["serviceConfiguration", "builder", "assembledAt", "terraformPlanDigest", "terraformSavedPlanDigest", "terraformProjectionDigest", "observationRunId", "observationRunAttempt", "observationArtifactId", "observationArtifactDigest", "assemblyRunId", "assemblyRunAttempt"];
 const exact = (object, keys) => object && typeof object === "object" && !Array.isArray(object) && JSON.stringify(Object.keys(object).sort()) === JSON.stringify([...keys].sort());
 const sha = (value, length) => typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value);
 const decimal = (value) => typeof value === "string" && /^[1-9][0-9]*$/.test(value);
@@ -89,10 +89,11 @@ export function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
     ["cutover-runner-image", { sha256: runner.childManifestDigest.slice(7) }],
   ]);
   for (const [name, value] of expectedSubjects) if (!exact(subjects.get(name), Object.keys(value)) || canonicalJson(subjects.get(name)) !== canonicalJson(value)) throw new Error("Signed subject differs from protected policy");
-  const readonly = predicate.readonlyServiceConfiguration;
-  if (expected.namespace === "readonly_mcp") {
-    if (!exact(readonly, ["platforms", "oauthClientSecretVersion"]) || typeof readonly.platforms !== "string" || !readonly.platforms || !decimal(readonly.oauthClientSecretVersion)) throw new Error("Invalid signed readonly configuration");
-  } else if (readonly !== undefined) throw new Error("Unexpected readonly configuration");
+  const configuration = predicate.serviceConfiguration;
+  const fields = expected.namespace === "pwmcp" ? ["oauthClientSecretVersion"] : ["platforms", "oauthClientSecretVersion"];
+  if (!exact(configuration, fields) || !decimal(configuration.oauthClientSecretVersion) ||
+    (expected.namespace !== "pwmcp" && (typeof configuration.platforms !== "string" || !configuration.platforms))) throw new Error("Invalid signed service configuration");
+  if (![predicate.assemblyRunId, predicate.assemblyRunAttempt].every(decimal)) throw new Error("Invalid or missing signed assembly run identity");
   if (![predicate.terraformPlanDigest, predicate.terraformSavedPlanDigest, predicate.terraformProjectionDigest].every((value) => sha(value, 64)) ||
     ![predicate.observationRunId, predicate.observationRunAttempt, predicate.observationArtifactId].every(decimal) ||
     !/^sha256:[0-9a-f]{64}$/.test(predicate.observationArtifactDigest ?? "")) throw new Error("Invalid or missing signed observation identity");
