@@ -66,7 +66,7 @@ import {
   validateMigrationIdentityFields,
 } from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
-import { assertProtectedContext, getProtectedBinding } from './protected-binding.js';
+import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
 import type { SignedIndexPolicy } from './index-coverage.js';
 
@@ -1857,6 +1857,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   // Phase 1: Preparation in transaction (supporting restart per Section 5)
   const prepResult = await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
+    assertCredentialUnchanged(db);
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.epoch !== expectedEpoch) {
       throw new CutoverFenceError(`Epoch mismatch in adopt: expected ${expectedEpoch}, got ${control.epoch}`);
@@ -2156,6 +2157,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   for (const c of candidates) {
     const itemResult = await db.runTransaction(async (transaction: any) => {
       const timer = startMonotonicTimer();
+      assertCredentialUnchanged(db);
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
       if (control.state !== 'migrating') {
         throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
@@ -2374,6 +2376,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
   // Phase 3: Finalization transaction (reads actual targets and receipts, writes final & marker, transitions to v3_ready)
   await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
+    assertCredentialUnchanged(db);
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
     if (control.state !== 'migrating') {
       throw new CutoverFenceError(`Cannot finalize: state must be 'migrating', got '${control.state}'`);
@@ -2586,6 +2589,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
   }
   return await db.runTransaction(async (transaction: any) => {
     const timer = startMonotonicTimer();
+    assertCredentialUnchanged(db);
     const control = await readCutoverFenceInTransaction(transaction, db, namespace);
 
     if (control.epoch !== expectedEpoch || control.migrationRunId !== migrationRunId ||

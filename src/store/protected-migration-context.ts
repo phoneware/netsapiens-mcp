@@ -301,20 +301,21 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
 
   const credentialsPresent = existsSync(PATHS.credentials);
   const oidcPresent = existsSync(PATHS.oidc);
+  let oidcBefore: Buffer | null = null;
   if (profile === 'production') {
     assertCredentialFile(readFixedFile(PATHS.credentials));
-    readFixedFile(PATHS.oidc);
+    oidcBefore = readFixedFile(PATHS.oidc);
   } else if (credentialsPresent || oidcPresent) {
     refuse('Emulator profile refuses mounted production credentials');
   }
 
   // Mutating production operations (adopt commit, activate) must carry the fixed
-  // dispatch claims. STS acceptance of the same token is a host pre-pass that
-  // this factory cannot observe; the host must establish it before any write.
+  // dispatch claims. These are read from the same bytes the exchange below must
+  // accept; a decoded claim is never authority on its own.
   const mutating = request.action === 'activate' || (request.action === 'adopt' && request.options.dryRun === false);
   let invocation: { runId: string; runAttempt: string } | null = null;
-  if (profile === 'production' && mutating) {
-    invocation = assertMutatingClaims(readFixedFile(PATHS.oidc));
+  if (oidcBefore !== null && mutating) {
+    invocation = assertMutatingClaims(oidcBefore);
   }
 
   const approval = parseStrictJson(readFixedFile(PATHS.approval), ['payloadType', 'payload', 'signatures'], 'approval');
@@ -353,21 +354,27 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   const db = new Firestore({ ...settings });
   if (!(db instanceof Firestore)) refuse('Constructed Firestore handle is not the SDK class');
 
-  // Admin access is needed only for adopt and activate. The token is fetched
-  // once here; the handle is closed before returning.
+  // Production: the fixed credential exchanges these exact bytes for an
+  // authenticated token before any data-plane use. The bytes must be unchanged
+  // across that exchange; their digest then binds every later operation.
   let adminAccess: { getAccessToken: () => Promise<string>; fetchFn: typeof fetch } | null = null;
-  if (request.action === 'adopt' || request.action === 'activate') {
-    if (profile === 'production') {
-      const AdminClient = sdk.v1?.FirestoreAdminClient;
-      if (typeof AdminClient !== 'function') refuse('Firestore Admin client is not available in the SDK');
-      const client = new AdminClient({ projectId: row.project, keyFilename: PATHS.credentials, universeDomain: 'googleapis.com' });
-      const token = await client.auth.getAccessToken();
-      await client.close();
-      if (typeof token !== 'string' || !token) refuse('Admin access token was not obtained');
+  let credentialDigest: string | null = null;
+  if (profile === 'production') {
+    if (oidcBefore === null) refuse('Production credential bytes were not bound');
+    const AdminClient = sdk.v1?.FirestoreAdminClient;
+    if (typeof AdminClient !== 'function') refuse('Firestore Admin client is not available in the SDK');
+    const client = new AdminClient({ projectId: row.project, keyFilename: PATHS.credentials, universeDomain: 'googleapis.com' });
+    const token = await client.auth.getAccessToken();
+    await client.close();
+    if (typeof token !== 'string' || !token) refuse('Admin access token was not obtained');
+    const oidcAfter = readFixedFile(PATHS.oidc);
+    if (!oidcAfter.equals(oidcBefore)) refuse('Credential token bytes changed across the STS exchange');
+    credentialDigest = sha256Hex(oidcAfter);
+    if (request.action === 'adopt' || request.action === 'activate') {
       adminAccess = { getAccessToken: async () => token, fetchFn: fetchForProfile(profile) };
-    } else {
-      adminAccess = { getAccessToken: async () => 'owner', fetchFn: fetchForProfile(profile) };
     }
+  } else if (request.action === 'adopt' || request.action === 'activate') {
+    adminAccess = { getAccessToken: async () => 'owner', fetchFn: fetchForProfile(profile) };
   }
 
   // Each protected operation is authorized by name and exact options. The
@@ -402,6 +409,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     authorized: { operation: operations[request.action], options: { ...authorizedOptions } },
     adminAccess,
     invocation,
+    credentialDigest,
   });
 
   return {

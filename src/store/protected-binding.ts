@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
 import { CutoverFenceError, CutoverRefusedError } from './errors.js';
 
@@ -28,8 +30,13 @@ export interface ProtectedBinding extends ProtectedIdentityFields {
   readonly authorized: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> };
   readonly adminAccess: { readonly getAccessToken: () => Promise<string>; readonly fetchFn: typeof fetch } | null;
   readonly invocation: { readonly runId: string; readonly runAttempt: string } | null;
+  // SHA-256 of the exact oidc.jwt bytes that STS accepted for this handle.
+  // Production only; null for the emulator, which has no credential file.
+  readonly credentialDigest: string | null;
 }
 
+const CREDENTIAL_PATH = '/run/cutover/oidc.jwt';
+const MAX_CREDENTIAL_BYTES = 64 * 1024;
 const bindings = new WeakMap<object, ProtectedBinding>();
 const consumed = new WeakSet<object>();
 
@@ -48,6 +55,23 @@ export function bindProtectedContext(db: object, binding: ProtectedBinding): voi
   bindings.set(db, deepFreeze({ ...binding, key: Buffer.from(binding.key) }));
 }
 
+// Re-reads the mounted credential and requires the exact bytes STS accepted.
+// Called at every protected operation entry and at each mutating transaction
+// start. A rotated or swapped file refuses; decoded claims are never authority.
+export function assertCredentialUnchanged(db: object): void {
+  const binding = bindings.get(db);
+  if (!binding) throw new CutoverRefusedError('Protected migration context required: database handle is not bound');
+  if (binding.credentialDigest === null) return;
+  const stat = lstatSync(CREDENTIAL_PATH);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CREDENTIAL_BYTES) {
+    throw new CutoverRefusedError('Credential token file is not a bounded regular file');
+  }
+  const digest = createHash('sha256').update(readFileSync(CREDENTIAL_PATH)).digest('hex');
+  if (digest !== binding.credentialDigest) {
+    throw new CutoverRefusedError('Credential token bytes changed since the authenticated exchange');
+  }
+}
+
 interface ContextFields extends ProtectedIdentityFields {
   readonly db: object;
   readonly FieldPath: unknown;
@@ -55,8 +79,9 @@ interface ContextFields extends ProtectedIdentityFields {
 }
 
 // Refuses before any Firestore data access unless the caller's context is the
-// one this handle was authenticated for, the operation matches, and the
-// options equal the authorized options exactly. Marks the handle consumed.
+// one this handle was authenticated for, the operation matches, the options
+// equal the authorized options exactly, and the credential bytes are unchanged.
+// Marks the handle consumed.
 export function assertProtectedContext(
   context: ContextFields,
   request: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> },
@@ -88,6 +113,7 @@ export function assertProtectedContext(
   if (mismatch) {
     throw new CutoverRefusedError('Protected migration context does not match the authenticated binding');
   }
+  assertCredentialUnchanged(context.db);
   consumed.add(context.db);
   return binding;
 }
