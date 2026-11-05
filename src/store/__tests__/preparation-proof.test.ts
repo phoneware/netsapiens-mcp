@@ -9,7 +9,7 @@ import { canonicalJson, formatPAE } from '../../cutover/dsse-verifier-core.mjs';
 import type { FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, initializeCutoverFence, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
-import { reviewedScopeClosed } from './support/reviewed-scope.mjs';
+import { closedBundleBytes } from './support/closed-bundle.mjs';
 import { createSyntheticFixture } from './support/synthetic-dsse-fixture.mjs';
 import { OPT, RUN, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import type { SubjectDescriptor } from '../subject-descriptor.js';
@@ -23,7 +23,6 @@ import type { SubjectDescriptor } from '../subject-descriptor.js';
 // Regenerate the bundle first: `npm run bundle:cutover`.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
 const PREPARE_RUNNER = resolve(here, 'support', 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', 'node_modules');
 // initializeCutoverFence accepts only epoch 1 for a new namespace. The fixture's signed identity derives its
@@ -56,7 +55,6 @@ function reviewedUnion(namespace: string): string[] {
     throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent; the preparation proof cannot run until the core sync lands');
   }
   const scope = (scopeFn as (ns: string) => { complete: boolean; groups: readonly string[] })(namespace);
-  if (scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
   return [...scope.groups];
 }
 
@@ -101,14 +99,14 @@ function runStep(fixture: any, namespace: string, bundleBytes: Buffer, request: 
   return JSON.parse(line) as StepResult;
 }
 
-describe.skipIf(!gateOpen || !reviewedScopeClosed())('preparation proof on the genuine bundle, emulator and fake Admin', () => {
+describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator and fake Admin', () => {
   let bundleBytes: Buffer;
   let db: Firestore;
   let admin: { close: () => Promise<void> } | null = null;
 
   beforeAll(() => {
     assertCanOwnMounts();
-    bundleBytes = readFileSync(BUNDLE_SOURCE);
+    bundleBytes = closedBundleBytes();
     expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
     db = new Firestore(EMULATOR);
   });

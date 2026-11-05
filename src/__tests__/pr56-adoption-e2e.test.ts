@@ -18,21 +18,20 @@ import { startFakeAdmin } from '../store/__tests__/support/fake-admin.mjs';
 import { assertCanOwnMounts, containerGateOpen, releaseMounts } from '../store/__tests__/support/mounts.mjs';
 import { fixtureFor, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
 import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from '../store/__tests__/support/emulator-seed.js';
-import { reviewedScopeClosed } from '../store/__tests__/support/reviewed-scope.mjs';
+import { closedBundleBytes } from '../store/__tests__/support/closed-bundle.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BUNDLE_SOURCE = resolve(here, '..', 'store', 'cutover-protocol.mjs');
 const NS = 'mcp';
 const gateOpen = containerGateOpen();
 
-describe.skipIf(!gateOpen || !reviewedScopeClosed())('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant shape (emulator, runner)', () => {
+describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc + nested grant shape (emulator, runner)', () => {
   let bundleBytes: Buffer;
   let db: Firestore;
   let admin: { close: () => Promise<void> } | null = null;
 
   beforeAll(() => {
     assertCanOwnMounts();
-    bundleBytes = readFileSync(BUNDLE_SOURCE);
+    bundleBytes = closedBundleBytes();
     expect(bundleBytes.toString('utf8')).toContain('createProtectedFirestoreMigrationContext');
     db = new Firestore(EMULATOR);
   });
