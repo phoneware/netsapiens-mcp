@@ -58,7 +58,7 @@ export function fixtureFor({ bundleBytes, namespace, epoch, nonce = '1', subject
       canonicalJson,
       formatPAE,
       bundleBytes,
-      collectionGroups: collectionGroups ?? reviewedUnion(namespace),
+      collectionGroups: collectionGroups ?? scopeUnionUnchecked(namespace),
       namespace,
       epoch,
       action: 'inspect',
