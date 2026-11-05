@@ -23,27 +23,28 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const RUNNER_SOURCE = resolve(here, 'prepare-runner.mjs');
 const REPO_NODE_MODULES = resolve(here, '..', '..', '..', '..', 'node_modules');
 
-// Collection-group names from a scope object's union. Entries are strings, or objects carrying a name.
-function unionNamesOf(scope) {
-  return scope.union.map((entry) => (typeof entry === 'string' ? entry : entry.name));
+// Collection-group names from a scope's groups list, the only mapping the signed-policy check uses.
+function groupNamesOf(scope) {
+  if (!Array.isArray(scope.groups)) throw new Error('reviewed runtime collection scope has no groups list');
+  return [...scope.groups];
 }
 
-// The reviewed union for a namespace, fail-closed: the harness refuses to build a positive fixture on an
+// The reviewed groups for a namespace, fail-closed: the harness refuses to build a positive fixture on an
 // incomplete scope. The factory is the authority on completeness; this check keeps positive runs honest.
 export function reviewedUnion(namespace) {
   const scopeFn = canonicalCore.getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== 'function') throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent');
   const scope = scopeFn(namespace);
   if (!scope || scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
-  return unionNamesOf(scope);
+  return groupNamesOf(scope);
 }
 
-// The union without the completeness check. Only for negative proofs, where the factory must be the gate
+// The groups without the completeness check. Only for negative proofs, where the factory must be the gate
 // that refuses an incomplete or unscanned scope.
 export function scopeUnionUnchecked(namespace) {
   const scopeFn = canonicalCore.getCutoverRuntimeCollectionScope;
   if (typeof scopeFn !== 'function') throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent');
-  return unionNamesOf(scopeFn(namespace));
+  return groupNamesOf(scopeFn(namespace));
 }
 
 // One fixture per (bundle, namespace, epoch, nonce, descriptor) for this process. The action and options are

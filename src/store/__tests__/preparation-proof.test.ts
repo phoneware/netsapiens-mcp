@@ -54,9 +54,9 @@ function reviewedUnion(namespace: string): string[] {
   if (typeof scopeFn !== 'function') {
     throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent; the preparation proof cannot run until the core sync lands');
   }
-  const scope = (scopeFn as (ns: string) => { complete: boolean; union: string[] })(namespace);
+  const scope = (scopeFn as (ns: string) => { complete: boolean; groups: readonly string[] })(namespace);
   if (scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
-  return [...scope.union];
+  return [...scope.groups];
 }
 
 // Every collection the preparation can read or write, for the snapshot and the reset.

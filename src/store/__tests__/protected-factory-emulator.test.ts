@@ -42,9 +42,9 @@ function reviewedUnion(namespace: string): string[] {
   if (typeof scopeFn !== 'function') {
     throw new Error('reviewed canonical core export getCutoverRuntimeCollectionScope is absent; the emulator harness cannot run until the core sync lands');
   }
-  const scope = (scopeFn as (ns: string) => { complete: boolean; union: string[] })(namespace);
+  const scope = (scopeFn as (ns: string) => { complete: boolean; groups: readonly string[] })(namespace);
   if (scope.complete !== true) throw new Error('reviewed runtime collection scope is incomplete');
-  return [...scope.union];
+  return [...scope.groups];
 }
 
 // Writes the fixture's bytes to the fixed mounts. The bundle may be replaced to test a digest

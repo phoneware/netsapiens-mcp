@@ -40,10 +40,10 @@ const MUTATIONS: readonly Mutation[] = [
     refusal: /unscanned sources/,
   },
   {
-    // unscanned is empty and complete is true; an unresolved dynamic collection is the only defect.
-    name: 'empty unscanned with an unresolved dynamic collection',
-    replacement: 'complete: true,\n    unscanned: Object.freeze([]),\n    unresolvedDynamic: Object.freeze(["tenant_*"]),',
-    refusal: /unresolved dynamic collection/,
+    // unscanned is empty and complete is true; a real unresolved entry is the only defect.
+    name: 'empty unscanned with a real unresolved collection',
+    replacement: 'complete: true,\n    unscanned: Object.freeze([]),\n    unresolved: Object.freeze(["tenant_*"]),',
+    refusal: /unresolved collections/,
   },
   {
     // unscanned missing entirely: the factory must treat an absent list as not a proof.
