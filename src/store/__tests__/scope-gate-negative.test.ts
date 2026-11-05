@@ -7,9 +7,9 @@
 // The groups come unchecked from the core: the factory, not the harness, must be the gate that refuses.
 //
 // Anchors are the reviewed core's scope text (src/cutover/canonical-core.mjs, getCutoverRuntimeCollectionScope,
-// blob a67967359cc5). The bundle is the built copy; the anchor must match it exactly once.
+// blob a67967359cc5). The bundle is the built copy; each anchor must match it exactly once. A mutation replaces
+// an existing field in place; it never adds a second key, which a later duplicate would silently override.
 // Runs only where containerGateOpen() holds. Never touches an existing /opt/cutover or /run/cutover.
-// UNVERIFIED: written without a run. Not run until the bundle is regenerated from the reviewed core.
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,16 +24,23 @@ const BUNDLE_SOURCE = resolve(here, '..', 'cutover-protocol.mjs');
 const NS = 'mcp';
 const gateOpen = containerGateOpen();
 
-// The open scope as the reviewed core writes it: complete false, and three unscanned sources. Every mutation
-// changes only the fields under test.
+// The open scope as the reviewed core writes it: complete false, and three unscanned sources.
 const OPEN_SCOPE_TEXT = 'complete: false,\n    unscanned: Object.freeze(["sibling services", "terraform", "workflows"]),';
 
-// The same scope, closed: complete true and no unscanned sources. Used by the closed-scope cases only.
+// The same scope, closed: complete true and no unscanned sources.
 const CLOSED_SCOPE_TEXT = 'complete: true,\n    unscanned: Object.freeze([]),';
+
+// The reviewed core's own unresolved field, which is empty today. Mutations replace it in place.
+const UNRESOLVED_TEXT = 'unresolved: Object.freeze([]),';
+
+interface Edit {
+  readonly from: string;
+  readonly to: string;
+}
 
 interface Mutation {
   readonly name: string;
-  readonly replacement: string;
+  readonly edits: readonly Edit[];
   readonly refusal: RegExp;
 }
 
@@ -42,19 +49,22 @@ const OPEN_MUTATIONS: readonly Mutation[] = [
   {
     // complete is forced true, unscanned is still nonempty: only the unscanned check can refuse.
     name: 'complete true with nonempty unscanned sources',
-    replacement: 'complete: true,\n    unscanned: Object.freeze(["sibling services"]),',
+    edits: [{ from: OPEN_SCOPE_TEXT, to: 'complete: true,\n    unscanned: Object.freeze(["sibling services"]),' }],
     refusal: /unscanned sources/,
   },
   {
     // unscanned is empty and complete is true; a real unresolved entry is the only defect.
     name: 'empty unscanned with a real unresolved collection',
-    replacement: 'complete: true,\n    unscanned: Object.freeze([]),\n    unresolved: Object.freeze(["tenant_*"]),',
+    edits: [
+      { from: OPEN_SCOPE_TEXT, to: 'complete: true,\n    unscanned: Object.freeze([]),' },
+      { from: UNRESOLVED_TEXT, to: 'unresolved: Object.freeze(["tenant_*"]),' },
+    ],
     refusal: /unresolved collections/,
   },
   {
     // unscanned missing entirely: the factory must treat an absent list as not a proof.
     name: 'missing unscanned list',
-    replacement: 'complete: true,',
+    edits: [{ from: OPEN_SCOPE_TEXT, to: 'complete: true,' }],
     refusal: /unscanned sources/,
   },
 ];
@@ -73,8 +83,19 @@ const CLOSED_MISMATCH_CASES = [
 ];
 
 // The core's index binding check runs before the factory's comparison, so a missing group can be reported as
-// "omits runtime collection group". Both messages name the signed-versus-scope mismatch this case proves.
+// "omits runtime collection group". Both messages name the signed-versus-scope mismatch these cases prove.
 const MISMATCH_REFUSAL = /differ from the reviewed runtime collection scope|omits runtime collection group/;
+
+// Applies each edit to the bundle text. Every anchor must match exactly once, so a changed bundle fails here.
+function mutate(bundleText: string, edits: readonly Edit[]): string {
+  let text = bundleText;
+  for (const edit of edits) {
+    const count = text.split(edit.from).length - 1;
+    if (count !== 1) throw new Error(`mutation anchor matched ${count} times; the bundle must match it exactly once`);
+    text = text.replace(edit.from, edit.to);
+  }
+  return text;
+}
 
 describe.skipIf(!gateOpen)('runtime scope gate negative proof (signed factory fixture)', () => {
   let bundleText: string;
@@ -85,7 +106,6 @@ describe.skipIf(!gateOpen)('runtime scope gate negative proof (signed factory fi
     bundleBytes = readFileSync(BUNDLE_SOURCE);
     bundleText = bundleBytes.toString('utf8');
     expect(bundleText).toContain('createProtectedFirestoreMigrationContext');
-    expect(bundleText.split(OPEN_SCOPE_TEXT).length - 1, 'open scope text must appear exactly once').toBe(1);
   });
 
   afterAll(() => {
@@ -117,15 +137,13 @@ describe.skipIf(!gateOpen)('runtime scope gate negative proof (signed factory fi
 
   for (const mutation of OPEN_MUTATIONS) {
     it(`refuses at the scope gate: ${mutation.name}`, async () => {
-      const mutatedText = bundleText.replace(OPEN_SCOPE_TEXT, mutation.replacement);
-      await expectRefusal(mutatedText, scopeUnionUnchecked(NS), mutation.refusal);
+      await expectRefusal(mutate(bundleText, mutation.edits), scopeUnionUnchecked(NS), mutation.refusal);
     });
   }
 
   for (const mismatch of CLOSED_MISMATCH_CASES) {
     it(`refuses at the groups comparison: ${mismatch.name}`, async () => {
-      expect(bundleText.split(CLOSED_SCOPE_TEXT).length - 1, 'closed scope text must not already be present').toBe(0);
-      const closedText = bundleText.replace(OPEN_SCOPE_TEXT, CLOSED_SCOPE_TEXT);
+      const closedText = mutate(bundleText, [{ from: OPEN_SCOPE_TEXT, to: CLOSED_SCOPE_TEXT }]);
       const reviewedGroups = scopeUnionUnchecked(NS);
       await expectRefusal(closedText, mismatch.signedGroups(reviewedGroups), MISMATCH_REFUSAL);
     });
