@@ -327,7 +327,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         return { status: 'fresh' as const, grant: current.grant };
       }
 
-      const op = options?.operation ?? requestOperationContext.getStore();
       if (this.fence?.enforce && op) {
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
         transaction.set(

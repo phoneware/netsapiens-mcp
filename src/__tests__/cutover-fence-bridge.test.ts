@@ -59,6 +59,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function configureHttpTest(): void {
+  process.env.MCP_TRANSPORT = 'http';
+  process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test_client_id';
+  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test_client_secret';
+  process.env.NETSAPIENS_API_URL = 'https://test.example.com';
+  process.env.MCP_BASE_URL = 'http://localhost';
+}
+
 function createTestDb(projectId: string = `mcp-bridge-${randomUUID().slice(0, 8)}`): Firestore {
   return new Firestore({
     projectId,
@@ -1111,6 +1119,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('22. Production createApp HTTP router /mcp under closing and fenced returns HTTP 503 Retry-After and never sends invalid_token challenge', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -1230,6 +1239,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('24. Preserves 2.3 base embedded format sessions under real HTTP with transparent adoption', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -1287,6 +1297,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('25. HTTP admission precedes client adoption: /authorize under closing returns HTTP 503', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -2031,6 +2042,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('33. Client disconnect during async handler work does not early release and drains cleanly on settlement', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -2119,6 +2131,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('34. In-flight nested task and late write after route completion rejects with CutoverFenceError', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
@@ -2233,6 +2246,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
   });
 
   it('36. Thunk rejection in trackWriter rethrows without unhandled rejection and detects underflow on real admission op context', async () => {
+    configureHttpTest();
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
