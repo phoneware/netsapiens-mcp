@@ -68,7 +68,7 @@ import {
 import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
-import { assertActivationObservation, assertPreparationObservation, recordedPreparationObservation } from './fresh-index-observation.js';
+import { assertActivationObservation, assertPreparationObservation, isRecordedObservation, recordedPreparationObservation } from './fresh-index-observation.js';
 import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
 import { APPROVED_GRAPH_PROJECTOR_ID, APPROVED_GRAPH_PROJECTOR_VERSION } from '../cutover/canonical-core.mjs';
 import type { ProtectedBinding } from './protected-binding.js';
@@ -2165,6 +2165,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       indexManifest: preparationBinding.indexSchema,
       protectedBinding: preparationBinding,
       freshObservation: recordedPreparationObservation(db, preparationBinding),
+      isRecordedObservation: (observation: unknown) => isRecordedObservation(db, observation),
     });
 
     timer.assertUnderDeadline(16_000, 'Preparation commit');

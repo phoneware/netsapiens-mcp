@@ -58,6 +58,12 @@ export function recordedPreparationObservation(db: object, binding: ProtectedBin
   return requireObservation(db, 'preparation', binding);
 }
 
+// True only when this exact object is the observation recorded for the handle. A structurally identical
+// copy is not the recorded one, so this is the proof the core needs, not a field comparison.
+export function isRecordedObservation(db: object, observation: unknown): boolean {
+  return observation !== undefined && observations.get(db) === observation;
+}
+
 // TTL schema for prospective targets. The settled expiry metadata is the row's own
 // stored field: sessions carry ttlAt = retainUntil, auth codes and resume tokens
 // carry ttlAt = expiresAt. Nothing is recomputed or extended here. A record whose
