@@ -1,4 +1,6 @@
 import { createHash, generateKeyPairSync, sign, constants } from "node:crypto";
+import { DEFAULT_BOUNDS, EMULATOR_INVENTORY_BINDING, SURFACES, closedListsDigest, emittedAssumptions } from "../../../cutover/writer-census-contract.mjs";
+import { splitForFiles } from "../../../cutover/writer-inventory-format.mjs";
 
 // Test-only fixture generator. It creates a new ephemeral RSA key in memory;
 // it never reads credentials, makes network calls, or writes fixed host paths.
@@ -19,14 +21,33 @@ export function createSyntheticFixture({ canonicalJson, formatPAE, bundleBytes, 
   const adminObservation = { databaseResource, paginationComplete: true, defaultIndexes: { source: index.policy.default.source, chain: [index.policy.default.source], indexes: [] }, collections: groups.map((collectionGroup) => ({ collectionGroup, requiredFields: subjectDescriptor !== null && collectionGroup === subjectGroup ? ["subjectRefs"] : [], fields: subjectDescriptor !== null && collectionGroup === subjectGroup ? [{ name: subjectName, index: { source: subjectName, chain: [subjectName], indexes: subjectField.indexConfig.indexes }, ttlConfig: null }] : [], composites: [] })) };
   const indexBytes = canonical(index), protocolDigest = digest(bundleBytes), indexSchemaDigest = digest(indexBytes), indexPolicyDigest = digest(canonical(index.policy));
   const source = "1".repeat(40), privateRunnerSha = "2".repeat(40), workflowSourceSha = "3".repeat(40), assemblyDigest = "4".repeat(64), childDigest = `sha256:${"5".repeat(64)}`, imageDigest = "6".repeat(64), packageIntegrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`, codeArtifact = `example.invalid/synthetic-service@sha256:${imageDigest}`;
+  const observed = {
+    schemaVersion: 2, project, projectNumber: null, database,
+    identity: { ancestry: [], policies: [], roles: [], grants: [], principals: [], serviceAccounts: [] },
+    workload: { enabledServices: [], workloads: [], attribution: [] },
+    ci: { wifPools: [], wifProviders: [], admittedState: [], buildTriggers: [] },
+    data: { topLevel: { namespace: [] }, namespacePatterns: [], fullPass: { complete: true }, foreignParentPrefixed: [], sharedGroupIds: [], ttlFields: [] },
+    rules: { releases: [], matchesCommitted: true, reachability: "none", tests: [] },
+  };
+  const surfaces = Object.fromEntries(SURFACES.map((name) => [name, { status: "ok" }]));
+  const measurement = { identity: {}, workload: {}, data: {}, rules: {} };
+  const census = {
+    schemaVersion: 2, kind: "netsapiens-writer-census", closedListsSha256: closedListsDigest(),
+    bounds: DEFAULT_BOUNDS, mode: { runnerAuditReread: true }, union: groups, exclusions: [], codeCensus: [],
+    acceptedAssumptions: emittedAssumptions(observed, { mode: { runnerAuditReread: true } }),
+    observed, review: { reviewedBy: "synthetic", reviewedAt: "2026-01-01T00:00:00Z", instructionRef: "test-only" },
+  };
+  const files = splitForFiles({ observed, measurements: measurement, surfaces }, EMULATOR_INVENTORY_BINDING);
+  const censusBytes = canonical(census), writerBytes = canonical(files["writer-inventory.json"]), collectionBytes = canonical(files["collection-inventory.json"]);
   const configuration = { oauthClientSecretVersion: "1", subjectDescriptor, ...(namespace === "pwmcp" ? {} : { platforms: "{}" }) };
   const predicate = { keyVersion, codeSha: source, publicPackageSourceSha: source, privateRunnerSha, workflowSourceSha, assemblyDigest, sessionSecretVersion: "1", image: codeArtifact, packageIntegrity, indexSchemaDigest, indexPolicyDigest, project, database, namespace, protocolDigest, serviceConfiguration: configuration, runner: { image: `${runnerRepository}@${childDigest}`, childManifestDigest: childDigest, configDigest: `sha256:${"8".repeat(64)}`, archiveSha256: "9".repeat(64) }, terraformPlanDigest: "a".repeat(64), terraformSavedPlanDigest: "b".repeat(64), terraformProjectionDigest: "c".repeat(64), observationRunId: "1", observationRunAttempt: "1", observationArtifactId: nonce, observationArtifactDigest: `sha256:${"d".repeat(64)}`, assemblyRunId: "2", assemblyRunAttempt: "1" };
-  const statement = { _type: "https://in-toto.io/Statement/v1", predicateType: "https://phoneware.us/mcp-cutover/v1", subject: [{ name: "cutover-protocol.mjs", digest: { sha256: protocolDigest } }, { name: "image", digest: { sha256: imageDigest } }, { name: "package", digest: { sha512: Buffer.from(packageIntegrity.slice(7), "base64").toString("hex") } }, { name: "git-commit", digest: { sha1: source } }, { name: "cutover-runner-image", digest: { sha256: childDigest.slice(7) } }], predicate };
+  Object.assign(predicate, { writerCensusDigest: digest(censusBytes), writerInventoryDigest: digest(writerBytes), collectionInventoryDigest: digest(collectionBytes) });
+  const statement = { _type: "https://in-toto.io/Statement/v1", predicateType: "https://phoneware.us/mcp-cutover/v2", subject: [{ name: "cutover-protocol.mjs", digest: { sha256: protocolDigest } }, { name: "image", digest: { sha256: imageDigest } }, { name: "package", digest: { sha512: Buffer.from(packageIntegrity.slice(7), "base64").toString("hex") } }, { name: "git-commit", digest: { sha1: source } }, { name: "cutover-runner-image", digest: { sha256: childDigest.slice(7) } }], predicate };
   const payload = canonical(statement), payloadType = "application/vnd.in-toto+json", signature = sign("sha256", formatPAE(payloadType, payload), { key: privateKey, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 });
   const envelope = { payloadType, payload: payload.toString("base64"), signatures: [{ keyid: keyVersion, sig: signature.toString("base64") }] };
   const approvalPayloadSha256 = digest(payload), migrationRunId = `nsm-${digest(Buffer.from(`netsapiens-mcp/cutover/migration-run/v1\n${approvalPayloadSha256}\n${namespace}\n${epoch}`)).slice(0, 40)}`;
   const request = { schemaVersion: 2, kind: "netsapiens-protected-migration-request", action, profile: "emulator", namespace, approvalPayloadSha256, identity: { expectedEpoch: epoch, migrationRunId, codeSha: source, codeArtifact, packageIntegrity, protocolDigest }, options };
   const trust = { algorithm: "RSA_SIGN_PSS_3072_SHA256", keyVersion, publicKeyPem: publicKey, publicKeySha256: digest(Buffer.from(publicKey)), runnerRepository };
   const buildInfo = { schemaVersion: 2, predicateType: statement.predicateType, sessionSecretVersion: "1", publicPackageSourceSha: source, privateRunnerSha, workflowSourceSha, assemblyDigest, profile: "emulator" };
-  return { opt: { "cutover-protocol.mjs": bundleBytes, "trust-policy.json": canonical(trust), "build-info.json": canonical(buildInfo) }, run: { "request.json": canonical(request), "attestation-manifest.json": payload, "approval.dsse.json": canonical(envelope), "index-schema.json": indexBytes, "session-secret": Buffer.from("synthetic-test-only-session-secret-000000000000") }, publicKey, statement, request, index, adminObservation, subjectField: subjectDescriptor === null ? null : subjectField };
+  return { opt: { "cutover-protocol.mjs": bundleBytes, "trust-policy.json": canonical(trust), "build-info.json": canonical(buildInfo) }, run: { "request.json": canonical(request), "attestation-manifest.json": payload, "approval.dsse.json": canonical(envelope), "index-schema.json": indexBytes, "writer-census.json": censusBytes, "writer-inventory.json": writerBytes, "collection-inventory.json": collectionBytes, "session-secret": Buffer.from("synthetic-test-only-session-secret-000000000000") }, publicKey, statement, request, index, adminObservation, subjectField: subjectDescriptor === null ? null : subjectField };
 }

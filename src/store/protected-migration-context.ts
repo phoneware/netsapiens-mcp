@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson, MCP_CUTOVER_PREDICATE_TYPE, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
+import { EMULATOR_INVENTORY_BINDING, PRODUCTION_INVENTORY_BINDING, compareCensus } from '../cutover/writer-census-contract.mjs';
+import { joinFromFiles, parseProtectedJson } from '../cutover/writer-inventory-format.mjs';
 import * as canonicalCore from '../cutover/canonical-core.mjs';
 import { subjectDescriptorFromPredicate } from './subject-descriptor.js';
 import { CutoverRefusedError } from './errors.js';
@@ -344,6 +346,36 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   }
   assertRuntimeScopeFromCore(request.namespace, groups as string[]);
 
+  const inventoryBinding = profile === 'production' ? PRODUCTION_INVENTORY_BINDING : EMULATOR_INVENTORY_BINDING;
+  if (inventoryBinding.project !== row.project || inventoryBinding.database !== row.database) {
+    refuse('Inventory binding does not match the protected database profile');
+  }
+  const censusBytes = readFixedFile(PATHS.writerCensus);
+  const writerBytes = readFixedFile(PATHS.writerInventory);
+  const collectionBytes = readFixedFile(PATHS.collectionInventory);
+  let census: unknown;
+  let writer: unknown;
+  let collection: unknown;
+  try {
+    census = parseProtectedJson(censusBytes);
+    writer = parseProtectedJson(writerBytes);
+    collection = parseProtectedJson(collectionBytes);
+    if (canonicalJson(writer) !== new TextDecoder('utf-8', { fatal: true }).decode(writerBytes) ||
+      canonicalJson(collection) !== new TextDecoder('utf-8', { fatal: true }).decode(collectionBytes)) {
+      refuse('Protected inventory files are not canonical JSON');
+    }
+    const inventory = joinFromFiles(writer, collection, inventoryBinding);
+    if (compareCensus({ census, ...inventory, scopeGroups: groups, binding: inventoryBinding }).decision !== 'match') {
+      refuse('Protected inventory does not match the approved census');
+    }
+  } catch {
+    refuse('Protected inventory evidence is invalid');
+  }
+
+  const writerCensusDigest = sha256Hex(censusBytes);
+  const writerInventoryDigest = sha256Hex(writerBytes);
+  const collectionInventoryDigest = sha256Hex(collectionBytes);
+
   const indexSchemaDigest = sha256Hex(Buffer.from(canonicalJson(index), 'utf8'));
   const indexPolicyDigest = sha256Hex(Buffer.from(canonicalJson(index.policy), 'utf8'));
 
@@ -368,6 +400,9 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
       database: row.database,
       namespace: request.namespace,
       protocolDigest: request.identity.protocolDigest,
+      writerCensusDigest,
+      writerInventoryDigest,
+      collectionInventoryDigest,
     },
   });
   if (!Buffer.from(verified.payloadBytes).equals(attestationBytes)) {
