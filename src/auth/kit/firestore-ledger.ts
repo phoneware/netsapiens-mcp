@@ -16,9 +16,11 @@ import {
   type StoredRefreshFamily,
   type StoredRefreshRecord,
   type TokenLedger,
+  type UpstreamCompletion,
 } from './ledger.js';
 import { StoreUnavailableError, CutoverFenceError, CutoverRefusedError, kitCodeOf } from './errors.js';
 import { stripUndefined } from './strip-undefined.js';
+import type { StoredUpstreamRecord } from './upstream-grant.js';
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
@@ -572,7 +574,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     replacement: T,
     expectedClientId: string,
     now: number = this.nowProvider(),
-    options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean; upstreamCompletion?: UpstreamCompletion | null },
   ): Promise<RefreshRotationResult<T>> {
     try {
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
@@ -756,6 +758,9 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             };
 
         if (oldRecord.status === 'consumed') {
+            if (options?.upstreamCompletion) {
+              throw new CutoverFenceError('Refresh token changed while upstream claim was pending');
+            }
           const successor = oldRecord.successorRefreshToken
             ? await transaction.get(
                 this.refreshCol().doc(docId(oldRecord.successorRefreshToken)),
@@ -784,7 +789,25 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           return { status: 'replay' } as const;
         }
 
-        // Active refresh token: perform rotation
+          const upstreamRef = this.legacy?.upstreamCollection
+            ? this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId))
+            : undefined;
+          const upstreamSnap = upstreamRef ? await transaction.get(upstreamRef) : undefined;
+          const upstreamRecord = upstreamSnap?.exists
+            ? upstreamSnap.data() as StoredUpstreamRecord<Record<string, unknown>>
+            : undefined;
+          const receipt = options?.upstreamCompletion;
+          if (receipt) {
+            if (!upstreamRecord || receipt.familyId !== oldRecord.familyId ||
+              receipt.leaseOwner !== upstreamRecord.leaseOwner ||
+              receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
+              receipt.operationId !== (op?.id ?? null) || upstreamRecord.ambiguousOutcome ||
+              (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== oldRecord.familyId))) {
+              throw new CutoverFenceError('Upstream refresh claim changed before rotation');
+            }
+          } else if (upstreamRecord?.leaseOwner || upstreamRecord?.ambiguousOutcome || upstreamRecord?.ambiguousOperationId) {
+            throw new CutoverFenceError('Upstream refresh remains pending');
+          }
         guard?.bufferCompletion(now);
 
         if (adoptedDocToWrite) {
@@ -810,7 +833,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
         transaction.delete(this.accessCol().doc(docId(oldRecord.token.accessToken)));
 
-        const stored: T = { ...replacement, refreshFamilyId: oldRecord.familyId };
+          const stored: T = { ...replacement, ...(upstreamRecord?.grant ?? {}), refreshFamilyId: oldRecord.familyId };
         const extras = this.accessDocExtras ? this.accessDocExtras(stored) : {};
         const accessPayload = stripUndefined({ ...stored, ...extras });
 
@@ -835,32 +858,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           retiredRefreshFingerprints: boundedRetired,
           updatedAt: now,
         }));
-        if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
+          if (upstreamRef && this.legacy?.toUpstream) {
           const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
           if (upstreamData) {
-            const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(oldRecord.familyId));
-            const upstreamSnap = await transaction.get(upstreamRef);
-            if (upstreamSnap.exists) {
-              const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<unknown>;
-              const currentLeaseOwner = upstreamRecord.leaseOwner;
-              const expectedOwner = op?.id;
-              const canClearLease = !currentLeaseOwner || currentLeaseOwner === expectedOwner || (upstreamRecord.leaseUntil ?? 0) <= now;
-              const upstreamPayload = stripUndefined({
+              transaction.set(upstreamRef, stripUndefined({
                 ...upstreamData,
-                grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
-                leaseUntil: canClearLease ? null : upstreamRecord.leaseUntil,
-                leaseOwner: canClearLease ? null : upstreamRecord.leaseOwner,
-                ambiguousOutcome: canClearLease ? null : upstreamRecord.ambiguousOutcome,
-                ambiguousReason: canClearLease ? null : upstreamRecord.ambiguousReason,
-                ambiguousAt: canClearLease ? null : upstreamRecord.ambiguousAt,
-                ambiguousOperationId: canClearLease ? null : upstreamRecord.ambiguousOperationId,
-                updatedAt: now,
-              });
-              transaction.set(upstreamRef, upstreamPayload, { merge: true });
-            } else {
-              const upstreamPayload = stripUndefined({
-                ...upstreamData,
-                grant: upstreamData.grant ? stripUndefined(upstreamData.grant as Record<string, unknown>) : undefined,
                 leaseUntil: null,
                 leaseOwner: null,
                 ambiguousOutcome: null,
@@ -868,9 +870,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 ambiguousAt: null,
                 ambiguousOperationId: null,
                 updatedAt: now,
-              });
-              transaction.set(upstreamRef, upstreamPayload, { merge: true });
-            }
+              }), { merge: true });
           }
         }
 

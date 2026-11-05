@@ -18,8 +18,8 @@ import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/au
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
-import type { RefreshRotationResult, StoredRefreshFamily } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode } from './kit/upstream-grant.js';
+import type { RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
+import { FirestoreUpstreamGrantStore, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
@@ -255,16 +255,16 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     replacement: StoredToken,
     expectedClientId: string,
     now?: number,
-    options?: { operation?: LegacyOperationContext },
+  options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletion | null },
   ): Promise<RefreshRotationResult<StoredToken>> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
         { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'rotate', now: this.localNow },
-        async (opCtx) => this.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: opCtx }),
+    async (opCtx) => this.rotate(oldRefreshToken, replacement, expectedClientId, now, { ...options, operation: opCtx }),
       );
     }
-    return super.rotate(oldRefreshToken, replacement, expectedClientId, now, { operation: op });
+  return super.rotate(oldRefreshToken, replacement, expectedClientId, now, { ...options, operation: op });
   }
 
   override async getByAccessToken(
@@ -395,9 +395,9 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     throw new Error('Token document missing refreshFamilyId');
   }
 
-  let upstreamGrant: NsUpstreamGrant;
+  let fresh: EnsureFreshResult<NsUpstreamGrant>;
   try {
-    upstreamGrant = await this.upstreamStore.ensureFresh(
+   fresh = await this.upstreamStore.ensureFresh(
       familyId,
       async (currentGrant: NsUpstreamGrant) => {
         const grantObj = (currentGrant as any)?.grant ?? currentGrant ?? {};
@@ -460,7 +460,22 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       guardResult = guard;
     }
     const snap = await transaction.get(accessRef);
+    const upstreamSnap = await transaction.get(upstreamRef);
+    if (!upstreamSnap.exists) throw new LeaseLostError('Upstream grant disappeared during refresh');
+    const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant>;
+    const receipt = fresh.completion;
+    if (receipt) {
+     if (receipt.familyId !== familyId || receipt.leaseOwner !== upstreamRecord.leaseOwner ||
+      receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
+      receipt.operationId !== (op?.id ?? null) || upstreamRecord.ambiguousOutcome ||
+      (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
+      throw new LeaseLostError('Upstream refresh claim changed before finalization');
+     }
+    } else if (upstreamRecord.leaseOwner || upstreamRecord.ambiguousOutcome || upstreamRecord.ambiguousOperationId) {
+     throw new LeaseLostError('Upstream refresh remains pending');
+    }
     if (!snap.exists) {
+     if (fresh.completion) throw new LeaseLostError('Access token changed during claimed refresh');
       const familySnap = await transaction.get(this.familyDocRef(familyId));
       if (familySnap.exists) {
         const familyData = familySnap.data() as StoredRefreshFamily;
@@ -468,12 +483,13 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           const currentAccessSnap = await transaction.get(this.accessDocRef(familyData.currentAccessToken));
           if (currentAccessSnap.exists) {
             guard?.bufferCompletion(this.localNow());
-            return currentAccessSnap.data() as StoredToken;
+        return { ...(currentAccessSnap.data() as StoredToken), ...upstreamRecord.grant };
           }
         }
       }
       throw new Error('Token document was deleted/revoked during refresh');
     }
+    const upstreamGrant = upstreamRecord.grant;
     const current = snap.data() as StoredToken;
     const updated: StoredToken = {
       ...current,
@@ -483,12 +499,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     };
     guard?.bufferCompletion(this.localNow());
     transaction.set(accessRef, cleanDoc(updated));
-    const upstreamSnap = await transaction.get(upstreamRef);
-    if (upstreamSnap.exists) {
-      const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant>;
-      const currentLeaseOwner = upstreamRecord.leaseOwner;
-      const expectedOwner = op?.id ?? (upstreamGrant as any)?.leaseOwner;
-      if (!currentLeaseOwner || currentLeaseOwner === expectedOwner || currentLeaseOwner === op?.id) {
+    if (receipt) {
         transaction.set(
           upstreamRef,
           {
@@ -502,7 +513,6 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           },
           { merge: true },
         );
-      }
     }
     return updated;
     });

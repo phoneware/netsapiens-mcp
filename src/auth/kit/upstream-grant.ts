@@ -10,6 +10,7 @@ import {
   kitCodeOf,
 } from './errors.js';
 import { docId } from './firestore-ledger.js';
+import type { UpstreamCompletion } from './ledger.js';
 import { stripUndefined } from './strip-undefined.js';
 import {
   type CutoverFenceConfig,
@@ -42,6 +43,12 @@ export interface StoredUpstreamRecord<G> {
   updatedAt?: number;
 }
 
+
+export type EnsureFreshResult<G> = Readonly<{
+  grant: G;
+  completion: UpstreamCompletion | null;
+}>;
+
 export interface EnsureFreshOptions {
   force?: boolean;
   skewMs?: number;
@@ -64,7 +71,7 @@ export interface UpstreamGrantStore<G> {
     familyId: string,
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
     options?: EnsureFreshOptions & { operation?: LegacyOperationContext; completeOperation?: boolean },
-  ): Promise<G>;
+  ): Promise<EnsureFreshResult<G>>;
   reconcileAmbiguousGrant?(
     familyId: string,
     grant: G,
@@ -101,7 +108,7 @@ export class MemoryUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     familyId: string,
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
     options?: EnsureFreshOptions,
-  ): Promise<G> {
+  ): Promise<EnsureFreshResult<G>> {
     const record = this.records.get(familyId);
     if (!record) {
       throw new UpstreamRevokedError('No upstream grant found for session');
@@ -113,7 +120,7 @@ export class MemoryUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
     const isExpiring = !record.expiresAt || record.expiresAt - skewMs <= now;
     if (!force && !isExpiring) {
-      return record.grant;
+      return { grant: record.grant, completion: null };
     }
 
     try {
@@ -123,7 +130,7 @@ export class MemoryUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         expiresAt: refreshed.expiresAt,
         updatedAt: now,
       });
-      return refreshed.grant;
+      return { grant: refreshed.grant, completion: null };
     } catch (err) {
       if (kitCodeOf(err)) throw err;
       const classification = classifyUpstreamTokenResponse(
@@ -135,7 +142,7 @@ export class MemoryUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         throw new UpstreamRevokedError(err instanceof Error ? err.message : String(err));
       }
       if (record.expiresAt && record.expiresAt > now) {
-        return record.grant;
+        return { grant: record.grant, completion: null };
       }
       throw new UpstreamUnavailableError(err instanceof Error ? err.message : String(err));
     }
@@ -264,7 +271,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     familyId: string,
     refresh: (currentGrant: G) => Promise<{ grant: G; expiresAt?: number }>,
     options?: EnsureFreshOptions & { operation?: LegacyOperationContext; completeOperation?: boolean },
-  ): Promise<G> {
+  ): Promise<EnsureFreshResult<G>> {
     const op = options?.operation ?? requestOperationContext.getStore();
     if (this.fence?.enforce && !op) {
       throw new CutoverFenceError(
@@ -287,7 +294,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         guard = await checkMutationGuardInTransaction(transaction, {
           db: this.db,
           namespace: this.fence.namespace,
-          operation: options?.operation,
+            operation: op,
           now: this.nowProvider,
           completeOperation: false,
         });
@@ -305,25 +312,15 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         );
       }
 
-      const activeLease = current.leaseUntil && current.leaseUntil > now;
-      if (activeLease) {
+        if (current.leaseOwner) {
+          if (!current.leaseUntil || current.leaseUntil <= now) {
+            throw new UpstreamUnavailableError('Upstream grant has an unresolved expired lease');
+          }
         return { status: 'leased' as const, current };
       }
 
-      if (this.fence?.enforce && current.ambiguousOperationId) {
-        const priorOpRef = getCutoverOperationDocRef(this.db, this.fence.namespace, current.ambiguousOperationId);
-        const priorOpSnap = await transaction.get(priorOpRef);
-        if (!priorOpSnap.exists) {
-          throw new CutoverFenceError(
-            'Upstream grant references missing ambiguous operation; fail closed',
-          );
-        }
-        const priorOp = priorOpSnap.data() as LegacyOperationRecord;
-        if (priorOp.phase !== 'completed' && priorOp.phase !== 'failed') {
-          throw new UpstreamUnavailableError(
-            `Upstream grant is locked by in-flight or unresolved operation in phase ${priorOp.phase}`,
-          );
-        }
+        if (current.ambiguousOperationId || current.leaseUntil) {
+          throw new UpstreamUnavailableError('Upstream grant has an unresolved lease binding');
       }
       const isExpiring = !current.expiresAt || current.expiresAt - skewMs <= now;
       if (!force && !isExpiring) {
@@ -358,7 +355,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
     };
     const claimResult = op?.trackWriter ? await op.trackWriter(runClaimTx) : await runClaimTx();
     if (claimResult.status === 'fresh') {
-      return claimResult.grant;
+      return { grant: claimResult.grant, completion: null };
     }
 
     if (claimResult.status === 'leased') {
@@ -377,7 +374,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         }
         const refreshedCommitted = !checkData.leaseUntil;
         if (refreshedCommitted) {
-          return checkData.grant;
+          return { grant: checkData.grant, completion: null };
         }
       }
 
@@ -405,7 +402,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             const snap = await transaction.get(docRef);
             if (snap.exists) {
               const current = snap.data() as StoredUpstreamRecord<G>;
-              if (current.leaseOwner === leaseOwner) {
+              if (current.leaseOwner === leaseOwner && (current.ambiguousOperationId ?? null) === (op?.id ?? null)) {
                 transaction.delete(docRef);
               }
             }
@@ -435,6 +432,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
         const runAmbiguityTx = async () => {
           await this.db.runTransaction(async (transaction) => {
+            const [grantSnap, operationSnap] = await Promise.all([transaction.get(docRef), transaction.get(opRef)]);
+            const current = grantSnap.data() as StoredUpstreamRecord<G> | undefined;
+            const operation = operationSnap.data() as LegacyOperationRecord | undefined;
+            if (!current || current.leaseOwner !== leaseOwner || current.ambiguousOperationId !== op.id ||
+              !operation || operation.phase !== 'upstream_pending' || operation.familyId !== familyId) return;
             transaction.set(
               opRef,
               {
@@ -464,38 +466,6 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         }
       }
 
-      if (!this.fence?.enforce || !op) {
-        const runLeaseTx = async () => {
-          await this.db.runTransaction(async (transaction) => {
-            const snap = await transaction.get(docRef);
-            if (snap.exists) {
-              const current = snap.data() as StoredUpstreamRecord<G>;
-              if (current.leaseOwner === leaseOwner) {
-                transaction.set(
-                  docRef,
-                  {
-                    leaseUntil: null,
-                    leaseOwner: null,
-                  },
-                  { merge: true },
-                );
-              }
-            }
-          }).catch(() => {});
-        };
-        if (op?.trackWriter) {
-          await op.trackWriter(runLeaseTx);
-        } else {
-          await runLeaseTx();
-        }
-      }
-      const snap = await docRef.get();
-      if (snap.exists) {
-        const data = snap.data() as StoredUpstreamRecord<G>;
-        if (!data.ambiguousOutcome && data.expiresAt && data.expiresAt > now) {
-          return data.grant;
-        }
-      }
 
       if (err instanceof UpstreamUnavailableError) {
         throw err;
@@ -526,7 +496,9 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamRevokedError('Grant document deleted during refresh');
         }
         const current = snap.data() as StoredUpstreamRecord<G>;
-        if (!current.leaseOwner || current.leaseOwner !== leaseOwner) {
+          if (current.leaseOwner !== leaseOwner || (current.ambiguousOperationId ?? null) !== (op?.id ?? null) ||
+            current.ambiguousOutcome || (op && this.fence?.enforce &&
+              (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
           throw new UpstreamUnavailableError('Lease owner changed during refresh');
         }
 
@@ -557,7 +529,12 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         await runCommitTx();
       }
       commitGuard?.commitCompletion?.();
-      return refreshed.grant;
+      return {
+        grant: refreshed.grant,
+        completion: options?.completeOperation === false
+          ? { familyId, leaseOwner, operationId: op?.id ?? null }
+          : null,
+      };
     } catch (err) {
       const op = options?.operation ?? requestOperationContext.getStore();
       if (this.fence?.enforce && op) {
@@ -565,6 +542,11 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
         const opRef = getCutoverOperationDocRef(this.db, this.fence.namespace, op.id);
         const runLocalCommitFailureTx = async () => {
           await this.db.runTransaction(async (transaction) => {
+            const [grantSnap, operationSnap] = await Promise.all([transaction.get(docRef), transaction.get(opRef)]);
+            const current = grantSnap.data() as StoredUpstreamRecord<G> | undefined;
+            const operation = operationSnap.data() as LegacyOperationRecord | undefined;
+            if (!current || current.leaseOwner !== leaseOwner || current.ambiguousOperationId !== op.id ||
+              !operation || operation.phase !== 'upstream_pending' || operation.familyId !== familyId) return;
             transaction.set(
               opRef,
               {

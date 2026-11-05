@@ -46,7 +46,7 @@ import {
 } from './kit/errors.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { DEFAULT_ACCESS_TOKEN_TTL_MS } from './kit/ledger.js';
-import type { TokenLedger } from './kit/ledger.js';
+import type { TokenLedger, UpstreamCompletion } from './kit/ledger.js';
 import type {
  OAuthClientInformationFull,
  OAuthTokens,
@@ -1398,6 +1398,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
     // Try to refresh the upstream NS token if we have a refresh token
     let nsTokens: NsTokenResponse;
+    let upstreamCompletion: UpstreamCompletion | null = null;
     if (stored.nsRefreshToken) {
      try {
       if (this.tokenStore instanceof FirestoreTokenStore && stored.refreshFamilyId) {
@@ -1425,7 +1426,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         },
         { operation: opCtx, now: this.nowProvider(), force: true, completeOperation: false },
        );
-       const effectiveGrant = (upstreamGrant as any)?.grant ?? upstreamGrant;
+       upstreamCompletion = upstreamGrant.completion;
+       const effectiveGrant = upstreamGrant.grant;
        nsTokens = {
         access_token: effectiveGrant.nsAccessToken,
         refresh_token: effectiveGrant.nsRefreshToken,
@@ -1487,12 +1489,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
     try {
      if ('rotate' in this.tokenStore && typeof (this.tokenStore as unknown as { rotate: unknown }).rotate === 'function') {
-      const rot = await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
-       refreshToken,
-       replacement,
-       stored.clientId,
-       this.nowProvider(),
-       { operation: opCtx },
+      const rotateOptions = { operation: opCtx, upstreamCompletion };
+      const rot = this.tokenStore instanceof FirestoreTokenStore
+       ? await this.tokenStore.rotate(refreshToken, replacement, stored.clientId, this.nowProvider(), rotateOptions)
+       : await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
+        refreshToken, replacement, stored.clientId, this.nowProvider(), { operation: opCtx },
       );
       if (rot.status === 'retry') {
        const remainingSec = Math.max(1, Math.round((rot.token.expiresAt - this.nowProvider()) / 1000));

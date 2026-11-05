@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Firestore } from '@google-cloud/firestore';
 import {
   CutoverFenceError,
@@ -38,10 +38,26 @@ import {
   TemporarilyUnavailableError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { docId } from '../auth/kit/firestore-ledger.js';
+import { FirestoreUpstreamGrantStore } from '../auth/kit/upstream-grant.js';
 import request from 'supertest';
 import { createApp, validateBridgeStartup } from '../http-server.js';
 
 const EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST;
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+const environment = { ...process.env };
+afterEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in environment)) delete process.env[key];
+  }
+  Object.assign(process.env, environment);
+  vi.restoreAllMocks();
+});
 
 function createTestDb(projectId: string = `mcp-bridge-${randomUUID().slice(0, 8)}`): Firestore {
   return new Firestore({
@@ -170,8 +186,8 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       );
     });
 
-    const { promise: fenceClosed, resolve: notifyFenceClosed } = Promise.withResolvers<void>();
-    const { promise: opStarted, resolve: notifyOpStarted } = Promise.withResolvers<void>();
+    const { promise: fenceClosed, resolve: notifyFenceClosed } = deferred();
+    const { promise: opStarted, resolve: notifyOpStarted } = deferred();
 
     const opPromise = withLegacyOperation({ db, namespace, kind: 'refresh' }, async (ctx) => {
       notifyOpStarted();
@@ -240,8 +256,8 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     let grantResolved = false;
     let operationFinished = false;
-    const { promise: fenceAttemptDone, resolve: notifyFenceAttemptDone } = Promise.withResolvers<void>();
-    const { promise: opPaused, resolve: notifyOpPaused } = Promise.withResolvers<void>();
+    const { promise: fenceAttemptDone, resolve: notifyFenceAttemptDone } = deferred();
+    const { promise: opPaused, resolve: notifyOpPaused } = deferred();
 
     const opPromise = withLegacyOperation({ db, namespace, kind: 'refresh' }, async (ctx) => {
       notifyOpPaused();
@@ -772,7 +788,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       { db, namespace, kind: 'auth_code', operationId: sharedOpId },
       async () => {
         executions++;
-        const { promise, resolve } = Promise.withResolvers<void>();
+        const { promise, resolve } = deferred();
         setTimeout(resolve, 50);
         await promise;
         return 'success_1';
@@ -1388,8 +1404,13 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       });
 
     // Pre-admitted request must succeed (200), NOT 503 double-admission refusal
-    expect(tokenRes1.status).toBe(200);
+    expect({ status: tokenRes1.status, error: tokenRes1.body?.error }).toEqual({ status: 200, error: undefined });
     expect(tokenRes1.body.access_token).toBeDefined();
+    expect(tokenRes1.body.refresh_token).toBeDefined();
+    const successor = await db.collection('mcp_tokens').doc(docId(tokenRes1.body.access_token)).get();
+    expect(successor.exists).toBe(true);
+    expect(successor.data()?.refreshToken).toBe(tokenRes1.body.refresh_token);
+    expect(successor.data()?.nsAccessToken).toBe('new-ns-access');
 
     // 2. New request after closing must be refused with 503 + Retry-After: 5
     const tokenRes2 = await request(app)
@@ -1859,7 +1880,6 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     const testAccessToken = 'sse-test-token-' + randomBytes(8).toString('hex');
     const testRefreshToken = 'sse-refresh-token-' + randomBytes(8).toString('hex');
-    const sessionId = 'sse-session-' + randomBytes(8).toString('hex');
 
     await tokenStore.issue({
       accessToken: testAccessToken,
@@ -1888,11 +1908,13 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
         },
       });
     expect(initRes.status).toBe(200);
-    const liveSessionId = initRes.headers['mcp-session-id'] || sessionId;
+    const liveSessionId = initRes.headers['mcp-session-id'];
+    expect(liveSessionId).toBeTruthy();
 
     const server = app.listen(0);
     const port = (server.address() as any).port;
     const controller = new AbortController();
+    try {
 
     const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
       headers: {
@@ -1920,8 +1942,10 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     }
     expect(activeOps).toBe(0);
 
+    } finally {
     controller.abort();
     await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
   it('32. Pre-send failure after claim preserves upstream_pending, makes zero upstream calls on subsequent retry, and prevents sealing (Reset Section 8)', async () => {
@@ -2098,6 +2122,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    process.env.MCP_STATELESS = 'true';
 
     const tokenStore = new FirestoreTokenStore({
       db,
@@ -2184,7 +2209,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
           return await fn();
         };
 
-        await upstreamStore.put(familyId, { test: 'grant' }, Date.now() + 3600_000, { operation: op });
+        await upstreamStore.put(familyId, { test: 'grant' }, Date.now() + 3600_000, { operation: op, completeOperation: false });
         expect(trackWriterCalls).toBeGreaterThan(0);
         const callsAfterPut = trackWriterCalls;
 
@@ -2211,6 +2236,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const db = createTestDb();
     const namespace = 'mcp';
     await initializeCutoverFence(db, namespace, { initialEpoch: 1, initialState: 'legacy_open' });
+    process.env.MCP_STATELESS = 'true';
 
     const tokenStore = new FirestoreTokenStore({
       db,
@@ -2264,5 +2290,56 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(capturedOpCtx).toBeDefined();
 
     expect(() => capturedOpCtx.exitWriter()).toThrow(CutoverFenceError);
+  });
+
+  it('retains the exact nonterminal claimant and refuses expired unresolved leases', async () => {
+    const db = createTestDb();
+    const store = new FirestoreUpstreamGrantStore<{ token: string }>({
+      db, collection: 'upstream_receipt',
+    });
+    const familyId = randomUUID();
+    await store.put(familyId, { token: 'old' }, 1);
+    const first = await store.ensureFresh(familyId, async () => ({
+      grant: { token: 'new' }, expiresAt: 100_000,
+    }), { now: 10, leaseMs: 10, completeOperation: false });
+    expect(first.grant).toEqual({ token: 'new' });
+    expect(first.completion).toEqual({
+      familyId, leaseOwner: expect.any(String), operationId: null,
+    });
+    const held = await store.get(familyId);
+    expect(held?.leaseOwner).toBe(first.completion?.leaseOwner);
+    const refresh = vi.fn(async () => ({ grant: { token: 'stale' } }));
+    await expect(store.ensureFresh(familyId, refresh, { now: 50, force: true }))
+      .rejects.toBeInstanceOf(UpstreamUnavailableError);
+    expect(refresh).not.toHaveBeenCalled();
+    expect((await store.get(familyId))?.leaseOwner).toBe(first.completion?.leaseOwner);
+});
+
+  it('rotation refuses missing or forged completion receipts even after lease expiry', async () => {
+    const db = createTestDb();
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const token = await store.issue({
+      accessToken: 'receipt-old-access',
+      refreshToken: 'receipt-old-refresh',
+      clientId: 'receipt-client',
+      expiresAt: 100_000,
+      nsAccessToken: 'old-upstream',
+      nsUsername: 'user',
+    });
+    const familyId = token.refreshFamilyId!;
+    const upstreamRef = store.upstreamDocRef(familyId);
+    await upstreamRef.set({
+      grant: { nsAccessToken: 'new-upstream', nsUsername: 'user' },
+      leaseOwner: 'actual-owner', leaseUntil: 1,
+    });
+    const replacement = { ...token, accessToken: 'receipt-new-access', refreshToken: 'receipt-new-refresh' };
+    await expect(store.rotate(token.refreshToken, replacement, token.clientId, 50))
+      .rejects.toThrow();
+    await expect(store.rotate(token.refreshToken, replacement, token.clientId, 50, {
+      upstreamCompletion: { familyId, leaseOwner: 'wrong-owner', operationId: null },
+    })).rejects.toThrow();
+    expect((await upstreamRef.get()).data()?.leaseOwner).toBe('actual-owner');
+    expect((await store.accessDocRef(replacement.accessToken).get()).exists).toBe(false);
+    expect((await store.refreshDocRef(token.refreshToken).get()).data()?.status).toBe('active');
   });
 });

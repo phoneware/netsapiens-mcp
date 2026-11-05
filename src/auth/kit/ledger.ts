@@ -1,5 +1,5 @@
+// Copied from phoneware/monorepo packages/mcp-oauth-kit/src/ledger.ts at 9aeb5315285a31a546040211c5fe5ed9f702f75d (blob 5c14f4717a00c5fb0932ea02695c0fe2480a1000). Edit the canonical file, then re-copy.
 import type { LegacyOperationContext } from './cutover-fence.js';
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/ledger.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
 import { createHash, randomUUID } from 'node:crypto';
 
 export const REFRESH_RETRY_WINDOW_MS = 30_000;
@@ -30,6 +30,7 @@ export interface StoredRefreshRecord<T extends BaseStoredToken> {
 
 export interface StoredRefreshFamily {
   id: string;
+  generation?: number;
   currentAccessToken: string;
   currentRefreshToken: string;
   previousAccessToken?: string;
@@ -50,6 +51,12 @@ export type RefreshRotationResult<T extends BaseStoredToken> =
   | { status: 'replay' }
   | { status: 'missing' };
 
+export type UpstreamCompletion = Readonly<{
+  familyId: string;
+  leaseOwner: string;
+  operationId: string | null;
+}>;
+
 export interface TokenLedger<T extends BaseStoredToken> {
   issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T>;
   getByAccessToken(accessToken: string): Promise<T | undefined>;
@@ -64,7 +71,7 @@ export interface TokenLedger<T extends BaseStoredToken> {
     replacement: T,
     expectedClientId: string,
     now?: number,
-    options?: { operation?: LegacyOperationContext },
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean; upstreamCompletion?: UpstreamCompletion | null },
   ): Promise<RefreshRotationResult<T>>;
   revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
   revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
