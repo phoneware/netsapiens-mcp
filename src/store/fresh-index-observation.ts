@@ -2,9 +2,9 @@ import { CutoverFenceError, CutoverRefusedError } from './errors.js';
 import { assertConcreteCoverage, assertDocumentBudget, concreteFieldPaths, type FreshCollectionCoverage, type SignedIndexPolicy } from './index-coverage.js';
 import type { ProtectedBinding } from './protected-binding.js';
 
-// Fresh authenticated Admin observation. The producer is the shared index
-// policy reader; until it is handed over, no observation can be recorded and
-// every migration check that needs one refuses. Nothing here assumes coverage.
+// Fresh authenticated Admin observation. fresh-index-producer.ts records it, reading
+// with the handle's authenticated token. Without a recorded observation for this
+// handle, every check that needs one refuses. Nothing here assumes coverage.
 
 export const FRESH_INDEX_OBSERVATION_MAX_AGE_NS = 120_000n * 1_000_000n;
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { canonicalJson, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
+import { getCutoverDistinctCollectionNames } from '../cutover/canonical-core.mjs';
 import { CutoverRefusedError } from './errors.js';
 import { deriveStoreKey } from './codec.js';
 import { bindProtectedContext, type ProtectedOperation } from './protected-binding.js';
@@ -172,10 +173,15 @@ function assertArgv(request: ProtectedRequestV2): void {
   }
 }
 
-// Runtime collection scope comes from the canonical core export, which is not
-// synchronized into this build. Until it is, the scope step refuses.
-function assertRuntimeScopeFromCore(_namespace: string, _collectionGroups: readonly string[]): void {
-  refuse('Runtime collection scope requires the synchronized canonical core export');
+// Runtime collection scope is the canonical core's distinct collection set for the
+// namespace, plus the namespace's _meta group that the migration reads and writes.
+// The signed index policy must name exactly that set, or the context refuses.
+// Every profile takes this same check; nothing here is an independent list.
+function assertRuntimeScopeFromCore(namespace: string, collectionGroups: readonly string[]): void {
+  const expected = [...getCutoverDistinctCollectionNames(namespace).distinct, `${namespace}_meta`].sort();
+  if (canonicalJson(expected) !== canonicalJson([...collectionGroups].sort())) {
+    refuse('Signed index collection groups differ from the canonical core runtime scope');
+  }
 }
 
 // Exact dispatch claims for mutating production operations. These are checked
@@ -375,7 +381,12 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     if (request.action === 'adopt' || request.action === 'activate') {
       adminAccess = { getAccessToken: async () => token, fetchFn: fetchForProfile(profile) };
     }
-  } else if (request.action === 'adopt' || request.action === 'activate') {
+  } else if (profile === 'emulator' && (request.action === 'adopt' || request.action === 'activate')) {
+    // Emulator test profile only: the fixed test owner token, read through the
+    // loopback fake Admin endpoint. Its digest binds fresh observations to this
+    // token the same way production binds them to the exchanged STS token. No
+    // production credential or production approval is used on this path.
+    adminTokenDigest = sha256Hex(Buffer.from('owner', 'utf8'));
     adminAccess = { getAccessToken: async () => 'owner', fetchFn: fetchForProfile(profile) };
   }
 
