@@ -537,6 +537,15 @@ export function extractCandidatesAndPlan(params: {
       reasons.missingAccessTokens++;
       continue;
     }
+    const owners = [accessEntry.data.familyId, accessEntry.data.refreshFamilyId].filter(value => value != null);
+    if (owners.some(value => typeof value !== 'string')) {
+      reasons.malformedRecords++;
+      continue;
+    }
+    if (owners.some(value => value !== familyId)) {
+      reasons.conflictingClaims++;
+      continue;
+    }
     if (claimedAccessIds.has(accessEntry.credentialToken)) {
       reasons.conflictingClaims++;
       continue;

@@ -137,6 +137,16 @@ const errorScenarios = (): ErrorScenario[] => {
         [`${NS}_tokens/ambiguous`, { accessToken: 'ambiguous', refreshToken: 'ambiguous-ref', familyId: 'fam-a', refreshFamilyId: 'fam-b', clientId: 'client', expiresAt: now + 3600_000 }],
       ],
     },
+    {
+      name: 'holds a family-selected token naming only a different family',
+      errors: '>=1',
+      seed: () => [
+        [`${NS}_tokens_refresh_families/fam-a`, { id: 'fam-a', currentAccessToken: 'ambiguous', currentRefreshToken: 'ambiguous-ref', retiredRefreshFingerprints: [], updatedAt: now }],
+        [`${NS}_tokens_refresh/ambiguous-ref`, { refreshToken: 'ambiguous-ref', accessToken: 'ambiguous', familyId: 'fam-a', status: 'active', token: { clientId: 'client', expiresAt: now + 3600_000 } }],
+        [`${NS}_tokens_upstream/fam-a`, { nsAccessToken: 'upstream', nsUsername: 'user@example.test' }],
+        [`${NS}_tokens/ambiguous`, { accessToken: 'ambiguous', refreshToken: 'ambiguous-ref', familyId: 'fam-b', clientId: 'client', expiresAt: now + 3600_000 }],
+      ],
+    },
   ];
 };
 
