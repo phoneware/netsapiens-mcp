@@ -54,7 +54,7 @@ export function verifyDSSEEnvelope(envelope, publicKeyPem, options) {
   if (EXPECTED_FIELDS.some((key) => typeof expected[key] !== "string" || !expected[key]) ||
     ![expected.codeSha, expected.publicPackageSourceSha, expected.privateRunnerSha, expected.workflowSourceSha].every((value) => sha(value, 40)) ||
     expected.codeSha !== expected.publicPackageSourceSha || ![expected.assemblyDigest, expected.indexSchemaDigest, expected.indexPolicyDigest, expected.protocolDigest].every((value) => sha(value, 64)) ||
-    !decimal(expected.sessionSecretVersion) || !/@sha256:[0-9a-f]{64}$/.test(expected.image) ||
+    !decimal(expected.sessionSecretVersion) || !/^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/.test(expected.image) ||
     !validSri(expected.packageIntegrity) || !["mcp", "pwmcp", "readonly_mcp"].includes(expected.namespace)) throw new Error("Malformed protected DSSE identity");
   if (!exact(envelope, ["payloadType", "payload", "signatures"]) || envelope.payloadType !== DSSE_PAYLOAD_TYPE ||
     !Array.isArray(envelope.signatures) || envelope.signatures.length !== 1 ||
