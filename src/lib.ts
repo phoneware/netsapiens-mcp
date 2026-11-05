@@ -23,6 +23,9 @@ export {
 } from './auth/kit/errors.js';
 export {
   withLegacyOperation,
+  deriveStoreKey,
+  startMonotonicTimer,
+  claimUpstreamGrantInTransaction,
   checkMutationGuardInTransaction,
   getCutoverFenceRecord,
   getCutoverFenceDocRef,
@@ -44,6 +47,9 @@ export type {
   SupportedCutoverNamespace,
   WithLegacyOperationOptions,
   GuardMutationOptions,
+  MonotonicTimer,
+  ClaimUpstreamGrantOptions,
+  PendingClaim,
   GuardMutationResult,
 } from './auth/kit/cutover-fence.js';
 export { MemoryTokenLedger } from './auth/kit/ledger.js';

@@ -32,6 +32,10 @@ import {
   type LegacyOperationContext,
   type SupportedCutoverNamespace,
   withLegacyOperation,
+ normalizeFenceConfig,
+ requireFenceKey,
+ assertOperationKey,
+ startMonotonicTimer,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
   requestOperationContext,
@@ -571,15 +575,17 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   fn: (opCtx?: LegacyOperationContext) => Promise<R>,
  ): Promise<R> {
   const existing = requestOperationContext.getStore();
-  if (existing && !existing.isCompleted()) {
-   if (typeof (existing as any).trackWriter === 'function') {
-    return await (existing as any).trackWriter(() => fn(existing));
+  if (existing) {
+   assertOperationKey(this.fenceConfig, existing);
+   if (existing.isCompleted()) throw new CutoverFenceError('Completed operation context cannot be reused');
+   if (existing.trackWriter) {
+    return await existing.trackWriter(() => fn(existing));
    }
    return await fn(existing);
   }
   if (this.db && this.fenceConfig?.enforce) {
    return await withLegacyOperation(
-    { db: this.db, namespace: this.fenceNamespace, kind, now: this.nowProvider },
+    { db: this.db, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind, now: this.nowProvider },
     async (opCtx) => fn(opCtx),
    );
   }
@@ -619,7 +625,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    : tokensCollection.startsWith('pwmcp')
    ? 'pwmcp'
    : 'mcp';
-  this.fenceConfig = options.fence ?? (process.env.MCP_FENCE_ENFORCE === 'true' ? { namespace: detectedNs, enforce: true } : undefined);
+  this.fenceConfig = normalizeFenceConfig(options.fence ?? (process.env.MCP_FENCE_ENFORCE === 'true' ? { namespace: detectedNs, enforce: true } : undefined));
 
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
@@ -829,7 +835,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
 
   try {
-   await this.withOperation('token_login', async (opCtx) => {
+   await this.withOperation('login', async (opCtx) => {
     let validated: { username: string; userRole?: UserRole; scope?: string; expiresIn?: number; user?: string; domain?: string; displayName?: string; email?: string };
     try {
      validated = await this.validateNsToken(resolvedPlatform.apiUrl, token);
@@ -1126,7 +1132,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
 
   try {
-   await this.withOperation('resume', async (opCtx) => {
+   await this.withOperation('auth_code', async (opCtx) => {
     const parts = resumeToken.split('.');
     const canonicalDecodedBytes = Buffer.concat(parts.map((p) => Buffer.from(p, 'base64url')));
     const resumeId = payload.nonce
@@ -1149,19 +1155,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       clientId: payload.pending.clientId,
      };
      const codeRef = this.db.collection(this.authCodesCollection).doc(code);
+     let committedGuard: GuardMutationResult | undefined;
      const success = await this.db.runTransaction(async (transaction) => {
+      const timer = startMonotonicTimer();
       let guard: GuardMutationResult | undefined;
       if (this.fenceConfig?.enforce) {
+       if (!opCtx) throw new CutoverFenceError('Durable operation context is required');
        guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db!,
         namespace: this.fenceNamespace,
         operation: opCtx,
+        timer,
         completeOperation: true,
         now: this.nowProvider,
        });
+       committedGuard = guard;
       }
       const resumeSnap = await transaction.get(resumeRef);
       if (resumeSnap.exists) {
+       guard?.assertPreReturn();
        return false;
       }
       guard?.bufferCompletion(now);
@@ -1171,8 +1183,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        ttlAt: new Date(now + 2 * 60 * 60 * 1000),
       });
       transaction.set(codeRef, stripUndefined(authCodeData as unknown as Record<string, unknown>));
+      guard?.assertPreReturn();
       return true;
      });
+     committedGuard?.onCommit();
 
      if (!success) {
       sendPage(res, 400, this.renderErrorPage('This sign-in session has already been completed. Close this tab and reconnect from your MCP client.', 400));
@@ -1220,20 +1234,26 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  ): Promise<boolean> {
   if (this.db) {
    const docRef = this.db.collection(this.resumeTokensCollection).doc(resumeId);
-   return await this.db.runTransaction(async (transaction) => {
+   let committedGuard: GuardMutationResult | undefined;
+   const result = await this.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     let guard: GuardMutationResult | undefined;
     if (this.fenceConfig?.enforce) {
+     if (!options?.operation) throw new CutoverFenceError('Durable operation context is required');
      guard = await checkMutationGuardInTransaction(transaction, {
       db: this.db!,
       namespace: this.fenceNamespace,
       operation: options?.operation,
+      timer,
       completeOperation: options?.completeOperation !== false,
       now: this.nowProvider,
      });
+     committedGuard = guard;
     }
     const snap = await transaction.get(docRef);
      if (snap.exists) {
       guard?.bufferCompletion(this.nowProvider());
+     guard?.assertPreReturn();
       return false;
      }
      const now = this.nowProvider();
@@ -1244,8 +1264,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       expiresAt,
       ttlAt: new Date(expiresAt),
      });
+    guard?.assertPreReturn();
      return true;
     });
+   committedGuard?.onCommit();
+   return result;
   }
   if (this.consumedResumeTokens.has(resumeId)) {
    return false;
@@ -1344,7 +1367,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   client: OAuthClientInformationFull,
   refreshToken: string,
  ): Promise<OAuthTokens> {
-  return await this.withOperation('refresh', async (opCtx) => {
+  return await this.withOperation('token_rotate', async (opCtx) => {
    try {
     const expectedClientId = client?.client_id;
     let stored: StoredToken | undefined;
@@ -1474,7 +1497,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
         (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
         (err instanceof Error && err.message.toLowerCase().includes('timeout'));
-      if (!(err instanceof UpstreamRequestRejectedError)) {
+      if (!(err instanceof UpstreamRequestRejectedError) && !opCtx?.isAmbiguousRemoteOutcome()) {
       opCtx?.markAmbiguousRemoteOutcome(isTimeout ? 'upstream_timeout' : 'upstream_transport_error');
       }
       throw toTokenEndpointError(err);

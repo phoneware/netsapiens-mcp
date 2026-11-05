@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Firestore } from '@google-cloud/firestore';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DocumentReference, Firestore } from '@google-cloud/firestore';
+import axios from 'axios';
 import {
   CutoverFenceError,
   CutoverRefusedError,
@@ -12,6 +13,9 @@ import {
 import {
   type CutoverFenceControlRecord,
   type LegacyOperationContext,
+  type WithLegacyOperationOptions,
+  deriveStoreKey,
+  startMonotonicTimer,
   checkMutationGuardInTransaction,
   getCutoverFenceDocRef,
   getCutoverFenceRecord,
@@ -19,9 +23,13 @@ import {
   initializeCutoverFence,
   markIrreversibleInTransaction,
   transitionCutoverFenceState,
-  withLegacyOperation,
+  withLegacyOperation as withKeyedLegacyOperation,
   requestOperationContext,
 } from '../auth/kit/cutover-fence.js';
+import {
+  withLegacyOperation as canonicalWithLegacyOperation,
+  checkMutationGuardInTransaction as canonicalGuard,
+} from '../auth/kit/cutover-protocol.mjs';
 import {
   FirestoreTokenStore,
   FirestoreClientsStore,
@@ -39,12 +47,24 @@ import {
   InvalidTokenError,
   TemporarilyUnavailableError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { docId } from '../auth/kit/firestore-ledger.js';
 import { FirestoreUpstreamGrantStore } from '../auth/kit/upstream-grant.js';
 import request from 'supertest';
 import { createApp, validateBridgeStartup } from '../http-server.js';
 
 const EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST;
+const TEST_SESSION_SECRET = 'bridge-test-secret-with-at-least-32-characters';
+const TEST_IDENTITY_KEY = deriveStoreKey(TEST_SESSION_SECRET);
+
+function withLegacyOperation<R>(
+  options: Omit<WithLegacyOperationOptions, 'identityKey'>,
+  fn: (ctx: LegacyOperationContext) => Promise<R>,
+): Promise<R> {
+  return withKeyedLegacyOperation({ ...options, identityKey: TEST_IDENTITY_KEY }, fn);
+}
+
+beforeEach(() => { process.env.MCP_SESSION_SECRET = TEST_SESSION_SECRET; });
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -77,6 +97,27 @@ function createTestDb(projectId: string = `mcp-bridge-${randomUUID().slice(0, 8)
   });
 }
 
+function waitForAdmissionDrain(db: Firestore, namespace: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let unsubscribe: (() => void) | undefined;
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      unsubscribe?.();
+      if (error) reject(error); else resolve();
+    };
+    // The timeout bounds a real Firestore listener and guarantees listener cleanup on failure.
+    const deadline = setTimeout(() => finish(new Error('Admission did not drain')), 10_000);
+    unsubscribe = getCutoverFenceDocRef(db, namespace).onSnapshot(
+      (snapshot) => { if (snapshot.data()?.activeOperations === 0) finish(); },
+      (error) => finish(error),
+    );
+    if (settled) unsubscribe();
+  });
+}
+
 describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeout: 60000 }, () => {
   if (!EMULATOR_HOST) {
     it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => {});
@@ -98,7 +139,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     let caughtError: unknown;
 
     try {
-      await withLegacyOperation({ db, namespace, kind: 'refresh' }, async () => {
+      await withLegacyOperation({ db, namespace, kind: 'token_rotate' }, async () => {
         upstreamCalled = true;
       });
     } catch (err) {
@@ -199,7 +240,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const { promise: fenceClosed, resolve: notifyFenceClosed } = deferred();
     const { promise: opStarted, resolve: notifyOpStarted } = deferred();
 
-    const opPromise = withLegacyOperation({ db, namespace, kind: 'refresh' }, async (ctx) => {
+    const opPromise = withLegacyOperation({ db, namespace, kind: 'token_rotate' }, async (ctx) => {
       notifyOpStarted();
       await fenceClosed;
       return await tokenStore.rotate(
@@ -269,7 +310,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const { promise: fenceAttemptDone, resolve: notifyFenceAttemptDone } = deferred();
     const { promise: opPaused, resolve: notifyOpPaused } = deferred();
 
-    const opPromise = withLegacyOperation({ db, namespace, kind: 'refresh' }, async (ctx) => {
+    const opPromise = withLegacyOperation({ db, namespace, kind: 'token_rotate' }, async (ctx) => {
       notifyOpPaused();
       await fenceAttemptDone;
       grantResolved = true;
@@ -330,7 +371,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     let caughtError: unknown;
     try {
-      await withLegacyOperation({ db, namespace, kind: 'refresh' }, async (ctx) => {
+      await withLegacyOperation({ db, namespace, kind: 'token_rotate' }, async (ctx) => {
         ctx.markAmbiguousRemoteOutcome('transport timeout after remote grant');
         throw new UpstreamTimeoutError('Remote grant timeout');
       });
@@ -1923,6 +1964,8 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(initRes.status).toBe(200);
     const liveSessionId = initRes.headers['mcp-session-id'];
     expect(liveSessionId).toBeTruthy();
+    await waitForAdmissionDrain(db, namespace);
+    observedActiveCountDuringVerify = -1;
 
     const server = app.listen(0);
     const port = (server.address() as any).port;
@@ -1944,16 +1987,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     expect(observedActiveCountDuringVerify).toBe(1);
 
-    let activeOps = 1;
-    for (let i = 0; i < 30; i++) {
-      const c = await getCutoverFenceRecord(db, namespace);
-      if (c?.activeOperations === 0) {
-        activeOps = 0;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(activeOps).toBe(0);
+      await waitForAdmissionDrain(db, namespace);
 
     } finally {
     controller.abort();
@@ -2216,7 +2250,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const opId = 'op-test-' + randomBytes(8).toString('hex');
 
     await withLegacyOperation(
-      { db, namespace, kind: 'upstream_test', operationId: opId, now: Date.now },
+      { db, namespace, kind: 'upstream_refresh', operationId: opId, now: Date.now },
       async (op) => {
         let trackWriterCalls = 0;
         op.trackWriter = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -2392,17 +2426,22 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
     const familyId = randomUUID();
     const rejectedOperationId = randomUUID();
-    await withLegacyOperation({ db, namespace: 'mcp', kind: 'seed' }, async (op) => {
+    const refreshId = 'confirmed-rejection-refresh';
+    await db.collection('mcp_tokens_refresh_families').doc(familyId).set({
+      id: familyId, currentAccessToken: 'confirmed-rejection-access', currentRefreshToken: refreshId, retiredRefreshFingerprints: [],
+    });
+    await db.collection('mcp_tokens_refresh').doc(refreshId).set({ status: 'active', familyId });
+    await withLegacyOperation({ db, namespace: 'mcp', kind: 'issue' }, async (op) => {
       await upstream.put(familyId, { token: 'original' }, 1, { operation: op });
     });
-    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh', operationId: rejectedOperationId }, async (op) =>
+    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'token_rotate', operationId: rejectedOperationId }, async (op) =>
       upstream.ensureFresh(familyId, async () => { throw new UpstreamRequestRejectedError(); },
         { operation: op, force: true }),
     )).rejects.toBeInstanceOf(UpstreamRequestRejectedError);
     expect((await upstream.get(familyId))?.leaseOwner).toBeNull();
-    expect((await getCutoverOperationDocRef(db, 'mcp', rejectedOperationId).get()).data()).not.toHaveProperty('familyId');
+    expect((await getCutoverOperationDocRef(db, 'mcp', rejectedOperationId, TEST_IDENTITY_KEY).get()).data()).not.toHaveProperty('familyId');
     expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
-    const recovered = await withLegacyOperation({ db, namespace: 'mcp', kind: 'refresh' }, async (op) =>
+    const recovered = await withLegacyOperation({ db, namespace: 'mcp', kind: 'token_rotate' }, async (op) =>
       upstream.ensureFresh(familyId, async () => ({ grant: { token: 'recovered' } }), { operation: op, force: true }),
     );
     expect(recovered.grant.token).toBe('recovered');
@@ -2421,12 +2460,11 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const release = deferred();
     const waiting = deferred();
     const runTransaction = db.runTransaction.bind(db);
-    const transactionSpy = vi.spyOn(db, 'runTransaction').mockImplementation((async (fn: any, ...args: any[]) =>
-      runTransaction(async (transaction) => {
-        const result = await fn(transaction);
-        if (result?.status === 'leased') waiting.resolve();
+    const transactionSpy = vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
+      const result = await runTransaction(fn, options);
+      if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiting.resolve();
         return result;
-      }, ...args)) as any);
+    });
     const claimant = store1.refreshNsToken(token.accessToken, async () => {
       claimed.resolve();
       await release.promise;
@@ -2481,28 +2519,284 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const familyId = randomUUID();
     await first.put(familyId, { token: 'original' }, 1);
     const claimed = deferred(), release = deferred(), waiting = deferred();
+    const pollStarted = deferred(), allowPoll = deferred();
     const originalRun = db.runTransaction.bind(db);
-    const spy = vi.spyOn(db, 'runTransaction').mockImplementation((async (fn: any, ...args: any[]) =>
-      originalRun(async (transaction) => {
-        const result = await fn(transaction);
-        if (result?.status === 'leased') waiting.resolve();
+    const spy = vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
+      const result = await originalRun(fn, options);
+      if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiting.resolve();
         return result;
-      }, ...args)) as any);
+    });
+    const originalGet = DocumentReference.prototype.get;
+    let pollBlocked = false;
+    const pollSpy = vi.spyOn(DocumentReference.prototype, 'get').mockImplementation(async function() {
+      if (this.path === `two_rejections/${familyId}` && !pollBlocked) {
+        pollBlocked = true;
+        pollStarted.resolve();
+        await allowPoll.promise;
+      }
+      return originalGet.call(this);
+    });
     const claim = first.ensureFresh(familyId, async () => {
       claimed.resolve();
       await release.promise;
       throw new UpstreamRequestRejectedError();
     }, { now: 100, force: true }).catch((error) => error);
     await claimed.promise;
-    const waiter = second.ensureFresh(familyId, async () => ({ grant: { token: 'unexpected' } }),
-      { now: 100, force: true, pollIntervalMs: 2000, waitMs: 5000 }).catch((error) => error);
+    const waiterGrant = vi.fn(async () => ({ grant: { token: 'unexpected' } }));
+    const waiter = second.ensureFresh(familyId, waiterGrant,
+      { now: 100, force: true, pollIntervalMs: 10, waitMs: 5000 }).catch((error) => error);
     await waiting.promise;
+    await pollStarted.promise;
     release.resolve();
     expect(await claim).toBeInstanceOf(UpstreamRequestRejectedError);
     await expect(first.ensureFresh(familyId, async () => { throw new UpstreamRequestRejectedError(); },
       { now: 200, force: true })).rejects.toBeInstanceOf(UpstreamRequestRejectedError);
+    allowPoll.resolve();
     expect(await waiter).toBeInstanceOf(UpstreamUnavailableError);
     expect((await first.get(familyId))?.grant).toEqual({ token: 'original' });
+    expect((await first.get(familyId))?.updatedAt).toBe(0);
+    expect(waiterGrant).not.toHaveBeenCalled();
+    pollSpy.mockRestore();
     spy.mockRestore();
+  });
+
+  it('a waiter observes a committed successful refresh through the same poll barrier', async () => {
+    const db = createTestDb();
+    const first = new FirestoreUpstreamGrantStore<{ token: string }>({ db, collection: 'successful_waiter', now: () => 0 });
+    const second = new FirestoreUpstreamGrantStore<{ token: string }>({ db, collection: 'successful_waiter', now: () => 0 });
+    const familyId = randomUUID();
+    await first.put(familyId, { token: 'original' }, 1);
+    const claimed = deferred(), release = deferred(), waiting = deferred(), pollStarted = deferred(), allowPoll = deferred();
+    const originalRun = db.runTransaction.bind(db);
+    const txSpy = vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
+      const result = await originalRun(fn, options);
+      if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiting.resolve();
+      return result;
+    });
+    const originalGet = DocumentReference.prototype.get;
+    let blocked = false;
+    const pollSpy = vi.spyOn(DocumentReference.prototype, 'get').mockImplementation(async function() {
+      if (this.path === `successful_waiter/${familyId}` && !blocked) {
+        blocked = true;
+        pollStarted.resolve();
+        await allowPoll.promise;
+      }
+      return originalGet.call(this);
+    });
+    const claim = first.ensureFresh(familyId, async () => {
+      claimed.resolve();
+      await release.promise;
+      return { grant: { token: 'replacement' }, expiresAt: 10_000 };
+    }, { now: 100, force: true });
+    await claimed.promise;
+    const waiterGrant = vi.fn(async () => ({ grant: { token: 'unexpected' } }));
+    const waiter = second.ensureFresh(familyId, waiterGrant, { now: 100, force: true, pollIntervalMs: 10 });
+    await waiting.promise;
+    await pollStarted.promise;
+    release.resolve();
+    expect((await claim).grant.token).toBe('replacement');
+    allowPoll.resolve();
+    expect((await waiter).grant.token).toBe('replacement');
+    expect(waiterGrant).not.toHaveBeenCalled();
+    pollSpy.mockRestore();
+    txSpy.mockRestore();
+  });
+
+  it('returns the committed retry pair when a refresh token rotates before its delayed claim', async () => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence });
+    const provider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com', nsClientId: 'test', nsClientSecret: 'test',
+      tokenStore: store, firestore: db, fence,
+    });
+    const original = await store.issue({
+      accessToken: 'old-barrier-access', refreshToken: 'old-barrier-refresh', clientId: 'barrier-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns', nsRefreshToken: 'old-ns-refresh', nsUsername: 'user',
+    });
+    const read = deferred(), resume = deferred();
+    const lookup = store.lookupRefresh.bind(store);
+    const lookupSpy = vi.spyOn(store, 'lookupRefresh').mockImplementation(async (...args) => {
+      const result = await lookup(...args);
+      if (result.status === 'active') { read.resolve(); await resume.promise; }
+      return result;
+    });
+    const grant = vi.spyOn(provider as unknown as { nsRefreshGrant: (token: string) => Promise<never> }, 'nsRefreshGrant')
+      .mockRejectedValue(new Error('Unexpected upstream call'));
+    const client = { client_id: original.clientId } as OAuthClientInformationFull;
+    const exchange = provider.exchangeRefreshToken(client, original.refreshToken);
+    await read.promise;
+    const successor = { ...original, accessToken: 'new-barrier-access', refreshToken: 'new-barrier-refresh' };
+    await store.rotate(original.refreshToken, successor, original.clientId);
+    resume.resolve();
+    const result = await exchange;
+    expect(result.access_token).toBe(successor.accessToken);
+    expect(result.refresh_token).toBe(successor.refreshToken);
+    expect(grant).not.toHaveBeenCalled();
+    lookupSpy.mockRestore();
+  });
+
+  it.each(['mcp', 'pwmcp', 'readonly_mcp'] as const)(
+    'shares keyed operations with canonical guards and bridge stores in %s',
+    async (namespace) => {
+      const db = createTestDb();
+      await initializeCutoverFence(db, namespace);
+      const callerId = `op1_/sensitive-Ω-${randomUUID()}`;
+      await withLegacyOperation({ db, namespace, kind: 'issue', operationId: callerId }, async (ctx) => {
+        const operationRef = getCutoverOperationDocRef(db, namespace, callerId, TEST_IDENTITY_KEY);
+        const snapshot = await operationRef.get();
+        expect(snapshot.id).toBe(ctx.storageId);
+        expect(snapshot.id).toMatch(/^op1_/);
+        expect(JSON.stringify(snapshot.data())).not.toContain(callerId);
+        let committed: (() => void) | undefined;
+        await db.runTransaction(async (transaction) => {
+          const timer = startMonotonicTimer();
+          const guard = await canonicalGuard(transaction, { db, namespace, operation: ctx, timer });
+          guard.assertPreWrite();
+          guard.bufferCompletion();
+          transaction.set(db.collection(`${namespace}_interop_test`).doc('proof'), { ok: true });
+          guard.assertPreReturn();
+          committed = guard.onCommit;
+        });
+        committed?.();
+      });
+      const store = new FirestoreTokenStore({ db, collection: `${namespace}_tokens`, fence: { namespace, enforce: true } });
+      await canonicalWithLegacyOperation({ db, namespace, kind: 'issue', identityKey: TEST_IDENTITY_KEY }, async (ctx) => {
+        await store.issue({
+          accessToken: `canonical-${namespace}`, refreshToken: `canonical-refresh-${namespace}`,
+          clientId: 'interop-client', expiresAt: Date.now() + 60_000,
+          nsAccessToken: 'interop-ns', nsUsername: 'user',
+        }, { operation: ctx });
+      });
+      expect((await getCutoverFenceRecord(db, namespace))?.activeOperations).toBe(0);
+    },
+  );
+
+  it('refuses missing and mismatched cutover identity keys before admission', async () => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    delete process.env.MCP_SESSION_SECRET;
+    expect(() => new FirestoreTokenStore({ db, fence: { namespace: 'mcp', enforce: true } })).toThrow(CutoverFenceError);
+    process.env.MCP_SESSION_SECRET = TEST_SESSION_SECRET;
+    expect(() => new FirestoreTokenStore({
+      db, fence: {
+        namespace: 'mcp', enforce: true, identityKey: Buffer.alloc(32, 99),
+      }
+    })).toThrow(CutoverFenceError);
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
+  });
+
+  it.each(['mcp', 'pwmcp', 'readonly_mcp'] as const)(
+    'binds every production operation kind without persisting caller IDs in %s',
+    async (namespace) => {
+      const db = createTestDb();
+      await initializeCutoverFence(db, namespace);
+      const kinds = [
+        'register', 'token', 'revoke', 'authorize', 'login', 'mfa', 'mcp',
+        'issue', 'rotate', 'read', 'update', 'upstream_refresh', 'delete',
+        'revocation', 'register_client', 'auth_code', 'token_issue', 'token_rotate',
+      ];
+      for (const kind of kinds) {
+        const callerId = `op1_/secret-Ω-${kind}-${randomUUID()}`;
+        await withLegacyOperation({ db, namespace, kind, operationId: callerId }, async (ctx) => {
+          const record = await getCutoverOperationDocRef(db, namespace, callerId, TEST_IDENTITY_KEY).get();
+          expect(record.id).toBe(ctx.storageId);
+          expect(JSON.stringify(record.data())).not.toContain(callerId);
+        });
+      }
+      expect((await getCutoverFenceRecord(db, namespace))?.activeOperations).toBe(0);
+      const changed = deriveStoreKey('different-bridge-secret-with-at-least-32-characters');
+      let called = false;
+      await expect(canonicalWithLegacyOperation({ db, namespace, kind: 'read', identityKey: changed }, async () => {
+        called = true;
+      })).rejects.toThrow(CutoverFenceError);
+      expect(called).toBe(false);
+    },
+  );
+
+  it.each([
+    ['exchange', { error: 'invalid_grant' }],
+    ['exchange', '{malformed'],
+    ['exchange', 'invalid_grant'],
+    ['transparent', { error: 'invalid_grant' }],
+    ['transparent', '{malformed'],
+    ['transparent', 'invalid_grant'],
+    ['forced', { error: 'invalid_grant' }],
+    ['forced', '{malformed'],
+    ['forced', 'invalid_grant'],
+  ] as const)('holds fenced %s on untrusted definitive response %#', async (mode, body) => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    let now = Date.now();
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence, now: () => now });
+    const provider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com', nsClientId: 'test', nsClientSecret: 'test',
+      tokenStore: store, firestore: db, fence, now: () => now,
+    });
+    const token = await store.issue({
+      accessToken: 'untrusted-access', refreshToken: 'untrusted-refresh', clientId: 'untrusted-client',
+      expiresAt: now + 3600_000, nsAccessToken: 'committed-ns', nsRefreshToken: 'committed-ns-refresh',
+      nsExpiresAt: now - 1, nsUsername: 'user',
+    });
+    const failure = Object.assign(new Error('upstream rejected'), { isAxiosError: true, response: { status: 400, data: body } });
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(failure);
+    const client = { client_id: token.clientId } as OAuthClientInformationFull;
+    const invoke = () => mode === 'exchange'
+      ? provider.exchangeRefreshToken(client, token.refreshToken)
+      : mode === 'transparent' ? provider.verifyAccessToken(token.accessToken)
+        : provider.forceRefreshUpstream(token.accessToken);
+    const upstreamRef = store.upstreamDocRef(token.refreshFamilyId!);
+    const before = (await upstreamRef.get()).data()!;
+    await expect(invoke()).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(1);
+    const held = (await upstreamRef.get()).data()!;
+    expect(held.grant).toEqual(before.grant);
+    expect(held.updatedAt).toBe(before.updatedAt);
+    expect(held.leaseOwner).toMatch(/^owner1_/);
+    expect(held.operationId).toMatch(/^op1_/);
+    expect(held.ambiguousOperationId).toBe(held.operationId);
+    expect((await store.accessDocRef(token.accessToken).get()).exists).toBe(true);
+    expect((await store.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(1);
+    const operation = await getCutoverFenceDocRef(db, 'mcp').collection('operations').doc(held.operationId).get();
+    expect(operation.data()).toMatchObject({ phase: 'upstream_pending', ambiguousRemoteOutcome: true });
+    now = held.leaseUntil + 1;
+    await expect(invoke()).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect((await upstreamRef.get()).data()).toEqual(held);
+  });
+
+  it('returns a retryable HTTP response without invalid-token challenge for a fenced invalid grant', async () => {
+    configureHttpTest();
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence });
+    const provider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com', nsClientId: 'test_client_id', nsClientSecret: 'test_client_secret',
+      tokenStore: store, firestore: db, fence, serverBaseUrl: 'http://localhost',
+    });
+    const token = await store.issue({
+      accessToken: 'http-untrusted-access', refreshToken: 'http-untrusted-refresh', clientId: 'http-untrusted-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns', nsRefreshToken: 'old-ns-refresh', nsUsername: 'user',
+    });
+    await provider.clientsStore.registerClient({
+      client_id: token.clientId, redirect_uris: ['http://localhost/cb'], token_endpoint_auth_method: 'none',
+    });
+    vi.spyOn(axios, 'post').mockRejectedValue(Object.assign(new Error('rejected'), {
+      isAxiosError: true, response: { status: 400, data: { error: 'invalid_grant' } },
+    }));
+    const { app } = createApp(provider);
+    const response = await request(app).post('/token').type('form').send({
+      grant_type: 'refresh_token', client_id: token.clientId, refresh_token: token.refreshToken,
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers['retry-after']).toBe('5');
+    expect(response.headers['www-authenticate']).toBeUndefined();
+    expect(response.body.error).toBe('temporarily_unavailable');
+    expect((await store.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(1);
   });
 });

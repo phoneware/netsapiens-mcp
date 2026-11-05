@@ -21,6 +21,8 @@ import { adoptClientMiddleware } from './auth/kit/adopt-client.js';
 import {
   getCutoverFenceRecord,
   withLegacyOperation,
+ requireFenceKey,
+ normalizeFenceConfig,
   type CutoverFenceConfig,
   type SupportedCutoverNamespace,
   requestOperationContext,
@@ -188,9 +190,9 @@ export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): 
  const explicitFence = (options && !('handleLogin' in options)) ? (options as CreateAppOptions | undefined)?.fence : undefined;
  const fenceEnforce = explicitFence?.enforce ?? (process.env.MCP_FENCE_ENFORCE === 'true' || process.env.MCP_CUTOVER_FENCE === 'true');
  const fenceNamespace = (explicitFence?.namespace ?? process.env.MCP_FENCE_NAMESPACE ?? process.env.MCP_CUTOVER_FENCE_NAMESPACE ?? (process.env.MCP_READ_ONLY === 'true' ? 'readonly_mcp' : 'mcp')) as ('mcp' | 'pwmcp' | 'readonly_mcp');
- const fenceConfig: CutoverFenceConfig | undefined = fenceEnforce
-   ? { namespace: fenceNamespace, enforce: true }
-   : undefined;
+ const fenceConfig: CutoverFenceConfig | undefined = normalizeFenceConfig(fenceEnforce
+  ? { ...explicitFence, namespace: fenceNamespace, enforce: true }
+  : undefined);
 
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  const authProvider = customAuthProvider ?? new NetSapiensAuthProvider({
@@ -201,6 +203,9 @@ export function createApp(options?: CreateAppOptions | NetSapiensAuthProvider): 
   serverBaseUrl: baseUrl.origin,
   fence: fenceConfig,
  });
+ if (fenceConfig?.enforce && (!authProvider.fenceConfig?.enforce || authProvider.fenceConfig.namespace !== fenceConfig.namespace)) {
+  throw new CutoverFenceError('Configured fence does not match the supplied authentication provider');
+ }
  if (fenceConfig?.enforce || authProvider.fenceConfig?.enforce) {
   assertSupportedMcpSdkVersion();
  }
@@ -429,6 +434,7 @@ const cutoverAdmissionMiddleware = (endpointName: string): express.RequestHandle
      {
       db: authProvider.dbInstance,
       namespace: authProvider.fenceNamespace as SupportedCutoverNamespace,
+      identityKey: requireFenceKey(authProvider.fenceConfig),
       kind: endpointName,
       now: authProvider.nowProvider,
      },

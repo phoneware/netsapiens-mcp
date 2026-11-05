@@ -18,7 +18,7 @@ import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/au
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
-import type { RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
+import type { RefreshLookupResult, RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
 import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { CutoverFenceError, UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
@@ -27,6 +27,10 @@ import {
   type CutoverFenceConfig,
   type LegacyOperationContext,
   withLegacyOperation,
+ normalizeFenceConfig,
+ requireFenceKey,
+ assertOperationKey,
+ startMonotonicTimer,
   checkMutationGuardInTransaction,
   type GuardMutationResult,
   requestOperationContext,
@@ -35,7 +39,7 @@ import {
 import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { logger } from '../utils/logger.js';
 
-function detectNamespace(collection: string): string {
+function detectNamespace(collection: string): SupportedCutoverNamespace {
   if (collection.startsWith('readonly_mcp')) return 'readonly_mcp';
   if (collection.startsWith('pwmcp')) return 'pwmcp';
   return 'mcp';
@@ -130,7 +134,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       projectId: opts.projectId,
       ignoreUndefinedProperties: true,
     });
-    const fenceConfig: CutoverFenceConfig | undefined = opts.fence;
+  const fenceConfig: CutoverFenceConfig | undefined = normalizeFenceConfig(opts.fence);
 
     super({
       db,
@@ -193,7 +197,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return this.rawDb;
   }
 
-  get fenceNamespace(): string {
+ get fenceNamespace(): SupportedCutoverNamespace {
     return this.fenceConfig?.namespace ?? detectNamespace(this.tokensCollection);
   }
 
@@ -215,8 +219,9 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
 
   private resolveOp(options?: { operation?: LegacyOperationContext }): LegacyOperationContext | undefined {
     const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fenceConfig, op);
     if (op && op.isCompleted()) {
-      return undefined;
+   throw new CutoverFenceError('Completed operation context cannot be reused');
     }
     return op;
   }
@@ -235,6 +240,22 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     return undefined;
   }
 
+ override async lookupRefresh(
+  refreshToken: string,
+  expectedClientId?: string,
+  now?: number,
+  options?: { operation?: LegacyOperationContext },
+ ): Promise<RefreshLookupResult<StoredToken>> {
+  const op = this.resolveOp(options);
+  if (this.fenceConfig?.enforce && !op) {
+   return withLegacyOperation(
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'read', now: this.localNow },
+    (ctx) => super.lookupRefresh(refreshToken, expectedClientId, now, { operation: ctx }),
+   );
+  }
+  return super.lookupRefresh(refreshToken, expectedClientId, now, { operation: op });
+ }
+
   async set(token: StoredToken, options?: { operation?: LegacyOperationContext }): Promise<void> {
     await this.issue(token, options);
   }
@@ -243,7 +264,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'issue', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'issue', now: this.localNow },
         async (opCtx) => this.issue(token, { operation: opCtx }),
       );
     }
@@ -260,7 +281,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'rotate', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'rotate', now: this.localNow },
     async (opCtx) => this.rotate(oldRefreshToken, replacement, expectedClientId, now, { ...options, operation: opCtx }),
       );
     }
@@ -274,7 +295,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'read', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'read', now: this.localNow },
         async (opCtx) => this.getByAccessToken(accessToken, { operation: opCtx }),
       );
     }
@@ -286,7 +307,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     }
     if (token.refreshFamilyId) {
       const up = await this.upstreamStore.get(token.refreshFamilyId);
-   if (up?.leaseOwner || up?.leaseUntil || up?.ambiguousOutcome || up?.ambiguousOperationId) return token;
+   if (up?.leaseOwner || up?.leaseUntil || up?.leaseExpiresAt || up?.operationId || up?.ambiguousOutcome || up?.ambiguousRemoteOutcome || up?.ambiguousOperationId) return token;
       if (up?.grant) {
         return {
           ...token,
@@ -310,7 +331,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'update', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'update', now: this.localNow },
         async (opCtx) => this.update(accessToken, patch, { operation: opCtx }),
       );
     }
@@ -318,23 +339,36 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     let guardResult: GuardMutationResult | undefined;
     const runTx = async () => {
       return await this.rawDb.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
         let guard: GuardMutationResult | undefined;
         const fence = this.fenceConfig;
         if (fence && fence.enforce) {
+     if (!op) throw new CutoverFenceError('Durable operation context is required');
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.rawDb,
             namespace: fence.namespace,
             operation: op,
+      timer,
             now: this.localNow,
           });
           guardResult = guard;
         }
         const accessSnap = await transaction.get(accessRef);
-      if (!accessSnap.exists) return undefined;
+    if (!accessSnap.exists) { guard?.assertPreReturn(); return undefined; }
       const existing = accessSnap.data() as StoredToken;
       const updated: StoredToken = { ...existing, ...patch };
       const now = this.localNow();
     const families = new Set([existing.refreshFamilyId, updated.refreshFamilyId].filter((id): id is string => !!id));
+    if (patch.refreshToken && patch.refreshToken !== existing.refreshToken) {
+     const replacementSnap = await transaction.get(this.refreshDocRef(patch.refreshToken));
+     const replacement = replacementSnap.data();
+     if (typeof replacement?.familyId === 'string') families.add(replacement.familyId);
+     if (typeof replacement?.accessToken === 'string') {
+      const pointerSnap = await transaction.get(this.accessDocRef(replacement.accessToken));
+      const owner = pointerSnap.data()?.refreshFamilyId;
+      if (typeof owner === 'string') families.add(owner);
+     }
+    }
     for (const familyId of families) {
      const upstreamSnap = await transaction.get(this.upstreamDocRef(familyId));
      assertGrantNotPending(upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant> | undefined);
@@ -371,11 +405,12 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         }), { merge: true });
       }
 
+    guard?.assertPreReturn();
         return updated;
       });
     };
     const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
-    guardResult?.commitCompletion?.();
+  guardResult?.onCommit();
     return result;
   }
 
@@ -387,7 +422,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   const op = this.resolveOp(opts);
   if (this.fenceConfig?.enforce && !op) {
     return await withLegacyOperation(
-      { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'upstream_refresh', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'upstream_refresh', now: this.localNow },
       async (opCtx) => this.refreshNsToken(accessToken, doRefresh, { ...opts, operation: opCtx }),
     );
   }
@@ -455,13 +490,17 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   let guardResult: GuardMutationResult | undefined;
   const runTx = async () => {
     return await this.rawDb.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
+     if (!op) throw new CutoverFenceError('Durable operation context is required');
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.rawDb,
         namespace: fence.namespace,
         operation: op,
+      pendingClaim: fresh.completion?.pendingClaim,
+      timer,
         now: this.localNow,
         completeOperation: true,
       });
@@ -473,13 +512,19 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const upstreamRecord = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant>;
     const receipt = fresh.completion;
     if (receipt) {
-     if (receipt.familyId !== familyId || receipt.leaseOwner !== upstreamRecord.leaseOwner ||
-      receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
-      receipt.operationId !== (fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome ||
-      (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== familyId))) {
+     const claim = receipt.pendingClaim;
+     if (receipt.familyId !== familyId ||
+      upstreamRecord.leaseOwner !== (claim?.ownerStorageId ?? receipt.leaseOwner) ||
+      (upstreamRecord.ambiguousOperationId ?? null) !== (claim?.storageId ?? null) ||
+      receipt.operationId !== (fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome || upstreamRecord.ambiguousRemoteOutcome ||
+      (claim && (claim.claimOwner !== receipt.leaseOwner || claim.operationId !== op?.id ||
+       upstreamRecord.operationId !== claim.storageId || upstreamRecord.familyGeneration !== claim.familyGeneration ||
+       upstreamRecord.grantVersion !== claim.grantVersion || upstreamRecord.leaseUntil !== claim.leaseExpiresAt ||
+       upstreamRecord.leaseExpiresAt !== claim.leaseExpiresAt))) {
       throw new LeaseLostError('Upstream refresh claim changed before finalization');
      }
-    } else if (upstreamRecord.leaseOwner || upstreamRecord.ambiguousOutcome || upstreamRecord.ambiguousOperationId) {
+    } else if (upstreamRecord.leaseOwner || upstreamRecord.leaseUntil || upstreamRecord.leaseExpiresAt ||
+     upstreamRecord.operationId || upstreamRecord.ambiguousOutcome || upstreamRecord.ambiguousRemoteOutcome || upstreamRecord.ambiguousOperationId) {
      throw new LeaseLostError('Upstream refresh remains pending');
     }
     if (!snap.exists) {
@@ -491,6 +536,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           const currentAccessSnap = await transaction.get(this.accessDocRef(familyData.currentAccessToken));
           if (currentAccessSnap.exists) {
             guard?.bufferCompletion(this.localNow());
+        guard?.assertPreReturn();
         return { ...(currentAccessSnap.data() as StoredToken), ...upstreamRecord.grant };
           }
         }
@@ -512,6 +558,8 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           upstreamRef,
           {
             leaseUntil: null,
+       leaseExpiresAt: null,
+       operationId: null,
             leaseOwner: null,
             ambiguousOutcome: null,
             ambiguousReason: null,
@@ -522,11 +570,13 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           { merge: true },
         );
     }
+    guard?.assertPreReturn();
     return updated;
     });
   };
   const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
-  guardResult?.commitCompletion?.();
+  guardResult?.onCommit();
+  if (fresh.completion) op?.clearAmbiguousRemoteOutcome();
   return result;
  }
 
@@ -534,7 +584,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'delete', now: this.localNow },
         async (opCtx) => this.delete(accessToken, { operation: opCtx }),
       );
     }
@@ -545,7 +595,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'delete', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'delete', now: this.localNow },
         async (opCtx) => this.deleteByRefreshToken(refreshToken, { operation: opCtx }),
       );
     }
@@ -556,7 +606,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
-        { db: this.rawDb, namespace: this.fenceNamespace as SupportedCutoverNamespace, kind: 'revocation', now: this.localNow },
+    { db: this.rawDb, namespace: this.fenceNamespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'revocation', now: this.localNow },
         async (opCtx) => this.revokeFamily(familyId, { operation: opCtx }),
       );
     }
@@ -587,7 +637,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
-  this.fenceConfig = opts.fence;
+  this.fenceConfig = normalizeFenceConfig(opts.fence);
   logger.info('Firestore clients store initialized', { collection: this.collection });
  }
 
@@ -623,9 +673,10 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
     );
   }
   const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fenceConfig, op);
   if (this.fenceConfig?.enforce && !op) {
    return await withLegacyOperation(
-    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'register_client' },
+    { db: this.db, namespace: this.fenceConfig.namespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'register_client' },
     async (opCtx) => this.registerClient(client, { operation: opCtx }),
    );
   }
@@ -644,19 +695,25 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
   }
   const docRef = this.db.collection(this.collection).doc(clientId);
   try {
+   let guardResult: GuardMutationResult | undefined;
    const runTx = async () => {
     await this.db.runTransaction(async (transaction) => {
+     const timer = startMonotonicTimer();
      let guard: GuardMutationResult | undefined;
      const fence = this.fenceConfig;
      if (fence && fence.enforce) {
+      if (!op) throw new CutoverFenceError('Durable operation context is required');
        guard = await checkMutationGuardInTransaction(transaction, {
          db: this.db,
          namespace: fence.namespace,
          operation: op,
+       timer,
        });
+      guardResult = guard;
      }
      guard?.bufferCompletion();
      transaction.set(docRef, stripUndefined(full));
+     guard?.assertPreReturn();
     });
    };
    if (op?.trackWriter) {
@@ -664,6 +721,7 @@ export class FirestoreClientsStore implements OAuthRegisteredClientsStore {
    } else {
     await runTx();
    }
+   guardResult?.onCommit();
    this.cache.set(clientId, full);
    return full;
   } catch (err: unknown) {
@@ -693,7 +751,7 @@ export class FirestoreAuthCodeStore {
    projectId: opts.projectId,
    ignoreUndefinedProperties: true,
   });
-  this.fenceConfig = opts.fence;
+  this.fenceConfig = normalizeFenceConfig(opts.fence);
   this.localNow = opts.now ?? Date.now;
   logger.info('Firestore auth code store initialized', { collection: this.collection });
  }
@@ -711,9 +769,10 @@ export class FirestoreAuthCodeStore {
   options?: { operation?: LegacyOperationContext; completeOperation?: boolean },
  ): Promise<void> {
   const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fenceConfig, op);
   if (this.fenceConfig?.enforce && !op) {
    return await withLegacyOperation(
-    { db: this.db, namespace: this.fenceConfig.namespace, kind: 'auth_code' },
+    { db: this.db, namespace: this.fenceConfig.namespace, identityKey: requireFenceKey(this.fenceConfig), kind: 'auth_code' },
     async (opCtx) => this.set(code, data, { operation: opCtx, completeOperation: true }),
    );
   }
@@ -730,20 +789,26 @@ export class FirestoreAuthCodeStore {
    clientId: data.clientId ?? data.pending.clientId,
   };
   const docRef = this.db.collection(this.collection).doc(code);
+  let guardResult: GuardMutationResult | undefined;
   const runTx = async () => {
     await this.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
       let guard: GuardMutationResult | undefined;
       const fence = this.fenceConfig;
       if (fence && fence.enforce) {
+     if (!op) throw new CutoverFenceError('Durable operation context is required');
         guard = await checkMutationGuardInTransaction(transaction, {
           db: this.db,
           namespace: fence.namespace,
           operation: op,
+      timer,
           completeOperation: options?.completeOperation !== false,
         });
+     guardResult = guard;
       }
       guard?.bufferCompletion(now);
       transaction.set(docRef, stripUndefined(docData));
+    guard?.assertPreReturn();
     });
   };
   if (op?.trackWriter) {
@@ -751,6 +816,7 @@ export class FirestoreAuthCodeStore {
   } else {
     await runTx();
   }
+  guardResult?.onCommit();
  }
 
  async getChallenge(
@@ -781,38 +847,46 @@ export class FirestoreAuthCodeStore {
   options?: { operation?: LegacyOperationContext },
  ): Promise<{ pending: PendingAuthorization; nsTokens: NsTokenResponse; extra?: Record<string, string> } | undefined> {
   const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fenceConfig, op);
   const docRef = this.db.collection(this.collection).doc(code);
   const runTx = async () => {
    return await this.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
+     if (!op) throw new CutoverFenceError('Durable operation context is required');
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: fence.namespace,
         operation: op,
+      timer,
         completeOperation: false,
       });
     }
     const snap = await transaction.get(docRef);
-    if (!snap.exists) return undefined;
+    if (!snap.exists) { guard?.assertPreReturn(); return undefined; }
     const data = snap.data() as AuthCodeData;
     if (data.used || this.localNow() > data.expiresAt) {
+     guard?.assertPreReturn();
      return undefined;
     }
     if (data.serverBaseUrl || expected?.serverBaseUrl) {
      if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
       logger.warn('Auth code redemption rejected: serverBaseUrl mismatch');
+      guard?.assertPreReturn();
       return undefined;
      }
     }
     const codeClientId = data.clientId ?? data.pending?.clientId;
     if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
      logger.warn('Auth code redemption rejected: clientId mismatch');
+     guard?.assertPreReturn();
      return undefined;
     }
     guard?.bufferCompletion();
     transaction.delete(docRef);
+    guard?.assertPreReturn();
     return {
      pending: data.pending,
      nsTokens: data.nsTokens,
@@ -830,34 +904,41 @@ export class FirestoreAuthCodeStore {
   options?: { operation?: LegacyOperationContext },
  ): Promise<{ tokens: OAuthTokens } | undefined> {
   const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fenceConfig, op);
   const codeRef = this.db.collection(this.collection).doc(code);
   let guardResult: GuardMutationResult | undefined;
   const runTx = async () => {
    return await this.db.runTransaction(async (transaction) => {
+    const timer = startMonotonicTimer();
     let guard: GuardMutationResult | undefined;
     const fence = this.fenceConfig;
     if (fence && fence.enforce) {
+     if (!op) throw new CutoverFenceError('Durable operation context is required');
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: fence.namespace,
         operation: op,
+      timer,
         completeOperation: true,
       });
       guardResult = guard;
     }
    const snap = await transaction.get(codeRef);
-   if (!snap.exists) return undefined;
+    if (!snap.exists) { guard?.assertPreReturn(); return undefined; }
    const data = snap.data() as AuthCodeData;
    if (data.used || Date.now() > data.expiresAt) {
+     guard?.assertPreReturn();
     return undefined;
    }
    if (data.serverBaseUrl || expected?.serverBaseUrl) {
     if (!data.serverBaseUrl || !expected?.serverBaseUrl || data.serverBaseUrl.toLowerCase() !== expected.serverBaseUrl.toLowerCase()) {
+      guard?.assertPreReturn();
      return undefined;
     }
    }
    const codeClientId = data.clientId ?? data.pending?.clientId;
    if (expected?.clientId && codeClientId && codeClientId !== expected.clientId) {
+     guard?.assertPreReturn();
     return undefined;
    }
 
@@ -887,6 +968,7 @@ export class FirestoreAuthCodeStore {
      serverBaseUrl: expected.serverBaseUrl,
    };
 
+    guard?.assertPreWrite();
    transaction.delete(codeRef);
    transaction.set(tokenStore.accessDocRef(accessToken), stripUndefined(storedToken));
    transaction.set(tokenStore.refreshDocRef(refreshToken), stripUndefined({
@@ -916,6 +998,7 @@ export class FirestoreAuthCodeStore {
      }));
    }
    guard?.bufferCompletion(now);
+    guard?.assertPreReturn();
 
    return {
      tokens: {
@@ -928,7 +1011,7 @@ export class FirestoreAuthCodeStore {
   });
  };
  const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
- guardResult?.commitCompletion?.();
+  guardResult?.onCommit();
  return result;
  }
 }

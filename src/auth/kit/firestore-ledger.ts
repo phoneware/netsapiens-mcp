@@ -24,10 +24,17 @@ import { assertGrantNotPending, type StoredUpstreamRecord } from './upstream-gra
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
+ normalizeFenceConfig,
+ requireFenceKey,
+ assertOperationKey,
+ startMonotonicTimer,
+ canonicalJsonStringify,
+ isLegacyMutationPermittedInTransaction,
   getCutoverFenceRecord,
   getCutoverOperationDocRef,
   readCutoverFenceInTransaction,
   type GuardMutationResult,
+ type MonotonicTimer,
   type LegacyOperationContext,
   type LegacyOperationRecord,
   requestOperationContext,
@@ -76,7 +83,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     this.accessDocExtras = opts.accessDocExtras;
     this.legacy = opts.legacy;
     this.nowProvider = opts.now ?? Date.now;
-    this.fence = opts.fence;
+  this.fence = normalizeFenceConfig(opts.fence);
   }
 
   private wrapError(err: unknown): never {
@@ -99,7 +106,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     return this.db.collection(this.familyCollection);
   }
 
-  private async assertIssueNotPending(transaction: Transaction, token: T, familyId: string): Promise<void> {
+ private async assertIssueNotPending(transaction: Transaction, token: T, familyId: string): Promise<{ generation: number; upstream?: StoredUpstreamRecord<unknown> }> {
     const access = await transaction.get(this.accessCol().doc(docId(token.accessToken)));
     const refresh = await transaction.get(this.refreshCol().doc(docId(token.refreshToken)));
     const families = new Set<string>([familyId]);
@@ -113,6 +120,13 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       if (typeof pointerFamily === 'string') families.add(pointerFamily);
     }
     for (const id of families) await this.assertFamilyNotPending(transaction, id);
+  const family = (await transaction.get(this.familyCol().doc(docId(familyId)))).data();
+  const generation = family?.generation ?? 1;
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new CutoverFenceError('Family generation is invalid');
+  const upstream = this.legacy?.upstreamCollection
+   ? (await transaction.get(this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId)))).data() as StoredUpstreamRecord<unknown> | undefined
+   : undefined;
+  return { generation, upstream };
   }
 
   async issue(
@@ -127,6 +141,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
       if (this.fence?.enforce) {
         const op = options?.operation ?? requestOperationContext.getStore();
+    assertOperationKey(this.fence, op);
         if (!op) {
           throw new CutoverFenceError(
             `Durable operation context is required for fence-enforced issue in namespace ${this.fence.namespace}`,
@@ -135,15 +150,22 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         let guardResult: GuardMutationResult | undefined;
         const runTx = async () => {
           await this.db.runTransaction(async (transaction: Transaction) => {
+      const timer = startMonotonicTimer();
             const guard = await checkMutationGuardInTransaction(transaction, {
               db: this.db,
               namespace: this.fence!.namespace,
               operation: op,
+       timer,
               completeOperation: options?.completeOperation,
               now: this.nowProvider,
             });
             guardResult = guard;
-            await this.assertIssueNotPending(transaction, stored, familyId);
+      const { generation, upstream } = await this.assertIssueNotPending(transaction, stored, familyId);
+      const nextUpstream = this.legacy?.toUpstream?.(stored as unknown as Record<string, unknown>);
+      const oldVersion = upstream?.grantVersion ?? upstream?.version ?? 1;
+      if (!Number.isSafeInteger(oldVersion) || oldVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
+      const grantVersion = oldVersion + (upstream && nextUpstream &&
+       canonicalJsonStringify(upstream.grant) !== canonicalJsonStringify(nextUpstream.grant) ? 1 : 0);
             guard.bufferCompletion(this.nowProvider());
             transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
             transaction.set(
@@ -158,6 +180,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               this.familyCol().doc(docId(familyId)),
               stripUndefined({
                 id: familyId,
+        generation,
                 currentAccessToken: stored.accessToken,
                 currentRefreshToken: stored.refreshToken,
                 retiredRefreshFingerprints: [],
@@ -165,16 +188,19 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               }),
             );
             if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
-              const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
+       const upstreamData = nextUpstream;
               if (upstreamData) {
                 const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
                 const upstreamPayload = stripUndefined({
                   ...upstreamData,
+         grantVersion,
+         familyGeneration: generation,
                   updatedAt: this.nowProvider(),
                 });
-                transaction.set(upstreamRef, upstreamPayload);
+        transaction.set(upstreamRef, upstreamPayload, { merge: true });
               }
             }
+      guard.assertPreReturn();
           });
         };
         if (op?.trackWriter) {
@@ -182,12 +208,17 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         } else {
           await runTx();
         }
-        guardResult?.commitCompletion?.();
+    guardResult?.onCommit();
         return stored;
       }
 
       await this.db.runTransaction(async (batch) => {
-        await this.assertIssueNotPending(batch, stored, familyId);
+    const { generation, upstream } = await this.assertIssueNotPending(batch, stored, familyId);
+    const nextUpstream = this.legacy?.toUpstream?.(stored as unknown as Record<string, unknown>);
+    const oldVersion = upstream?.grantVersion ?? upstream?.version ?? 1;
+    if (!Number.isSafeInteger(oldVersion) || oldVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
+    const grantVersion = oldVersion + (upstream && nextUpstream &&
+     canonicalJsonStringify(upstream.grant) !== canonicalJsonStringify(nextUpstream.grant) ? 1 : 0);
       batch.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
       batch.set(
         this.refreshCol().doc(docId(stored.refreshToken)),
@@ -201,6 +232,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         this.familyCol().doc(docId(familyId)),
         stripUndefined({
           id: familyId,
+      generation,
           currentAccessToken: stored.accessToken,
           currentRefreshToken: stored.refreshToken,
           retiredRefreshFingerprints: [],
@@ -208,14 +240,16 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }),
       );
       if (this.legacy?.toUpstream && this.legacy?.upstreamCollection) {
-        const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
+     const upstreamData = nextUpstream;
         if (upstreamData) {
           const upstreamRef = this.db.collection(this.legacy.upstreamCollection).doc(docId(familyId));
           const upstreamPayload = stripUndefined({
             ...upstreamData,
+       grantVersion,
+       familyGeneration: generation,
             updatedAt: this.nowProvider(),
           });
-          batch.set(upstreamRef, upstreamPayload);
+      batch.set(upstreamRef, upstreamPayload, { merge: true });
         }
       }
 
@@ -233,6 +267,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     try {
       if (this.fence?.enforce) {
         const op = options?.operation ?? requestOperationContext.getStore();
+    assertOperationKey(this.fence, op);
         if (!op) {
           throw new CutoverFenceError(
             `Durable operation context is required for fence-enforced getByAccessToken in namespace ${this.fence.namespace}`,
@@ -240,47 +275,22 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
 
         return await this.db.runTransaction(async (transaction: Transaction) => {
-          const control = await readCutoverFenceInTransaction(transaction, this.db, this.fence!.namespace);
-          if (control.state !== 'legacy_open') {
-            if (
-              control.state === 'closing' &&
-              op &&
-              op.epoch === control.epoch
-            ) {
-              const opRef = getCutoverOperationDocRef(this.db, this.fence!.namespace, op.id);
-              const opSnap = await transaction.get(opRef);
-              if (!opSnap.exists) {
-                throw new CutoverFenceError(
-                  `Durable operation record missing in closing: ${op.id}`,
-                );
-              }
-              const opData = opSnap.data() as LegacyOperationRecord;
-              if (opData.epoch !== control.epoch) {
-                throw new CutoverFenceError(
-                  `Operation epoch mismatch in closing: expected ${control.epoch}, got ${opData.epoch}`,
-                );
-              }
-              if (opData.phase !== 'admitted' && opData.phase !== 'upstream_pending') {
-                throw new CutoverFenceError(
-                  `Operation in closing is in phase ${opData.phase}; lookup refused`,
-                );
-              }
-            } else {
-              throw new CutoverRefusedError(
-                `Cutover state is ${control.state}; access token lookup refused for namespace ${this.fence!.namespace}`,
-                { cutoverState: control.state, epoch: control.epoch },
-              );
-            }
-          }
+     const timer = startMonotonicTimer();
+     try {
+      const permission = await isLegacyMutationPermittedInTransaction(transaction, this.db, this.fence!.namespace, op, timer);
+      if (!permission.permitted) throw new CutoverRefusedError('Fenced access-token lookup refused');
 
           const snap = await transaction.get(this.accessCol().doc(docId(accessToken)));
           if (!snap.exists) return undefined;
           const data = snap.data() as Record<string, unknown>;
 
           if (!data.refreshFamilyId && (this.legacy?.embeddedRefreshQuery || this.legacy?.pointerDocs)) {
-            return await this.adoptLegacyEmbeddedDocInTransaction(transaction, data, { operation: op });
+       return await this.adoptLegacyEmbeddedDocInTransaction(transaction, data, { operation: op, timer });
           }
           return (this.legacy?.toToken ? this.legacy.toToken(data) : data) as unknown as T;
+     } finally {
+      timer.assertUnderDeadline('access lookup pre-return');
+     }
         });
       }
 
@@ -321,39 +331,13 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     try {
       if (this.fence?.enforce) {
         const op = options?.operation ?? requestOperationContext.getStore();
-        return await this.db.runTransaction(async (transaction: Transaction) => {
-          const control = await readCutoverFenceInTransaction(transaction, this.db, this.fence!.namespace);
-          if (control.state !== 'legacy_open') {
-            if (
-              control.state === 'closing' &&
-              op &&
-              op.epoch === control.epoch
-            ) {
-              const opRef = getCutoverOperationDocRef(this.db, this.fence!.namespace, op.id);
-              const opSnap = await transaction.get(opRef);
-              if (!opSnap.exists) {
-                throw new CutoverFenceError(
-                  `Durable operation record missing in closing: ${op.id}`,
-                );
-              }
-              const opData = opSnap.data() as LegacyOperationRecord;
-              if (opData.epoch !== control.epoch) {
-                throw new CutoverFenceError(
-                  `Operation epoch mismatch in closing: expected ${control.epoch}, got ${opData.epoch}`,
-                );
-              }
-              if (opData.phase !== 'admitted' && opData.phase !== 'upstream_pending') {
-                throw new CutoverFenceError(
-                  `Operation in closing is in phase ${opData.phase}; lookup refused`,
-                );
-              }
-            } else {
-              throw new CutoverRefusedError(
-                `Cutover state is ${control.state}; refresh lookup refused for namespace ${this.fence!.namespace}`,
-                { cutoverState: control.state, epoch: control.epoch },
-              );
-            }
-          }
+    assertOperationKey(this.fence, op);
+    let committedGuard: GuardMutationResult | undefined;
+    const result = await this.db.runTransaction<RefreshLookupResult<T>>(async (transaction: Transaction) => {
+     const timer = startMonotonicTimer();
+     try {
+      const permission = await isLegacyMutationPermittedInTransaction(transaction, this.db, this.fence!.namespace, op, timer);
+      if (!permission.permitted) throw new CutoverRefusedError('Fenced refresh-token lookup refused');
           const refreshRef = this.refreshCol().doc(docId(refreshToken));
           const snap = await transaction.get(refreshRef);
 
@@ -370,7 +354,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                   const adopted = await this.adoptLegacyEmbeddedDocInTransaction(
                     transaction,
                     rawDoc,
-                    { operation: op },
+           { operation: op, timer },
                   );
                   if (adopted) {
                     if (expectedClientId && adopted.clientId !== expectedClientId) {
@@ -402,14 +386,17 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 db: this.db,
                 namespace: this.fence!.namespace,
                 operation: op,
+         timer,
                 completeOperation: true,
                 now: this.nowProvider,
               });
+        committedGuard = retiredGuard;
               const familyDoc = retiredMatch.docs[0]!;
               const family = familyDoc.data() as StoredRefreshFamily;
               await this.assertFamilyNotPending(transaction, family.id);
               retiredGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyDoc.ref, family);
+        retiredGuard.assertPreReturn();
               return { status: 'replay', familyId: familyDoc.id };
             }
             return { status: 'missing' };
@@ -426,7 +413,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             const adopted = await this.adoptLegacyEmbeddedDocInTransaction(
               transaction,
               rawAccess,
-              { operation: options?.operation },
+        { operation: op, timer },
             );
             if (!adopted) return { status: 'missing' };
             if (expectedClientId && adopted.clientId !== expectedClientId) {
@@ -482,19 +469,27 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               db: this.db,
               namespace: this.fence!.namespace,
               operation: op,
+        timer,
               completeOperation: true,
               now: this.nowProvider,
             });
+       committedGuard = replayGuard;
             if (family) {
               await this.assertFamilyNotPending(transaction, family.id);
               replayGuard.bufferCompletion(now);
               this.deleteFamilyInTransaction(transaction, familyRef, family);
+        replayGuard.assertPreReturn();
             }
             return { status: 'replay', familyId: raw.familyId };
           }
 
           return { status: 'active', token: raw.token, familyId: raw.familyId };
+     } finally {
+      timer.assertUnderDeadline('refresh lookup pre-return');
+     }
         });
+    committedGuard?.onCommit();
+    return result;
       }
 
       const refreshRef = this.refreshCol().doc(docId(refreshToken));
@@ -600,16 +595,21 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const oldRef = this.refreshCol().doc(docId(oldRefreshToken));
 
       const op = options?.operation ?? requestOperationContext.getStore();
+   assertOperationKey(this.fence, op);
       let guardResult: GuardMutationResult | undefined;
       const runTx = async () => {
         return await this.db.runTransaction(async (transaction: Transaction) => {
+     const timer = startMonotonicTimer();
+     try {
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce) {
-          const op = options?.operation ?? requestOperationContext.getStore();
+       if (!op) throw new CutoverFenceError('Durable operation context is required');
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
             operation: op,
+        pendingClaim: options?.upstreamCompletion?.pendingClaim,
+        timer,
             completeOperation: options?.completeOperation,
             now: this.nowProvider,
           });
@@ -652,6 +652,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 });
                 const familyPayload = stripUndefined({
                   id: familyId,
+           generation: 1,
                   currentAccessToken: migrated.accessToken,
                   currentRefreshToken: migrated.refreshToken,
                   retiredRefreshFingerprints: [],
@@ -728,6 +729,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           });
           const familyPayload = stripUndefined({
             id: familyId,
+        generation: 1,
             currentAccessToken: migrated.accessToken,
             currentRefreshToken: migrated.refreshToken,
             retiredRefreshFingerprints: [],
@@ -777,6 +779,9 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
               currentRefreshToken: oldRefreshToken,
               retiredRefreshFingerprints: [],
             };
+      const familyGeneration = family.generation ?? 1;
+      if (!Number.isSafeInteger(familyGeneration) || familyGeneration < 1) throw new CutoverFenceError('Family generation is invalid');
+      const nextGeneration = familyGeneration + 1;
 
         if (oldRecord.status === 'consumed') {
             if (options?.upstreamCompletion) {
@@ -820,16 +825,30 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             : undefined;
           const receipt = options?.upstreamCompletion;
           if (receipt) {
+       const claim = receipt.pendingClaim;
             if (!upstreamRecord || receipt.familyId !== oldRecord.familyId ||
-              receipt.leaseOwner !== upstreamRecord.leaseOwner ||
-              receipt.operationId !== (upstreamRecord.ambiguousOperationId ?? null) ||
-              receipt.operationId !== (this.fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome ||
-              (receipt.operationId !== null && (guard?.operation?.phase !== 'upstream_pending' || guard.operation.familyId !== oldRecord.familyId))) {
+        upstreamRecord.leaseOwner !== (claim?.ownerStorageId ?? receipt.leaseOwner) ||
+        (upstreamRecord.ambiguousOperationId ?? null) !== (claim?.storageId ?? null) ||
+        receipt.operationId !== (this.fence?.enforce ? op?.id ?? null : null) || upstreamRecord.ambiguousOutcome || upstreamRecord.ambiguousRemoteOutcome ||
+        (claim && (claim.claimOwner !== receipt.leaseOwner || claim.operationId !== op?.id ||
+         upstreamRecord.operationId !== claim.storageId || upstreamRecord.familyGeneration !== claim.familyGeneration ||
+         upstreamRecord.grantVersion !== claim.grantVersion || upstreamRecord.leaseUntil !== claim.leaseExpiresAt ||
+         upstreamRecord.leaseExpiresAt !== claim.leaseExpiresAt))) {
               throw new CutoverFenceError('Upstream refresh claim changed before rotation');
             }
-          } else if (upstreamRecord?.leaseOwner || upstreamRecord?.ambiguousOutcome || upstreamRecord?.ambiguousOperationId) {
+      } else if (upstreamRecord?.leaseOwner || upstreamRecord?.leaseUntil || upstreamRecord?.leaseExpiresAt ||
+       upstreamRecord?.operationId || upstreamRecord?.ambiguousOutcome || upstreamRecord?.ambiguousRemoteOutcome || upstreamRecord?.ambiguousOperationId) {
             throw new CutoverFenceError('Upstream refresh remains pending');
           }
+      const stored: T = { ...replacement, ...(options?.useCurrentUpstream ? upstreamRecord?.grant ?? {} : {}), refreshFamilyId: oldRecord.familyId };
+      const extras = this.accessDocExtras ? this.accessDocExtras(stored) : {};
+      const accessPayload = stripUndefined({ ...stored, ...extras });
+      const upstreamData = upstreamRef && this.legacy?.toUpstream
+       ? this.legacy.toUpstream(stored as unknown as Record<string, unknown>) : undefined;
+      const priorVersion = upstreamRecord?.grantVersion ?? upstreamRecord?.version ?? 1;
+      if (!Number.isSafeInteger(priorVersion) || priorVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
+      const nextVersion = priorVersion + (upstreamRecord && upstreamData &&
+       canonicalJsonStringify(upstreamRecord.grant) !== canonicalJsonStringify(upstreamData.grant) ? 1 : 0);
         guard?.bufferCompletion(now);
 
         if (adoptedDocToWrite) {
@@ -855,9 +874,6 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }
         transaction.delete(this.accessCol().doc(docId(oldRecord.token.accessToken)));
 
-          const stored: T = { ...replacement, ...(options?.useCurrentUpstream ? upstreamRecord?.grant ?? {} : {}), refreshFamilyId: oldRecord.familyId };
-        const extras = this.accessDocExtras ? this.accessDocExtras(stored) : {};
-        const accessPayload = stripUndefined({ ...stored, ...extras });
 
         transaction.set(oldRef, stripUndefined({
           ...oldRecord,
@@ -873,6 +889,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         }));
         transaction.set(familyRef, stripUndefined({
           id: oldRecord.familyId,
+       generation: nextGeneration,
           currentAccessToken: stored.accessToken,
           currentRefreshToken: stored.refreshToken,
           previousAccessToken: oldRecord.token.accessToken,
@@ -881,11 +898,14 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           updatedAt: now,
         }));
           if (upstreamRef && this.legacy?.toUpstream) {
-          const upstreamData = this.legacy.toUpstream(stored as unknown as Record<string, unknown>);
           if (upstreamData) {
               transaction.set(upstreamRef, stripUndefined({
+         grantVersion: nextVersion,
+         familyGeneration: nextGeneration,
                 ...upstreamData,
                 leaseUntil: null,
+         leaseExpiresAt: null,
+         operationId: null,
                 leaseOwner: null,
                 ambiguousOutcome: null,
                 ambiguousReason: null,
@@ -896,11 +916,16 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
           }
         }
 
+      timer.assertUnderDeadline('rotation pre-return');
         return { status: 'claimed', token: stored } as const;
+     } finally {
+      timer.assertUnderDeadline('rotation pre-return');
+     }
         });
       };
       const result = op?.trackWriter ? await op.trackWriter(runTx) : await runTx();
-      guardResult?.commitCompletion?.();
+   guardResult?.onCommit();
+   if (options?.upstreamCompletion) op?.clearAmbiguousRemoteOutcome();
       return result;
     } catch (err) {
       this.wrapError(err);
@@ -910,6 +935,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   async revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
       const op = options?.operation ?? requestOperationContext.getStore();
+   assertOperationKey(this.fence, op);
       if (this.fence?.enforce && !op) {
         throw new CutoverFenceError(
           `Durable operation context is required for fence-enforced revokeFamily in namespace ${this.fence.namespace}`,
@@ -919,12 +945,14 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       let guardResult: GuardMutationResult | undefined;
       const runTx = async () => {
         await this.db.runTransaction(async (transaction: Transaction) => {
+     const timer = startMonotonicTimer();
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
             operation: op,
+       timer,
             now: this.nowProvider,
           });
           guardResult = guard;
@@ -932,12 +960,14 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         const familySnap = await transaction.get(familyRef);
         if (!familySnap.exists) {
           guard?.bufferCompletion(this.nowProvider());
+      guard?.assertPreReturn();
           return;
         }
         const family = familySnap.data() as StoredRefreshFamily;
           await this.assertFamilyNotPending(transaction, family.id);
         guard?.bufferCompletion(this.nowProvider());
         this.deleteFamilyInTransaction(transaction, familyRef, family);
+     guard?.assertPreReturn();
         });
       };
       if (op?.trackWriter) {
@@ -945,7 +975,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       } else {
         await runTx();
       }
-      guardResult?.commitCompletion?.();
+   guardResult?.onCommit();
     } catch (err) {
       this.wrapError(err);
     }
@@ -954,6 +984,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   async revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void> {
     try {
       const op = options?.operation ?? requestOperationContext.getStore();
+   assertOperationKey(this.fence, op);
       if (this.fence?.enforce && !op) {
         throw new CutoverFenceError(
           `Durable operation context is required for fence-enforced revokeByToken in namespace ${this.fence.namespace}`,
@@ -965,12 +996,14 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       let guardResult: GuardMutationResult | undefined;
       const runTx = async () => {
         await this.db.runTransaction(async (transaction: Transaction) => {
+     const timer = startMonotonicTimer();
         let guard: GuardMutationResult | undefined;
         if (this.fence?.enforce && op) {
           guard = await checkMutationGuardInTransaction(transaction, {
             db: this.db,
             namespace: this.fence.namespace,
             operation: op,
+       timer,
             now: this.nowProvider,
           });
           guardResult = guard;
@@ -995,6 +1028,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             guard?.bufferCompletion(this.nowProvider());
             transaction.delete(accessRef);
           }
+      guard?.assertPreReturn();
           return;
         }
 
@@ -1013,6 +1047,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
                 familySnap.data() as StoredRefreshFamily,
               );
             }
+       guard?.assertPreReturn();
             return;
           }
         }
@@ -1032,10 +1067,12 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             familyDoc.ref,
             familyDoc.data() as StoredRefreshFamily,
           );
+      guard?.assertPreReturn();
           return;
         }
 
         guard?.bufferCompletion(this.nowProvider());
+     guard?.assertPreReturn();
         });
       };
       if (op?.trackWriter) {
@@ -1043,7 +1080,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       } else {
         await runTx();
       }
-      guardResult?.commitCompletion?.();
+   guardResult?.onCommit();
     } catch (err) {
       this.wrapError(err);
     }
@@ -1100,9 +1137,11 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
     options?: { operation?: LegacyOperationContext },
   ): Promise<T | undefined> {
     const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fence, op);
     const runTx = async () => {
       return await this.db.runTransaction(async (transaction: Transaction) => {
-        return await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw, options);
+    const timer = startMonotonicTimer();
+    return await this.adoptLegacyEmbeddedDocInTransaction(transaction, raw, { ...options, timer });
       });
     };
     if (op?.trackWriter) {
@@ -1114,15 +1153,18 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
   private async adoptLegacyEmbeddedDocInTransaction(
     transaction: Transaction,
     raw: Record<string, unknown>,
-    options?: { operation?: LegacyOperationContext },
+  options: { operation?: LegacyOperationContext; timer: MonotonicTimer },
   ): Promise<T | undefined> {
     let guard: GuardMutationResult | undefined;
     const op = options?.operation ?? requestOperationContext.getStore();
+  assertOperationKey(this.fence, op);
     if (this.fence?.enforce) {
+   if (!op) throw new CutoverFenceError('Durable operation context is required');
       guard = await checkMutationGuardInTransaction(transaction, {
         db: this.db,
         namespace: this.fence.namespace,
         operation: op,
+    timer: options.timer,
         completeOperation: false,
         now: this.nowProvider,
       });
@@ -1130,15 +1172,17 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
 
     const tokenObj = (this.legacy?.toToken ? this.legacy.toToken(raw) : raw) as unknown as T;
     if (!tokenObj.accessToken || !tokenObj.refreshToken) {
+   guard?.assertPreReturn();
       return undefined;
     }
 
     const accessRef = this.accessCol().doc(docId(tokenObj.accessToken));
     const accessSnap = await transaction.get(accessRef);
-    if (!accessSnap.exists) return undefined;
+  if (!accessSnap.exists) { guard?.assertPreReturn(); return undefined; }
 
     const currentData = accessSnap.data() as Record<string, unknown>;
     if (currentData.refreshFamilyId) {
+   guard?.assertPreReturn();
       return (this.legacy?.toToken ? this.legacy.toToken(currentData) : currentData) as unknown as T;
     }
 
@@ -1161,6 +1205,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       this.familyCol().doc(docId(familyId)),
       stripUndefined({
         id: familyId,
+    generation: 1,
         currentAccessToken: migrated.accessToken,
         currentRefreshToken: migrated.refreshToken,
         retiredRefreshFingerprints: [],
@@ -1180,6 +1225,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
         );
       }
     }
+  guard?.assertPreReturn();
 
     return migrated;
   }

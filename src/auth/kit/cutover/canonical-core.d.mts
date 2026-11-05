@@ -8,14 +8,15 @@ export function assertSupportedCutoverNamespace(namespace: string): asserts name
 
 export class CutoverFenceError extends Error {
   readonly kitCode: 'cutover_fence_error';
-  constructor(message: string);
+  constructor(message: string, options?: { cause?: unknown });
 }
 
 export class CutoverRefusedError extends Error {
   readonly kitCode: 'cutover_refused';
+  readonly retryAfterSeconds: number;
   readonly cutoverState?: string;
   readonly epoch?: number;
-  constructor(message: string, details?: { cutoverState?: string; epoch?: number });
+  constructor(message?: string, details?: { cause?: unknown; retryAfterSeconds?: number; cutoverState?: string; epoch?: number });
 }
 
 export function isCutoverFenceError(err: unknown): err is CutoverFenceError;
@@ -359,6 +360,8 @@ export interface GuardMutationOptions {
   timer: MonotonicTimer;
 }
 
+export type PendingClaim = NonNullable<GuardMutationOptions['pendingClaim']>;
+
 export interface GuardMutationResult {
   control: CutoverFenceControlRecord;
   operation: LegacyOperationRecord;
@@ -537,9 +540,20 @@ export interface CutoverRuntimeCollectionScope {
   runtime: readonly CutoverRuntimeCollectionEntry[];
   union: readonly CutoverRuntimeCollectionEntry[];
   migrationNames: readonly string[];
+  groups: readonly string[];
+  unresolved: readonly string[];
   siblingWriters: readonly { file: string; collection: string; mode: string; migrated: boolean; note: string }[];
 }
 export function getCutoverRuntimeCollectionScope(namespace: string): CutoverRuntimeCollectionScope;
+export function assertRuntimeScopeClosed(scope: { complete: boolean; unscanned: readonly unknown[]; unresolved: readonly unknown[] }): void;
+export const APPROVED_GRAPH_PROJECTOR_ID: string;
+export const APPROVED_GRAPH_PROJECTOR_VERSION: number;
+export const NONEMPTY_PROJECTOR_KEYS: readonly string[];
+export const CANDIDATE_KIND_TO_CLASSIFICATION: Readonly<Record<string, string>>;
+export function canonicalCompare(a: string, b: string): number;
+export function assertPreparedIdentity(prepDoc: Record<string, unknown>, expected: MigrationIdentityExpectation, namespace: string): void;
+export function assertSubjectRefsPresent(kind: string, projection: { status?: string; subjectRefs?: unknown }, subject: unknown): void;
+export function verifyIndexManifestDigests(manifest: Record<string, unknown>, expected: { namespace: string; binding: Record<string, unknown>; indexSchemaDigest: string; indexPolicyDigest: string }): { indexSchemaDigest: string; indexPolicyDigest: string };
 
 // Internal migration helpers used by the kit's own tests. Not part of the public package API.
 export interface InternalPreparationOptions {

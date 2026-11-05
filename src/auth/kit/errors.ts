@@ -45,32 +45,7 @@ export class UpstreamRevokedError extends KitError {
  }
 }
 
-export class CutoverRefusedError extends KitError {
-  readonly kitCode = 'cutover_refused';
-  readonly retryAfterSeconds: number;
-  readonly cutoverState?: string;
-  readonly epoch?: number;
-
-  constructor(
-    message: string = 'Cutover in progress; operation temporarily unavailable',
-    options?: { cause?: unknown; retryAfterSeconds?: number; cutoverState?: string; epoch?: number },
-  ) {
-    super(message, options);
-    this.name = 'CutoverRefusedError';
-    this.retryAfterSeconds = options?.retryAfterSeconds ?? 30;
-    this.cutoverState = options?.cutoverState;
-    this.epoch = options?.epoch;
-  }
-}
-
-export class CutoverFenceError extends KitError {
-  readonly kitCode = 'cutover_fence_error';
-
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'CutoverFenceError';
-  }
-}
+export { CutoverFenceError, CutoverRefusedError } from './cutover-protocol.mjs';
 
 /**
  * Matches KitError codes structurally.

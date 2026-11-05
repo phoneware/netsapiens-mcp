@@ -19,7 +19,7 @@ const consumer = resolve(value('--consumer'));
 const lockPath = resolve(consumer, safePath(value('--lock')));
 const digest = (content) => createHash('sha256').update(content).digest('hex');
 const git = (...argv) => execFileSync('git', argv, { cwd: packageRoot });
-const paths = [
+const commonPaths = [
   'src/cutover/canonical-core.mjs', 'src/cutover/canonical-core.d.mts',
   'src/cutover/protocol.entry.mjs',
   'src/cutover/dsse-verifier-core.mjs', 'src/cutover/dsse-verifier-core.d.mts',
@@ -32,14 +32,21 @@ const readOptional = async (path) => {
 };
 const previousBytes = await readOptional(lockPath);
 const previous = previousBytes ? JSON.parse(previousBytes.toString('utf8')) : undefined;
+const profile = args.includes('--check') ? previous?.profile : value('--profile');
+if (profile !== 'bridge' && profile !== 'migration') throw new Error('Profile must be bridge or migration');
+const paths = profile === 'bridge' ? [...commonPaths, 'src/ledger.ts'] : commonPaths;
+const generatedNames = profile === 'bridge'
+  ? ['cutover-protocol.mjs', 'cutover-protocol.d.ts', 'cutover-protocol.d.mts']
+  : ['cutover-protocol.mjs', 'cutover-protocol.d.ts'];
 if (args.includes('--check')) {
   if (!previous || previous.generator !== 1 || previous.repository !== 'phoneware/monorepo' ||
     !/^[0-9a-f]{40}$/.test(previous.commit) || !Array.isArray(previous.files) || previous.files.length !== paths.length ||
     previous.entrypoint !== 'src/cutover/protocol.entry.mjs' ||
-    !Array.isArray(previous.generated) || previous.generated.length !== 1) {
+    !Array.isArray(previous.generated) || previous.generated.length !== generatedNames.length) {
     throw new Error('Invalid source lock');
   }
   const names = new Set();
+  const generatedSeen = new Set();
   const sources = new Set();
   for (const entry of previous.files) {
     const destination = safePath(entry.destination);
@@ -52,8 +59,10 @@ if (args.includes('--check')) {
   }
   for (const entry of previous.generated ?? []) {
     const destination = safePath(entry.destination);
-    if (!destination.endsWith('/cutover-protocol.mjs') || names.has(destination) ||
+    const basename = destination.split('/').at(-1);
+    if (!generatedNames.includes(basename) || generatedSeen.has(basename) || names.has(destination) ||
       !/^[0-9a-f]{64}$/.test(entry.sha256)) throw new Error('Invalid generated output inventory');
+    generatedSeen.add(basename);
     if (digest(await readFile(resolve(consumer, destination))) !== entry.sha256) throw new Error(`Generated output drift: ${destination}`);
   }
 } else {
@@ -88,5 +97,5 @@ if (args.includes('--check')) {
     await writeFile(item.target, item.content);
   }
   await mkdir(dirname(lockPath), { recursive: true });
-  await writeFile(lockPath, JSON.stringify({ generator: 1, repository: 'phoneware/monorepo', commit, entrypoint: 'src/cutover/protocol.entry.mjs', files: staged.map((item) => item.entry), generated }, null, 2) + '\n');
+  await writeFile(lockPath, JSON.stringify({ generator: 1, repository: 'phoneware/monorepo', commit, profile, entrypoint: 'src/cutover/protocol.entry.mjs', files: staged.map((item) => item.entry), generated }, null, 2) + '\n');
 }

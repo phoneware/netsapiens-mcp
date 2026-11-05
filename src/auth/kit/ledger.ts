@@ -1,5 +1,4 @@
-// Copied from phoneware/monorepo packages/mcp-oauth-kit/src/ledger.ts at 9aeb5315285a31a546040211c5fe5ed9f702f75d (blob 5c14f4717a00c5fb0932ea02695c0fe2480a1000). Edit the canonical file, then re-copy.
-import type { LegacyOperationContext } from './cutover-fence.js';
+import type { LegacyOperationContext, PendingClaim } from './cutover-fence.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const REFRESH_RETRY_WINDOW_MS = 30_000;
@@ -51,11 +50,9 @@ export type RefreshRotationResult<T extends BaseStoredToken> =
   | { status: 'replay' }
   | { status: 'missing' };
 
-export type UpstreamCompletion = Readonly<{
-  familyId: string;
-  leaseOwner: string;
-  operationId: string | null;
-}>;
+export type UpstreamCompletion =
+  | Readonly<{ familyId: string; leaseOwner: string; operationId: null; pendingClaim?: never }>
+  | Readonly<{ familyId: string; leaseOwner: string; operationId: string; pendingClaim: PendingClaim }>;
 
 export interface TokenLedger<T extends BaseStoredToken> {
   issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T>;
