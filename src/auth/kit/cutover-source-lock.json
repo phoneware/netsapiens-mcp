@@ -1,0 +1,86 @@
+{
+  "generator": 1,
+  "repository": "phoneware/monorepo",
+  "commit": "f0b2e96b628b2748da795306534f174a90880bd5",
+  "entrypoint": "src/cutover/protocol.entry.mjs",
+  "files": [
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
+      "blob": "871e7ffdf59071dcca518fb5b0caf22a3e25d1e9",
+      "destination": "src/auth/kit/cutover/canonical-core.mjs",
+      "sha256": "edf477d3160f850efea0c55e997d627ac25a2e9c7e271fbf87a295f799826c12"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
+      "blob": "a795117327a7063a8d51286de8377c97ddb4f206",
+      "destination": "src/auth/kit/cutover/canonical-core.d.mts",
+      "sha256": "5b64eea53286a1f479b4e570824a0c89bc2088ca01df46a07694be15f9384da7"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/dsse-verifier-core.mjs",
+      "blob": "94542270d9dc95dc3b72321fadf0c1a0640e3c69",
+      "destination": "src/auth/kit/cutover/dsse-verifier-core.mjs",
+      "sha256": "da56fcba8f3dceb58979ebef9dcc8d1f4e05a382f0e7f83ca813954d983ed6ce"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/dsse-verifier-core.d.mts",
+      "blob": "37ced2047a1152dbe9cade01e63f17e39f57fda2",
+      "destination": "src/auth/kit/cutover/dsse-verifier-core.d.mts",
+      "sha256": "12c8987ece153d0ccedf8f1bccc2383561c434e4191088db0107e48e6eff03d4"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/protocol.entry.mjs",
+      "blob": "e2c4a2b75ee8376be469e25f86f9f8e0c48c1beb",
+      "destination": "src/auth/kit/cutover/canonical-protocol.entry.mjs",
+      "sha256": "b556586e06d485a06365563b0be19a3256bdc0e767a7d310e11d25c179272f85"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.mjs",
+      "blob": "8bd4db6c9b873c938959a6f017611c8a4fde1888",
+      "destination": "src/auth/kit/store/netsapiens-projector.mjs",
+      "sha256": "f9f2143e59003a2001b056f9b92fbcd451f6c7e931d4c85767ca0af5b18f8da9"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.d.mts",
+      "blob": "47002d2454bf5f8f52f4ec3669aea79ff3bee4aa",
+      "destination": "src/auth/kit/store/netsapiens-projector.d.mts",
+      "sha256": "98ed4f94eb5c5138922b228b0c0386f4793989b26bdc0baa666b6c2dfcb46fbb"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/errors.ts",
+      "blob": "576d6817ed077921251bba3467371c17df167f1c",
+      "destination": "src/auth/kit/store/errors.ts",
+      "sha256": "ba3a7e50bc7d29c1c4f1cb3bd3370f41fa7269d03378c81c50a5ea73912b183f"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/codec.ts",
+      "blob": "bc2c92896c069961ac26f40b1a03f1c234a13d1d",
+      "destination": "src/auth/kit/store/codec.ts",
+      "sha256": "78bc0e50c760794872e28c4c6bd299106552d525eefa6e18232cc3b8295524e2"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/row-format.ts",
+      "blob": "f59c5e071bd85b8fce84aeba5aaee61c5d275c3f",
+      "destination": "src/auth/kit/store/row-format.ts",
+      "sha256": "7a971c91259e2aa784477e3f910ad5187532b8c982997f33ce12b2ad4194ad21"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/subject-descriptor.ts",
+      "blob": "b244f6ecaeaace1a1dd4441edbb3816fd04736f4",
+      "destination": "src/auth/kit/store/subject-descriptor.ts",
+      "sha256": "ea7d67b6fc3b78eb926d07f59cac819c1e602e19810952c6ffb6e9f85f4dd109"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/subject-guard.ts",
+      "blob": "281081d858701b22d829a3ab9c0138220db13a69",
+      "destination": "src/auth/kit/store/subject-guard.ts",
+      "sha256": "1051e61c0dd1a66e20e0e291da1ddb1bfc5c271b6e0677c6d8f63d8d2196eab1"
+    }
+  ],
+  "generated": [
+    {
+      "destination": "src/auth/kit/cutover-protocol.mjs",
+      "sha256": "7a9f9f87778d42b4e3af9cf82fa21cbf3bf7fc9edb97b29907ac775fb4046474"
+    }
+  ]
+}
