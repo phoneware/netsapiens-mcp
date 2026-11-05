@@ -2,12 +2,14 @@
 // This file is compile-time only and is not part of the cleared source handoff.
 
 export const DSSE_PAYLOAD_TYPE: 'application/vnd.in-toto+json';
+export const MCP_CUTOVER_PREDICATE_TYPE: 'https://phoneware.us/mcp-cutover/v2';
 
 export function canonicalJson(value: unknown): string;
 
 // Namespace-bound rule for the approval's subject descriptor. Returns nothing; throws
 // with a fixed message that never echoes the value.
 export function validateSubjectDescriptor(namespace: string, value: unknown): void;
+export function validateCutoverStatement(statement: unknown): void;
 
 export function formatPAE(payloadType: string, payloadBytes: Uint8Array): Buffer;
 
@@ -29,7 +31,10 @@ export interface DSSEVerifyOptions {
     | 'project'
     | 'database'
     | 'namespace'
-    | 'protocolDigest',
+    | 'protocolDigest'
+    | 'writerCensusDigest'
+    | 'writerInventoryDigest'
+    | 'collectionInventoryDigest',
     string>>;
 }
 

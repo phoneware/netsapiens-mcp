@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { canonicalJson, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
+import { canonicalJson, MCP_CUTOVER_PREDICATE_TYPE, verifyDSSEEnvelope } from '../cutover/dsse-verifier-core.mjs';
 import * as canonicalCore from '../cutover/canonical-core.mjs';
 import { subjectDescriptorFromPredicate } from './subject-descriptor.js';
 import { CutoverRefusedError } from './errors.js';
@@ -23,6 +23,9 @@ const PATHS = {
   approval: `${RUN_DIR}/approval.dsse.json`,
   attestation: `${RUN_DIR}/attestation-manifest.json`,
   indexSchema: `${RUN_DIR}/index-schema.json`,
+  writerCensus: `${RUN_DIR}/writer-census.json`,
+  writerInventory: `${RUN_DIR}/writer-inventory.json`,
+  collectionInventory: `${RUN_DIR}/collection-inventory.json`,
   credentials: `${RUN_DIR}/credentials.json`,
   oidc: `${RUN_DIR}/oidc.jwt`,
   sessionSecret: `${RUN_DIR}/session-secret`,
@@ -295,7 +298,7 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
     'privateRunnerSha', 'workflowSourceSha', 'assemblyDigest', 'profile',
   ], 'build-info');
   if (buildInfo.schemaVersion !== 2 ||
-    typeof buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] !== 'string' || !buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] ||
+    buildInfo[PRODUCTION_PREDICATE_TYPE_KEY] !== MCP_CUTOVER_PREDICATE_TYPE ||
     typeof buildInfo.sessionSecretVersion !== 'string' || !DECIMAL.test(buildInfo.sessionSecretVersion) ||
     typeof buildInfo.publicPackageSourceSha !== 'string' || !SHA1_HEX.test(buildInfo.publicPackageSourceSha) ||
     typeof buildInfo.privateRunnerSha !== 'string' || !SHA1_HEX.test(buildInfo.privateRunnerSha) ||
@@ -344,25 +347,6 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   const indexSchemaDigest = sha256Hex(Buffer.from(canonicalJson(index), 'utf8'));
   const indexPolicyDigest = sha256Hex(Buffer.from(canonicalJson(index.policy), 'utf8'));
 
-  const credentialsPresent = existsSync(PATHS.credentials);
-  const oidcPresent = existsSync(PATHS.oidc);
-  let oidcBefore: Buffer | null = null;
-  if (profile === 'production') {
-    assertCredentialFile(readFixedFile(PATHS.credentials));
-    oidcBefore = readFixedFile(PATHS.oidc);
-  } else if (credentialsPresent || oidcPresent) {
-    refuse('Emulator profile refuses mounted production credentials');
-  }
-
-  // Mutating production operations (adopt commit, activate) must carry the fixed
-  // dispatch claims. These are read from the same bytes the exchange below must
-  // accept; a decoded claim is never authority on its own.
-  const mutating = request.action === 'activate' || (request.action === 'adopt' && 'dryRun' in request.options && request.options.dryRun === false);
-  let invocation: { runId: string; runAttempt: string } | null = null;
-  if (oidcBefore !== null && mutating) {
-    invocation = assertMutatingClaims(oidcBefore);
-  }
-
   const approval = parseStrictJson(readFixedFile(PATHS.approval), ['payloadType', 'payload', 'signatures'], 'approval');
   const expectedKeyVersion = policy.keyVersion as string;
   const verified = verifyDSSEEnvelope(approval, policy.publicKeyPem as string, {
@@ -389,6 +373,25 @@ export async function createProtectedFirestoreMigrationContext(...args: unknown[
   if (!Buffer.from(verified.payloadBytes).equals(attestationBytes)) {
     refuse('Verified approval payload is not the attestation manifest bytes');
   }
+  const credentialsPresent = existsSync(PATHS.credentials);
+  const oidcPresent = existsSync(PATHS.oidc);
+  let oidcBefore: Buffer | null = null;
+  if (profile === 'production') {
+    assertCredentialFile(readFixedFile(PATHS.credentials));
+    oidcBefore = readFixedFile(PATHS.oidc);
+  } else if (credentialsPresent || oidcPresent) {
+    refuse('Emulator profile refuses mounted production credentials');
+  }
+
+  // Mutating production operations (adopt commit, activate) must carry the fixed
+  // dispatch claims. These are read from the same bytes the exchange below must
+  // accept; a decoded claim is never authority on its own.
+  const mutating = request.action === 'activate' || (request.action === 'adopt' && 'dryRun' in request.options && request.options.dryRun === false);
+  let invocation: { runId: string; runAttempt: string } | null = null;
+  if (oidcBefore !== null && mutating) {
+    invocation = assertMutatingClaims(oidcBefore);
+  }
+
 
   // Subject descriptor authority: the verified predicate only, bound module-private before any read.
   const subjectDescriptor = subjectDescriptorFromPredicate(request.namespace, verified.statement.predicate);
