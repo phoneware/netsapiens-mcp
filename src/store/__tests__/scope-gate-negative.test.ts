@@ -82,10 +82,9 @@ const CLOSED_MISMATCH_CASES = [
   },
 ];
 
-// The core's index binding check runs before the factory's comparison, so a missing group can be reported as
-// "omits runtime collection group". Both messages name the signed-versus-scope mismatch these cases prove.
-const MISMATCH_REFUSAL = /differ from the reviewed runtime collection scope|omits runtime collection group/;
-
+// The factory compares the signed groups against the reviewed groups and refuses with this message. The core's
+// index binding message is not reachable on this path (only the prepare seam runs that check), so it is not accepted.
+const MISMATCH_REFUSAL = /differ from the reviewed runtime collection scope/;
 // Applies each edit to the bundle text. Every anchor must match exactly once, so a changed bundle fails here.
 function mutate(bundleText: string, edits: readonly Edit[]): string {
   let text = bundleText;
