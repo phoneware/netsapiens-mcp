@@ -6,6 +6,7 @@
 // argument shapes are proven by the core's tests and the emulator suites, not by these declarations. The
 // interface types are not runtime values; they type the public re-exports that the core does not define.
 import type { FirestoreLike } from '../store/firestore-like.js';
+import type { SubjectDescriptor } from '../store/subject-descriptor.js';
 
 export { CutoverFenceError, CutoverRefusedError, isCutoverFenceError, isCutoverRefusedError } from '../store/errors.js';
 
@@ -122,7 +123,42 @@ export function reconcileUpstreamGrantInTransaction(...args: any[]): Promise<any
 export function verifyIndexManifestDigests(...args: any[]): any;
 export function assertPreparedIdentity(...args: any[]): any;
 export function assertSubjectRefsPresent(...args: any[]): any;
-export function prepareMigrationInTransaction(...args: any[]): Promise<CutoverFenceControlRecord>;
+export interface PrepareProtectedBinding {
+  readonly profile: 'production' | 'emulator';
+  readonly project: string;
+  readonly database: string;
+  readonly subjectDescriptor: SubjectDescriptor | null;
+}
+export interface PrepareExpectedIdentity {
+  readonly namespace: string;
+  readonly epoch: number;
+  readonly migrationRunId: string;
+  readonly codeSha: string;
+  readonly codeArtifact: string;
+  readonly packageIntegrity: string;
+  readonly protocolDigest: string;
+  readonly assemblyDigest: string;
+  readonly indexSchemaDigest: string;
+  readonly indexPolicyDigest: string;
+  readonly encoderVersion: number;
+}
+// The §3.3 seam options, exactly. The core refuses any other key at runtime; this type makes tsc refuse it first.
+export interface PrepareMigrationOptions {
+  readonly namespace: string;
+  readonly prepDoc: unknown;
+  readonly storeKey: Uint8Array | string;
+  readonly FieldPath: unknown;
+  readonly timer: unknown;
+  readonly completePlan: unknown;
+  readonly expectedIdentity: PrepareExpectedIdentity;
+  readonly indexManifest: unknown;
+  readonly protectedBinding: PrepareProtectedBinding;
+}
+export function prepareMigrationInTransaction(
+  transaction: unknown,
+  db: unknown,
+  options: PrepareMigrationOptions,
+): Promise<CutoverFenceControlRecord>;
 export function finalizeMigrationInTransaction(...args: any[]): Promise<any>;
 export function activateMigrationInTransaction(...args: any[]): Promise<any>;
 export function verifyActiveMigrationInTransaction(...args: any[]): Promise<any>;
