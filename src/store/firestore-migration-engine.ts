@@ -2305,7 +2305,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
 
       // All transaction reads must precede any buffered writes or deletes
       if (!allTargetsAlreadyRetained && control.emptyNamespace !== true) {
-        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now);
+        await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now, timer);
       }
 
       // Execute source actions (deletions / replacements)

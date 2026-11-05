@@ -127,6 +127,7 @@ export function markIrreversibleInTransaction(
   expectedEpoch: number,
   migrationRunId?: string,
   nowProvider?: () => number,
+  timer: MonotonicTimer,
 ): Promise<CutoverFenceControlRecord>;
 
 export interface LegacyOperationMetadata {
