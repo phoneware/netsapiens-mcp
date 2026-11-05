@@ -58,10 +58,13 @@ export function recordedPreparationObservation(db: object, binding: ProtectedBin
   return requireObservation(db, 'preparation', binding);
 }
 
-// True only when this exact object is the observation recorded for the handle. A structurally identical
-// copy is not the recorded one, so this is the proof the core needs, not a field comparison.
+// True only when this exact object is the observation recorded for the handle and it is still within the
+// freshness window. A structurally identical copy, a fake, another handle's record or a stale record is refused.
+// Identity comes from the module's single WeakMap, so no caller can forge it.
 export function isRecordedObservation(db: object, observation: unknown): boolean {
-  return observation !== undefined && observations.get(db) === observation;
+  if (observation === undefined || observations.get(db) !== observation) return false;
+  const ageNs = process.hrtime.bigint() - (observation as FreshIndexObservation).completedAtNs;
+  return ageNs >= 0n && ageNs <= FRESH_INDEX_OBSERVATION_MAX_AGE_NS;
 }
 
 // TTL schema for prospective targets. The settled expiry metadata is the row's own
