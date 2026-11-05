@@ -152,7 +152,7 @@ describe.skipIf(!gateOpen)('protected migration factory on the emulator profile'
     mount(fixture);
     const result = await runFactory('inspect', 'mcp');
     expect(result.ok).toBe(false);
-    expect(result.message).not.toMatch(/session-secret|ENOENT/);
+    expect(result.message).toBe('DSSE envelope signature verification failed against approved public key');
   });
 
   it('refuses a variable outside the factory environment allowlist before reading any file', async () => { mount(fixtureFor('mcp'));
