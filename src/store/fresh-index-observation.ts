@@ -50,12 +50,12 @@ function requireObservation(db: object, purpose: FreshIndexObservation['purpose'
   return observation;
 }
 
-// The recorded observation for this handle, passed to the preparation seam unchanged. Refuses when
-// none was recorded, so the seam never receives an absent or invented observation.
-export function recordedFreshIndexObservation(db: object): FreshIndexObservation {
-  const observation = observations.get(db);
-  if (!observation) throw new CutoverRefusedError('Fresh authenticated index observation is required');
-  return observation;
+// The authenticated recorded preparation observation for this handle, for the preparation seam. It is the
+// same record the preparation gate checked: purpose, namespace, epoch, run, policy digest, admin token
+// digest and age are all re-verified against the binding now. It never observes again, so there is one
+// observation per handle. A caller cannot supply it; it refuses unless the recorded one matches.
+export function recordedPreparationObservation(db: object, binding: ProtectedBinding): FreshIndexObservation {
+  return requireObservation(db, 'preparation', binding);
 }
 
 // TTL schema for prospective targets. The settled expiry metadata is the row's own
