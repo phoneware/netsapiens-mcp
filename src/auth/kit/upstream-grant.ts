@@ -575,6 +575,35 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
       if (this.fence?.enforce && op) op.markAmbiguousRemoteOutcome(reasonCode);
 
+      const markAmbiguous = async () => this.db.runTransaction(async (transaction) => {
+        const timer = startMonotonicTimer();
+        let guard: GuardMutationResult | undefined;
+        if (this.fence?.enforce && op) {
+          guard = await checkMutationGuardInTransaction(transaction, {
+            db: this.db, namespace: this.fence.namespace, operation: op,
+            pendingClaim, identityKey: this.fence.identityKey, timer,
+            now: this.nowProvider, completeOperation: false,
+          });
+        }
+        const snap = await transaction.get(docRef);
+        const current = snap.data() as StoredUpstreamRecord<G> | undefined;
+        if (!current || current.leaseOwner !== (pendingClaim?.ownerStorageId ?? leaseOwner) ||
+          (current.ambiguousOperationId ?? null) !== (pendingClaim?.storageId ?? operationId) ||
+          (pendingClaim && (current.operationId !== pendingClaim.storageId ||
+            current.familyGeneration !== pendingClaim.familyGeneration || current.grantVersion !== pendingClaim.grantVersion ||
+            current.leaseUntil !== pendingClaim.leaseExpiresAt || current.leaseExpiresAt !== pendingClaim.leaseExpiresAt))) {
+          throw new UpstreamUnavailableError('Upstream claim changed before ambiguity was recorded');
+        }
+        guard?.assertPreWrite();
+        transaction.set(docRef, { ambiguousOutcome: true, ambiguousReason: reasonCode, ambiguousAt: this.nowProvider() }, { merge: true });
+        timer.assertUnderDeadline('upstream ambiguity pre-return');
+      });
+      try {
+        if (op?.trackWriter) await op.trackWriter(markAmbiguous); else await markAmbiguous();
+      } catch (markError) {
+        throw new UpstreamUnavailableError('Upstream grant outcome is unresolved', { cause: markError });
+      }
+
 
       if (err instanceof UpstreamUnavailableError) {
         throw err;

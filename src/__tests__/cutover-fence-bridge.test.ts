@@ -124,6 +124,32 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => {});
     return;
   }
+  it('preserves the key binding through closing, fenced, and reopening', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace);
+    await withLegacyOperation({ db, namespace, kind: 'read' }, async () => { });
+    const initial = await getCutoverFenceRecord(db, namespace);
+    const binding = {
+      operationIdentityVersion: initial?.operationIdentityVersion,
+      operationIdentityKeyCheck: initial?.operationIdentityKeyCheck,
+    };
+    expect(binding.operationIdentityVersion).toBe(1);
+    expect(binding.operationIdentityKeyCheck).toMatch(/^[0-9a-f]{64}$/);
+    for (const [fromState, toState, epoch] of [
+      ['legacy_open', 'closing', 1], ['closing', 'fenced', 1],
+      ['fenced', 'closing', 2], ['closing', 'legacy_open', 2],
+    ] as const) {
+      await transitionCutoverFenceState(db, namespace, { fromState, toState, expectedEpoch: epoch });
+      expect(await getCutoverFenceRecord(db, namespace)).toMatchObject(binding);
+    }
+    await expect(canonicalWithLegacyOperation({
+      db, namespace, kind: 'read', identityKey: deriveStoreKey(`${TEST_SESSION_SECRET}-other`),
+    }, async () => { })).rejects.toThrow(/identity key binding mismatch/i);
+    await withLegacyOperation({ db, namespace, kind: 'read' }, async () => { });
+    expect(await getCutoverFenceRecord(db, namespace)).toMatchObject(binding);
+  });
+
   it('binds pending completion to the original random claimant without mutating on forgery', async () => {
     const db = createTestDb();
     const namespace = 'mcp';
@@ -1794,6 +1820,13 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     let grantCallCount = 0;
+    let waiterObserved = deferred();
+    const runTransaction = db.runTransaction.bind(db);
+    vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
+      const result = await runTransaction(fn, options);
+      if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiterObserved.resolve();
+      return result;
+    });
 
     // Pairing 1: exchangeRefreshToken (leaseholder) vs verifyAccessToken (transparent refresh waiter)
     let releaseBarrier1: () => void = () => {};
@@ -1842,7 +1875,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(leaseAcquired1).toBe(true);
 
     const p1Verify = authProvider.verifyAccessToken(testAccessToken1);
-    await new Promise((r) => setTimeout(r, 60));
+    await waiterObserved.promise;
 
     releaseBarrier1();
 
@@ -1884,6 +1917,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     const grantBefore2 = grantCallCount;
+    waiterObserved = deferred();
     const p2Exchange = authProvider.exchangeRefreshToken(clientInfo, testRefreshToken2);
 
     const upstreamDoc2 = db.collection('mcp_tokens_upstream').doc(docId(token2.refreshFamilyId!));
@@ -1898,7 +1932,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     }
     expect(leaseAcquired2).toBe(true);
     const p2Forced = authProvider.forceRefreshUpstream(testAccessToken2);
-    await new Promise((r) => setTimeout(r, 60));
+    await waiterObserved.promise;
 
     releaseBarrier2();
 
@@ -1940,6 +1974,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     const grantBefore3 = grantCallCount;
+    waiterObserved = deferred();
     const p3Verify = authProvider.verifyAccessToken(testAccessToken3);
 
     const upstreamDoc3 = db.collection('mcp_tokens_upstream').doc(docId(token3.refreshFamilyId!));
@@ -1954,7 +1989,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     }
     expect(leaseAcquired3).toBe(true);
     const p3Forced = authProvider.forceRefreshUpstream(testAccessToken3);
-    await new Promise((r) => setTimeout(r, 60));
+    await waiterObserved.promise;
 
     releaseBarrier3();
 

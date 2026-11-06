@@ -1814,6 +1814,8 @@ export async function transitionCutoverFenceState(db, namespace, params) {
       epoch: nextEpoch,
       activeOperations: current.activeOperations,
       irreversible: current.irreversible,
+      operationIdentityVersion: current.operationIdentityVersion,
+      operationIdentityKeyCheck: current.operationIdentityKeyCheck,
       emptyNamespace: current.emptyNamespace,
       migrationRunId: params.migrationRunId ?? current.migrationRunId,
       migrationManifestDigest: params.migrationManifestDigest ?? current.migrationManifestDigest,

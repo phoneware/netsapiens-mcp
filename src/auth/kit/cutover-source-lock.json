@@ -1,14 +1,14 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "a202c778aeb6d4166d095b56ae05cf2cb6c4b450",
+  "commit": "0843f999cc97d2dacf437311c9c57f71bddc9b1a",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "9111b686851aa4f75d179c1149f110bd83c98515",
+      "blob": "8bba45e9a4a8d5f0eb57ad9371bdd02381860ff9",
       "destination": "src/auth/kit/cutover/canonical-core.mjs",
-      "sha256": "1958cdb629292512a1f73589cf2f44da715a499050731ca5b4b44b844aef69a1"
+      "sha256": "c1962d80286d11a8c0c2c994ba12f87db37afb92ad2ad94e4663dd2782ba17e6"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
@@ -92,7 +92,7 @@
   "generated": [
     {
       "destination": "src/auth/kit/cutover-protocol.mjs",
-      "sha256": "cb68366958b3db3e1fa2719325e4ab82183703147f55dd8e60487eb16f5f2aa0"
+      "sha256": "2c90f0cc0cf4931539c2af3cd8d74a2069e1c4806599938a9a7438b9d409ee1a"
     },
     {
       "destination": "src/auth/kit/cutover-protocol.d.ts",
