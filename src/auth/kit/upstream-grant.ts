@@ -509,6 +509,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
             guard = await checkMutationGuardInTransaction(transaction, {
               db: this.db, namespace: this.fence.namespace, operation: op,
               pendingClaim, timer,
+              identityKey: this.fence.identityKey,
               now: this.nowProvider, completeOperation: false,
             });
           }
@@ -564,6 +565,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
               namespace: this.fence.namespace,
               operation: op,
               pendingClaim, timer,
+              identityKey: this.fence.identityKey,
               now: this.nowProvider,
               completeOperation: options?.completeOperation ?? true,
             });

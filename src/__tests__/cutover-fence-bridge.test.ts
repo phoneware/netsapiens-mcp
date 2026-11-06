@@ -16,6 +16,7 @@ import {
   type WithLegacyOperationOptions,
   deriveStoreKey,
   startMonotonicTimer,
+  claimUpstreamGrantInTransaction,
   checkMutationGuardInTransaction,
   getCutoverFenceDocRef,
   getCutoverFenceRecord,
@@ -123,6 +124,67 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => {});
     return;
   }
+  it('binds pending completion to the original random claimant without mutating on forgery', async () => {
+    const db = createTestDb();
+    const namespace = 'mcp';
+    const familyId = 'claim-family';
+    const owner = randomUUID();
+    const familyRef = db.collection('mcp_tokens_refresh_families').doc(familyId);
+    const pointerRef = db.collection('mcp_tokens_refresh').doc('refresh');
+    const grantRef = db.collection('mcp_tokens_upstream').doc(familyId);
+    await initializeCutoverFence(db, namespace);
+    await familyRef.set({ id: familyId, generation: 3, currentRefreshToken: 'refresh' });
+    await pointerRef.set({ familyId, status: 'active' });
+    await grantRef.set({ grantVersion: 7, grant: { token: 'original' } });
+
+    await withLegacyOperation({ db, namespace, kind: 'upstream_refresh' }, async (operation) => {
+      const claim = await db.runTransaction((transaction) => claimUpstreamGrantInTransaction(transaction, db, {
+        namespace, epoch: operation.epoch, familyId, operationId: operation.id,
+        identityKey: TEST_IDENTITY_KEY, claimOwner: owner,
+        expectedFamilyGeneration: 3, expectedGrantVersion: 7,
+        expectedKind: operation.kind, timer: startMonotonicTimer(),
+      }));
+      const operationRef = getCutoverOperationDocRef(db, namespace, operation.id, TEST_IDENTITY_KEY);
+      const controlRef = getCutoverFenceDocRef(db, namespace);
+      const snapshot = async () => Promise.all(
+        [familyRef, pointerRef, grantRef, operationRef, controlRef].map(async (ref) => (await ref.get()).data()),
+      );
+      const before = await snapshot();
+      const forgeries = [
+        { ...claim, claimOwner: randomUUID() },
+        { ...claim, operationId: randomUUID() },
+        { ...claim, familyId: 'other-family' },
+        { ...claim, familyGeneration: claim.familyGeneration + 1 },
+        { ...claim, grantVersion: claim.grantVersion + 1 },
+        { ...claim, leaseExpiresAt: claim.leaseExpiresAt + 1 },
+      ];
+      for (const pendingClaim of forgeries) {
+        await expect(db.runTransaction(async (transaction) => {
+          await checkMutationGuardInTransaction(transaction, {
+            db, namespace, operation, pendingClaim, identityKey: TEST_IDENTITY_KEY,
+            timer: startMonotonicTimer(),
+          });
+        })).rejects.toThrow();
+        expect(await snapshot()).toEqual(before);
+      }
+      let onCommit: (() => void) | undefined;
+      await db.runTransaction(async (transaction) => {
+        const guard = await checkMutationGuardInTransaction(transaction, {
+          db, namespace, operation, pendingClaim: claim, identityKey: TEST_IDENTITY_KEY,
+          timer: startMonotonicTimer(),
+        });
+        guard.bufferCompletion();
+        transaction.update(grantRef, {
+          leaseOwner: null, leaseUntil: null, leaseExpiresAt: null,
+          operationId: null, ambiguousOperationId: null,
+        });
+        onCommit = guard.onCommit;
+      });
+      onCommit?.();
+      expect(operation.isCompleted()).toBe(true);
+    });
+  });
+
 
   it('1. Fence closes before admission: no write or upstream call', async () => {
     const db = createTestDb();

@@ -1,4 +1,4 @@
-import type { Firestore, Transaction, DocumentReference, CollectionReference } from '@google-cloud/firestore';
+import type { FirestoreLike, TransactionLike, FieldPathAdapter } from '../store/firestore-like.js';
 
 export const SUPPORTED_CUTOVER_NAMESPACES: readonly ['mcp', 'pwmcp', 'readonly_mcp'];
 export type SupportedCutoverNamespace = (typeof SUPPORTED_CUTOVER_NAMESPACES)[number];
@@ -164,10 +164,12 @@ export interface LegacyOperationContext {
   trackWriter?<T>(work: () => Promise<T>): Promise<T>;
 }
 
-export function getCutoverFenceDocRef(db: Firestore, namespace: string): DocumentReference;
-export function getCutoverOperationsColRef(db: Firestore, namespace: string): CollectionReference;
+export type CollectionFor<DB extends FirestoreLike> = ReturnType<DB['collection']>;
+export type DocumentFor<DB extends FirestoreLike> = ReturnType<CollectionFor<DB>['doc']>;
+export function getCutoverFenceDocRef<DB extends FirestoreLike>(db: DB, namespace: string): DocumentFor<DB>;
+export function getCutoverOperationsColRef<DB extends FirestoreLike>(db: DB, namespace: string): CollectionFor<DB>;
 export function operationStorageId(namespace: string, operationId: string, identityKey: Uint8Array): string;
-export function getCutoverOperationDocRef(db: Firestore, namespace: string, operationId: string, identityKey: Uint8Array): DocumentReference;
+export function getCutoverOperationDocRef<DB extends FirestoreLike>(db: DB, namespace: string, operationId: string, identityKey: Uint8Array): DocumentFor<DB>;
 
 export function canonicalJsonStringify(val: unknown): string;
 export function rfc8785CanonicalJson(val: unknown): string;
@@ -259,15 +261,15 @@ export function computePlanDigest(namespace: string, epoch: number, planSpec: un
 export function computeReceiptSetDigest(receipts: Record<string, unknown>[], namespace: string, epoch: number): string;
 
 export function parseCutoverFenceRecord(data: unknown, namespace: string): CutoverFenceControlRecord;
-export function readCutoverFenceInTransaction(transaction: Transaction, db: Firestore, namespace: string): Promise<CutoverFenceControlRecord>;
-export function getCutoverFenceRecord(db: Firestore, namespace: string): Promise<CutoverFenceControlRecord | undefined>;
+export function readCutoverFenceInTransaction(transaction: TransactionLike, db: FirestoreLike, namespace: string): Promise<CutoverFenceControlRecord>;
+export function getCutoverFenceRecord(db: FirestoreLike, namespace: string): Promise<CutoverFenceControlRecord | undefined>;
 
 export interface InitializeCutoverFenceOptions {
   initialEpoch?: number;
   initialState?: 'legacy_open';
   now?: () => number;
 }
-export function initializeCutoverFence(db: Firestore, namespace: string, options?: InitializeCutoverFenceOptions): Promise<CutoverFenceControlRecord>;
+export function initializeCutoverFence(db: FirestoreLike, namespace: string, options?: InitializeCutoverFenceOptions): Promise<CutoverFenceControlRecord>;
 
 export interface CutoverTransitionParams {
   expectedEpoch: number;
@@ -280,11 +282,11 @@ export interface CutoverTransitionParams {
   now?: () => number;
   allowIdempotent?: boolean;
 }
-export function transitionCutoverFenceState(db: Firestore, namespace: string, params: CutoverTransitionParams): Promise<CutoverFenceControlRecord>;
+export function transitionCutoverFenceState(db: FirestoreLike, namespace: string, params: CutoverTransitionParams): Promise<CutoverFenceControlRecord>;
 
 export function markIrreversibleInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   namespace: string,
   expectedEpoch: number,
   migrationRunId: string | undefined,
@@ -301,7 +303,7 @@ export interface LegacyOperationMetadata {
 }
 
 export interface WithLegacyOperationOptions {
-  db: Firestore;
+  db: FirestoreLike;
   namespace: SupportedCutoverNamespace;
   kind: string;
   operationId?: string;
@@ -316,14 +318,14 @@ export function withLegacyOperation<R>(
 ): Promise<R>;
 
 export function releaseLegacyOperation(
-  db: Firestore,
+  db: FirestoreLike,
   ctx: LegacyOperationContext,
   outcome?: 'completed' | 'failed',
   nowProvider?: () => number,
 ): Promise<void>;
 
 export function markOperationAmbiguous(
-  db: Firestore,
+  db: FirestoreLike,
   ctx: LegacyOperationContext,
   nowProvider?: () => number,
 ): Promise<void>;
@@ -336,16 +338,18 @@ export interface MonotonicTimer {
 export function startMonotonicTimer(): MonotonicTimer;
 export function isMonotonicTimer(t: unknown): t is MonotonicTimer;
 export function checkV3MutationGuardInTransaction(
-  transaction: Transaction,
-  options: { db: Firestore; namespace: SupportedCutoverNamespace; timer: MonotonicTimer; now?: () => number },
+  transaction: TransactionLike,
+  options: { db: FirestoreLike; namespace: SupportedCutoverNamespace; timer: MonotonicTimer; now?: () => number },
 ): Promise<{ control: CutoverFenceControlRecord; bufferMutation(): void; assertPreReturn(): void }>;
 
 
 export interface GuardMutationOptions {
-  db: Firestore;
+  db: FirestoreLike;
   namespace: SupportedCutoverNamespace;
   operation: LegacyOperationContext;
   completeOperation?: boolean;
+  /** Required when pendingClaim is supplied; never persisted. */
+  identityKey?: Uint8Array;
   pendingClaim?: {
     familyId: string;
     operationId: string;
@@ -373,13 +377,13 @@ export interface GuardMutationResult {
 }
 
 export function checkMutationGuardInTransaction(
-  transaction: Transaction,
+  transaction: TransactionLike,
   options: GuardMutationOptions,
 ): Promise<GuardMutationResult>;
 
 export function isLegacyMutationPermittedInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   namespace: string,
   operation: LegacyOperationContext | undefined,
   timer: MonotonicTimer,
@@ -404,8 +408,8 @@ export interface ClaimUpstreamGrantOptions {
 }
 
 export function claimUpstreamGrantInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: ClaimUpstreamGrantOptions,
 ): Promise<{
   status: 'claimed';
@@ -439,8 +443,8 @@ export interface ReconcileUpstreamGrantOptions {
 }
 
 export function reconcileUpstreamGrantInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: ReconcileUpstreamGrantOptions,
 ): Promise<{ status: 'ambiguous_pending'; operationId: string; familyId: string }>;
 
@@ -454,8 +458,8 @@ export interface CandidateCommitment {
 
 
 export interface MigrationContext {
-  db: Firestore;
-  FieldPath: { documentId(): unknown };
+  db: FirestoreLike;
+  FieldPath: FieldPathAdapter;
   key: Uint8Array | Buffer;
   namespace: SupportedCutoverNamespace;
   expectedEpoch: number;
@@ -493,8 +497,8 @@ export interface CompleteMigrationPlan {
 export function assertValidMigrationContext(options: unknown): asserts options is MigrationContext;
 
 export function verifyActiveMigrationInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: MigrationContext & {
     storeKey: Uint8Array | Buffer;
     migrationManifestDigest: string;
@@ -524,6 +528,9 @@ export interface MigrationIdentityExpectation {
   assemblyDigest: string;
   indexSchemaDigest: string;
   encoderVersion: 1;
+}
+export interface PreparationIdentityExpectation extends MigrationIdentityExpectation {
+  readonly indexPolicyDigest: string;
 }
 export function validateCompleteMigrationPlanForIdentity(
   plan: CompleteMigrationPlan,
@@ -560,14 +567,16 @@ export interface InternalPreparationOptions {
   namespace: SupportedCutoverNamespace;
   prepDoc: Record<string, unknown>;
   storeKey: Uint8Array | Buffer | string;
-  FieldPath: { documentId(): unknown };
+  FieldPath: FieldPathAdapter;
   timer: MonotonicTimer;
-  completePlan?: CompleteMigrationPlan;
-  expectedIdentity?: MigrationIdentityExpectation;
+  completePlan: CompleteMigrationPlan;
+  expectedIdentity: PreparationIdentityExpectation;
+  indexManifest: unknown;
+  protectedBinding: { profile: string; project: string; database: string; subjectDescriptor: unknown };
 }
 export function prepareMigrationInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: InternalPreparationOptions,
 ): Promise<CutoverFenceControlRecord>;
 
@@ -576,12 +585,12 @@ export interface InternalFinalizationOptions {
   finalDoc: Record<string, unknown>;
   markerDoc: Record<string, unknown>;
   storeKey: Uint8Array | Buffer | string;
-  FieldPath: { documentId(): unknown };
+  FieldPath: FieldPathAdapter;
   timer: MonotonicTimer;
 }
 export function finalizeMigrationInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: InternalFinalizationOptions,
 ): Promise<CutoverFenceControlRecord>;
 
@@ -593,11 +602,11 @@ export interface InternalActivationOptions {
   codeArtifact: string;
   protocolDigest: string;
   storeKey: Uint8Array | Buffer | string;
-  FieldPath: { documentId(): unknown };
+  FieldPath: FieldPathAdapter;
   timer: MonotonicTimer;
 }
 export function activateMigrationInTransaction(
-  transaction: Transaction,
-  db: Firestore,
+  transaction: TransactionLike,
+  db: FirestoreLike,
   options: InternalActivationOptions,
 ): Promise<{ status: 'activated' | 'already_active'; control: CutoverFenceControlRecord; planDigest: string }>;

@@ -3162,7 +3162,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
   }
   if (opRecord.phase === "upstream_pending") {
     const claim = options.pendingClaim;
-    if (!claim || claim.operationId !== options.operation.id || claim.storageId !== options.operation.storageId || claim.familyId !== opRecord.familyId || typeof claim.claimOwner !== "string" || !Number.isSafeInteger(claim.familyGeneration) || !Number.isSafeInteger(claim.grantVersion) || !Number.isSafeInteger(claim.leaseExpiresAt) || opRecord.ambiguousRemoteOutcome === true) {
+    if (!claim || claim.operationId !== options.operation.id || claim.storageId !== options.operation.storageId || claim.familyId !== opRecord.familyId || typeof claim.claimOwner !== "string" || !claim.claimOwner || operationStorageId(options.namespace, options.operation.id, options.identityKey) !== options.operation.storageId || operationKeyCheck(options.namespace, options.identityKey) !== options.operation.identityKeyCheck || claimOwnerStorageId(options.namespace, claim.claimOwner, options.identityKey) !== claim.ownerStorageId || !Number.isSafeInteger(claim.familyGeneration) || !Number.isSafeInteger(claim.grantVersion) || !Number.isSafeInteger(claim.leaseExpiresAt) || opRecord.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError("A matching pending claim is required for grant completion");
     }
     const grantSnap = await transaction.get(

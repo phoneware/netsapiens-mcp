@@ -609,6 +609,7 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             namespace: this.fence.namespace,
             operation: op,
         pendingClaim: options?.upstreamCompletion?.pendingClaim,
+        identityKey: this.fence!.identityKey,
         timer,
             completeOperation: options?.completeOperation,
             now: this.nowProvider,

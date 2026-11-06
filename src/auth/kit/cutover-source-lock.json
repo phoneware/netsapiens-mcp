@@ -1,20 +1,20 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "04bc3627e7375c5b4152e724a20d58ca3c234bcb",
+  "commit": "a202c778aeb6d4166d095b56ae05cf2cb6c4b450",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "871e7ffdf59071dcca518fb5b0caf22a3e25d1e9",
+      "blob": "9111b686851aa4f75d179c1149f110bd83c98515",
       "destination": "src/auth/kit/cutover/canonical-core.mjs",
-      "sha256": "edf477d3160f850efea0c55e997d627ac25a2e9c7e271fbf87a295f799826c12"
+      "sha256": "1958cdb629292512a1f73589cf2f44da715a499050731ca5b4b44b844aef69a1"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
-      "blob": "e7f591cdfca4b490a36461e8ec12cda437d8ab9c",
+      "blob": "b114c86455ee3480be55e0f30d38324a34222f3e",
       "destination": "src/auth/kit/cutover/canonical-core.d.mts",
-      "sha256": "c7efda0f65558266e9a5a5ca2c4d1f8a2a1dcb23d984b5f1a35155bbdf9c944d"
+      "sha256": "073c89b8fab485025b7e35e22ebe91ec266d215a587f6db0b948c394aa1017fe"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/dsse-verifier-core.mjs",
@@ -81,12 +81,18 @@
       "blob": "acf10d65d8910c3938869d625eca0a2603a38b88",
       "destination": "src/auth/kit/ledger.ts",
       "sha256": "f3d06318a357b586e5aae10d4ef1356bc25ed53f0165f4f96fc66151718a0fab"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/firestore-like.ts",
+      "destination": "src/auth/kit/store/firestore-like.ts",
+      "blob": "ad1f421906486874881d499ed23997d108ff84c4",
+      "sha256": "c0e21fc939eae5091816baa386bc3234963ff81792de9297c683c3c3b2fddeb0"
     }
   ],
   "generated": [
     {
       "destination": "src/auth/kit/cutover-protocol.mjs",
-      "sha256": "7a9f9f87778d42b4e3af9cf82fa21cbf3bf7fc9edb97b29907ac775fb4046474"
+      "sha256": "cb68366958b3db3e1fa2719325e4ab82183703147f55dd8e60487eb16f5f2aa0"
     },
     {
       "destination": "src/auth/kit/cutover-protocol.d.ts",

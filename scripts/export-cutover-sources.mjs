@@ -18,6 +18,7 @@ const safePath = (path) => {
 const consumer = resolve(value('--consumer'));
 const lockPath = resolve(consumer, safePath(value('--lock')));
 const digest = (content) => createHash('sha256').update(content).digest('hex');
+const gitBlob = (content) => createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex');
 const git = (...argv) => execFileSync('git', argv, { cwd: packageRoot });
 const commonPaths = [
   'src/cutover/canonical-core.mjs', 'src/cutover/canonical-core.d.mts',
@@ -25,6 +26,7 @@ const commonPaths = [
   'src/cutover/dsse-verifier-core.mjs', 'src/cutover/dsse-verifier-core.d.mts',
   'src/store/netsapiens-projector.mjs', 'src/store/netsapiens-projector.d.mts',
   'src/store/errors.ts', 'src/store/codec.ts', 'src/store/row-format.ts',
+  'src/store/firestore-like.ts',
   'src/store/subject-descriptor.ts', 'src/store/subject-guard.ts',
 ];
 const readOptional = async (path) => {
@@ -55,7 +57,7 @@ if (args.includes('--check')) {
     if (!paths.some((path) => entry.source === `packages/mcp-oauth-kit/${path}`) || sources.has(entry.source)) throw new Error('Invalid source inventory');
     sources.add(entry.source);
     const actual = await readFile(resolve(consumer, destination));
-    if (digest(actual) !== entry.sha256) throw new Error(`Source drift: ${destination}`);
+    if (digest(actual) !== entry.sha256 || gitBlob(actual) !== entry.blob) throw new Error(`Source drift: ${destination}`);
   }
   for (const entry of previous.generated ?? []) {
     const destination = safePath(entry.destination);

@@ -500,6 +500,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         namespace: fence.namespace,
         operation: op,
       pendingClaim: fresh.completion?.pendingClaim,
+      identityKey: fence.identityKey,
       timer,
         now: this.localNow,
         completeOperation: true,
