@@ -3,14 +3,20 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
 const [fileArg, mutation] = process.argv.slice(2);
-if (!fileArg || !process.env.RUNNER_TEMP) throw new Error('A disposable RUNNER_TEMP and bundle path are required');
+if (!fileArg || !process.env.RUNNER_TEMP) throw new Error('A disposable RUNNER_TEMP and mutation path are required');
 const root = realpathSync(process.env.RUNNER_TEMP);
 const file = realpathSync(fileArg);
-if (!file.startsWith(`${root}${sep}`) || !file.endsWith(`${sep}src${sep}store${sep}cutover-protocol.mjs`)) {
-  throw new Error('Mutation target must be a disposable bundle under RUNNER_TEMP');
+const suffix = mutation === 'first-write-latch'
+  ? `${sep}src${sep}cutover${sep}canonical-core.mjs`
+  : mutation === 'private-first-write-latch'
+    ? `${sep}private${sep}cutover-protocol.mjs`
+    : `${sep}src${sep}store${sep}cutover-protocol.mjs`;
+if (!file.startsWith(`${root}${sep}`) || !file.endsWith(suffix)) {
+  throw new Error('Mutation target must be the named disposable source or bundle under RUNNER_TEMP');
 }
 const mutations = {
   'first-write-latch': [['if (!control.irreversible) {', 'if (false) {']],
+  'private-first-write-latch': [['if (!control.irreversible) {', 'if (false) {']],
   'malformed-marker': [
     ['validateMigrationIdentityFields(m, namespace, expectedEpoch, migrationRunId);', 'void m;'],
     ['if (f[k] !== p[k] || m[k] !== p[k]) {', 'if (f[k] !== p[k]) {'],
