@@ -185,6 +185,32 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
   });
 
+  it.each(['structured', 'legacy-pointer'])('refuses update over a claimed %s refresh owner', async (shape) => {
+    const db = createTestDb();
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const first = await store.issue({
+      accessToken: 'access-a', refreshToken: 'refresh-a', clientId: 'client',
+      expiresAt: Date.now() + 60_000, nsAccessToken: 'upstream-a', nsUsername: 'a',
+    });
+    const second = await store.issue({
+      accessToken: 'access-b', refreshToken: 'refresh-b', clientId: 'client',
+      expiresAt: Date.now() + 60_000, nsAccessToken: 'upstream-b', nsUsername: 'b',
+    });
+    const family = second.refreshFamilyId!;
+    const destination = store.refreshDocRef(second.refreshToken);
+    if (shape === 'legacy-pointer') await destination.set({ accessToken: second.accessToken });
+    await store.upstreamDocRef(family).set({ leaseOwner: 'held', grant: { nsAccessToken: 'upstream-b' } }, { merge: true });
+    const refs = [
+      store.accessDocRef(first.accessToken), store.accessDocRef(second.accessToken),
+      store.refreshDocRef(first.refreshToken), destination,
+      store.upstreamDocRef(first.refreshFamilyId!), store.upstreamDocRef(family),
+    ];
+    const snapshot = () => Promise.all(refs.map(async (ref) => (await ref.get()).data()));
+    const before = await snapshot();
+    await expect(store.update(first.accessToken, { refreshToken: second.refreshToken })).rejects.toThrow();
+    expect(await snapshot()).toEqual(before);
+  });
+
 
   it('1. Fence closes before admission: no write or upstream call', async () => {
     const db = createTestDb();
