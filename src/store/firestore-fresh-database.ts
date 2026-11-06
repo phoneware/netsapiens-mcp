@@ -6,6 +6,12 @@ function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function isProviderTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3}(?:\d{3}){0,2})?Z$/.test(value)) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 19) === value.slice(0, 19);
+}
+
 /** Compare a completed create operation with the subsequent authenticated database readback. */
 export function validateFreshDatabaseResponses(
   resource: FreshResourceIdentity, operationName: string, operationValue: unknown, readbackValue: unknown,
@@ -21,7 +27,7 @@ export function validateFreshDatabaseResponses(
   const validateDatabase = (database: Record<string, unknown>) => {
     if (database.name !== databaseName || database.uid !== resource.databaseUid ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(resource.databaseUid) ||
-      database.type !== 'FIRESTORE_NATIVE' || typeof database.createTime !== 'string' || !Number.isFinite(Date.parse(database.createTime)) ||
+      database.type !== 'FIRESTORE_NATIVE' || !isProviderTimestamp(database.createTime) ||
       database.deleteTime !== undefined || database.previousId !== undefined) throw new Error('Invalid created database identity or state');
     if (database.sourceInfo !== undefined) {
       const source = object(database.sourceInfo, 'database provenance');

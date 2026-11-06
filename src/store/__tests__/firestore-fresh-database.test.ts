@@ -11,6 +11,8 @@ describe('fresh database response consistency', () => {
   it('accepts matching completed create and readback, with optional matching operation provenance', () => {
     expect(() => validateFreshDatabaseResponses(resource, operationName, operation, database)).not.toThrow();
     expect(() => validateFreshDatabaseResponses(resource, operationName, operation, { ...database, sourceInfo: { operation: operationName } })).not.toThrow();
+    const fractional = { ...database, createTime: '2026-11-05T00:00:00.123456789Z' };
+    expect(() => validateFreshDatabaseResponses(resource, operationName, { ...operation, response: fractional }, fractional)).not.toThrow();
   });
 
   it('rejects ambiguous, unrelated, incomplete, restored or replaced resources', () => {
@@ -22,6 +24,7 @@ describe('fresh database response consistency', () => {
       { ...database, uid: 'different' }, { ...database, name: `${name}-other` }, { ...database, deleteTime: '2026-11-05T01:00:00Z' },
       { ...database, previousId: 'old' }, { ...database, sourceInfo: { backup: 'backup' } },
       { ...database, sourceInfo: { operation: `${name}/operations/other` } }, { ...database, createTime: '2026-11-06T00:00:00Z' },
+      { ...database, createTime: '2026-02-30T00:00:00Z' }, { ...database, createTime: 'yesterday' },
     ]) expect(() => validateFreshDatabaseResponses(resource, operationName, operation, altered)).toThrow();
     expect(() => validateFreshDatabaseResponses(resource, `${name}/operations/`, operation, database)).toThrow();
     expect(() => validateFreshDatabaseResponses({ ...resource, databaseUid: 'not-a-uuid' }, operationName, operation, database)).toThrow();
