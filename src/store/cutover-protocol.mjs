@@ -603,18 +603,22 @@ function buildSourceProjectionMap(candidate, entries, codec) {
     consumed2.add(entry);
   }, "use");
   if (candidate.kind === "pr56Families" || candidate.kind === "baseFormatTokens") {
-    const access = singleEntry(entries, "tokens");
-    const accessId = requireCredential(access, aliases(access.data.accessToken, access.data.token?.accessToken));
-    use("tokens", access, accessId);
+    const accessEntries = entriesFor(entries, "tokens");
+    if (accessEntries.length > 1 || candidate.kind === "baseFormatTokens" && accessEntries.length !== 1) {
+      throw new CutoverFenceError("Invalid access source cardinality");
+    }
+    const access = accessEntries[0];
+    const accessId = access ? requireCredential(access, aliases(access.data.accessToken, access.data.token?.accessToken)) : void 0;
+    if (access) use("tokens", access, accessId);
     let family;
     if (candidate.kind === "pr56Families") {
       family = singleEntry(entries, "families");
       const upstream = singleEntry(entries, "upstream");
-      if (family.data.id !== void 0 && family.data.id !== family.physicalId || upstream.physicalId !== family.physicalId || access.data.familyId != null && access.data.familyId !== family.physicalId || access.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId || family.data.currentAccessToken != null && family.data.currentAccessToken !== accessId) throw new CutoverFenceError("Source family identity mismatch");
+      if (family.data.id !== void 0 && family.data.id !== family.physicalId || upstream.physicalId !== family.physicalId || access?.data.familyId != null && access.data.familyId !== family.physicalId || access?.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId || access && family.data.currentAccessToken != null && family.data.currentAccessToken !== accessId) throw new CutoverFenceError("Source family identity mismatch");
       use("families", family, family.physicalId);
       use("upstream", upstream, upstream.physicalId);
     }
-    const accessRefresh = aliases(access.data.refreshToken, access.data.token?.refreshToken);
+    const accessRefresh = access ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : void 0;
     const activeId = family ? family.data.currentRefreshToken : accessRefresh;
     if (typeof activeId !== "string" || !activeId) throw new CutoverFenceError("Source refresh credential is missing");
     if (family && accessRefresh !== void 0 && accessRefresh !== activeId) throw new CutoverFenceError("Source access refresh identity mismatch");
@@ -624,13 +628,20 @@ function buildSourceProjectionMap(candidate, entries, codec) {
     }
     for (const entry of entriesFor(entries, "refresh")) {
       const linkedAccess = entry.data.accessToken;
-      const fromAccess = linkedAccess === accessId ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : void 0;
+      const fromAccess = access && linkedAccess === accessId ? accessRefresh : void 0;
       const raw = requireCredential(entry, aliases(entry.data.refreshToken, entry.data.token?.refreshToken) ?? fromAccess);
       if (family && aliases(entry.data.familyId, entry.data.family_id) !== family.physicalId) throw new CutoverFenceError("Source refresh family mismatch");
       if (raw === activeId && (entry.data.status === "active" || !family && entry.data.status === void 0 && linkedAccess === accessId)) {
-        const linked = aliases(entry.data.accessToken, entry.data.token?.accessToken);
-        if (linked !== void 0 && linked !== accessId || family && family.data.currentAccessToken == null && linked !== accessId) {
+        const embedded = entry.data.token;
+        if (family && !access && (!embedded || typeof embedded !== "object" || typeof embedded.accessToken !== "string" || !embedded.accessToken || typeof embedded.refreshToken !== "string" || embedded.refreshToken !== activeId || typeof embedded.clientId !== "string" || !embedded.clientId.trim() || !Number.isSafeInteger(embedded.expiresAt) || embedded.expiresAt <= 0)) {
+          throw new CutoverFenceError("Missing access source requires a complete embedded refresh token");
+        }
+        const linked = aliases(family?.data.currentAccessToken, entry.data.accessToken, embedded?.accessToken, accessId);
+        if (!linked || family && !access && family.data.currentAccessToken !== linked) {
           throw new CutoverFenceError("Source active refresh access identity mismatch");
+        }
+        if (embedded?.familyId != null && embedded.familyId !== family?.physicalId || embedded?.refreshFamilyId != null && embedded.refreshFamilyId !== family?.physicalId || embedded?.family_id != null && embedded.family_id !== family?.physicalId) {
+          throw new CutoverFenceError("Embedded refresh family identity mismatch");
         }
         use("refresh", entry, raw);
       } else if (family && raw === previousId && entry.data.status === "consumed" && Number.isSafeInteger(entry.data.consumedAt) && entry.data.successorRefreshToken === activeId) use("prevRefresh", entry, raw);
@@ -751,9 +762,9 @@ function projectSourceLogical(candidate, sources, codec, subject) {
     const upDoc = sources.get("upstream");
     if (!upDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing upstream source`);
     const grant = upDoc.grant && typeof upDoc.grant === "object" ? upDoc.grant : upDoc;
-    const tokDoc = sources.get("tokens");
-    if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
-    const accessId = tokDoc.accessToken ?? famData.currentAccessToken ?? tokDoc.id;
+    const tokDoc = sources.get("tokens") ?? curRefDoc.token;
+    if (!tokDoc || typeof tokDoc !== "object") throw new CutoverFenceError("Missing access source requires a complete embedded refresh token");
+    const accessId = aliases(famData.currentAccessToken, curRefDoc.accessToken, curRefDoc.token?.accessToken, tokDoc.accessToken, tokDoc.token?.accessToken);
     if (!accessId || typeof accessId !== "string") throw new CutoverFenceError("pr56Families missing accessId");
     const newAccessId = codec.id("session", accessId);
     const newRefreshId = codec.id("refresh", currentRefId);
@@ -6420,6 +6431,7 @@ function extractCandidatesAndPlan(params) {
   const malformedDocKeys = /* @__PURE__ */ new Set();
   const tokensByCredential = /* @__PURE__ */ new Map();
   const tokensByPhysicalId = /* @__PURE__ */ new Map();
+  const tokenPhysicalIds = new Set(tokensDocs.map((doc) => doc.id));
   for (const d of tokensDocs) {
     const data = d.data() || {};
     if (data.familyId != null && data.refreshFamilyId != null && data.familyId !== data.refreshFamilyId) {
@@ -6541,11 +6553,13 @@ function extractCandidatesAndPlan(params) {
         accessEntry = byPhys;
       }
     }
-    if (!accessId || typeof accessId !== "string" || !accessId.trim() || !accessEntry) {
+    const hasPhysicalAccess = typeof accessId === "string" && tokenPhysicalIds.has(legacyDocId(accessId));
+    const embedded = curRefDoc.token;
+    if (!accessId || typeof accessId !== "string" || !accessId.trim() || !accessEntry && (hasPhysicalAccess || !embedded || typeof embedded !== "object" || embedded.accessToken !== accessId || embedded.refreshToken !== currentRefToken || typeof embedded.clientId !== "string" || !embedded.clientId.trim() || !Number.isSafeInteger(embedded.expiresAt) || embedded.expiresAt <= 0)) {
       reasons.missingAccessTokens++;
       continue;
     }
-    const owners = [accessEntry.data.familyId, accessEntry.data.refreshFamilyId].filter((value) => value != null);
+    const owners = [accessEntry?.data.familyId, accessEntry?.data.refreshFamilyId].filter((value) => value != null);
     if (owners.some((value) => typeof value !== "string")) {
       reasons.malformedRecords++;
       continue;
@@ -6554,11 +6568,11 @@ function extractCandidatesAndPlan(params) {
       reasons.conflictingClaims++;
       continue;
     }
-    if (claimedAccessIds.has(accessEntry.credentialToken)) {
+    if (claimedAccessIds.has(accessId)) {
       reasons.conflictingClaims++;
       continue;
     }
-    claimedAccessIds.add(accessEntry.credentialToken);
+    claimedAccessIds.add(accessId);
     let prevRefEntry = void 0;
     if (famData.previousRefreshToken) {
       const prevRefToken = famData.previousRefreshToken;
@@ -6597,7 +6611,7 @@ function extractCandidatesAndPlan(params) {
     }
     if (retiredConflict) continue;
     retiredFingerprints.sort(codeUnitCompare);
-    const newAccessId = codec.id("session", accessEntry.credentialToken);
+    const newAccessId = codec.id("session", accessId);
     const newRefreshId = codec.id("refresh", curRefEntry.credentialToken);
     const candSources = [
       {
@@ -6617,14 +6631,14 @@ function extractCandidatesAndPlan(params) {
         id: computeKeyedDocId(storeKey, "source-id", namespace, epoch, "upstream", familyId),
         rawId: familyId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "upstream", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "upstream", familyId), upstreamById.get(familyId))
-      },
-      {
-        collection: "tokens",
-        id: computeKeyedDocId(storeKey, "source-id", namespace, epoch, "tokens", accessEntry.physicalId),
-        rawId: accessEntry.physicalId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "tokens", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "tokens", accessEntry.physicalId), accessEntry.data || {})
       }
     ];
+    if (accessEntry) candSources.push({
+      collection: "tokens",
+      id: computeKeyedDocId(storeKey, "source-id", namespace, epoch, "tokens", accessEntry.physicalId),
+      rawId: accessEntry.physicalId,
+      recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, "tokens", computeKeyedDocId(storeKey, "source-id", namespace, epoch, "tokens", accessEntry.physicalId), accessEntry.data || {})
+    });
     if (prevRefEntry) {
       candSources.push({
         collection: "refresh",
@@ -6660,9 +6674,9 @@ function extractCandidatesAndPlan(params) {
     const sourceEntries = [
       { collection: "families", physicalId: familyId, data: famData },
       { collection: "refresh", physicalId: curRefEntry.physicalId, data: curRefDoc },
-      { collection: "upstream", physicalId: familyId, data: upstreamById.get(familyId) },
-      { collection: "tokens", physicalId: accessEntry.physicalId, data: accessEntry.data }
+      { collection: "upstream", physicalId: familyId, data: upstreamById.get(familyId) }
     ];
+    if (accessEntry) sourceEntries.push({ collection: "tokens", physicalId: accessEntry.physicalId, data: accessEntry.data });
     if (prevRefEntry) sourceEntries.push({ collection: "refresh", physicalId: prevRefEntry.physicalId, data: prevRefEntry.data });
     const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: "pr56Families", targets: candTargets, logicalDigest: "" }, sourceEntries, codec);
     const logicalProjection = projectSourceLogical(
@@ -6758,7 +6772,7 @@ function extractCandidatesAndPlan(params) {
     candidateCommitments.push(candCommitment);
     claimedRefreshDocIds.add(curRefEntry.doc.id);
     if (prevRefEntry) claimedRefreshDocIds.add(prevRefEntry.doc.id);
-    claimedTokenDocIds.add(accessEntry.doc.id);
+    if (accessEntry) claimedTokenDocIds.add(accessEntry.doc.id);
     claimedUpstreamDocIds.add(familyId);
     candidates.push({
       id: candidateId,

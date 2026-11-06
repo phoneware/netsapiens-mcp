@@ -393,6 +393,7 @@ export function extractCandidatesAndPlan(params: {
   interface LegacyCredentialEntry { doc: any; data: any; physicalId: string; credentialToken: string }
   const tokensByCredential = new Map<string, LegacyCredentialEntry>();
   const tokensByPhysicalId = new Map<string, LegacyCredentialEntry>();
+  const tokenPhysicalIds = new Set(tokensDocs.map((doc: any) => doc.id));
   for (const d of tokensDocs) {
     const data = d.data() || {};
     // Conflicting family ownership is never a valid source, including when one family selects
@@ -435,6 +436,11 @@ export function extractCandidatesAndPlan(params: {
 
   for (const d of refreshDocs) {
     const data = d.data() || {};
+    if (data.refreshToken != null && data.token?.refreshToken != null && data.refreshToken !== data.token.refreshToken) {
+      malformedDocKeys.add(`refresh:${d.id}`);
+      reasons.conflictingClaims++;
+      continue;
+    }
     let credToken = data.refreshToken ?? data.token?.refreshToken;
     if (!credToken && data.accessToken) {
       const tok = tokensByCredential.get(data.accessToken);
@@ -523,11 +529,18 @@ export function extractCandidatesAndPlan(params: {
       }
     }
 
-    if (!accessId || typeof accessId !== 'string' || !accessId.trim() || !accessEntry) {
+    const hasPhysicalAccess = typeof accessId === 'string' && tokenPhysicalIds.has(legacyDocId(accessId));
+    const embedded = curRefDoc.token;
+    if (!accessId || typeof accessId !== 'string' || !accessId.trim() || (!accessEntry && (
+      hasPhysicalAccess || !embedded || typeof embedded !== 'object' ||
+      embedded.accessToken !== accessId || embedded.refreshToken !== currentRefToken ||
+      typeof embedded.clientId !== 'string' || !embedded.clientId.trim() ||
+      !Number.isSafeInteger(embedded.expiresAt) || embedded.expiresAt <= 0
+    ))) {
       reasons.missingAccessTokens++;
       continue;
     }
-    const owners = [accessEntry.data.familyId, accessEntry.data.refreshFamilyId].filter(value => value != null);
+    const owners = [accessEntry?.data.familyId, accessEntry?.data.refreshFamilyId].filter(value => value != null);
     if (owners.some(value => typeof value !== 'string')) {
       reasons.malformedRecords++;
       continue;
@@ -536,11 +549,11 @@ export function extractCandidatesAndPlan(params: {
       reasons.conflictingClaims++;
       continue;
     }
-    if (claimedAccessIds.has(accessEntry.credentialToken)) {
+    if (claimedAccessIds.has(accessId)) {
       reasons.conflictingClaims++;
       continue;
     }
-    claimedAccessIds.add(accessEntry.credentialToken);
+    claimedAccessIds.add(accessId);
 
     let prevRefEntry: any = undefined;
     if (famData.previousRefreshToken) {
@@ -584,7 +597,7 @@ export function extractCandidatesAndPlan(params: {
     if (retiredConflict) continue;
     retiredFingerprints.sort(codeUnitCompare);
 
-    const newAccessId = codec.id('session', accessEntry.credentialToken);
+    const newAccessId = codec.id('session', accessId);
     const newRefreshId = codec.id('refresh', curRefEntry.credentialToken);
 
     const candSources = [
@@ -606,13 +619,13 @@ export function extractCandidatesAndPlan(params: {
         rawId: familyId,
         recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'upstream', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'upstream', familyId), upstreamById.get(familyId)),
       },
-      {
-        collection: 'tokens',
-        id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId),
-        rawId: accessEntry.physicalId,
-        recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId), accessEntry.data || {}),
-      },
     ];
+    if (accessEntry) candSources.push({
+      collection: 'tokens',
+      id: computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId),
+      rawId: accessEntry.physicalId,
+      recordDigest: computeSourceRecordDigest(storeKey, namespace, epoch, 'tokens', computeKeyedDocId(storeKey, 'source-id', namespace, epoch, 'tokens', accessEntry.physicalId), accessEntry.data || {}),
+    });
 
     if (prevRefEntry) {
       candSources.push({
@@ -655,8 +668,8 @@ export function extractCandidatesAndPlan(params: {
       { collection: 'families', physicalId: familyId, data: famData },
       { collection: 'refresh', physicalId: curRefEntry.physicalId, data: curRefDoc },
       { collection: 'upstream', physicalId: familyId, data: upstreamById.get(familyId) },
-      { collection: 'tokens', physicalId: accessEntry.physicalId, data: accessEntry.data },
     ];
+    if (accessEntry) sourceEntries.push({ collection: 'tokens', physicalId: accessEntry.physicalId, data: accessEntry.data });
     if (prevRefEntry) sourceEntries.push({ collection: 'refresh', physicalId: prevRefEntry.physicalId, data: prevRefEntry.data });
     const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'pr56Families', targets: candTargets, logicalDigest: '' }, sourceEntries, codec);
 
@@ -769,7 +782,7 @@ export function extractCandidatesAndPlan(params: {
 
     claimedRefreshDocIds.add(curRefEntry.doc.id);
     if (prevRefEntry) claimedRefreshDocIds.add(prevRefEntry.doc.id);
-    claimedTokenDocIds.add(accessEntry.doc.id);
+    if (accessEntry) claimedTokenDocIds.add(accessEntry.doc.id);
     claimedUpstreamDocIds.add(familyId);
 
     candidates.push({

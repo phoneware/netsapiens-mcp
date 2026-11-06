@@ -11,7 +11,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deriveStoreKey } from '../store/codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
-import { getCutoverFenceRecord, transitionCutoverFenceState } from '../store/firestore-v2-adoption.js';
+import { getCutoverFenceRecord } from '../store/firestore-v2-adoption.js';
 import { startFakeAdmin } from '../store/__tests__/support/fake-admin.mjs';
 import { assertCanOwnMounts, containerGateOpen, releaseMounts } from '../store/__tests__/support/mounts.mjs';
 import { fixtureFor, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
@@ -100,26 +100,27 @@ describe.skipIf(!gateOpen)('PR56 Retired Refresh Token Replay Detection (emulato
       expect(adopted.ok).toBe(true);
       expect(adopted.report?.errors).toBe(0);
       expect(adopted.report?.migrated).toBe(1);
+      const prepared = (await db.collection(`${NS}_meta`).doc(`migration_prepared_${EPOCH}`).get()).data();
+      expect(prepared?.physicalCounts).toMatchObject({ families: 1, refresh: 1, upstream: 1, tokens: 0 });
+      expect(prepared?.totalPhysicalRecords).toBe(3);
 
       // The runner writes the retired fingerprint as a row that points at the family.
       const retiredRow = await db.collection(`${NS}_retired_refresh`).doc(legacyShaFingerprint).get();
       expect(retiredRow.exists).toBe(true);
       expect(retiredRow.data()).toEqual({ familyId });
+      const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+      expect(ctrl?.state).toBe('v3_ready');
+      const activated = await runStep({
+        bundleBytes, namespace: NS, epoch: EPOCH, action: 'activate',
+        options: { migrationManifestDigest: ctrl!.migrationManifestDigest! }
+      });
+      expect(activated.ok, activated.message).toBe(true);
     } finally {
       await admin.close();
     }
 
     // 5. Move to v3_active with the run the runner recorded, then open the v3 store with the factory's key.
     const key = deriveStoreKey(sessionSecretOf(fixture));
-    const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
-    expect(ctrl?.state).toBe('v3_ready');
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
-      fromState: 'v3_ready',
-      toState: 'v3_active',
-      expectedEpoch: ctrl!.epoch,
-      migrationRunId: ctrl!.migrationRunId!,
-      migrationManifestDigest: ctrl!.migrationManifestDigest!,
-    });
     const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key });
 
     // 6. Presenting the old retired token is detected as replay for its family.

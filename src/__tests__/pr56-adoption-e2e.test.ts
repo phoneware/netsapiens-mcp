@@ -13,11 +13,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { deriveStoreKey } from '../store/codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
-import { getCutoverFenceRecord, transitionCutoverFenceState } from '../store/firestore-v2-adoption.js';
+import { getCutoverFenceRecord } from '../store/firestore-v2-adoption.js';
 import { startFakeAdmin } from '../store/__tests__/support/fake-admin.mjs';
 import { assertCanOwnMounts, containerGateOpen, releaseMounts } from '../store/__tests__/support/mounts.mjs';
 import { fixtureFor, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
-import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs } from '../store/__tests__/support/emulator-seed.js';
+import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs, snapshotNamespace } from '../store/__tests__/support/emulator-seed.js';
 import { closedBundleBytes } from '../store/__tests__/support/closed-bundle.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -46,12 +46,50 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
     releaseMounts();
     await db.terminate();
   });
+  it('refuses incomplete or mismatched missing-access evidence without writes', async () => {
+    const now = Date.now();
+    const valid = { accessToken: 'access/one', refreshToken: 'refresh/one', clientId: 'client', expiresAt: now + 60000, extra: { seatId: 'same-seat' } };
+    const variants = [
+      { field: 'accessToken', value: '' }, { field: 'refreshToken', value: '' },
+      { field: 'clientId', value: '' }, { field: 'expiresAt', value: 0 },
+      { field: 'accessToken', value: 'access.one' }, { field: 'refreshToken', value: 'refresh.one' },
+      { field: 'familyId', value: 'other-family' },
+    ];
+    for (const variant of variants) {
+      if (admin) { await admin.close(); admin = null; }
+      await resetFencedNamespace(db, NS);
+      const token = { ...valid, [variant.field]: variant.value };
+      await seedDocs(db, [
+        [`${NS}_tokens_refresh_families/family`, { currentAccessToken: valid.accessToken, currentRefreshToken: valid.refreshToken }],
+        [`${NS}_tokens_refresh/refresh_one`, { familyId: 'family', status: 'active', token }],
+        [`${NS}_tokens_upstream/family`, { nsAccessToken: 'upstream', nsUsername: 'user' }],
+      ]);
+      const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+      admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+      const before = await snapshotNamespace(db, NS);
+      const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+      if (inspected.ok) {
+        expect((inspected.reasons?.missingAccessTokens ?? 0) + (inspected.reasons?.missingRefreshPointers ?? 0) +
+          (inspected.reasons?.malformedRecords ?? 0) + (inspected.reasons?.conflictingClaims ?? 0)).toBeGreaterThan(0);
+        const refused = await runStep({
+          bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt',
+          options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }
+        });
+        expect(refused.ok).toBe(false);
+        expect(refused.message).toMatch(/Cannot prepare migration/);
+      } else {
+        expect(inspected.message).toMatch(/Source active refresh access identity mismatch|Embedded refresh family identity mismatch|Conflicting or malformed credential identity/);
+      }
+      expect(await snapshotNamespace(db, NS)).toEqual(before);
+    }
+  });
 
-  it('adopts PR56 session where access doc is absent, preserves clientId and seatId, and exchanges successfully', async () => {
+  it.each([true, false])('adopts absent access with refresh-level access alias present=%s and exchanges successfully', async (includeAccessAlias) => {
     const legacyRefreshToken = 'tok-refresh-valid';
     const legacyAccessToken = 'tok-access-expired';
     const familyId = 'fam-1';
     const expectedClientId = 'pr56-surviving-client';
+    const legacyExpiry = Date.now() - 1000;
 
     // 1. Fenced namespace at the runner epoch, then the PR #56 legacy rows.
     await resetFencedNamespace(db, NS);
@@ -66,14 +104,14 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       }],
       // 3. Legacy refresh collection, which holds the authoritative embedded token.
       [`${NS}_tokens_refresh/${legacyRefreshToken}`, {
-        accessToken: legacyAccessToken,
+        ...(includeAccessAlias ? { accessToken: legacyAccessToken } : {}),
         familyId,
         status: 'active',
         token: {
           accessToken: legacyAccessToken,
           refreshToken: legacyRefreshToken,
           clientId: expectedClientId,
-          expiresAt: Date.now() - 1000,
+          expiresAt: legacyExpiry,
           serverBaseUrl: 'http://localhost:3000',
           nsAccessToken: 'ns-tok-legacy',
           nsRefreshToken: 'ns-ref-legacy',
@@ -117,18 +155,19 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
     expect(adopted.ok).toBe(true);
     expect(adopted.report?.errors).toBe(0);
     expect(adopted.report?.migrated).toBe(1);
+    const prepared = (await db.collection(`${NS}_meta`).doc(`migration_prepared_${EPOCH}`).get()).data();
+    expect(prepared?.physicalCounts).toMatchObject({ families: 1, refresh: 1, upstream: 1, tokens: 0 });
+    expect(prepared?.totalPhysicalRecords).toBe(3);
 
     // 8. Move to v3_active with the run the runner recorded, then open the v3 store with the factory's key.
     const key = deriveStoreKey(sessionSecretOf(fixture));
     const ctrl = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
     expect(ctrl?.state).toBe('v3_ready');
-    await transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
-      fromState: 'v3_ready',
-      toState: 'v3_active',
-      expectedEpoch: ctrl!.epoch,
-      migrationRunId: ctrl!.migrationRunId!,
-      migrationManifestDigest: ctrl!.migrationManifestDigest!,
+    const activated = await runStep({
+      bundleBytes, namespace: NS, epoch: EPOCH, action: 'activate',
+      options: { migrationManifestDigest: ctrl!.migrationManifestDigest! }
     });
+    expect(activated.ok, activated.message).toBe(true);
     const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key });
 
     // 9. lookupRefresh resolves clientId and seatId from the active refresh pointer.
@@ -140,14 +179,18 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       expect(lookup.session.nsUsername).toBe('alice@domain.com');
       expect(lookup.session.nsAccessToken).toBe('ns-tok-upstream');
       expect(lookup.session.nsRefreshToken).toBe('ns-ref-upstream');
+      expect(lookup.session.expiresAt).toBe(legacyExpiry);
     }
 
+    const upstreamPost = vi.spyOn(axios, 'post')
+      .mockResolvedValueOnce({ data: { access_token: 'ns-tok-new', refresh_token: 'ns-ref-new', expires_in: 3600 } })
+      .mockRejectedValue(new Error('unmocked upstream call refused'));
     // 10. A mismatched client ID rejects the lookup.
     const wrongClientLookup = await store.sessions.lookupRefresh(legacyRefreshToken, 'wrong-client', Date.now());
     expect(wrongClientLookup.status).toBe('missing');
+    expect(upstreamPost).not.toHaveBeenCalled();
 
-    // 11. The /token refresh exchange. The NetSapiens token endpoint is mocked once; any other upstream call
-    // is refused, so no live vendor request is sent.
+    // 11. Exercise the provider refresh exchange. The upstream token endpoint is mocked; no live call is sent.
     const provider = new NetSapiensAuthProvider({
       platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://ns.example.com' }],
       nsApiUrl: 'https://ns.example.com',
@@ -156,11 +199,11 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       serverBaseUrl: 'http://localhost:3000',
       store,
     } as any);
-    vi.spyOn(axios, 'post')
-      .mockResolvedValueOnce({ data: { access_token: 'ns-tok-new', refresh_token: 'ns-ref-new', expires_in: 3600 } })
-      .mockRejectedValue(new Error('unmocked upstream call refused'));
+    await expect(provider.verifyAccessToken(legacyAccessToken)).rejects.toThrow(/Access token expired/);
 
     const tokens = await provider.exchangeRefreshToken({ client_id: expectedClientId } as any, legacyRefreshToken);
+    expect(upstreamPost).toHaveBeenCalledTimes(1);
+    expect(upstreamPost.mock.calls[0][1]).toMatchObject({ grant_type: 'refresh_token', refresh_token: 'ns-ref-upstream' });
     expect(tokens.access_token).toBeDefined();
     expect(tokens.refresh_token).toBeDefined();
     expect(tokens.token_type).toBe('Bearer');
