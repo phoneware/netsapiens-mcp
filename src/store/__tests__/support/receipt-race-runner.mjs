@@ -15,8 +15,14 @@ try {
   if (request.action !== 'adopt' || request.options.dryRun !== false) throw new Error('Receipt race requires an adopt commit');
   const options = { dryRun: false, expectedSourceInventoryDigest: request.options.expectedSourceInventoryDigest };
   const snapshot = async () => {
-    const names = bundle.getCutoverDistinctCollectionNames(context.namespace);
-    const groups = [...new Set([...Object.values(names.source), ...Object.values(names.target), `${context.namespace}_meta`])].sort();
+    const policy = JSON.parse(readFileSync('/run/cutover/index-schema.json', 'utf8'));
+    const signedGroups = policy.binding?.collectionGroups;
+    if (!Array.isArray(signedGroups)) throw new Error('Signed fixture collection inventory is missing');
+    const required = ['tokens_refresh_families', 'tokens', 'tokens_refresh', 'tokens_upstream', 'auth_codes', 'resume_tokens',
+      'oauth_clients', 'clients', 'refresh_families', 'sessions', 'refresh', 'upstream', 'retired_refresh']
+      .map((suffix) => `${context.namespace}_${suffix}`);
+    if (required.some((group) => !signedGroups.includes(group))) throw new Error('Signed fixture collection inventory is incomplete');
+    const groups = [...new Set([...signedGroups, `${context.namespace}_meta`])].sort();
     const rows = [];
     for (const group of groups) {
       const docs = await context.db.collection(group).get();
@@ -24,7 +30,7 @@ try {
     }
     const operations = await context.db.collection(`${context.namespace}_meta`).doc('cutover_fence').collection('operations').get();
     for (const doc of operations.docs) rows.push([`operations/${doc.id}`, doc.data()]);
-    return JSON.stringify(rows.sort((a, b) => a[0].localeCompare(b[0])));
+    return { rows: JSON.stringify(rows.sort((a, b) => a[0].localeCompare(b[0]))), operationCount: operations.size };
   };
   const original = context.db.runTransaction.bind(context.db);
   if (worker) {
@@ -82,8 +88,9 @@ try {
     const beforeStop = await snapshot();
     child.send?.('stop');
     const secondStopped = await stopped;
-    const unchangedAfterStop = beforeStop === await snapshot();
-    process.stdout.write(`${JSON.stringify({ ok: true, firstPrepared: prepared, secondCommitted: workerCommitted, firstObservedReceipt: receiptObserved, secondStopped, unchangedAfterStop, result })}\n`);
+    const afterStop = await snapshot();
+    const unchangedAfterStop = beforeStop.rows === afterStop.rows && beforeStop.operationCount === afterStop.operationCount;
+    process.stdout.write(`${JSON.stringify({ ok: true, firstPrepared: prepared, secondCommitted: workerCommitted, firstObservedReceipt: receiptObserved, secondStopped, unchangedAfterStop, operationCount: afterStop.operationCount, result })}\n`);
     finishedProof = true;
   }
 } catch (error) {

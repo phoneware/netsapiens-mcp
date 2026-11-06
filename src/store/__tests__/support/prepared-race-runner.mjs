@@ -10,10 +10,9 @@ try {
   const request = JSON.parse(readFileSync('/run/cutover/request.json', 'utf8'));
   if (request.action !== 'adopt' || request.options.dryRun !== false) throw new Error('Race runner requires commit');
   const original = context.db.runTransaction.bind(context.db);
-  let calls = 0;
   context.db.runTransaction = async (...args) => {
-    calls++;
-    if (calls === 2) {
+    const result = await original(...args);
+    if (!mutated && result?.dryRun === false && result?.isResume === false) {
       const ref = context.db.collection(`${context.namespace}_meta`).doc(`migration_prepared_${context.expectedEpoch}`);
       const prepared = (await ref.get()).data();
       if (!prepared?.candidateCommitments?.length) throw new Error('Expected a prepared candidate');
@@ -23,7 +22,7 @@ try {
       await ref.set({ candidateCommitments }, { merge: true });
       mutated = true;
     }
-    return original(...args);
+    return result;
   };
   await bundle.adoptFirestoreLegacyTokens({ ...context, dryRun: false, expectedSourceInventoryDigest: request.options.expectedSourceInventoryDigest });
   process.stdout.write(`${JSON.stringify({ ok: true, mutated })}\n`);

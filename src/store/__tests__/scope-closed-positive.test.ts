@@ -301,7 +301,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       const injection = variant === 'reordered'
         ? 'plan.items[0].prospectiveTargetPostimages.reverse();'
         : 'plan.items[0].prospectiveTargetPostimages[0].id = \"wrong-target-identity\";';
-      const mutant = Buffer.from(closedBundle.toString('utf8').replace(anchor, `${injection}\n    ${anchor}`), 'utf8');
+      const mutant = Buffer.from(closedBundle.toString('utf8').replace(anchor, `${anchor}\n    ${injection}`), 'utf8');
       const collectionGroups = scopeUnionUnchecked(NS);
       const fixture = fixtureFor({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, collectionGroups });
       admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
@@ -342,6 +342,8 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const raced = await runFactory(argvFor('adopt', NS, options));
     expect(raced.ok, raced.message).toBe(true);
     expect(raced).toMatchObject({ firstPrepared: true, secondCommitted: true, firstObservedReceipt: true, secondStopped: true, unchangedAfterStop: true });
+    const operations = await db.collection(`${NS}_meta`).doc('cutover_fence').collection('operations').get();
+    expect(raced.operationCount).toBe(operations.size);
     expect((await db.collection(`${NS}_retired_refresh`).doc('retired-proof').get()).data()).toEqual({ familyId: 'race-family' });
     const metadata = await db.collection(`${NS}_meta`).get();
     const receipts = metadata.docs.filter((doc) => doc.id.startsWith(`migration_receipt_${EPOCH}_`));
@@ -577,7 +579,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     mountFixture(fixture, 'adopt', options);
     writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'prepared-race-runner.mjs')));
     const result = await runFactory(argvFor('adopt', NS, options));
-    expect(result.mutated).toBe(true);
+    expect(result.mutated, result.message).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.message).toContain('Prepared manifest changed before item transaction');
     expect((await db.collection(`${NS}_tokens`).doc(source.accessToken).get()).data()).toEqual(source);

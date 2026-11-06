@@ -351,7 +351,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     expect(finalRecord?.migrationManifestDigest).toBeDefined();
 
     await expect(transitionCutoverFenceState(fence(db), NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }))
-      .rejects.toThrow(/cannot transition from v3_ready to legacy_open/);
+      .rejects.toThrow(/Illegal cutover state transition/);
 
     const activated = await step('activate', { migrationManifestDigest: finalRecord!.migrationManifestDigest! });
     expect(activated.ok, `activation refused: ${activated.message}`).toBe(true);
