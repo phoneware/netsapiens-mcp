@@ -1,0 +1,19 @@
+name: Bridge isolated fake proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fake-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Check canonical source lock
+        run: npm run check:cutover
+      - name: Exercise bridge with fake Firestore and mocked provider, without network
+        run: sudo unshare --net -- ./node_modules/.bin/vitest run src/auth/__tests__/bound-transport-regression.test.ts
