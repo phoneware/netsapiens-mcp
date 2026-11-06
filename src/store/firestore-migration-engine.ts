@@ -66,6 +66,7 @@ import {
   validateMigrationIdentityFields,
 } from '../cutover/canonical-core.mjs';
 import * as canonicalCoreVerify from '../cutover/canonical-core.mjs';
+import type { PreparationIdentityExpectation } from '../cutover/canonical-core.mjs';
 import type { FirestoreLike } from './firestore-like.js';
 import { assertCredentialUnchanged, assertProtectedContext, getProtectedBinding } from './protected-binding.js';
 import { assertActivationObservation, assertPreparationObservation } from './fresh-index-observation.js';
@@ -131,19 +132,7 @@ function prospectiveWrites(
 // Preparation snapshot. The complete plan, the expected identity, the signed index manifest
 // and the authenticated binding must describe one snapshot before any write is budgeted.
 // Nothing here reads the request. Any mismatch refuses; nothing is repaired.
-export interface PreparationIdentity {
-  readonly namespace: string;
-  readonly epoch: number;
-  readonly migrationRunId: string;
-  readonly codeSha: string;
-  readonly codeArtifact: string;
-  readonly packageIntegrity: string;
-  readonly protocolDigest: string;
-  readonly assemblyDigest: string;
-  readonly indexSchemaDigest: string;
-  readonly indexPolicyDigest: string;
-  readonly encoderVersion: number;
-}
+export type PreparationIdentity = PreparationIdentityExpectation;
 
 export interface PreparationInputs {
   readonly completePlan: Parameters<typeof prospectiveWrites>[1];
@@ -1730,7 +1719,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       now: Date.now(),
     });
 
-    timer.assertUnderDeadline(16_000, 'Preflight scan');
+    timer.assertUnderDeadline('Preflight scan');
 
     const targetDocMapById = new Map<string, any>();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
@@ -2018,7 +2007,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
       packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
-    timer.assertUnderDeadline(16_000, 'Preparation observation scan');
+    timer.assertUnderDeadline('Preparation observation scan');
     if (inputs.sourceInventoryDigest !== expectedSourceInventoryDigest) {
       throw new CutoverFenceError(`Source inventory digest mismatch: expected ${expectedSourceInventoryDigest}, observed ${inputs.sourceInventoryDigest}`);
     }
@@ -2086,7 +2075,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError('prepDoc.planDigest does not match computePlanDigest(prepDoc.planSpec)');
       }
 
-      timer.assertUnderDeadline(16_000, 'Preparation resume check');
+      timer.assertUnderDeadline('Preparation resume check');
       return {
         dryRun: false,
         isResume: true,
@@ -2108,17 +2097,18 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     if ((await transaction.get(existingPreparedRef)).exists) {
       throw new CutoverFenceError(`Inconsistent state: prepared manifest exists while cutover state is 'fenced' for namespace ${namespace}`);
     }
-    timer.assertUnderDeadline(16_000, 'Fenced prepared check');
+    timer.assertUnderDeadline('Fenced prepared check');
 
 
     const { candidates, sourceInventoryDigest, plan } = await readPreparationInputs(transaction, {
       db, namespace, epoch: control.epoch, storeKey, FieldPath, migrationRunId, codeSha, codeArtifact,
       packageIntegrity, protocolDigest, assemblyDigest, indexSchemaDigest,
     });
-    timer.assertUnderDeadline(16_000, 'Preparation source scan');
+    timer.assertUnderDeadline('Preparation source scan');
 
     const preparationBinding = getProtectedBinding(db);
     if (!preparationBinding) throw new CutoverRefusedError('Protected migration context required for preparation');
+    assertSupportedCutoverNamespace(preparationBinding.namespace);
     // Every identity field comes from the authenticated binding. The gate compares the prepared plan against it.
     const preparationIdentity: PreparationIdentity = {
       namespace: preparationBinding.namespace,
@@ -2142,7 +2132,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     const totalErrors = Object.values(plan.prepared.reasons || {}).reduce((a: number, b: any) => a + (typeof b === 'number' ? b : 0), 0);
 
     if (dryRun) {
-      timer.assertUnderDeadline(16_000, 'Dry run inspection');
+      timer.assertUnderDeadline('Dry run inspection');
       if (totalErrors === 0) {
         assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
       }
@@ -2161,7 +2151,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       );
     }
 
-    timer.assertUnderDeadline(16_000, 'Preparation attempt');
+    timer.assertUnderDeadline('Preparation attempt');
 
     // Write prepared manifest + transition control to migrating
     assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });
@@ -2182,7 +2172,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       },
     });
 
-    timer.assertUnderDeadline(16_000, 'Preparation commit');
+    timer.assertUnderDeadline('Preparation commit');
 
     return {
       dryRun: false,
@@ -2338,12 +2328,15 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
     clients: `${namespace}_clients`,
   };
 
+  const expectedPreparedDigest = D('prepared', namespace, expectedEpoch, prepared);
+
   // Phase 2: Execute each item in its own atomic transaction with exact receipt and latch
   for (const c of candidates) {
     const itemResult = await db.runTransaction(async (transaction: any) => {
       const timer = startMonotonicTimer();
       assertCredentialUnchanged(db);
       const control = await readCutoverFenceInTransaction(transaction, db, namespace);
+      if (control.epoch !== expectedEpoch) throw new CutoverFenceError('Migration epoch changed before item transaction');
       if (control.state !== 'migrating') {
         throw new CutoverFenceError(`Cannot execute item: state must be 'migrating', got '${control.state}'`);
       }
@@ -2358,18 +2351,22 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         throw new CutoverFenceError(`Prepared manifest missing in item transaction for namespace ${namespace}`);
       }
       const prepDoc = prepSnap.data();
+      validateMigrationIdentityFields(prepDoc, namespace, expectedEpoch, migrationRunId);
       if (prepDoc.migrationRunId !== migrationRunId || prepDoc.epoch !== control.epoch) {
         throw new CutoverFenceError('migration_prepared identity mismatch in item transaction');
       }
       if (prepDoc.codeSha !== codeSha || prepDoc.codeArtifact !== codeArtifact || prepDoc.protocolDigest !== protocolDigest) {
         throw new CutoverFenceError('migration_prepared provenance mismatch in item transaction');
       }
-      if (control.preparedManifestDigest && D('prepared', namespace, control.epoch, prepDoc) !== control.preparedManifestDigest) {
-        throw new CutoverFenceError('migration_prepared digest mismatch with control preparedManifestDigest');
+      if (D('prepared', namespace, control.epoch, prepDoc) !== expectedPreparedDigest) {
+        throw new CutoverFenceError('Prepared manifest changed before item transaction');
       }
       const candidateCommitment = prepDoc.candidateCommitments?.find((item: any) => item.id === c.id);
       if (!candidateCommitment) {
         throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} not bound in prepared manifest commitments`);
+      }
+      if (!c.commitment || C(candidateCommitment) !== C(c.commitment)) {
+        throw new CutoverFenceError('Candidate commitment changed before item transaction');
       }
 
       // Check existing receipt (idempotency/restart) with postimage verification
@@ -2395,7 +2392,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
               }
             }
           }
-          timer.assertUnderDeadline(16_000, 'Item retry check');
+          timer.assertUnderDeadline('Item retry check');
           return { status: rData.disposition === 'retained' ? 'retained' : 'written' };
         }
       }
@@ -2480,7 +2477,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         }
       }
 
-      timer.assertUnderDeadline(16_000, 'Item transaction attempt');
+      timer.assertUnderDeadline('Item transaction attempt');
 
       // All transaction reads must precede any buffered writes or deletes
       if (!allTargetsAlreadyRetained && control.emptyNamespace !== true) {
@@ -2547,7 +2544,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       };
 
       transaction.set(receiptRef, receiptDoc);
-      timer.assertUnderDeadline(16_000, 'Item transaction commit');
+      timer.assertUnderDeadline('Item transaction commit');
       return { status: disposition };
     });
 
@@ -2697,7 +2694,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       adoptedAt: Date.now(),
     };
 
-    timer.assertUnderDeadline(16_000, 'Finalization attempt');
+    timer.assertUnderDeadline('Finalization attempt');
 
     await finalizeMigrationInTransaction(transaction, db, {
       namespace,
@@ -2708,7 +2705,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       timer,
     });
 
-    timer.assertUnderDeadline(16_000, 'Finalization commit');
+    timer.assertUnderDeadline('Finalization commit');
   });
 
   return {
@@ -2741,7 +2738,7 @@ export async function verifyActiveFirestoreMigration(
       storeKey: context.key,
       timer,
     });
-    timer.assertUnderDeadline(16_000, 'Active ownership verification');
+    timer.assertUnderDeadline('Active ownership verification');
     return result;
   }, { readOnly: true });
 }
@@ -2818,7 +2815,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
       }
     }
 
-    timer.assertUnderDeadline(16_000, 'Activation attempt');
+    timer.assertUnderDeadline('Activation attempt');
 
     const res = await activateMigrationInTransaction(transaction, db, {
       ...context,
@@ -2826,7 +2823,7 @@ export async function activateFirestoreMigration(context: MigrationContext & { m
       migrationManifestDigest,
       timer,
     });
-    timer.assertUnderDeadline(16_000, 'Activation commit');
+    timer.assertUnderDeadline('Activation commit');
 
     return {
       status: res.status,
@@ -2913,7 +2910,7 @@ export async function getFirestoreMigrationStatus(context: MigrationContext): Pr
       }
     }
 
-    timer.assertUnderDeadline(16_000, 'Status check');
+    timer.assertUnderDeadline('Status check');
 
     return {
       state: control.state,

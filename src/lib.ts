@@ -49,6 +49,8 @@ export {
   CutoverRefusedError,
 } from './store/firestore-v2-adoption.js';
 export { deriveStoreKey, StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError, StoreUnavailableError } from './store/codec.js';
+export { startMonotonicTimer, getCutoverFenceDocRef, getCutoverOperationsColRef } from './cutover/canonical-core.mjs';
+export type { FirestoreLike, TransactionLike, DocumentReferenceLike, QueryLike } from './store/firestore-like.js';
 
 // Types
 export type {

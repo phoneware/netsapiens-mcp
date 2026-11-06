@@ -1943,7 +1943,7 @@ export async function withLegacyOperation(options, fn) {
         if (key === 'revision' || key === 'phase') {
           if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
             throw new CutoverFenceError('Invalid operation metadata');
-        }
+          }
           metadata[key + 'Fingerprint'] = createHmac('sha256', deriveKey(options.identityKey))
             .update(JSON.stringify(['netsapiens-mcp/operation-metadata', 1, options.namespace, key, value]), 'utf8').digest('hex');
         } else if (key === 'attempt' && Number.isSafeInteger(value) && value >= 1 && value <= 100) {
@@ -2290,7 +2290,10 @@ export async function checkMutationGuardInTransaction(transaction, options) {
   if (opRecord.phase === 'upstream_pending') {
     const claim = options.pendingClaim;
     if (!claim || claim.operationId !== options.operation.id || claim.storageId !== options.operation.storageId ||
-      claim.familyId !== opRecord.familyId || typeof claim.claimOwner !== 'string' ||
+      claim.familyId !== opRecord.familyId || typeof claim.claimOwner !== 'string' || !claim.claimOwner ||
+      operationStorageId(options.namespace, options.operation.id, options.identityKey) !== options.operation.storageId ||
+      operationKeyCheck(options.namespace, options.identityKey) !== options.operation.identityKeyCheck ||
+      claimOwnerStorageId(options.namespace, claim.claimOwner, options.identityKey) !== claim.ownerStorageId ||
       !Number.isSafeInteger(claim.familyGeneration) || !Number.isSafeInteger(claim.grantVersion) ||
       !Number.isSafeInteger(claim.leaseExpiresAt) || opRecord.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError('A matching pending claim is required for grant completion');
@@ -2585,7 +2588,6 @@ export async function claimUpstreamGrantInTransaction(transaction, db, options) 
       familyGeneration: expectedFamilyGeneration,
       grantVersion: expectedGrantVersion,
       claimedAt: now,
-      updatedAt: now,
     }),
     { merge: true },
   );
@@ -3237,8 +3239,8 @@ export async function prepareMigrationInTransaction(transaction, db, options) {
     }
 
     const codec = createCodec(options.storeKey);
-  // In-memory subject policy from the verified binding only; it never leaves this transaction.
-  const subject = subjectSpecFor(options.protectedBinding.subjectDescriptor, namespace, options.storeKey);
+    // In-memory subject policy from the verified binding only; it never leaves this transaction.
+    const subject = subjectSpecFor(options.protectedBinding.subjectDescriptor, namespace, options.storeKey);
 
     for (const c of prepDoc.candidateCommitments) {
       const sourcesMap = new Map();
@@ -4619,21 +4621,35 @@ const GOVERNANCE_PWMCP_COLLECTIONS = Object.freeze([
 // Sibling writers found by the focused census (code paths only). `migrated` marks a credential collection
 // the migration also covers. Recorded for policy contention; not migration candidates.
 const SIBLING_WRITERS = Object.freeze([
-  { file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_tokens', mode: 'batch.delete', migrated: true,
-    note: 'seat revocation deletes migrated token rows directly; must route through the canonical guard' },
-  { file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_tokens', mode: 'scanSeatCredentials then transaction.delete of access, refresh, family and upstream refs', migrated: true,
-    note: 'seat revocation deletes migrated credential refs inside the admitted or pre-fence transaction. Bound at PR2457 5c8a9f3d8 (source evidence, no runtime proof): pwmcp_tokens, pwmcp_tokens_refresh, pwmcp_tokens_refresh_families, pwmcp_tokens_upstream, all in the pwmcp migration registry' },
-  { file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_seat_cleanup_state', mode: 'drain cursor and bounded-operation state (set and get)', migrated: false,
-    note: 'governance-owned via SERVICE_OWNED_COLLECTIONS.seatCleanupState at consumer b7602f8cb; holds no seat, key or credential rows' },
-  { file: 'apps/recording-notice/server/src/firestore-store.ts', collection: 'rn_usage', mode: 'set on usage doc ${domain}__${month}', migrated: false,
-    note: 'shares the GCP project (var.project_id) and the default database with the fenced pwmcp namespaces; client has no explicit project or database, and edge-recording-notice sets GOOGLE_CLOUD_PROJECT to var.project_id (recording-notice.tf)' },
-  { file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_seat_cleanup', mode: 'transaction.set; reads and deletes in the revoke path', migrated: false,
-    note: 'consumer cleanup/audit outbox written inside seat revocation; outside the migration census' },
+  {
+    file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_tokens', mode: 'batch.delete', migrated: true,
+    note: 'seat revocation deletes migrated token rows directly; must route through the canonical guard'
+  },
+  {
+    file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_tokens', mode: 'scanSeatCredentials then transaction.delete of access, refresh, family and upstream refs', migrated: true,
+    note: 'seat revocation deletes migrated credential refs inside the admitted or pre-fence transaction. Bound at PR2457 5c8a9f3d8 (source evidence, no runtime proof): pwmcp_tokens, pwmcp_tokens_refresh, pwmcp_tokens_refresh_families, pwmcp_tokens_upstream, all in the pwmcp migration registry'
+  },
+  {
+    file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_seat_cleanup_state', mode: 'drain cursor and bounded-operation state (set and get)', migrated: false,
+    note: 'governance-owned via SERVICE_OWNED_COLLECTIONS.seatCleanupState at consumer b7602f8cb; holds no seat, key or credential rows'
+  },
+  {
+    file: 'apps/recording-notice/server/src/firestore-store.ts', collection: 'rn_usage', mode: 'set on usage doc ${domain}__${month}', migrated: false,
+    note: 'shares the GCP project (var.project_id) and the default database with the fenced pwmcp namespaces; client has no explicit project or database, and edge-recording-notice sets GOOGLE_CLOUD_PROJECT to var.project_id (recording-notice.tf)'
+  },
+  {
+    file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_seat_cleanup', mode: 'transaction.set; reads and deletes in the revoke path', migrated: false,
+    note: 'consumer cleanup/audit outbox written inside seat revocation; outside the migration census'
+  },
   { file: 'packages/mcp-governance/src/stores/seat-store.ts', collection: 'pwmcp_seat_keys', mode: 'create|set|batch.delete', migrated: false, note: '' },
-  { file: 'services/phoneware-mcp/src/http/server.ts', collection: 'pwmcp_resume_tokens', mode: 'provider-config', migrated: true,
-    note: 'named as the OAuth provider resume store; writes depend on the provider fence config' },
-  { file: 'services/sso/src/links/store.ts', collection: 'pwmcp_login_links', mode: 'via @phoneware/mcp-governance FirestoreLoginLinkStore', migrated: false,
-    note: 'SSO sibling writer; policy contention only' },
+  {
+    file: 'services/phoneware-mcp/src/http/server.ts', collection: 'pwmcp_resume_tokens', mode: 'provider-config', migrated: true,
+    note: 'named as the OAuth provider resume store; writes depend on the provider fence config'
+  },
+  {
+    file: 'services/sso/src/links/store.ts', collection: 'pwmcp_login_links', mode: 'via @phoneware/mcp-governance FirestoreLoginLinkStore', migrated: false,
+    note: 'SSO sibling writer; policy contention only'
+  },
   { file: 'apps/lens/proof/services.mjs', collection: 'pwmcp_seats', mode: 'proof harness', migrated: false, note: 'test-data writer; subject to safe-testing rule' },
 ]);
 

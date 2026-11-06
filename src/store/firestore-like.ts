@@ -1,45 +1,50 @@
-// The Firestore surface this store uses, declared without importing the SDK. Import-free by design: the
-// protected assembly's type check reads this file, so it must never pull in the SDK, the store, or the auth
-// modules. Type-only.
+export type DocumentDataLike = Record<string, unknown>;
+
+export type WhereFilterOpLike =
+  | '<' | '<=' | '==' | '!=' | '>=' | '>'
+  | 'array-contains' | 'in' | 'not-in' | 'array-contains-any';
 
 export interface DocumentSnapshotLike {
   readonly id: string;
   readonly exists: boolean;
-  data(): Record<string, unknown> | undefined;
+  data(): DocumentDataLike | undefined;
+}
+export interface QueryDocumentSnapshotLike extends DocumentSnapshotLike {
+  data(): DocumentDataLike;
 }
 export interface QuerySnapshotLike {
   readonly empty: boolean;
-  readonly docs: DocumentSnapshotLike[];
+  readonly size: number;
+  readonly docs: QueryDocumentSnapshotLike[];
 }
 export interface DocumentReferenceLike {
   readonly id: string;
   get(): Promise<DocumentSnapshotLike>;
-  set(data: Record<string, unknown>, options?: { merge?: boolean }): Promise<unknown>;
+  set(data: DocumentDataLike, options?: { merge?: boolean }): Promise<unknown>;
   delete(): Promise<unknown>;
-  collection?(path: string): CollectionLike;
+  collection(path: string): CollectionLike;
 }
 export interface QueryLike {
   get(): Promise<QuerySnapshotLike>;
   limit(count: number): QueryLike;
-  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt(...fieldValues: any[]): QueryLike;
-  endBefore(...fieldValues: any[]): QueryLike;
-  where(field: string, op: any, value: any): QueryLike;
+  orderBy(field: unknown, direction?: 'asc' | 'desc'): QueryLike;
+  where(field: string, op: WhereFilterOpLike, value: unknown): QueryLike;
+  startAt(...values: unknown[]): QueryLike;
+  endBefore(...values: unknown[]): QueryLike;
 }
 export interface CollectionLike extends QueryLike {
   doc(id: string): DocumentReferenceLike;
-  where(field: string, op: any, value: any): QueryLike;
-  orderBy(field: any, directionStr?: 'asc' | 'desc'): QueryLike;
-  startAt(...fieldValues: any[]): QueryLike;
-  endBefore(...fieldValues: any[]): QueryLike;
 }
 export interface TransactionLike {
-  get(ref: DocumentReferenceLike | QueryLike): Promise<any>;
-  set(ref: DocumentReferenceLike, data: Record<string, unknown>, options?: { merge?: boolean }): unknown;
+  get(ref: DocumentReferenceLike): Promise<DocumentSnapshotLike>;
+  get(query: QueryLike): Promise<QuerySnapshotLike>;
+  set(ref: DocumentReferenceLike, data: DocumentDataLike, options?: { merge?: boolean }): unknown;
   delete(ref: DocumentReferenceLike): unknown;
 }
 export interface FirestoreLike {
   collection(path: string): CollectionLike;
-  // readOnly transactions take no write locks. Inspect, verify and status use them.
-  runTransaction<T>(callback: (tx: TransactionLike) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
+  runTransaction<T>(callback: (transaction: TransactionLike) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
+}
+export interface FieldPathAdapter {
+  documentId(): unknown;
 }

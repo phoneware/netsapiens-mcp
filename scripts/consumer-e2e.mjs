@@ -37,6 +37,8 @@ function parseArgs() {
   let coldRegistry = null;
   let legs = null;
   let firestoreMajor = '8';
+  let bridgeTarball = null;
+  let canonicalTarball = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -50,8 +52,12 @@ function parseArgs() {
       legs = args[++i];
     } else if (arg === '--firestore-major') {
       firestoreMajor = args[++i];
+    } else if (arg === '--bridge-tarball') {
+      bridgeTarball = args[++i];
+    } else if (arg === '--canonical-tarball') {
+      canonicalTarball = args[++i];
     } else if (arg === '-h' || arg === '--help') {
-      console.log('Usage: node scripts/consumer-e2e.mjs (--tarball <path> | --registry <version>) [--legs <csv>] [--firestore-major 7|8|9]');
+      console.log('Usage: node scripts/consumer-e2e.mjs (--tarball <path> | --registry <version>) [--legs <csv>] [--firestore-major 7|8|9] [--bridge-tarball <path> --canonical-tarball <path>]');
       process.exit(0);
     }
   }
@@ -67,12 +73,17 @@ function parseArgs() {
     ? legs.split(',').map((s) => s.trim().toLowerCase())
     : ['install', 'config', 'sqlite', 'memory', 'version', 'library'];
 
+  if (selectedLegs.includes('cutover-interop') && (!tarball || !bridgeTarball || !canonicalTarball)) {
+    throw new Error('cutover-interop requires --tarball, --bridge-tarball, and --canonical-tarball');
+  }
   return {
     tarball: tarball ? path.resolve(process.cwd(), tarball) : null,
     registry,
     coldRegistry,
     legs: selectedLegs,
     firestoreMajor,
+    bridgeTarball: bridgeTarball ? path.resolve(process.cwd(), bridgeTarball) : null,
+    canonicalTarball: canonicalTarball ? path.resolve(process.cwd(), canonicalTarball) : null,
   };
 }
 
@@ -321,7 +332,8 @@ async function main() {
   try {
     if (!coldPackage) {
     execSync('npm init -y', { cwd: tempDir, stdio: 'pipe' });
-    execSync(`npm i --legacy-peer-deps ${targetPkg}`, { cwd: tempDir, stdio: 'pipe' });
+      const install = await runCommand('npm', ['install', '--legacy-peer-deps', targetPkg], { cwd: tempDir });
+      if (install.status !== 0) throw new Error(`Consumer install failed:\n${install.stdout}\n${install.stderr}`);
     }
 
     // -------------------------------------------------------------------------
@@ -1180,6 +1192,61 @@ void dummyStore;
         fail('library', 'consumer-typecheck', `tsc --noEmit failed (${tscRes.status}):\n${tscRes.stdout}\n${tscRes.stderr}`);
       }
       pass('library', 'consumer-typecheck');
+
+      fs.writeFileSync(path.join(tempDir, 'firestore-types.ts'), `
+import { Firestore, type Transaction, type DocumentReference, type CollectionReference } from '@google-cloud/firestore';
+import {
+    getCutoverFenceDocRef, getCutoverOperationDocRef, getCutoverOperationsColRef,
+    checkMutationGuardInTransaction, startMonotonicTimer,
+    type FirestoreLike, type TransactionLike, type LegacyOperationContext,
+} from 'netsapiens-mcp/lib';
+declare const native: Firestore;
+declare const nativeTransaction: Transaction;
+declare const operation: LegacyOperationContext;
+const structural: FirestoreLike = native;
+const transaction: TransactionLike = nativeTransaction;
+const control: DocumentReference = getCutoverFenceDocRef(native, 'mcp');
+const operationRef: DocumentReference = getCutoverOperationDocRef(native, 'mcp', 'caller', new Uint8Array(32));
+const operations: CollectionReference = getCutoverOperationsColRef(native, 'mcp');
+void checkMutationGuardInTransaction(transaction, { db: structural, namespace: 'mcp', operation, timer: startMonotonicTimer() });
+void [control, operationRef, operations];
+`);
+      for (const version of ['7.11.0', '8.6.0', '9.0.0']) {
+        execSync(`npm i --legacy-peer-deps --no-save @google-cloud/firestore@${version}`, { cwd: tempDir, stdio: 'pipe' });
+        const sdkTypecheck = await runCommand('npx', ['tsc', '--noEmit'], { cwd: tempDir });
+        if (sdkTypecheck.status !== 0) {
+          fail('library', `firestore-${version}-typecheck`, `${sdkTypecheck.stdout}\n${sdkTypecheck.stderr}`);
+        }
+        pass('library', `firestore-${version}-typecheck`);
+      }
+    }
+    if (opts.legs.includes('cutover-interop')) {
+      console.log('Running leg: cutover-interop');
+      const revisions = {
+        migration: process.env.CUTOVER_MIGRATION_REVISION,
+        bridge: process.env.CUTOVER_BRIDGE_REVISION,
+        canonical: process.env.CUTOVER_CANONICAL_REVISION,
+      };
+      for (const [name, revision] of Object.entries(revisions)) {
+        if (!/^[0-9a-f]{40}$/.test(revision ?? '')) throw new Error(`CUTOVER_${name.toUpperCase()}_REVISION must be a full source commit SHA`);
+      }
+      for (const [name, tarball] of Object.entries({ migration: opts.tarball, bridge: opts.bridgeTarball, canonical: opts.canonicalTarball })) {
+        const digest = createHash('sha256').update(fs.readFileSync(tarball)).digest('hex');
+        console.log(`cutover-interop ${name} declared-revision=${revisions[name]} tarball-sha256=${digest}`);
+      }
+      const bridgeRoot = path.join(tempDir, 'bridge-consumer');
+      const canonicalRoot = path.join(tempDir, 'canonical-consumer');
+      for (const [root, tarball] of [[bridgeRoot, opts.bridgeTarball], [canonicalRoot, opts.canonicalTarball]]) {
+        fs.mkdirSync(root);
+        fs.writeFileSync(path.join(root, 'package.json'), '{"private":true,"type":"module"}\n');
+        const result = await runCommand('npm', ['install', '--legacy-peer-deps', tarball], { cwd: root });
+        if (result.status !== 0) throw new Error(`Interop install failed:\n${result.stdout}\n${result.stderr}`);
+      }
+      const firestore = await runCommand('npm', ['install', '--legacy-peer-deps', '--no-save', '@google-cloud/firestore@8.6.0'], { cwd: tempDir });
+      if (firestore.status !== 0) throw new Error(`Firestore install failed:\n${firestore.stdout}\n${firestore.stderr}`);
+      const { runCutoverInterop } = await import('./cutover-interop.mjs');
+      await runCutoverInterop({ migrationRoot: tempDir, bridgeRoot, canonicalRoot });
+      pass('cutover-interop', 'three-packed-runtimes');
     }
 
   } finally {
