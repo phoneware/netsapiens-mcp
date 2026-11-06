@@ -125,7 +125,8 @@ export function buildSourceProjectionMap(candidate, entries, codec) {
     const clients = entries.filter((entry) => entry.collection === 'clients' || entry.collection === 'oauthClients');
     if (clients.length < 1 || clients.length > 2 || new Set(clients.map((entry) => entry.collection)).size !== clients.length) throw new CutoverFenceError('Invalid client source cardinality');
     for (const entry of clients) {
-      if (entry.physicalId !== clients[0].physicalId || (entry.data.client_id !== undefined && entry.data.client_id !== entry.physicalId)) throw new CutoverFenceError('Source client identity mismatch');
+      if (entry.physicalId !== clients[0].physicalId || (entry.data.client_id !== undefined && entry.data.client_id !== entry.physicalId) ||
+        (entry.data.clientId !== undefined && entry.data.clientId !== entry.physicalId)) throw new CutoverFenceError('Source client identity mismatch');
     }
     const projected = clients.map((entry) => projectSourceLogical(candidate, new Map([['clients', projectionEntry(entry, entry.physicalId)]]), codec, null));
     if (projected.length === 2 && JSON.stringify(projected[0]) !== JSON.stringify(projected[1])) throw new CutoverFenceError('Conflicting client logical projections');
@@ -145,12 +146,13 @@ export function buildSourceProjectionMap(candidate, entries, codec) {
   return roles;
 }
 
-export function buildTargetProjectionMap(candidate, entries) {
+export function buildTargetProjectionMap(candidate, entries, options = {}) {
   assertEntrySet(entries);
   const roles = new Map();
   const consumed = new Set();
   const use = (role, entry) => {
     if (roles.has(role) || consumed.has(entry)) throw new CutoverFenceError('Duplicate target projection role');
+    if (options.requireIds && entry.collection !== 'oauthClients' && entry.data.id !== entry.physicalId) throw new CutoverFenceError('Prospective target identity is missing or mismatched');
     if (entry.data.id !== undefined && entry.data.id !== entry.physicalId) throw new CutoverFenceError('Target document identity mismatch');
     roles.set(role, projectionEntry(entry, entry.physicalId));
     consumed.add(entry);
@@ -171,6 +173,7 @@ export function buildTargetProjectionMap(candidate, entries) {
     }
     if (!roles.has('activeRefresh')) throw new CutoverFenceError('Target active refresh is missing');
     const retired = entriesFor(entries, 'retiredRefreshTokens');
+    if (candidate.kind === 'baseFormatTokens' && (roles.has('prevRefresh') || retired.length)) throw new CutoverFenceError('Base target graph contains extra refresh roles');
     for (const entry of retired) {
       if (entry.data.familyId !== family.physicalId || (entry.data.id !== undefined && entry.data.id !== entry.physicalId) ||
         (entry.data.retiredAt !== undefined && (!Number.isSafeInteger(entry.data.retiredAt) || entry.data.retiredAt <= 0))) {
@@ -183,7 +186,8 @@ export function buildTargetProjectionMap(candidate, entries) {
     const collection = candidate.kind === 'clients' ? 'oauthClients' : candidate.kind === 'authCodes' ? 'authCodes' : candidate.kind === 'resumeTokens' ? 'resumeTokens' : null;
     if (!collection) throw new CutoverFenceError('Unsupported target projection kind');
     const entry = singleEntry(entries, collection);
-    if (collection === 'oauthClients' && entry.data.client_id !== entry.physicalId) throw new CutoverFenceError('Target client identity mismatch');
+    if (collection === 'oauthClients' && (entry.data.client_id !== entry.physicalId ||
+      (entry.data.clientId !== undefined && entry.data.clientId !== entry.physicalId))) throw new CutoverFenceError('Target client identity mismatch');
     use(collection === 'oauthClients' ? 'clients' : collection, entry);
   }
   if (consumed.size !== entries.length) throw new CutoverFenceError('Unexpected target projection entry');
