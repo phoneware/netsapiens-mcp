@@ -21,7 +21,10 @@ const mutations = {
     ['validateMigrationIdentityFields(m, namespace, expectedEpoch, migrationRunId);', 'void m;'],
     ['if (f[k] !== p[k] || m[k] !== p[k]) {', 'if (f[k] !== p[k]) {'],
   ],
-  'unexpected-target': [['if (!expectedWrittenTargets.has(targetKey)) {', 'if (false) {']],
+  'unexpected-target': [[
+    'if (!expectedWrittenTargets.has(targetKey)) {\n      throw new CutoverFenceError(`Cannot activate: extra target document',
+    'if (false) {\n      throw new CutoverFenceError(`Cannot activate: extra target document',
+  ]],
   'finalization-latch': [['if (markerDoc.emptyNamespace !== true && !control.irreversible) {', 'if (false) {']],
 };
 if (!Object.hasOwn(mutations, mutation)) throw new Error('Unknown proof mutation');
