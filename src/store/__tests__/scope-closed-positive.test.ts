@@ -363,7 +363,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     await resetFencedNamespace(db, NS);
     const now = Date.now();
     const resumeId = 'legacy-resume-only';
-    await seedDocs(db, [[`${NS}_resume_tokens/${resumeId}`, { consumedAt: now, expiresAt: now + 60000 }]]);
+    await seedDocs(db, [[`${NS}_resume_tokens/${resumeId}`, { consumedAt: now, expiresAt: now + 60000, ttlAt: new Date(now + 60000) }]]);
     const collectionGroups = scopeUnionUnchecked(NS);
     const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
     admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
