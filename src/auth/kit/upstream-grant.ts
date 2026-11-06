@@ -57,9 +57,38 @@ export interface StoredUpstreamRecord<G> {
 }
 
 export function assertGrantNotPending(record: StoredUpstreamRecord<unknown> | undefined): void {
-  if (record?.leaseOwner || record?.leaseUntil || record?.leaseExpiresAt || record?.operationId || record?.ambiguousOutcome || record?.ambiguousRemoteOutcome || record?.ambiguousOperationId) {
+  if (record && (record.leaseOwner != null || record.leaseUntil != null || record.leaseExpiresAt != null ||
+    record.operationId != null || record.ambiguousOperationId != null || record.ambiguousOutcome || record.ambiguousRemoteOutcome)) {
     throw new UpstreamUnavailableError('Upstream grant has a pending or ambiguous claim');
   }
+}
+
+function mergedGrantValue(previous: unknown, patch: unknown): unknown {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || patch instanceof Date) return patch;
+  const entries = Object.entries(patch);
+  if (!entries.length) return {};
+  const base = previous && typeof previous === 'object' && !Array.isArray(previous) && !(previous instanceof Date)
+    ? { ...previous } : {};
+  for (const [key, value] of entries) {
+    if (value !== undefined) {
+      const existing = Object.prototype.hasOwnProperty.call(base, key)
+        ? (base as Record<string, unknown>)[key] : undefined;
+      (base as Record<string, unknown>)[key] = mergedGrantValue(existing, value);
+    }
+  }
+  return base;
+}
+
+/** Keep the version stable for an identical grant and advance it for replacement. */
+export function nextGrantVersion<G>(current: StoredUpstreamRecord<G> | undefined, grant: G): number {
+  const previous = current?.grantVersion ?? current?.version ?? 1;
+  if (!Number.isSafeInteger(previous) || previous < 1) throw new CutoverFenceError('Upstream grant version is invalid');
+  const changed = current !== undefined &&
+    canonicalJsonStringify(stripUndefined(current.grant)) !==
+    canonicalJsonStringify(mergedGrantValue(current.grant, stripUndefined(grant)));
+  const next = previous + (changed ? 1 : 0);
+  if (!Number.isSafeInteger(next)) throw new CutoverFenceError('Upstream grant version is invalid');
+  return next;
 }
 
 
@@ -221,13 +250,16 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           });
           guardResult = guard;
           const current = await transaction.get(docRef);
-          assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
+          const previous = current.data() as StoredUpstreamRecord<G> | undefined;
+          assertGrantNotPending(previous);
+          const grantVersion = nextGrantVersion(previous, grant);
           guard.bufferCompletion(this.nowProvider());
           transaction.set(
             docRef,
             stripUndefined({
               grant,
               expiresAt,
+              grantVersion,
               updatedAt: this.nowProvider(),
             }),
             { merge: true },
@@ -246,8 +278,10 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
 
     await this.db.runTransaction(async (transaction) => {
       const current = await transaction.get(docRef);
-      assertGrantNotPending(current.data() as StoredUpstreamRecord<G> | undefined);
-      transaction.set(docRef, stripUndefined({ grant, expiresAt, updatedAt: this.nowProvider() }), { merge: true });
+      const previous = current.data() as StoredUpstreamRecord<G> | undefined;
+      assertGrantNotPending(previous);
+      const grantVersion = nextGrantVersion(previous, grant);
+      transaction.set(docRef, stripUndefined({ grant, grantVersion, expiresAt, updatedAt: this.nowProvider() }), { merge: true });
     });
   }
 

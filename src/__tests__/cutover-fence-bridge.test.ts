@@ -211,6 +211,60 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(await snapshot()).toEqual(before);
   });
 
+  it('advances direct grant versions atomically and refuses an observed stale version', async () => {
+    const db = createTestDb();
+    const familyId = 'version-family';
+    const store = new FirestoreUpstreamGrantStore<{ token: string }>({ db, collection: 'mcp_tokens_upstream' });
+    await initializeCutoverFence(db, 'mcp');
+    await db.collection('mcp_tokens_refresh_families').doc(familyId).set({
+      id: familyId, generation: 1, currentRefreshToken: 'version-refresh',
+    });
+    await db.collection('mcp_tokens_refresh').doc('version-refresh').set({ familyId, status: 'active' });
+    await store.put(familyId, { token: 'one' });
+    expect((await store.get(familyId))?.grantVersion).toBe(1);
+    await store.put(familyId, { token: 'one' });
+    expect((await store.get(familyId))?.grantVersion).toBe(1);
+    await store.put(familyId, { token: 'two' });
+    const changed = await store.get(familyId);
+    expect(changed?.grantVersion).toBe(2);
+    await expect(withLegacyOperation({ db, namespace: 'mcp', kind: 'upstream_refresh' }, async (operation) => {
+      await db.runTransaction((transaction) => claimUpstreamGrantInTransaction(transaction, db, {
+        namespace: 'mcp', epoch: operation.epoch, familyId, operationId: operation.id,
+        identityKey: TEST_IDENTITY_KEY, claimOwner: randomUUID(), expectedFamilyGeneration: 1,
+        expectedGrantVersion: 1, expectedKind: operation.kind, timer: startMonotonicTimer(),
+      }));
+    })).rejects.toThrow();
+    expect(await store.get(familyId)).toEqual(changed);
+    await Promise.all([store.put(familyId, { token: 'three' }), store.put(familyId, { token: 'four' })]);
+    const concurrent = await store.get(familyId);
+    expect(concurrent?.grantVersion).toBe(4);
+    expect(['three', 'four']).toContain(concurrent?.grant.token);
+    await db.collection('mcp_tokens_upstream').doc(familyId).set({ leaseUntil: 0 }, { merge: true });
+    const held = await store.get(familyId);
+    await expect(store.put(familyId, { token: 'five' })).rejects.toBeInstanceOf(UpstreamUnavailableError);
+    expect(await store.get(familyId)).toEqual(held);
+  });
+
+  it('updates the upstream version only when token update changes its grant', async () => {
+    const db = createTestDb();
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens' });
+    const token = await store.issue({
+      accessToken: 'version-access', refreshToken: 'version-refresh', clientId: 'client',
+      expiresAt: Date.now() + 60_000, nsAccessToken: 'upstream-one', nsUsername: 'user',
+    });
+    const grantRef = store.upstreamDocRef(token.refreshFamilyId!);
+    expect((await grantRef.get()).data()?.grantVersion).toBe(1);
+    await store.update(token.accessToken, { nsAccessToken: 'upstream-one' });
+    expect((await grantRef.get()).data()?.grantVersion).toBe(1);
+    await store.update(token.accessToken, { nsAccessToken: 'upstream-two' });
+    expect((await grantRef.get()).data()?.grantVersion).toBe(2);
+    await Promise.all([
+      store.update(token.accessToken, { nsAccessToken: 'upstream-three' }),
+      store.update(token.accessToken, { nsAccessToken: 'upstream-four' }),
+    ]);
+    expect((await grantRef.get()).data()?.grantVersion).toBe(4);
+  });
+
 
   it('1. Fence closes before admission: no write or upstream call', async () => {
     const db = createTestDb();

@@ -19,7 +19,7 @@ import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshLookupResult, RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
+import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, nextGrantVersion, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { CutoverFenceError, UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
@@ -369,10 +369,26 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       if (typeof owner === 'string') families.add(owner);
      }
     }
+    const upstreamByFamily = new Map<string, StoredUpstreamRecord<NsUpstreamGrant> | undefined>();
     for (const familyId of families) {
      const upstreamSnap = await transaction.get(this.upstreamDocRef(familyId));
-     assertGrantNotPending(upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant> | undefined);
+     const upstream = upstreamSnap.data() as StoredUpstreamRecord<NsUpstreamGrant> | undefined;
+     assertGrantNotPending(upstream);
+     upstreamByFamily.set(familyId, upstream);
     }
+    const shouldWriteUpstream = updated.refreshFamilyId && (patch.nsAccessToken || patch.nsRefreshToken || patch.nsExpiresAt);
+    const grantPatch = stripUndefined({
+     nsAccessToken: updated.nsAccessToken,
+     nsRefreshToken: updated.nsRefreshToken,
+     nsExpiresAt: updated.nsExpiresAt,
+     nsUsername: updated.nsUsername,
+     nsUserRole: updated.nsUserRole,
+     nsApiUrl: updated.nsApiUrl,
+    });
+    const currentUpstream = updated.refreshFamilyId ? upstreamByFamily.get(updated.refreshFamilyId) : undefined;
+    const grantVersion = shouldWriteUpstream
+     ? nextGrantVersion(currentUpstream, { ...currentUpstream?.grant, ...grantPatch })
+     : undefined;
 
       guard?.bufferCompletion(now);
       transaction.set(accessRef, stripUndefined(cleanDoc(updated)), { merge: true });
@@ -389,17 +405,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         }));
       }
 
-      if (updated.refreshFamilyId && (patch.nsAccessToken || patch.nsRefreshToken || patch.nsExpiresAt)) {
+    if (updated.refreshFamilyId && shouldWriteUpstream) {
         const upstreamRef = this.upstreamDocRef(updated.refreshFamilyId);
         transaction.set(upstreamRef, stripUndefined({
-          grant: {
-            nsAccessToken: updated.nsAccessToken,
-            nsRefreshToken: updated.nsRefreshToken,
-            nsExpiresAt: updated.nsExpiresAt,
-            nsUsername: updated.nsUsername,
-            nsUserRole: updated.nsUserRole,
-            nsApiUrl: updated.nsApiUrl,
-          },
+      grant: grantPatch,
+      grantVersion,
           expiresAt: updated.nsExpiresAt,
           updatedAt: now,
         }), { merge: true });
