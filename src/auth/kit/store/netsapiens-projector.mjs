@@ -31,6 +31,154 @@ export { createCodec, accessAad, familyAad, upstreamAad, codeUnitCompare, Cutove
 export const PROJECTOR_ID = 'netsapiens-mcp/v2-v3-projector';
 export const PROJECTOR_VERSION = 1;
 
+// The identities here exist only in the transaction's snapshot, never in a manifest.
+function entriesFor(entries, collection) {
+  return entries.filter((entry) => entry.collection === collection);
+}
+function singleEntry(entries, collection) {
+  const found = entriesFor(entries, collection);
+  if (found.length !== 1) throw new CutoverFenceError(`Expected exactly one ${collection} source or target`);
+  return found[0];
+}
+function projectionEntry(entry, id) {
+  return { ...entry.data, physicalId: entry.physicalId, id };
+}
+function aliases(...values) {
+  const present = values.filter((value) => value !== undefined && value !== null);
+  if (present.some((value) => typeof value !== 'string' || value.length === 0) ||
+    present.some((value) => value !== present[0])) throw new CutoverFenceError('Conflicting or malformed credential identity');
+  return present[0];
+}
+function legacyPhysicalId(value) {
+  return value.replace(/\//g, '_').replace(/\./g, '_');
+}
+function requireCredential(entry, raw) {
+  if (typeof raw !== 'string' || !raw || legacyPhysicalId(raw) !== entry.physicalId) {
+    throw new CutoverFenceError('Legacy credential does not match its physical document identity');
+  }
+  return raw;
+}
+function assertEntrySet(entries) {
+  const keys = new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry.collection !== 'string' || typeof entry.physicalId !== 'string' ||
+      !entry.physicalId || !entry.data || typeof entry.data !== 'object' || Array.isArray(entry.data)) {
+      throw new CutoverFenceError('Malformed projection snapshot entry');
+    }
+    const key = JSON.stringify([entry.collection, entry.physicalId]);
+    if (keys.has(key)) throw new CutoverFenceError('Duplicate projection snapshot entry');
+    keys.add(key);
+  }
+}
+
+export function buildSourceProjectionMap(candidate, entries, codec) {
+  assertEntrySet(entries);
+  const roles = new Map();
+  const consumed = new Set();
+  const use = (role, entry, id) => {
+    if (roles.has(role) || consumed.has(entry)) throw new CutoverFenceError('Duplicate source projection role');
+    roles.set(role, projectionEntry(entry, id));
+    consumed.add(entry);
+  };
+  if (candidate.kind === 'pr56Families' || candidate.kind === 'baseFormatTokens') {
+    const access = singleEntry(entries, 'tokens');
+    const accessId = requireCredential(access, aliases(access.data.accessToken, access.data.token?.accessToken));
+    use('tokens', access, accessId);
+    let family;
+    if (candidate.kind === 'pr56Families') {
+      family = singleEntry(entries, 'families');
+      const upstream = singleEntry(entries, 'upstream');
+      if ((family.data.id !== undefined && family.data.id !== family.physicalId) || upstream.physicalId !== family.physicalId ||
+        (access.data.familyId != null && access.data.familyId !== family.physicalId) ||
+        (access.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId) ||
+        family.data.currentAccessToken !== accessId) throw new CutoverFenceError('Source family identity mismatch');
+      use('families', family, family.physicalId);
+      use('upstream', upstream, upstream.physicalId);
+    }
+    const activeId = family ? family.data.currentRefreshToken : aliases(access.data.refreshToken, access.data.token?.refreshToken);
+    if (typeof activeId !== 'string' || !activeId) throw new CutoverFenceError('Source refresh credential is missing');
+    const previousId = family?.data.previousRefreshToken;
+    if (previousId != null && (typeof previousId !== 'string' || !previousId || previousId === activeId)) {
+      throw new CutoverFenceError('Source previous refresh identity is invalid');
+    }
+    for (const entry of entriesFor(entries, 'refresh')) {
+      const linkedAccess = entry.data.accessToken;
+      const fromAccess = linkedAccess === accessId ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : undefined;
+      const raw = requireCredential(entry, aliases(entry.data.refreshToken, entry.data.token?.refreshToken) ?? fromAccess);
+      if (family && entry.data.familyId !== family.physicalId) throw new CutoverFenceError('Source refresh family mismatch');
+      if (raw === activeId && entry.data.status === 'active') use('refresh', entry, raw);
+      else if (family && raw === previousId && entry.data.status === 'consumed' && Number.isSafeInteger(entry.data.consumedAt)) use('prevRefresh', entry, raw);
+      else throw new CutoverFenceError('Source refresh role or status mismatch');
+    }
+    if (family && (!roles.has('refresh') || (!!previousId !== roles.has('prevRefresh')))) throw new CutoverFenceError('Source refresh role is missing');
+    if (!family && entriesFor(entries, 'refresh').length > 1) throw new CutoverFenceError('Duplicate base refresh pointer');
+  } else if (candidate.kind === 'clients') {
+    const clients = entries.filter((entry) => entry.collection === 'clients' || entry.collection === 'oauthClients');
+    if (clients.length < 1 || clients.length > 2 || new Set(clients.map((entry) => entry.collection)).size !== clients.length) throw new CutoverFenceError('Invalid client source cardinality');
+    for (const entry of clients) {
+      if (entry.physicalId !== clients[0].physicalId || (entry.data.client_id !== undefined && entry.data.client_id !== entry.physicalId)) throw new CutoverFenceError('Source client identity mismatch');
+    }
+    const projected = clients.map((entry) => projectSourceLogical(candidate, new Map([['clients', projectionEntry(entry, entry.physicalId)]]), codec, null));
+    if (projected.length === 2 && JSON.stringify(projected[0]) !== JSON.stringify(projected[1])) throw new CutoverFenceError('Conflicting client logical projections');
+    const selected = clients.find((entry) => entry.collection === 'oauthClients') ?? clients[0];
+    roles.set('clients', projectionEntry(selected, selected.physicalId));
+    for (const entry of clients) consumed.add(entry);
+  } else {
+    const collection = candidate.kind === 'authCodes' ? 'authCodes' : candidate.kind === 'resumeTokens' ? 'resumeTokens' : null;
+    if (!collection) throw new CutoverFenceError('Unsupported source projection kind');
+    const entry = singleEntry(entries, collection);
+    const raw = collection === 'authCodes' ? aliases(entry.data.code, entry.data.rawCode) : aliases(entry.data.token, entry.data.resumeToken);
+    if (raw !== undefined && raw !== entry.physicalId) throw new CutoverFenceError('Source document identity mismatch');
+    use(collection, entry, entry.physicalId);
+  }
+  if (consumed.size !== entries.length) throw new CutoverFenceError('Unexpected source projection entry');
+  return roles;
+}
+
+export function buildTargetProjectionMap(candidate, entries) {
+  assertEntrySet(entries);
+  const roles = new Map();
+  const consumed = new Set();
+  const use = (role, entry) => {
+    if (roles.has(role) || consumed.has(entry)) throw new CutoverFenceError('Duplicate target projection role');
+    if (entry.data.id !== undefined && entry.data.id !== entry.physicalId) throw new CutoverFenceError('Target document identity mismatch');
+    roles.set(role, projectionEntry(entry, entry.physicalId));
+    consumed.add(entry);
+  };
+  if (candidate.kind === 'pr56Families' || candidate.kind === 'baseFormatTokens') {
+    const family = singleEntry(entries, 'families');
+    const access = singleEntry(entries, 'tokens');
+    const upstream = singleEntry(entries, 'upstream');
+    if (upstream.physicalId !== family.physicalId || access.physicalId !== family.data.currentAccessTokenId ||
+      access.data.familyId !== family.physicalId) throw new CutoverFenceError('Target family identity mismatch');
+    use('families', family); use('tokens', access); use('upstream', upstream);
+    for (const entry of entriesFor(entries, 'refresh')) {
+      if (entry.data.familyId !== family.physicalId) throw new CutoverFenceError('Target refresh family mismatch');
+      if (entry.physicalId === family.data.activeRefreshId && entry.data.status === 'active') use('activeRefresh', entry);
+      else if (entry.data.status === 'consumed') use('prevRefresh', entry);
+      else throw new CutoverFenceError('Target refresh role or status mismatch');
+    }
+    if (!roles.has('activeRefresh')) throw new CutoverFenceError('Target active refresh is missing');
+    const retired = entriesFor(entries, 'retiredRefreshTokens');
+    for (const entry of retired) {
+      if (entry.data.familyId !== family.physicalId || (entry.data.id !== undefined && entry.data.id !== entry.physicalId) ||
+        (entry.data.retiredAt !== undefined && (!Number.isSafeInteger(entry.data.retiredAt) || entry.data.retiredAt <= 0))) {
+        throw new CutoverFenceError('Target retired refresh identity mismatch');
+      }
+      consumed.add(entry);
+    }
+    if (retired.length) roles.set('retiredRefresh', { ids: retired.map((entry) => entry.physicalId).sort(codeUnitCompare) });
+  } else {
+    const collection = candidate.kind === 'clients' ? 'oauthClients' : candidate.kind === 'authCodes' ? 'authCodes' : candidate.kind === 'resumeTokens' ? 'resumeTokens' : null;
+    if (!collection) throw new CutoverFenceError('Unsupported target projection kind');
+    const entry = singleEntry(entries, collection);
+    if (collection === 'oauthClients' && entry.data.client_id !== entry.physicalId) throw new CutoverFenceError('Target client identity mismatch');
+    use(collection === 'oauthClients' ? 'clients' : collection, entry);
+  }
+  if (consumed.size !== entries.length) throw new CutoverFenceError('Unexpected target projection entry');
+  return roles;
+}
+
 export function getTimestampMs(val) {
   if (val instanceof Date) {
     const ms = val.getTime();
