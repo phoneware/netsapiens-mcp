@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -22,6 +23,12 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
   process.env.MCP_SESSION_SECRET = secret;
   const key = canonical.deriveStoreKey(secret);
   assert.deepEqual(bridge.deriveStoreKey(secret), key);
+  const canonicalUrl = pathToFileURL(requireAt(canonicalRoot).resolve('@phoneware/mcp-oauth-kit/cutover-protocol')).href;
+  const restarted = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { deriveStoreKey } from ${JSON.stringify(canonicalUrl)}; process.stdout.write(Buffer.from(deriveStoreKey(process.env.CUTOVER_TEST_SECRET)).toString('hex'));`,
+  ], { encoding: 'utf8', env: { ...process.env, CUTOVER_TEST_SECRET: secret } });
+  assert.equal(restarted.status, 0, 'independent key-derivation process failed');
+  assert.equal(restarted.stdout, Buffer.from(key).toString('hex'));
   assert.deepEqual(migration.deriveStoreKey(secret), key);
   assert.deepEqual(canonical.deriveStoreKey(secret), key);
   const otherKey = canonical.deriveStoreKey(`${secret}-different`);
@@ -65,6 +72,27 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
         await ledger.issue({ accessToken: `access-${randomUUID()}`, refreshToken: `refresh-${randomUUID()}`, clientId: 'consumer', expiresAt: Date.now() + 60000 }, { operation });
       });
 
+      const tokenStore = new bridge.FirestoreTokenStore({ db, collection: `${namespace}_tokens`, fence: { namespace, enforce: true } });
+      const accessToken = `access-${randomUUID()}`;
+      let issued;
+      await canonical.withLegacyOperation({ db, namespace, kind: 'token_issue', identityKey: key }, async (operation) => {
+        issued = await tokenStore.issue({
+          accessToken, refreshToken: `refresh-${randomUUID()}`, clientId: 'consumer',
+          expiresAt: Date.now() + 60000, nsAccessToken: 'old-upstream',
+          nsRefreshToken: 'old-upstream-refresh', nsUsername: 'consumer',
+        }, { operation });
+      });
+      await canonical.withLegacyOperation({ db, namespace, kind: 'upstream_refresh', identityKey: key }, async (operation) => {
+        const refreshed = await tokenStore.refreshNsToken(accessToken, async () => ({
+          access_token: 'new-upstream', refresh_token: 'new-upstream-refresh', expires_in: 3600,
+        }), { operation, force: true });
+        assert.equal(refreshed.nsAccessToken, 'new-upstream');
+        assert.equal(operation.isCompleted(), true);
+      });
+      const completedGrant = (await tokenStore.upstreamDocRef(issued.refreshFamilyId).get()).data();
+      assert.equal(completedGrant.leaseOwner ?? null, null);
+      assert.equal(completedGrant.operationId ?? null, null);
+
       for (const [admission, claimant, completion] of [[bridge, bridge, canonical], [canonical, canonical, bridge], [migration, migration, canonical]]) {
         const familyId = randomUUID();
         const refreshId = randomUUID();
@@ -78,11 +106,19 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
           const claim = await db.runTransaction((transaction) => claimant.claimUpstreamGrantInTransaction(transaction, db, {
             namespace, epoch: operation.epoch, familyId, operationId: operation.id, identityKey: key,
             claimOwner: randomUUID(), expectedFamilyGeneration: 3, expectedGrantVersion: 7,
-            expectedKind: operation.kind, timer: claimant.startMonotonicTimer(),
+            expectedKind: operation.kind, timer: claimant.startMonotonicTimer(), nowProvider: () => 1,
           }));
           const durableGrant = JSON.stringify((await grant.get()).data());
           assert.equal(durableGrant.includes(claim.claimOwner), false);
           assert.equal(durableGrant.includes(operation.id), false);
+          await assert.rejects(canonical.withLegacyOperation({ db, namespace, kind: 'upstream_refresh', identityKey: key }, async (contender) => {
+            await db.runTransaction((transaction) => canonical.claimUpstreamGrantInTransaction(transaction, db, {
+              namespace, epoch: contender.epoch, familyId, operationId: contender.id, identityKey: key,
+              claimOwner: randomUUID(), expectedFamilyGeneration: 3, expectedGrantVersion: 7,
+              expectedKind: contender.kind, timer: canonical.startMonotonicTimer(),
+            }));
+          }));
+          assert.equal(JSON.stringify((await grant.get()).data()), durableGrant);
           const opRef = canonical.getCutoverOperationDocRef(db, namespace, operation.id, key);
           const controlRef = canonical.getCutoverFenceDocRef(db, namespace);
           const refs = [family, pointer, grant, opRef, controlRef];
@@ -111,6 +147,24 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
               timer: completion.startMonotonicTimer(),
             });
           }));
+          assert.deepEqual(await snapshot(), before);
+          await assert.rejects(db.runTransaction(async (transaction) => {
+            await completion.checkMutationGuardInTransaction(transaction, {
+              db, namespace, operation: { ...operation, storageId: operation.id },
+              pendingClaim: { ...claim, storageId: operation.id }, identityKey: key,
+              timer: completion.startMonotonicTimer(),
+            });
+          }));
+          assert.deepEqual(await snapshot(), before);
+          await assert.rejects(db.runTransaction(async (transaction) => {
+            const guard = await completion.checkMutationGuardInTransaction(transaction, {
+              db, namespace, operation, pendingClaim: claim, identityKey: key,
+              timer: completion.startMonotonicTimer(),
+            });
+            guard.bufferCompletion();
+            throw new Error('abort transaction');
+          }), /abort transaction/);
+          assert.equal(operation.isCompleted(), false);
           assert.deepEqual(await snapshot(), before);
           let onCommit;
           await db.runTransaction(async (transaction) => {
