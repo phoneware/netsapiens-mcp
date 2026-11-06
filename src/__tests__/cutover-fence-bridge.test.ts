@@ -121,7 +121,7 @@ function waitForAdmissionDrain(db: Firestore, namespace: string): Promise<void> 
 
 describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeout: 60000 }, () => {
   if (!EMULATOR_HOST) {
-    it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => {});
+    it.skip('Skipped when no emulator running locally; CI runs with FIRESTORE_EMULATOR_HOST', () => { });
     return;
   }
   it('preserves the key binding through closing, fenced, and reopening', async () => {
@@ -606,9 +606,9 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       epoch: 99,
       kind: 'refresh',
       isAmbiguousRemoteOutcome: () => false,
-      markAmbiguousRemoteOutcome: () => {},
+      markAmbiguousRemoteOutcome: () => { },
       isCompleted: () => false,
-      markCompleted: () => {},
+      markCompleted: () => { },
     };
 
     const tokenStore = new FirestoreTokenStore({
@@ -989,7 +989,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       nsExpiresAt: Date.now() + 3600_000,
       nsUsername: 'user_231',
       nsUserRole: 'admin',
-      nsApiUrl: 'https://edge.phoneware.cloud',
+      nsApiUrl: 'https://api.example.com',
     });
 
     const tokenStore = new FirestoreTokenStore({
@@ -1012,7 +1012,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
           nsExpiresAt: Date.now() + 3600_000,
           nsUsername: 'user_231',
           nsUserRole: 'admin',
-          nsApiUrl: 'https://edge.phoneware.cloud',
+          nsApiUrl: 'https://api.example.com',
         },
         'client_231',
         Date.now(),
@@ -1860,7 +1860,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     // Pairing 1: exchangeRefreshToken (leaseholder) vs verifyAccessToken (transparent refresh waiter)
-    let releaseBarrier1: () => void = () => {};
+    let releaseBarrier1: () => void = () => { };
     const barrierPromise1 = new Promise<void>((r) => { releaseBarrier1 = r; });
 
     vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
@@ -1916,7 +1916,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(grantCallCount).toBe(1);
 
     // Pairing 2: exchangeRefreshToken vs forceRefreshUpstream on same family
-    let releaseBarrier2: () => void = () => {};
+    let releaseBarrier2: () => void = () => { };
     const barrierPromise2 = new Promise<void>((r) => { releaseBarrier2 = r; });
 
     vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
@@ -1973,7 +1973,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(grantCallCount - grantBefore2).toBe(1);
 
     // Pairing 3: verifyAccessToken vs forceRefreshUpstream on same family
-    let releaseBarrier3: () => void = () => {};
+    let releaseBarrier3: () => void = () => { };
     const barrierPromise3 = new Promise<void>((r) => { releaseBarrier3 = r; });
 
     vi.spyOn(authProvider as any, 'nsRefreshGrant').mockImplementation(async () => {
@@ -2180,26 +2180,26 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const controller = new AbortController();
     try {
 
-    const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
-      headers: {
-        Authorization: `Bearer ${testAccessToken}`,
-        Accept: 'text/event-stream',
-        'mcp-session-id': liveSessionId,
-      },
-      signal: controller.signal,
-    });
+      const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
+        headers: {
+          Authorization: `Bearer ${testAccessToken}`,
+          Accept: 'text/event-stream',
+          'mcp-session-id': liveSessionId,
+        },
+        signal: controller.signal,
+      });
 
-    const sseResp = await fetchPromise;
-    expect(sseResp.status).toBe(200);
-    expect(sseResp.headers.get('content-type')).toContain('text/event-stream');
+      const sseResp = await fetchPromise;
+      expect(sseResp.status).toBe(200);
+      expect(sseResp.headers.get('content-type')).toContain('text/event-stream');
 
-    expect(observedActiveCountDuringVerify).toBe(1);
+      expect(observedActiveCountDuringVerify).toBe(1);
 
       await waitForAdmissionDrain(db, namespace);
 
     } finally {
-    controller.abort();
-    await new Promise<void>((r) => server.close(() => r()));
+      controller.abort();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 
@@ -2309,7 +2309,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     });
 
     let inFlight = false;
-    let releaseBarrier: () => void = () => {};
+    let releaseBarrier: () => void = () => { };
     const barrierPromise = new Promise<void>((r) => { releaseBarrier = r; });
     vi.spyOn(authProvider as any, 'nsPasswordGrant').mockImplementation(async () => {
       inFlight = true;
@@ -2344,7 +2344,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'realuser', password: 'realpassword', auth_state: signedState }),
       signal: controller.signal,
-    }).catch(() => {});
+    }).catch(() => { });
 
     for (let i = 0; i < 30; i++) {
       if (inFlight) break;
@@ -2571,7 +2571,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       .rejects.toBeInstanceOf(UpstreamUnavailableError);
     expect(refresh).not.toHaveBeenCalled();
     expect((await store.get(familyId))?.leaseOwner).toBe(first.completion?.leaseOwner);
-});
+  });
 
   it('rotation refuses missing or forged completion receipts even after lease expiry', async () => {
     const db = createTestDb();
@@ -2624,7 +2624,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     await expect(store.revokeByToken(token.refreshToken)).rejects.toThrow();
     expect((await ref.get()).data()).toMatchObject({ leaseOwner: 'held-owner', grant: { nsAccessToken: 'uncommitted' } });
     expect((await store.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
-});
+  });
 
   it('a confirmed upstream rejection releases the exact claim and permits a later attempt', async () => {
     const db = createTestDb();
@@ -2671,7 +2671,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const transactionSpy = vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
       const result = await runTransaction(fn, options);
       if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiting.resolve();
-        return result;
+      return result;
     });
     const claimant = store1.refreshNsToken(token.accessToken, async () => {
       claimed.resolve();
@@ -2689,7 +2689,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect((await store1.get(token.accessToken))?.nsAccessToken).toBe('old-ns');
     expect((await store1.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
     transactionSpy.mockRestore();
-});
+  });
 
   it('does not call upstream when a bearer was rotated after it was read', async () => {
     const db = createTestDb();
@@ -2732,7 +2732,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const spy = vi.spyOn(db, 'runTransaction').mockImplementation(async (fn, options) => {
       const result = await originalRun(fn, options);
       if (result && typeof result === 'object' && 'status' in result && result.status === 'leased') waiting.resolve();
-        return result;
+      return result;
     });
     const originalGet = DocumentReference.prototype.get;
     let pollBlocked = false;
