@@ -193,7 +193,10 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       await resetFencedNamespace(db, NS);
       await seedDocs(db, scenario.seed());
       await startAdmin(NS);
-      const digest = await inspectDigest();
+      const inspected = await step('inspect');
+      expect(inspected.ok, inspected.message).toBe(true);
+      if (scenario.reason) expect(inspected.reasons?.[scenario.reason]).toBeGreaterThan(0);
+      const digest = inspected.sourceInventoryDigest as string;
       const before = await snapshotNamespace(db, NS);
 
       const dry = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest })
@@ -204,17 +207,13 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
 
       const committed = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
       expect(committed.ok, 'a commit with migration errors must be refused').toBe(false);
-      if (scenario.reason) {
-        const reasonCount = new RegExp(`"${scenario.reason}":([1-9][0-9]*)`);
-        expect(committed.message).toMatch(reasonCount);
-      }
       expect(committed.exitStatus).not.toBe(0);
       expect(await snapshotNamespace(db, NS)).toEqual(before);
       expect((await getCutoverFenceRecord(fence(db), NS))?.state).toBe('fenced');
     });
   }
 
-  it('dryRun: true accurately reports migrated counts without writing v3 documents or marker', async () => {
+  it('dry run scans the candidate without migrating or writing documents', async () => {
     const now = Date.now();
     await resetFencedNamespace(db, NS);
     await seedDocs(db, [
@@ -231,7 +230,8 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     const report = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest })
     expect(report.ok).toBe(true);
     expect(report.report?.errors).toBe(0);
-    expect(report.report?.migrated).toBe(1);
+    expect(report.report?.scanned).toBe(1);
+    expect(report.report?.migrated).toBe(0);
 
     // No v3 documents or v2_adopted marker were written during the dry run.
     expect((await db.collection(`${NS}_refresh_families`).get()).empty).toBe(true);

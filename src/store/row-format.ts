@@ -46,12 +46,12 @@ export function compareDescriptors(
 export function safeDocEntry(
   physicalId: string,
   data: Record<string, unknown> | null | undefined,
-  credentialId?: string,
+  projectionId: string,
 ): Record<string, unknown> {
   const d = data || {};
   return {
     ...d,
     physicalId,
-    id: credentialId ?? (typeof d.id === 'string' && d.id ? d.id : physicalId),
+    id: projectionId,
   };
 }

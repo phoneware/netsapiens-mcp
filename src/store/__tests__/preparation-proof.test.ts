@@ -200,7 +200,8 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     const beforeDry = await snapshot('mcp');
     const dry = await runStep(fixture, 'mcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: digest })
     expect(dry.ok).toBe(true);
-    expect(dry.report?.dryRun).toBe(true);
+    expect(dry.report?.scanned).toBeGreaterThan(0);
+    expect(dry.report?.migrated).toBe(0);
     expect(dry.report?.errors).toBe(0);
     expect(await snapshot('mcp')).toEqual(beforeDry);
 

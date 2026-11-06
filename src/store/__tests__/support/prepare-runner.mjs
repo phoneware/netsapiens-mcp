@@ -19,7 +19,7 @@ try {
   const request = JSON.parse(readFileSync('/run/cutover/request.json', 'utf8'));
   if (request.action === 'inspect') {
     const inspected = await bundle.inspectFirestoreLegacyMigration(context);
-    reply({ ok: true, sourceInventoryDigest: inspected.sourceInventoryDigest, scanned: inspected.scanned });
+    reply({ ok: true, sourceInventoryDigest: inspected.sourceInventoryDigest, scanned: inspected.scanned, reasons: inspected.reasons });
   } else if (request.action === 'adopt') {
     const report = await bundle.adoptFirestoreLegacyTokens({
       ...context,

@@ -1,21 +1,27 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "c4d8b3d9cf1e628d27103dee3efe9d44ffc503c9",
+  "commit": "4d2103924cb3c22d4a04f14bdcaf1b873eb5c34b",
   "profile": "migration",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "ea9201599bb28c0c702afeeccd803c3152f151c8",
+      "blob": "7a30a2a34ad5ae7e899bf72e59fd5477bc364f2a",
       "destination": "src/cutover/canonical-core.mjs",
-      "sha256": "84c2e107e8ffa7c46bfdef0aebc7120b1eb2312c01c02b8040f67274f99b73ff"
+      "sha256": "c7e1507e8b7eadf69d403745609dc52ff4da7f2971eaffae92089241436ab5ca"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
       "blob": "7c9f43ed11ec62ff1843e5af4cc03dcf104c332e",
       "destination": "src/cutover/canonical-core.d.mts",
       "sha256": "a45747b3e1d755c3e3ae71992e05a15983f35aae0ac95d9908553f96c8dbe01e"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/cutover/protocol.entry.mjs",
+      "blob": "e2c4a2b75ee8376be469e25f86f9f8e0c48c1beb",
+      "destination": "src/cutover/canonical-protocol.entry.mjs",
+      "sha256": "b556586e06d485a06365563b0be19a3256bdc0e767a7d310e11d25c179272f85"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/dsse-verifier-core.mjs",
@@ -30,22 +36,16 @@
       "sha256": "12c8987ece153d0ccedf8f1bccc2383561c434e4191088db0107e48e6eff03d4"
     },
     {
-      "source": "packages/mcp-oauth-kit/src/cutover/protocol.entry.mjs",
-      "blob": "e2c4a2b75ee8376be469e25f86f9f8e0c48c1beb",
-      "destination": "src/cutover/canonical-protocol.entry.mjs",
-      "sha256": "b556586e06d485a06365563b0be19a3256bdc0e767a7d310e11d25c179272f85"
-    },
-    {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.mjs",
-      "blob": "8bd4db6c9b873c938959a6f017611c8a4fde1888",
+      "blob": "bb048254a58c84b56b9132d813f45b5393f9529b",
       "destination": "src/store/netsapiens-projector.mjs",
-      "sha256": "f9f2143e59003a2001b056f9b92fbcd451f6c7e931d4c85767ca0af5b18f8da9"
+      "sha256": "722b47680cace9a7441e473199959f90a81aa8e3096f4671d2823bc5c5506625"
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.d.mts",
-      "blob": "47002d2454bf5f8f52f4ec3669aea79ff3bee4aa",
+      "blob": "62a1880191bb92660440a617bb59e4baec25d950",
       "destination": "src/store/netsapiens-projector.d.mts",
-      "sha256": "98ed4f94eb5c5138922b228b0c0386f4793989b26bdc0baa666b6c2dfcb46fbb"
+      "sha256": "6698d9a2e00cae22bb474e6516d1d2a429f57c51f2693dbe0c1e5657f105898a"
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/errors.ts",
@@ -61,9 +61,15 @@
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/row-format.ts",
-      "blob": "f59c5e071bd85b8fce84aeba5aaee61c5d275c3f",
+      "blob": "c2a1d9a7f66b57b48493f44316cdeef2ae211d6b",
       "destination": "src/store/row-format.ts",
-      "sha256": "7a971c91259e2aa784477e3f910ad5187532b8c982997f33ce12b2ad4194ad21"
+      "sha256": "16a0a896e813099f4cd89a297570d3c658d5f391c5e550b3e82d1a5a105822d4"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/store/firestore-like.ts",
+      "blob": "ad1f421906486874881d499ed23997d108ff84c4",
+      "destination": "src/store/firestore-like.ts",
+      "sha256": "c0e21fc939eae5091816baa386bc3234963ff81792de9297c683c3c3b2fddeb0"
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/subject-descriptor.ts",
@@ -76,18 +82,12 @@
       "blob": "281081d858701b22d829a3ab9c0138220db13a69",
       "destination": "src/store/subject-guard.ts",
       "sha256": "1051e61c0dd1a66e20e0e291da1ddb1bfc5c271b6e0677c6d8f63d8d2196eab1"
-    },
-    {
-      "source": "packages/mcp-oauth-kit/src/store/firestore-like.ts",
-      "destination": "src/store/firestore-like.ts",
-      "blob": "ad1f421906486874881d499ed23997d108ff84c4",
-      "sha256": "c0e21fc939eae5091816baa386bc3234963ff81792de9297c683c3c3b2fddeb0"
     }
   ],
   "generated": [
     {
       "destination": "src/store/cutover-protocol.mjs",
-      "sha256": "642e79c66cb4cb43d7e51f39cda4881dc9182c0c8ad18ddee07b05ea4276afd7"
+      "sha256": "5e830d34c2a79460561edbcc6c6bb87dde04ec041c8407d4dd9baea2ed54fa6a"
     },
     {
       "destination": "src/store/cutover-protocol.d.ts",

@@ -7,7 +7,6 @@ import {
   upstreamAad,
   codeUnitCompare,
   compareDescriptors,
-  safeDocEntry,
 } from './row-format.js';
 import {
   encodeSessionsRow,
@@ -19,6 +18,8 @@ import {
   encodeOAuthClientsRow,
 } from './row-codec.js';
 import {
+  buildSourceProjectionMap,
+  buildTargetProjectionMap,
   projectSourceLogical,
   projectTargetLogical,
   sanitizeId,
@@ -650,14 +651,14 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'pr56Families', sortedSourceIds);
 
-    const sourcesMap = new Map();
-    sourcesMap.set('families', safeDocEntry(familyId, famData, familyId));
-    sourcesMap.set('refresh', safeDocEntry(curRefEntry.physicalId, curRefDoc, curRefEntry.credentialToken));
-    sourcesMap.set('upstream', safeDocEntry(familyId, upstreamById.get(familyId), familyId));
-    sourcesMap.set('tokens', safeDocEntry(accessEntry.physicalId, accessEntry.data || {}, accessEntry.credentialToken));
-    if (prevRefEntry) {
-      sourcesMap.set('prevRefresh', safeDocEntry(prevRefEntry.physicalId, prevRefEntry.data || {}, prevRefEntry.credentialToken));
-    }
+    const sourceEntries = [
+      { collection: 'families', physicalId: familyId, data: famData },
+      { collection: 'refresh', physicalId: curRefEntry.physicalId, data: curRefDoc },
+      { collection: 'upstream', physicalId: familyId, data: upstreamById.get(familyId) },
+      { collection: 'tokens', physicalId: accessEntry.physicalId, data: accessEntry.data },
+    ];
+    if (prevRefEntry) sourceEntries.push({ collection: 'refresh', physicalId: prevRefEntry.physicalId, data: prevRefEntry.data });
+    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'pr56Families', targets: candTargets, logicalDigest: '' }, sourceEntries, codec);
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'pr56Families', targets: candTargets, logicalDigest: '' },
@@ -868,11 +869,9 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'baseFormatTokens', sortedSourceIds);
 
-    const sourcesMap = new Map();
-    sourcesMap.set('tokens', safeDocEntry(tokEntry.physicalId, tokData, tokEntry.credentialToken));
-    if (baseRefEntry) {
-      sourcesMap.set('refresh', safeDocEntry(baseRefEntry.physicalId, baseRefEntry.data || {}, baseRefEntry.credentialToken));
-    }
+    const sourceEntries = [{ collection: 'tokens', physicalId: tokEntry.physicalId, data: tokData }];
+    if (baseRefEntry) sourceEntries.push({ collection: 'refresh', physicalId: baseRefEntry.physicalId, data: baseRefEntry.data });
+    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'baseFormatTokens', targets: candTargets, logicalDigest: '' }, sourceEntries, codec);
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'baseFormatTokens', targets: candTargets, logicalDigest: '' },
@@ -984,8 +983,7 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'authCodes', sortedSourceIds);
 
-    const sourcesMap = new Map();
-    sourcesMap.set('authCodes', safeDocEntry(rawCode, cData));
+    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'authCodes', targets: candTargets, logicalDigest: '' }, [{ collection: 'authCodes', physicalId: rawCode, data: cData }], codec);
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'authCodes', targets: candTargets, logicalDigest: '' },
@@ -1085,8 +1083,7 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'resumeTokens', sortedSourceIds);
 
-    const sourcesMap = new Map();
-    sourcesMap.set('resumeTokens', safeDocEntry(resId, rData));
+    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'resumeTokens', targets: candTargets, logicalDigest: '' }, [{ collection: 'resumeTokens', physicalId: resId, data: rData }], codec);
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'resumeTokens', targets: candTargets, logicalDigest: '' },
@@ -1176,34 +1173,6 @@ export function extractCandidatesAndPlan(params: {
       });
     }
 
-    // When both exist: assert complete semantic equivalence across all metadata fields
-    if (hasLegacyClient && hasOauthClient) {
-      const leg = clientDocsById.get(clientId);
-      const oauth = oauthClientDocsById.get(clientId);
-      const legUris = (leg.redirect_uris || []).slice().sort(codeUnitCompare);
-      const oauthUris = (oauth.redirect_uris || []).slice().sort(codeUnitCompare);
-      const legGrants = (leg.grant_types || []).slice().sort(codeUnitCompare);
-      const oauthGrants = (oauth.grant_types || []).slice().sort(codeUnitCompare);
-      const legResp = (leg.response_types || []).slice().sort(codeUnitCompare);
-      const oauthResp = (oauth.response_types || []).slice().sort(codeUnitCompare);
-
-      const conflicts =
-        C(legUris) !== C(oauthUris) ||
-        C(legGrants) !== C(oauthGrants) ||
-        C(legResp) !== C(oauthResp) ||
-        (leg.token_endpoint_auth_method ?? (leg.client_secret ? 'client_secret_basic' : 'none')) !== (oauth.token_endpoint_auth_method ?? (oauth.client_secret ? 'client_secret_basic' : 'none')) ||
-        (leg.client_secret ?? null) !== (oauth.client_secret ?? null) ||
-        (leg.client_name ?? null) !== (oauth.client_name ?? null) ||
-        (leg.client_uri ?? null) !== (oauth.client_uri ?? null) ||
-        (leg.logo_uri ?? null) !== (oauth.logo_uri ?? null) ||
-        (leg.scope ?? null) !== (oauth.scope ?? null) ||
-        (leg.client_id_issued_at ?? null) !== (oauth.client_id_issued_at ?? null);
-
-      if (conflicts) {
-        reasons.conflictingClaims++;
-        throw new CutoverFenceError(`Conflicting client metadata between clients and oauthClients for ${sanitizeId(clientId)}`);
-      }
-    }
 
     candSources.sort(compareDescriptors);
 
@@ -1216,9 +1185,10 @@ export function extractCandidatesAndPlan(params: {
     const sortedSourceIds = candSources.map((s) => s.id).sort(codeUnitCompare);
     const candidateId = computeCandidateId(storeKey, namespace, epoch, 'clients', sortedSourceIds);
 
-    const authoritativeDoc = hasOauthClient ? oauthClientDocsById.get(clientId) : clientDocsById.get(clientId);
-    const sourcesMap = new Map();
-    sourcesMap.set('clients', safeDocEntry(clientId, authoritativeDoc));
+    const sourceEntries = [];
+    if (hasLegacyClient) sourceEntries.push({ collection: 'clients', physicalId: clientId, data: clientDocsById.get(clientId) });
+    if (hasOauthClient) sourceEntries.push({ collection: 'oauthClients', physicalId: clientId, data: oauthClientDocsById.get(clientId) });
+    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: 'clients', targets: candTargets, logicalDigest: '' }, sourceEntries, codec);
 
     const logicalProjection = projectSourceLogical(
       { id: candidateId, kind: 'clients', targets: candTargets, logicalDigest: '' },
@@ -1724,7 +1694,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     const targetDocMapById = new Map<string, any>();
     for (const [colKey, docs] of targetDocsByKey.entries()) {
       for (const d of docs) {
-        targetDocMapById.set(`${colKey}:${d.id}`, { ...(d.data() || {}), id: d.id });
+        targetDocMapById.set(`${colKey}:${d.id}`, { collection: colKey, physicalId: d.id, data: d.data() || {} });
       }
     }
 
@@ -1732,61 +1702,8 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
     const claimedTargetIds = new Set<string>();
 
     for (const c of candidates) {
-      let existingCount = 0;
-      const targetMap = new Map();
-      const rows = c.targetRows || {};
-
-      if (c.kind === 'pr56Families') {
-        const famDoc = targetDocMapById.get(`families:${rows.refreshFamilies?.id}`);
-        const upDoc = targetDocMapById.get(`upstream:${rows.upstreamGrants?.id}`);
-        const sessDoc = targetDocMapById.get(`tokens:${rows.sessions?.id}`);
-        const actRefDoc = targetDocMapById.get(`refresh:${rows.refreshTokens?.id}`);
-        if (famDoc) { existingCount++; targetMap.set('families', famDoc); }
-        if (upDoc) { existingCount++; targetMap.set('upstream', upDoc); }
-        if (sessDoc) { existingCount++; targetMap.set('tokens', sessDoc); }
-        if (actRefDoc) { existingCount++; targetMap.set('activeRefresh', actRefDoc); }
-        if (rows.prevRefresh) {
-          const prevRefDoc = targetDocMapById.get(`refresh:${rows.prevRefresh.id}`);
-          if (prevRefDoc) { existingCount++; targetMap.set('prevRefresh', prevRefDoc); }
-        }
-        if (rows.retiredRefresh && rows.retiredRefresh.length > 0) {
-          const fps: string[] = [];
-          for (const ret of rows.retiredRefresh) {
-            const retDoc = targetDocMapById.get(`retiredRefreshTokens:${ret.fingerprint}`);
-            if (
-              retDoc &&
-              typeof retDoc === 'object' &&
-              retDoc.id === ret.fingerprint &&
-              retDoc.familyId === rows.refreshFamilies?.id &&
-              (retDoc.retiredAt === undefined || (Number.isSafeInteger(retDoc.retiredAt) && retDoc.retiredAt > 0))
-            ) {
-              existingCount++;
-              fps.push(ret.fingerprint);
-            }
-          }
-          if (fps.length > 0) {
-            targetMap.set('retiredRefresh', { ids: fps });
-          }
-        }
-      } else if (c.kind === 'baseFormatTokens') {
-        const famDoc = targetDocMapById.get(`families:${rows.refreshFamilies?.id}`);
-        const upDoc = targetDocMapById.get(`upstream:${rows.upstreamGrants?.id}`);
-        const sessDoc = targetDocMapById.get(`tokens:${rows.sessions?.id}`);
-        const actRefDoc = targetDocMapById.get(`refresh:${rows.refreshTokens?.id}`);
-        if (famDoc) { existingCount++; targetMap.set('families', famDoc); }
-        if (upDoc) { existingCount++; targetMap.set('upstream', upDoc); }
-        if (sessDoc) { existingCount++; targetMap.set('tokens', sessDoc); }
-        if (actRefDoc) { existingCount++; targetMap.set('activeRefresh', actRefDoc); }
-      } else if (c.kind === 'authCodes') {
-        const codeDoc = targetDocMapById.get(`authCodes:${rows.authCodes?.id}`);
-        if (codeDoc) { existingCount++; targetMap.set('authCodes', codeDoc); }
-      } else if (c.kind === 'resumeTokens') {
-        const resDoc = targetDocMapById.get(`resumeTokens:${rows.resumeTokens?.id}`);
-        if (resDoc) { existingCount++; targetMap.set('resumeTokens', resDoc); }
-      } else if (c.kind === 'clients') {
-        const clientDoc = targetDocMapById.get(`oauthClients:${rows.oauthClients?.client_id}`);
-        if (clientDoc) { existingCount++; targetMap.set('clients', clientDoc); }
-      }
+      const targetEntries = c.targets.map((target: { collection: string; rawId: string }) => targetDocMapById.get(`${target.collection}:${target.rawId}`)).filter(Boolean);
+      const existingCount = targetEntries.length;
 
       if (existingCount === 0) {
         continue;
@@ -1804,7 +1721,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
       // Only a stored-target decode or projection refusal is a partial target. Everything else propagates.
       let derivedDigest: string;
       try {
-        const decodedLogical = projectTargetLogical(c, targetMap, codec);
+        const decodedLogical = projectTargetLogical(c, buildTargetProjectionMap(c, targetEntries), codec);
         derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
       } catch (err) {
         if (!isCutoverFenceError(err)) throw err;
@@ -2420,40 +2337,31 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
           throw new CutoverFenceError(`Missing prospective target postimage or mapping for target ${t.collection}:${sanitizeId(t.id)}`);
         }
       }
+      const prospectiveEntries = c.targets.map((t: { collection: string; id: string; rawId: string }) => ({
+        collection: t.collection, physicalId: t.rawId, data: c.postimageByTargetId.get(t.id),
+      }));
+      const prospectiveLogical = projectTargetLogical(c, buildTargetProjectionMap(c, prospectiveEntries), codec);
+      if (H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, prospectiveLogical]) !== c.logicalDigest) {
+        throw new CutoverFenceError('Candidate target postimages do not match the source projection');
+      }
 
       // Check retained path: read target documents first before overwrite
       // Decode existing targets using projector rather than comparing randomized ciphertext bytes
       let allTargetsAlreadyRetained = true;
       let hasAnyTarget = false;
-      const existingTargetsMap = new Map();
+      const existingTargetEntries: Array<{ collection: string; physicalId: string; data: Record<string, unknown> }> = [];
       const retainedTargetRows = new Map<string, unknown>();
 
       for (const t of c.targets) {
-        const post = c.postimageByTargetId.get(t.id);
         const physicalCol = targetColMap[t.collection];
-        const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
+        const docId = t.rawId;
+        if (computeKeyedDocId(storeKey, 'target-id', namespace, control.epoch, t.collection, docId) !== t.id) throw new CutoverFenceError('Candidate target identity changed');
         const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
 
         if (targetSnap.exists) {
           hasAnyTarget = true;
-          const row = { ...(targetSnap.data() || {}), id: docId };
+          existingTargetEntries.push({ collection: t.collection, physicalId: docId, data: targetSnap.data() || {} });
           retainedTargetRows.set(t.id, targetSnap.data());
-          if (t.collection === 'refresh') {
-            const role = docId === c.targetRows?.refreshTokens?.id ? 'activeRefresh'
-              : docId === c.targetRows?.prevRefresh?.id ? 'prevRefresh' : null;
-            if (!role) throw new CutoverFenceError('Unexpected refresh target in candidate');
-            existingTargetsMap.set(role, row);
-          } else if (t.collection === 'retiredRefreshTokens') {
-            if (row.familyId !== c.targetRows?.refreshFamilies?.id ||
-              (row.retiredAt !== undefined && (!Number.isSafeInteger(row.retiredAt) || row.retiredAt <= 0))) {
-              throw new CutoverFenceError('Invalid retired refresh target in candidate');
-            }
-            const retired = existingTargetsMap.get('retiredRefresh') ?? { ids: [] };
-            retired.ids.push(docId);
-            existingTargetsMap.set('retiredRefresh', retired);
-          } else {
-            existingTargetsMap.set(t.collection === 'oauthClients' ? 'clients' : t.collection, row);
-          }
         } else {
           allTargetsAlreadyRetained = false;
         }
@@ -2464,7 +2372,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
           throw new CutoverFenceError(`Conflicting partial target graph detected for candidate ${sanitizeId(c.id)}; cannot overwrite`);
         }
         try {
-          const existingLogical = projectTargetLogical(c, existingTargetsMap, codec);
+          const existingLogical = projectTargetLogical(c, buildTargetProjectionMap(c, existingTargetEntries), codec);
           if (C(existingLogical) !== C(c.logicalDigest)) {
             // Check if logical digest matches
             const derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, existingLogical]);
@@ -2480,7 +2388,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       timer.assertUnderDeadline('Item transaction attempt');
 
       // All transaction reads must precede any buffered writes or deletes
-      if (!allTargetsAlreadyRetained && control.emptyNamespace !== true) {
+      if (control.emptyNamespace !== true) {
         await markIrreversibleInTransaction(transaction, db, namespace, control.epoch, migrationRunId, () => now, timer);
       }
 
@@ -2497,7 +2405,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
         for (const t of c.targets) {
           const post = c.postimageByTargetId.get(t.id);
           const physicalCol = targetColMap[t.collection];
-          const docId = post.id || post.code || post.client_id || post.fingerprint || t.rawId;
+          const docId = t.rawId;
           transaction.set(db.collection(physicalCol).doc(docId), post);
         }
       }

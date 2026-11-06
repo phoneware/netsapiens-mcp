@@ -120,6 +120,27 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(refused.message).toMatch(/extra target document/i);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
+  it('signed preparation refuses a swapped credential document identity without writes', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    await seedDocs(db, [
+      [`${NS}_tokens/swapped-key`, { accessToken: 'actual-access', refreshToken: 'actual-refresh', clientId: 'client', expiresAt: now + 60000, nsAccessToken: 'upstream', nsUsername: 'user' }],
+    ]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    expect(inspected.reasons?.malformedRecords).toBeGreaterThan(0);
+    const refused = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/malformedRecords/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
 
   it('a signed fixture over the synthetic closed scope passes inspect, dry-run, and commit to v3_ready', async () => {
     await resetFencedNamespace(db, NS);

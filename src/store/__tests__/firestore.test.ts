@@ -108,7 +108,7 @@ describe.skipIf(!host)('Firestore emulator', () => {
    encodeOAuthClientsRow('client', { redirect_uris: ['https://example.test'], client_name: null }, now),
   ];
   try {
-   await expect(collection.doc('invalid').set({ nested: { value: undefined } })).rejects.toThrow();
+   await expect(async () => collection.doc('invalid').set({ nested: { value: undefined } })).rejects.toThrow();
    for (const [index, row] of rows.entries()) {
     expect(() => normalizeValue(row)).not.toThrow();
     await collection.doc(String(index)).set(row);
