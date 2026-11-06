@@ -190,6 +190,107 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(committed.report?.migrated).toBe(1);
     expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_ready');
   });
+  it('signed migration preserves both family and unattached base sessions and their TTL policies', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    const family = 'pr56-fam-1';
+    await seedDocs(db, [
+      [`${NS}_tokens_refresh_families/${family}`, { id: family, generation: 2, status: 'active', currentAccessToken: 'pr56-acc', currentRefreshToken: 'pr56-ref', clientId: 'pr56-client', serverBaseUrl: 'https://example.com', retiredRefreshFingerprints: ['old-fp-1'] }],
+      [`${NS}_tokens_upstream/${family}`, { id: family, grantVersion: 3, nsAccessToken: 'pr56-ns-acc', nsRefreshToken: 'pr56-ns-ref', nsUsername: 'user@pr56.com' }],
+      [`${NS}_tokens_refresh/pr56-ref`, { refreshToken: 'pr56-ref', accessToken: 'pr56-acc', familyId: family, status: 'active' }],
+      [`${NS}_tokens/pr56-acc`, { accessToken: 'pr56-acc', refreshToken: 'pr56-ref', refreshFamilyId: family, expiresAt: now + 3600000, clientId: 'pr56-client' }],
+      [`${NS}_tokens/legacy-acc-2`, { accessToken: 'legacy-acc-2', refreshToken: 'legacy-ref-2', expiresAt: now + 3600000, nsAccessToken: 'legacy-ns-acc', nsRefreshToken: 'legacy-ns-ref', nsUsername: 'legacy@domain.com', clientId: 'legacy-client', seatId: 'seat-42', ttlAt: new Date(now + 30 * 86400000) }],
+    ]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const committed = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
+    });
+    expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report?.migrated).toBe(2);
+    const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    const activated = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate',
+      options: { migrationManifestDigest: ready!.migrationManifestDigest! }, collectionGroups
+    });
+    expect(activated.ok, activated.message).toBe(true);
+    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    expect(await store.sessions.getByRefreshToken('pr56-ref')).toMatchObject({ clientId: 'pr56-client', nsUsername: 'user@pr56.com' });
+    expect(await store.sessions.getByRefreshToken('legacy-ref-2')).toMatchObject({ clientId: 'legacy-client', nsUsername: 'legacy@domain.com', extra: {} });
+    expect((await db.collection(`${NS}_refresh_families`).doc(family).get()).data()?.ttlAt).toBeUndefined();
+    expect((await db.collection(`${NS}_upstream`).doc(family).get()).data()?.ttlAt).toBeUndefined();
+    for (const doc of (await db.collection(`${NS}_refresh`).get()).docs) expect(doc.data().ttlAt).toBeUndefined();
+    const sessions = await db.collection(`${NS}_sessions`).get();
+    expect(sessions.size).toBeGreaterThan(0);
+    for (const doc of sessions.docs) expect(doc.data().ttlAt).toBeDefined();
+  });
+  it('signed migration preserves and atomically redeems an unexpired legacy authorization code', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    const code = 'auth-code-real-123';
+    const clientId = 'client-auth-test';
+    const serverBaseUrl = 'http://localhost:3000';
+    await seedDocs(db, [[`${NS}_auth_codes/${code}`, {
+      pending: { clientId, codeChallenge: 'challenge-xyz', redirectUri: 'https://app.example.com/callback', state: 'oauth-state-1', scopes: ['user', 'admin'], createdAt: now },
+      nsTokens: { access_token: 'ns-auth-tok', refresh_token: 'ns-auth-ref', expires_in: 3600, username: 'authuser@domain.com' },
+      clientId, serverBaseUrl, expiresAt: now + 600000,
+    }]]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const committed = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
+    });
+    expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report?.migrated).toBe(1);
+    const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    const activated = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate',
+      options: { migrationManifestDigest: ready!.migrationManifestDigest! }, collectionGroups
+    });
+    expect(activated.ok, activated.message).toBe(true);
+    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    const preview = await store.authCodes.getEntry(code, { serverBaseUrl, clientId });
+    expect(preview?.data.pending.codeChallenge).toBe('challenge-xyz');
+    const issued = { accessToken: 'issued-acc-1', refreshToken: 'issued-ref-1' };
+    const session = { clientId, expiresAt: now + 3600000, nsAccessToken: 'ns-auth-tok', nsRefreshToken: 'ns-auth-ref', nsUsername: 'authuser@domain.com', serverBaseUrl };
+    expect(await store.authCodes.redeemAndIssue(code, { serverBaseUrl, clientId }, issued, session, preview!.sealed)).toBeDefined();
+    expect(await store.authCodes.redeem(code, { serverBaseUrl, clientId })).toBeUndefined();
+    expect(await store.sessions.get(issued.accessToken)).toMatchObject({ clientId, nsUsername: 'authuser@domain.com' });
+  });
+  it('signed inspection refuses a retired fingerprint claimed by two families without writes', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    const docs: Array<readonly [string, Record<string, unknown>]> = [];
+    for (const id of ['one', 'two']) {
+      docs.push([`${NS}_tokens_refresh_families/${id}`, { currentAccessToken: `access-${id}`, currentRefreshToken: `refresh-${id}`, retiredRefreshFingerprints: ['shared-fingerprint'] }]);
+      docs.push([`${NS}_tokens/access-${id}`, { accessToken: `access-${id}`, refreshToken: `refresh-${id}`, familyId: id, clientId: 'client', expiresAt: now + 60000 }]);
+      docs.push([`${NS}_tokens_refresh/refresh-${id}`, { refreshToken: `refresh-${id}`, accessToken: `access-${id}`, familyId: id, status: 'active' }]);
+      docs.push([`${NS}_tokens_upstream/${id}`, { nsAccessToken: 'upstream', nsUsername: 'user' }]);
+    }
+    await seedDocs(db, docs);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    expect(inspected.reasons?.conflictingClaims).toBeGreaterThan(0);
+    const refused = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/conflictingClaims/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
   it('signed migration preserves raw credential identities, predecessor and legacy replay TTL', async () => {
     await resetFencedNamespace(db, NS);
     const now = Date.now();
