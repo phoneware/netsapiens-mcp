@@ -104,6 +104,30 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
 
   const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   const key = deriveStoreKey(secret);
+  it('retains the bound key across closing, fencing and reopening', async () => {
+    const db = new MockFirestore();
+    const namespace = 'mcp';
+    await initializeCutoverFence(db, namespace);
+    await withLegacyOperation({ db, namespace, kind: 'read', identityKey: key }, async () => { });
+    const initial = await getCutoverFenceRecord(db, namespace);
+    const binding = {
+      operationIdentityVersion: initial?.operationIdentityVersion,
+      operationIdentityKeyCheck: initial?.operationIdentityKeyCheck,
+    };
+    expect(binding.operationIdentityVersion).toBe(1);
+    expect(binding.operationIdentityKeyCheck).toMatch(/^[0-9a-f]{64}$/);
+    for (const [fromState, toState, epoch] of [
+      ['legacy_open', 'closing', 1], ['closing', 'fenced', 1],
+      ['fenced', 'closing', 2], ['closing', 'legacy_open', 2],
+    ] as const) {
+      await transitionCutoverFenceState(db, namespace, { fromState, toState, expectedEpoch: epoch });
+      expect(await getCutoverFenceRecord(db, namespace)).toMatchObject(binding);
+    }
+    await expect(withLegacyOperation({
+      db, namespace, kind: 'read', identityKey: deriveStoreKey(`${secret}-other`),
+    }, async () => { })).rejects.toThrow(/identity key binding mismatch/i);
+    await withLegacyOperation({ db, namespace, kind: 'read', identityKey: key }, async () => { });
+  });
   const setupFencedState = async (db: any, namespace: string, epoch: number = 1): Promise<void> => {
     await initializeCutoverFence(db, namespace, { initialEpoch: epoch });
     await transitionCutoverFenceState(db, namespace, { fromState: 'legacy_open', toState: 'closing', expectedEpoch: epoch });
