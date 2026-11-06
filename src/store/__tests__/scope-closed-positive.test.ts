@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createCodec, deriveStoreKey } from '../codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
-import { encodeRefreshFamiliesRow, encodeRefreshRow, encodeSessionsRow, encodeUpstreamRow } from '../row-codec.js';
+import { encodeOAuthClientsRow, encodeRefreshFamiliesRow, encodeRefreshRow, encodeSessionsRow, encodeUpstreamRow } from '../row-codec.js';
 import { startFakeAdmin } from './support/fake-admin.mjs';
 import { OPT, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import { argvFor, fixtureFor, mountFixture, runFactory, runStep, scopeUnionUnchecked, sessionSecretOf } from './support/runner-harness.mjs';
@@ -264,6 +264,28 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(accepted.ok, accepted.message).toBe(true);
     expect(accepted.report?.skipped).toBe(1);
     expect(await getCutoverFenceRecord(db as unknown as FirestoreLike, NS)).toMatchObject({ state: 'v3_ready', irreversible: true });
+  });
+  it('signed preparation refuses a semantically wrong retained OAuth target without writes', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    await seedDocs(db, [
+      [`${NS}_clients/client`, { client_id: 'client', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none', scope: 'read' }],
+      [`${NS}_oauth_clients/client`, encodeOAuthClientsRow('client', { redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none', scope: 'write', client_id_issued_at: null }, now)],
+    ]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    expect(inspected.reasons?.partialTargets).toBeGreaterThan(0);
+    const refused = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/Existing target graph does not equal the source projection/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
   it('signed concurrent item retry verifies retired targets through the bound receipt', async () => {
     await resetFencedNamespace(db, NS);
