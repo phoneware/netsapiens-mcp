@@ -6470,6 +6470,11 @@ function extractCandidatesAndPlan(params) {
   const refreshByPhysicalId = /* @__PURE__ */ new Map();
   for (const d of refreshDocs) {
     const data = d.data() || {};
+    if (data.refreshToken != null && data.token?.refreshToken != null && data.refreshToken !== data.token.refreshToken) {
+      malformedDocKeys.add(`refresh:${d.id}`);
+      reasons.conflictingClaims++;
+      continue;
+    }
     let credToken = data.refreshToken ?? data.token?.refreshToken;
     if (!credToken && data.accessToken) {
       const tok = tokensByCredential.get(data.accessToken);

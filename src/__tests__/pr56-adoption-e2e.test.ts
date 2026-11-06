@@ -83,6 +83,28 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       expect(await snapshotNamespace(db, NS)).toEqual(before);
     }
   });
+  it('refuses a surviving source changed after inspection without migration writes', async () => {
+    await resetFencedNamespace(db, NS);
+    const token = { accessToken: 'ttl-access', refreshToken: 'ttl-refresh', clientId: 'client', expiresAt: Date.now() + 60000 };
+    await seedDocs(db, [
+      [`${NS}_tokens_refresh_families/family`, { currentAccessToken: token.accessToken, currentRefreshToken: token.refreshToken }],
+      [`${NS}_tokens_refresh/ttl-refresh`, { familyId: 'family', status: 'active', token }],
+      [`${NS}_tokens_upstream/family`, { nsAccessToken: 'original', nsUsername: 'same-user' }],
+    ]);
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    expect(inspected.ok, inspected.message).toBe(true);
+    await db.collection(`${NS}_tokens_upstream`).doc('family').update({ nsAccessToken: 'changed' });
+    const before = await snapshotNamespace(db, NS);
+    const refused = await runStep({
+      bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest },
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/Source inventory digest mismatch/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
 
   it.each([true, false])('adopts absent access with refresh-level access alias present=%s and exchanges successfully', async (includeAccessAlias) => {
     const legacyRefreshToken = 'tok-refresh-valid';
