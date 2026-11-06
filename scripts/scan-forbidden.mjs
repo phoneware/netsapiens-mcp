@@ -23,9 +23,12 @@ const matchedLines = value => {
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
     const match = pattern.exec(value);
-    if (match) lines.add(value.slice(0, match.index).split('\n').length);
+    if (match) {
+      const before = value.slice(0, match.index);
+      lines.add(`${before.split('\n').length}:${match.index - before.lastIndexOf('\n')}+${match[0].length}`);
+    }
   }
-  return [...lines].sort((a, b) => a - b);
+  return [...lines].sort();
 };
 const run = (command, args) => execFileSync(command, args, { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 let found = false;
