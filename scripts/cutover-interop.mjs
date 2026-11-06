@@ -18,7 +18,7 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
   const migration = await load(migrationRoot, 'netsapiens-mcp/cutover-protocol');
   const bridge = await load(bridgeRoot, 'netsapiens-mcp/lib');
   const canonical = await load(canonicalRoot, '@phoneware/mcp-oauth-kit/cutover-protocol');
-  const { Firestore } = requireAt(migrationRoot)('@google-cloud/firestore');
+  const { Firestore, FieldPath } = requireAt(migrationRoot)('@google-cloud/firestore');
   const secret = 'cutover-interop-session-secret-for-isolated-proof-only';
   process.env.MCP_SESSION_SECRET = secret;
   const key = canonical.deriveStoreKey(secret);
@@ -38,6 +38,24 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
     const db = makeDb();
     try {
       await canonical.initializeCutoverFence(db, namespace);
+      const beforeMigrationRefusals = await canonical.getCutoverFenceRecord(db, namespace);
+      const invalidMigrationCalls = [
+        ['prepare', (transaction) => canonical.prepareMigrationInTransaction(transaction, db, {
+          namespace, prepDoc: {}, storeKey: key, FieldPath, timer: canonical.startMonotonicTimer(),
+        }), /Preparation requires the engine-built complete plan/],
+        ['finalize', (transaction) => canonical.finalizeMigrationInTransaction(transaction, db, {
+          namespace, finalDoc: {}, markerDoc: {}, storeKey: key, FieldPath, timer: canonical.startMonotonicTimer(),
+        }), /state must be 'migrating'/],
+        ['activate', (transaction) => canonical.activateMigrationInTransaction(transaction, db, {
+          namespace, expectedEpoch: 1, migrationRunId: 'run', migrationManifestDigest: '0'.repeat(64),
+          codeArtifact: 'test', protocolDigest: '0'.repeat(64), storeKey: key, FieldPath, timer: canonical.startMonotonicTimer(),
+        }), /marker missing/],
+      ];
+      for (const [name, call, expected] of invalidMigrationCalls) {
+        await assert.rejects(db.runTransaction(call), expected, `private ${name} refusal`);
+        assert.deepEqual(await canonical.getCutoverFenceRecord(db, namespace), beforeMigrationRefusals);
+        assert.equal((await db.collection(`${namespace}_meta`).get()).size, 1);
+      }
       const kinds = ['token', 'login', 'upstream_refresh'];
       const ids = ['slash/name', 'unicode-\u96ea', 'secret-like-value', 'op1_prefix'];
       for (const kind of kinds) {
@@ -62,6 +80,13 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
         }
       }
       await bridge.withLegacyOperation({ db, namespace, kind: 'read', identityKey: key }, async (operation) => {
+        const operationRef = canonical.getCutoverOperationDocRef(db, namespace, operation.id, key);
+        const before = (await operationRef.get()).data();
+        await assert.rejects(canonical.releaseLegacyOperation(db, { ...operation, id: randomUUID() }, key));
+        await assert.rejects(canonical.releaseLegacyOperation(db, operation, otherKey));
+        await assert.rejects(canonical.markOperationAmbiguous(db, { ...operation, id: randomUUID() }, key));
+        await assert.rejects(canonical.markOperationAmbiguous(db, operation, otherKey));
+        assert.deepEqual((await operationRef.get()).data(), before);
         await canonical.releaseLegacyOperation(db, operation, key);
         assert.equal(operation.isCompleted(), true);
       });

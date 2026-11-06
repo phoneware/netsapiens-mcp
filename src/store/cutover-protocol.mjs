@@ -2723,6 +2723,12 @@ async function transitionCutoverFenceState(db, namespace, params) {
       `Transition to '${params.toState}' must use atomic transaction helper (prepareMigrationInTransaction, finalizeMigrationInTransaction, or activateMigrationInTransaction)`
     );
   }
+  if (params.emptyNamespace !== void 0) {
+    throw new CutoverFenceError("emptyNamespace flag is only allowed on transition to v3_ready through the atomic finalization helper");
+  }
+  if (params.migrationRunId !== void 0 || params.migrationManifestDigest !== void 0) {
+    throw new CutoverFenceError("Migration identity is only set by atomic migration helpers");
+  }
   return await db.runTransaction(async (transaction) => {
     const timer = startMonotonicTimer();
     const snap = await transaction.get(docRef);
@@ -3031,13 +3037,13 @@ async function withLegacyOperation(options, fn) {
       throw new CutoverFenceError("Operation has an unresolved upstream outcome");
     }
     if (!ctx.isCompleted()) {
-      await releaseLegacyOperation(options.db, ctx, "completed", now);
+      await releaseLegacyOperation(options.db, ctx, options.identityKey, "completed", now);
     }
     return result;
   } catch (err) {
     if (ctx.isAmbiguousRemoteOutcome()) {
       try {
-        await markOperationAmbiguous(options.db, ctx, now);
+        await markOperationAmbiguous(options.db, ctx, options.identityKey, now);
       } catch (markErr) {
         if (err && typeof err === "object") {
           err.markAmbiguousError = markErr;
@@ -3045,7 +3051,7 @@ async function withLegacyOperation(options, fn) {
       }
     } else if (!ctx.isCompleted()) {
       try {
-        await releaseLegacyOperation(options.db, ctx, "failed", now);
+        await releaseLegacyOperation(options.db, ctx, options.identityKey, "failed", now);
       } catch (releaseErr) {
         if (err && typeof err === "object") {
           err.releaseError = releaseErr;
@@ -3056,8 +3062,11 @@ async function withLegacyOperation(options, fn) {
   }
 }
 __name(withLegacyOperation, "withLegacyOperation");
-async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvider = Date.now) {
+async function releaseLegacyOperation(db, ctx, identityKey, outcome = "completed", nowProvider = Date.now) {
   assertSupportedCutoverNamespace(ctx.namespace);
+  if (operationStorageId(ctx.namespace, ctx.id, identityKey) !== ctx.storageId || operationKeyCheck(ctx.namespace, identityKey) !== ctx.identityKeyCheck) {
+    throw new CutoverFenceError("Operation identity binding mismatch");
+  }
   if (outcome !== "completed" && outcome !== "failed") {
     throw new CutoverFenceError(`Invalid outcome for release: ${outcome}`);
   }
@@ -3098,6 +3107,9 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
       timer.assertUnderDeadline("releaseLegacyOperation terminal");
       return;
     }
+    if (typeof ctx.isCompleted !== "function" || ctx.isCompleted()) {
+      throw new CutoverFenceError("Completed operation cannot release a nonterminal record");
+    }
     if (opData.phase === "upstream_pending" || opData.ambiguousRemoteOutcome === true) {
       throw new CutoverFenceError(
         `Cannot release operation in phase ${opData.phase}; pending or ambiguous claims must be resolved`
@@ -3130,8 +3142,11 @@ async function releaseLegacyOperation(db, ctx, outcome = "completed", nowProvide
   ctx.markCompleted();
 }
 __name(releaseLegacyOperation, "releaseLegacyOperation");
-async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
+async function markOperationAmbiguous(db, ctx, identityKey, nowProvider = Date.now) {
   assertSupportedCutoverNamespace(ctx.namespace);
+  if (operationStorageId(ctx.namespace, ctx.id, identityKey) !== ctx.storageId || operationKeyCheck(ctx.namespace, identityKey) !== ctx.identityKeyCheck) {
+    throw new CutoverFenceError("Operation identity binding mismatch");
+  }
   const opRef = storedOperationRef(db, ctx.namespace, ctx.storageId);
   const currentTime = nowProvider();
   await db.runTransaction(async (transaction) => {
@@ -3160,7 +3175,7 @@ async function markOperationAmbiguous(db, ctx, nowProvider = Date.now) {
         `Epoch mismatch on mark ambiguous: context epoch ${ctx.epoch} != recorded epoch ${opData.epoch}`
       );
     }
-    if (control.epoch !== ctx.epoch || control.state !== "legacy_open" && control.state !== "closing" || opData.phase !== "upstream_pending") {
+    if (typeof ctx.isCompleted !== "function" || ctx.isCompleted() || control.epoch !== ctx.epoch || control.state !== "legacy_open" && control.state !== "closing" || opData.phase !== "upstream_pending") {
       throw new CutoverFenceError("Only the original pending operation can be marked ambiguous");
     }
     timer.assertUnderDeadline("markOperationAmbiguous reads");
@@ -3235,6 +3250,9 @@ async function checkMutationGuardInTransaction(transaction, options) {
     throw new CutoverFenceError(
       `Durable operation context is required for guarded mutation in namespace ${options.namespace}`
     );
+  }
+  if (operationStorageId(options.namespace, options.operation.id, options.identityKey) !== options.operation.storageId || operationKeyCheck(options.namespace, options.identityKey) !== options.operation.identityKeyCheck || control.operationIdentityKeyCheck !== options.operation.identityKeyCheck) {
+    throw new CutoverFenceError("Operation identity binding mismatch");
   }
   const opRef = storedOperationRef(options.db, options.namespace, options.operation.storageId);
   const opSnap = await transaction.get(opRef);
@@ -3347,13 +3365,16 @@ async function checkMutationGuardInTransaction(transaction, options) {
   };
 }
 __name(checkMutationGuardInTransaction, "checkMutationGuardInTransaction");
-async function legacyPermissionDecision(transaction, db, namespace, operation, timer) {
+async function legacyPermissionDecision(transaction, db, namespace, operation, timer, identityKey) {
   assertSupportedCutoverNamespace(namespace);
   const control = await readCutoverFenceInTransaction(transaction, db, namespace);
   if (["fenced", "migrating", "v3_ready", "v3_active"].includes(control.state)) {
     return { permitted: false, control };
   }
-  if (!operation) {
+  if (!operation || typeof operation.storageId !== "string" || !operation.storageId || operation.namespace !== namespace || typeof operation.isCompleted !== "function" || operation.isCompleted()) {
+    return { permitted: false, control };
+  }
+  if (!(identityKey instanceof Uint8Array) || identityKey.byteLength !== 32 || operationStorageId(namespace, operation.id, identityKey) !== operation.storageId || operationKeyCheck(namespace, identityKey) !== operation.identityKeyCheck || control.operationIdentityKeyCheck !== operation.identityKeyCheck) {
     return { permitted: false, control };
   }
   const opRef = storedOperationRef(db, namespace, operation.storageId);
@@ -3365,7 +3386,7 @@ async function legacyPermissionDecision(transaction, db, namespace, operation, t
   if (control.operationIdentityVersion !== 1 || control.operationIdentityKeyCheck !== operation.identityKeyCheck || opRecord.operationIdentityVersion !== 1 || opRecord.schemaVersion !== 1 || opRecord.id !== operation.storageId || opRecord.operationId !== operation.storageId) {
     return { permitted: false, control };
   }
-  if (opRecord.namespace !== namespace || opRecord.epoch !== control.epoch) {
+  if (opRecord.namespace !== namespace || opRecord.epoch !== control.epoch || operation.epoch !== opRecord.epoch) {
     return { permitted: false, control };
   }
   if (opRecord.kind !== operation.kind) {
@@ -3378,12 +3399,12 @@ async function legacyPermissionDecision(transaction, db, namespace, operation, t
   return { permitted: true, control };
 }
 __name(legacyPermissionDecision, "legacyPermissionDecision");
-async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation, timer) {
+async function isLegacyMutationPermittedInTransaction(transaction, db, namespace, operation, timer, identityKey) {
   if (!isMonotonicTimer(timer)) {
     throw new CutoverFenceError("isLegacyMutationPermittedInTransaction requires the caller callback-entry monotonic timer");
   }
   timer.assertUnderDeadline("isLegacyMutationPermittedInTransaction entry");
-  const result = await legacyPermissionDecision(transaction, db, namespace, operation, timer);
+  const result = await legacyPermissionDecision(transaction, db, namespace, operation, timer, identityKey);
   timer.assertUnderDeadline("isLegacyMutationPermittedInTransaction before return");
   return result;
 }

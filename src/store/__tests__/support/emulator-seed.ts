@@ -56,6 +56,8 @@ export async function snapshotNamespace(db: Firestore, namespace: string): Promi
     const docs = await db.collection(group).get();
     for (const doc of docs.docs) lines.push(`${group}/${doc.id}=${JSON.stringify(doc.data())}`);
   }
+  const operations = await db.collection(`${namespace}_meta`).doc('cutover_fence').collection('operations').get();
+  for (const doc of operations.docs) lines.push(`${namespace}_meta/cutover_fence/operations/${doc.id}=${JSON.stringify(doc.data())}`);
   return lines.sort();
 }
 
