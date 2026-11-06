@@ -91,7 +91,7 @@ export function buildSourceProjectionMap(candidate, entries, codec) {
       if ((family.data.id !== undefined && family.data.id !== family.physicalId) || upstream.physicalId !== family.physicalId ||
         (access.data.familyId != null && access.data.familyId !== family.physicalId) ||
         (access.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId) ||
-        family.data.currentAccessToken !== accessId) throw new CutoverFenceError('Source family identity mismatch');
+        (family.data.currentAccessToken != null && family.data.currentAccessToken !== accessId)) throw new CutoverFenceError('Source family identity mismatch');
       use('families', family, family.physicalId);
       use('upstream', upstream, upstream.physicalId);
     }
@@ -105,8 +105,14 @@ export function buildSourceProjectionMap(candidate, entries, codec) {
       const linkedAccess = entry.data.accessToken;
       const fromAccess = linkedAccess === accessId ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : undefined;
       const raw = requireCredential(entry, aliases(entry.data.refreshToken, entry.data.token?.refreshToken) ?? fromAccess);
-      if (family && entry.data.familyId !== family.physicalId) throw new CutoverFenceError('Source refresh family mismatch');
-      if (raw === activeId && entry.data.status === 'active') use('refresh', entry, raw);
+      if (family && aliases(entry.data.familyId, entry.data.family_id) !== family.physicalId) throw new CutoverFenceError('Source refresh family mismatch');
+      if (raw === activeId && entry.data.status === 'active') {
+        const linked = aliases(entry.data.accessToken, entry.data.token?.accessToken);
+        if ((linked !== undefined && linked !== accessId) || (family && family.data.currentAccessToken == null && linked !== accessId)) {
+          throw new CutoverFenceError('Source active refresh access identity mismatch');
+        }
+        use('refresh', entry, raw);
+      }
       else if (family && raw === previousId && entry.data.status === 'consumed' && Number.isSafeInteger(entry.data.consumedAt)) use('prevRefresh', entry, raw);
       else throw new CutoverFenceError('Source refresh role or status mismatch');
     }

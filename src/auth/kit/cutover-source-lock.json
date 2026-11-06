@@ -1,15 +1,15 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "4d2103924cb3c22d4a04f14bdcaf1b873eb5c34b",
+  "commit": "8e8735638c591c22fd456aaab29307c5a463abf2",
   "profile": "bridge",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "7a30a2a34ad5ae7e899bf72e59fd5477bc364f2a",
+      "blob": "88e585c224101cde987e35d3ee6b56c3fc394ca4",
       "destination": "src/auth/kit/cutover/canonical-core.mjs",
-      "sha256": "c7e1507e8b7eadf69d403745609dc52ff4da7f2971eaffae92089241436ab5ca"
+      "sha256": "17228be33446017b5ab68a7c2384aafbd1921e19d06cf6198cfa6456a1c25787"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
@@ -37,9 +37,9 @@
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.mjs",
-      "blob": "bb048254a58c84b56b9132d813f45b5393f9529b",
+      "blob": "e7d374d4a9f1d6300784600c9f59fe26c8fc1812",
       "destination": "src/auth/kit/store/netsapiens-projector.mjs",
-      "sha256": "722b47680cace9a7441e473199959f90a81aa8e3096f4671d2823bc5c5506625"
+      "sha256": "198c9b0d3fca33b0fc6d71786f4fe5af4470328418ac1c916c8bdb2a83b93556"
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.d.mts",
@@ -93,7 +93,7 @@
   "generated": [
     {
       "destination": "src/auth/kit/cutover-protocol.mjs",
-      "sha256": "b331267afa0eb944d02d3088a6fe5101353f17bd7edd1d29a6d0574f6cde95fc"
+      "sha256": "4b5d01b95a863d83e777c7573fa06d9256e863a9b30a186ddbef2b71aa8823a4"
     },
     {
       "destination": "src/auth/kit/cutover-protocol.d.ts",
