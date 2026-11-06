@@ -610,7 +610,7 @@ function buildSourceProjectionMap(candidate, entries, codec) {
     if (candidate.kind === "pr56Families") {
       family = singleEntry(entries, "families");
       const upstream = singleEntry(entries, "upstream");
-      if (family.data.id !== void 0 && family.data.id !== family.physicalId || upstream.physicalId !== family.physicalId || access.data.familyId != null && access.data.familyId !== family.physicalId || access.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId || family.data.currentAccessToken !== accessId) throw new CutoverFenceError("Source family identity mismatch");
+      if (family.data.id !== void 0 && family.data.id !== family.physicalId || upstream.physicalId !== family.physicalId || access.data.familyId != null && access.data.familyId !== family.physicalId || access.data.refreshFamilyId != null && access.data.refreshFamilyId !== family.physicalId || family.data.currentAccessToken != null && family.data.currentAccessToken !== accessId) throw new CutoverFenceError("Source family identity mismatch");
       use("families", family, family.physicalId);
       use("upstream", upstream, upstream.physicalId);
     }
@@ -624,9 +624,14 @@ function buildSourceProjectionMap(candidate, entries, codec) {
       const linkedAccess = entry.data.accessToken;
       const fromAccess = linkedAccess === accessId ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : void 0;
       const raw = requireCredential(entry, aliases(entry.data.refreshToken, entry.data.token?.refreshToken) ?? fromAccess);
-      if (family && entry.data.familyId !== family.physicalId) throw new CutoverFenceError("Source refresh family mismatch");
-      if (raw === activeId && entry.data.status === "active") use("refresh", entry, raw);
-      else if (family && raw === previousId && entry.data.status === "consumed" && Number.isSafeInteger(entry.data.consumedAt)) use("prevRefresh", entry, raw);
+      if (family && aliases(entry.data.familyId, entry.data.family_id) !== family.physicalId) throw new CutoverFenceError("Source refresh family mismatch");
+      if (raw === activeId && entry.data.status === "active") {
+        const linked = aliases(entry.data.accessToken, entry.data.token?.accessToken);
+        if (linked !== void 0 && linked !== accessId || family && family.data.currentAccessToken == null && linked !== accessId) {
+          throw new CutoverFenceError("Source active refresh access identity mismatch");
+        }
+        use("refresh", entry, raw);
+      } else if (family && raw === previousId && entry.data.status === "consumed" && Number.isSafeInteger(entry.data.consumedAt)) use("prevRefresh", entry, raw);
       else throw new CutoverFenceError("Source refresh role or status mismatch");
     }
     if (family && (!roles.has("refresh") || !!previousId !== roles.has("prevRefresh"))) throw new CutoverFenceError("Source refresh role is missing");
@@ -4884,7 +4889,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
       throw new CutoverFenceError(`Already active but immutable prepared manifest missing at migration_prepared_${expectedEpoch}`);
     }
     const p2 = prepSnap2.data();
-    validateMapKeysExact(p2, REQUIRED_PREPARED_MANIFEST_KEYS, "prepared manifest");
+    validateMapKeysExact(p2, p2.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS, "prepared manifest");
     validateMigrationIdentityFields(p2, namespace, expectedEpoch, migrationRunId);
     if (p2.kind !== "prepared") {
       throw new CutoverFenceError(`Already active prep manifest kind must be 'prepared', got '${p2.kind}'`);
@@ -4966,7 +4971,7 @@ async function activateMigrationInTransaction(transaction, db, options) {
     throw new CutoverFenceError(`Cannot activate: prepared manifest missing at ${namespace}_meta/migration_prepared_${expectedEpoch}`);
   }
   const p = prepSnap.data();
-  validateMapKeysExact(p, REQUIRED_PREPARED_MANIFEST_KEYS, "prepared manifest");
+  validateMapKeysExact(p, p.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS, "prepared manifest");
   validateMigrationIdentityFields(p, namespace, expectedEpoch, migrationRunId);
   if (p.kind !== "prepared") {
     throw new CutoverFenceError(`Prepared manifest kind must be 'prepared', got '${p.kind}'`);

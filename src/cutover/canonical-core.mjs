@@ -3997,7 +3997,7 @@ export async function activateMigrationInTransaction(transaction, db, options) {
       throw new CutoverFenceError(`Already active but immutable prepared manifest missing at migration_prepared_${expectedEpoch}`);
     }
     const p = prepSnap.data();
-    validateMapKeysExact(p, REQUIRED_PREPARED_MANIFEST_KEYS, 'prepared manifest');
+    validateMapKeysExact(p, p.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS, 'prepared manifest');
     validateMigrationIdentityFields(p, namespace, expectedEpoch, migrationRunId);
     if (p.kind !== 'prepared') {
       throw new CutoverFenceError(`Already active prep manifest kind must be 'prepared', got '${p.kind}'`);
@@ -4090,7 +4090,7 @@ export async function activateMigrationInTransaction(transaction, db, options) {
     throw new CutoverFenceError(`Cannot activate: prepared manifest missing at ${namespace}_meta/migration_prepared_${expectedEpoch}`);
   }
   const p = prepSnap.data();
-  validateMapKeysExact(p, REQUIRED_PREPARED_MANIFEST_KEYS, 'prepared manifest');
+  validateMapKeysExact(p, p.totalPhysicalRecords > 0 ? [...REQUIRED_PREPARED_MANIFEST_KEYS, ...NONEMPTY_PROJECTOR_KEYS] : REQUIRED_PREPARED_MANIFEST_KEYS, 'prepared manifest');
   validateMigrationIdentityFields(p, namespace, expectedEpoch, migrationRunId);
   if (p.kind !== 'prepared') {
     throw new CutoverFenceError(`Prepared manifest kind must be 'prepared', got '${p.kind}'`);
