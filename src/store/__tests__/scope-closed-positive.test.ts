@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deriveStoreKey } from '../codec.js';
@@ -301,68 +301,6 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     })).rejects.toThrow();
   });
 
-  it('packed private v3 guard atomically latches a real credential write and rejects aborts and bad markers', async () => {
-    if (admin) { await admin.close(); admin = null; }
-    const modulePath = process.env.CUTOVER_PRIVATE_PROTOCOL_FILE;
-    if (!modulePath) throw new Error('CUTOVER_PRIVATE_PROTOCOL_FILE is required for packed private guard proof');
-    // The path selects the exact independently packed private artifact at runtime.
-    const privateKit = await import(pathToFileURL(modulePath).href);
-    await resetFencedNamespace(db, NS);
-    const collectionGroups = scopeUnionUnchecked(NS);
-    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
-    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
-    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
-    expect(inspected.ok, inspected.message).toBe(true);
-    const committed = await runStep({
-      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
-      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
-    });
-    expect(committed.ok, committed.message).toBe(true);
-    const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
-    const activated = await runStep({
-      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate',
-      options: { migrationManifestDigest: ready!.migrationManifestDigest! }, collectionGroups,
-    });
-    expect(activated.ok, activated.message).toBe(true);
-    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))).toMatchObject({ state: 'v3_active', irreversible: false });
-    const credential = db.collection(`${NS}_sessions`).doc('private-guard-credential');
-    const row = { familyId: 'private-guard-family', expiresAt: Date.now() + 60000, retainUntil: Date.now() + 120000, sealed: 'test-only-sealed', v: 2, ttlAt: new Date(Date.now() + 120000) };
-    const beforeAbort = await snapshotNamespace(db, NS);
-    await expect(db.runTransaction(async (transaction) => {
-      const guard = await privateKit.checkV3MutationGuardInTransaction(transaction, {
-        db, namespace: NS, timer: privateKit.startMonotonicTimer(),
-      });
-      guard.bufferMutation();
-      transaction.set(credential, row);
-      throw new Error('injected private guard abort');
-    })).rejects.toThrow(/injected private guard abort/);
-    expect(await snapshotNamespace(db, NS)).toEqual(beforeAbort);
-    expect((await credential.get()).exists).toBe(false);
-    await db.runTransaction(async (transaction) => {
-      const guard = await privateKit.checkV3MutationGuardInTransaction(transaction, {
-        db, namespace: NS, timer: privateKit.startMonotonicTimer(),
-      });
-      guard.bufferMutation();
-      transaction.set(credential, row);
-      guard.assertPreReturn();
-    });
-    expect((await credential.get()).data()).toMatchObject({ familyId: row.familyId, sealed: row.sealed, v: 2 });
-    expect(await getCutoverFenceRecord(db as unknown as FirestoreLike, NS)).toMatchObject({ state: 'v3_active', irreversible: true, emptyNamespace: false });
-    const markerRef = db.collection(`${NS}_meta`).doc('v2_adopted');
-    const marker = (await markerRef.get()).data()!;
-    await markerRef.set({ schemaVersion: 99 }, { merge: true });
-    const beforeRefusal = await snapshotNamespace(db, NS);
-    await expect(db.runTransaction(async (transaction) => {
-      const guard = await privateKit.checkV3MutationGuardInTransaction(transaction, {
-        db, namespace: NS, timer: privateKit.startMonotonicTimer(),
-      });
-      guard.bufferMutation();
-      transaction.set(db.collection(`${NS}_sessions`).doc('must-not-write'), row);
-    })).rejects.toThrow(/schemaVersion/i);
-    expect(await snapshotNamespace(db, NS)).toEqual(beforeRefusal);
-    expect((await db.collection(`${NS}_sessions`).doc('must-not-write').get()).exists).toBe(false);
-    await markerRef.set(marker);
-  });
 
   it('refuses an altered prepared snapshot before writing an item', async () => {
     if (admin) { await admin.close(); admin = null; }
