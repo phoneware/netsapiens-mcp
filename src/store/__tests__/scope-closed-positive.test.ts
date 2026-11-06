@@ -96,6 +96,20 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
   it('signed activation refuses an unsupported marker schema without writes', async () => {
     await assertMarkerRefusal((marker) => ({ ...marker, schemaVersion: 99 }), /schemaVersion/i);
   });
+  it('signed activation refuses a missing marker without writes', async () => {
+    const { collectionGroups, options } = await emptyReadyFixture();
+    const markerRef = db.collection(`${NS}_meta`).doc('v2_adopted');
+    const marker = (await markerRef.get()).data()!;
+    await markerRef.delete();
+    const before = await snapshotNamespace(db, NS);
+    const refused = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate', options, collectionGroups });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/marker|ownership/i);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+    await markerRef.set(marker);
+    const restored = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate', options, collectionGroups });
+    expect(restored.ok, restored.message).toBe(true);
+  });
   it('signed activation refuses an unexpected target without writes', async () => {
     const { collectionGroups, options } = await emptyReadyFixture();
     const unexpected = db.collection(`${NS}_sessions`).doc('unexpected-target');
