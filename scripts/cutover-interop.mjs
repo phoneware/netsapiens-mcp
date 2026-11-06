@@ -54,7 +54,11 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
           }
         }
       }
-      await assert.rejects(canonical.withLegacyOperation({ db, namespace, kind: 'token', identityKey: otherKey }, async () => {}));
+      await bridge.withLegacyOperation({ db, namespace, kind: 'read', identityKey: key }, async (operation) => {
+        await canonical.releaseLegacyOperation(db, operation);
+        assert.equal(operation.isCompleted(), true);
+      });
+      await assert.rejects(canonical.withLegacyOperation({ db, namespace, kind: 'token', identityKey: otherKey }, async () => { }));
 
       const ledger = new bridge.FirestoreTokenLedger({ db, collection: `${namespace}_tokens`, fence: { namespace, enforce: true } });
       await canonical.withLegacyOperation({ db, namespace, kind: 'token_issue', identityKey: key }, async (operation) => {
@@ -76,6 +80,9 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
             claimOwner: randomUUID(), expectedFamilyGeneration: 3, expectedGrantVersion: 7,
             expectedKind: operation.kind, timer: claimant.startMonotonicTimer(),
           }));
+          const durableGrant = JSON.stringify((await grant.get()).data());
+          assert.equal(durableGrant.includes(claim.claimOwner), false);
+          assert.equal(durableGrant.includes(operation.id), false);
           const opRef = canonical.getCutoverOperationDocRef(db, namespace, operation.id, key);
           const controlRef = canonical.getCutoverFenceDocRef(db, namespace);
           const refs = [family, pointer, grant, opRef, controlRef];
@@ -134,7 +141,7 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
       await raw.set({ phase, operationId: raw.id });
       const before = (await raw.get()).data();
       const control = await canonical.getCutoverFenceRecord(db, namespace);
-      await assert.rejects(bridge.withLegacyOperation({ db, namespace, kind: 'token', identityKey: key }, async () => {}));
+      await assert.rejects(bridge.withLegacyOperation({ db, namespace, kind: 'token', identityKey: key }, async () => { }));
       assert.deepEqual((await raw.get()).data(), before);
       assert.deepEqual(await canonical.getCutoverFenceRecord(db, namespace), control);
     } finally {
