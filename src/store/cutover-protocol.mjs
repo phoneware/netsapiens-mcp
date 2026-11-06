@@ -614,8 +614,10 @@ function buildSourceProjectionMap(candidate, entries, codec) {
       use("families", family, family.physicalId);
       use("upstream", upstream, upstream.physicalId);
     }
-    const activeId = family ? family.data.currentRefreshToken : aliases(access.data.refreshToken, access.data.token?.refreshToken);
+    const accessRefresh = aliases(access.data.refreshToken, access.data.token?.refreshToken);
+    const activeId = family ? family.data.currentRefreshToken : accessRefresh;
     if (typeof activeId !== "string" || !activeId) throw new CutoverFenceError("Source refresh credential is missing");
+    if (family && accessRefresh !== void 0 && accessRefresh !== activeId) throw new CutoverFenceError("Source access refresh identity mismatch");
     const previousId = family?.data.previousRefreshToken;
     if (previousId != null && (typeof previousId !== "string" || !previousId || previousId === activeId)) {
       throw new CutoverFenceError("Source previous refresh identity is invalid");
@@ -625,13 +627,13 @@ function buildSourceProjectionMap(candidate, entries, codec) {
       const fromAccess = linkedAccess === accessId ? aliases(access.data.refreshToken, access.data.token?.refreshToken) : void 0;
       const raw = requireCredential(entry, aliases(entry.data.refreshToken, entry.data.token?.refreshToken) ?? fromAccess);
       if (family && aliases(entry.data.familyId, entry.data.family_id) !== family.physicalId) throw new CutoverFenceError("Source refresh family mismatch");
-      if (raw === activeId && entry.data.status === "active") {
+      if (raw === activeId && (entry.data.status === "active" || !family && entry.data.status === void 0 && linkedAccess === accessId)) {
         const linked = aliases(entry.data.accessToken, entry.data.token?.accessToken);
         if (linked !== void 0 && linked !== accessId || family && family.data.currentAccessToken == null && linked !== accessId) {
           throw new CutoverFenceError("Source active refresh access identity mismatch");
         }
         use("refresh", entry, raw);
-      } else if (family && raw === previousId && entry.data.status === "consumed" && Number.isSafeInteger(entry.data.consumedAt)) use("prevRefresh", entry, raw);
+      } else if (family && raw === previousId && entry.data.status === "consumed" && Number.isSafeInteger(entry.data.consumedAt) && entry.data.successorRefreshToken === activeId) use("prevRefresh", entry, raw);
       else throw new CutoverFenceError("Source refresh role or status mismatch");
     }
     if (family && (!roles.has("refresh") || !!previousId !== roles.has("prevRefresh"))) throw new CutoverFenceError("Source refresh role is missing");
@@ -652,7 +654,7 @@ function buildSourceProjectionMap(candidate, entries, codec) {
     if (!collection) throw new CutoverFenceError("Unsupported source projection kind");
     const entry = singleEntry(entries, collection);
     const raw = collection === "authCodes" ? aliases(entry.data.code, entry.data.rawCode) : aliases(entry.data.token, entry.data.resumeToken);
-    if (raw !== void 0 && raw !== entry.physicalId) throw new CutoverFenceError("Source document identity mismatch");
+    if (raw !== void 0 && raw !== entry.physicalId || entry.data.id !== void 0 && entry.data.id !== entry.physicalId) throw new CutoverFenceError("Source document identity mismatch");
     use(collection, entry, entry.physicalId);
   }
   if (consumed2.size !== entries.length) throw new CutoverFenceError("Unexpected source projection entry");
@@ -673,7 +675,7 @@ function buildTargetProjectionMap(candidate, entries) {
     const family = singleEntry(entries, "families");
     const access = singleEntry(entries, "tokens");
     const upstream = singleEntry(entries, "upstream");
-    if (upstream.physicalId !== family.physicalId || access.physicalId !== family.data.currentAccessTokenId || access.data.familyId !== family.physicalId) throw new CutoverFenceError("Target family identity mismatch");
+    if (upstream.physicalId !== family.physicalId || access.physicalId !== family.data.currentAccessTokenId || access.data.familyId !== family.physicalId || upstream.data.familyId !== void 0 && upstream.data.familyId !== family.physicalId) throw new CutoverFenceError("Target family identity mismatch");
     use("families", family);
     use("tokens", access);
     use("upstream", upstream);
@@ -763,6 +765,9 @@ function projectSourceLogical(candidate, sources, codec, subject) {
       if (prevDoc.id !== prevId || prevDoc.status !== "consumed") {
         throw new CutoverFenceError(`Previous refresh token mismatch or not consumed for family ${sanitizeId(familyId)}`);
       }
+      if (prevDoc.successorRefreshToken !== currentRefId) {
+        throw new CutoverFenceError("Previous refresh successor does not match the active credential");
+      }
       if (typeof prevDoc.consumedAt !== "number") {
         throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} previous refresh missing numeric consumedAt`);
       }
@@ -836,8 +841,8 @@ function projectSourceLogical(candidate, sources, codec, subject) {
   if (candidate.kind === "baseFormatTokens") {
     const tokDoc = sources.get("tokens");
     if (!tokDoc) throw new CutoverFenceError(`Candidate ${sanitizeId(candidate.id)} missing tokens source`);
-    const accessToken = tokDoc.accessToken;
-    const refreshToken = tokDoc.refreshToken;
+    const accessToken = aliases(tokDoc.accessToken, tokDoc.token?.accessToken);
+    const refreshToken = aliases(tokDoc.refreshToken, tokDoc.token?.refreshToken);
     if (typeof accessToken !== "string" || accessToken.length === 0 || typeof refreshToken !== "string" || refreshToken.length === 0) {
       throw new CutoverFenceError("baseFormatTokens missing raw access or refresh credential");
     }
@@ -1635,6 +1640,7 @@ function isTargetFormatRow(collection, data) {
   }
   if (collection.endsWith("_resume_tokens")) {
     const isTarget = data.v === 2 && data._mcp_format === "v3_target";
+    if (isTarget && (data.token !== void 0 || data.resumeToken !== void 0)) throw new CutoverFenceError(`Ambiguous resume_tokens document format in '${collection}'`);
     const isSource = data.v === void 0 && data._mcp_format === void 0 && (data.consumedAt !== void 0 || data.expiresAt !== void 0 || data.token !== void 0);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
@@ -3994,6 +4000,11 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
       return { collection: identity.collection, physicalId: identity.physicalId, data: item.prospectiveTargetPostimages[index] };
     });
     if (expectedByKey.size) throw new CutoverFenceError("Prospective target set is incomplete");
+    const receiptTargets = prospective.map((entry) => {
+      const id = computeKeyedDocId(storeKey, "target-id", namespace, epoch, entry.collection, entry.physicalId);
+      return { collection: entry.collection, id, recordDigest: computeTargetRecordDigest(storeKey, namespace, epoch, entry.collection, id, entry.data) };
+    });
+    if (C(item.receiptUpperBound.targetAfter) !== C(receiptTargets)) throw new CutoverFenceError("Prospective receipt does not bind target postimages");
     const prospectiveProjection = projectTargetLogical(cand, buildTargetProjectionMap(cand, prospective), codec);
     if (H(storeKey, "logical-record", namespace, epoch, [cand.kind, prospectiveProjection]) !== srcDigest) {
       throw new CutoverFenceError("Prospective target graph does not match its source projection");
@@ -5239,6 +5250,8 @@ function validateCompleteMigrationPlanForIdentity(plan, expected) {
     candidates.set(c.id, c);
   }
   const covered = /* @__PURE__ */ new Set();
+  validatePlanSpec(prep.planSpec, prep, ns, expected.epoch, expected.migrationRunId);
+  const specifications = new Map(prep.planSpec.candidates.map((entry) => [entry.candidateId, entry]));
   for (const item of plan.items) {
     const c = candidates.get(item.candidateId);
     if (!c) throw new CutoverFenceError(`Plan item '${item.candidateId}' has no prepared candidate`);
@@ -5266,6 +5279,10 @@ function validateCompleteMigrationPlanForIdentity(plan, expected) {
     const refKeys = new Set(gotSources);
     if (actionKeys.length !== refKeys.size || !actionKeys.every((k) => refKeys.has(k))) {
       throw new CutoverFenceError(`Plan item '${item.candidateId}' source actions are not exactly the source references`);
+    }
+    const specification = specifications.get(item.candidateId);
+    if (!specification || C(specification.sourceActions) !== C(item.sourceActions)) {
+      throw new CutoverFenceError(`Plan item '${item.candidateId}' source actions do not match its prepared specification`);
     }
   }
   if (covered.size !== candidates.size) {
@@ -5581,7 +5598,7 @@ function encodeOAuthClientsRow(clientId, clientData, now) {
     client_uri: clientData.client_uri ?? null,
     logo_uri: clientData.logo_uri ?? null,
     scope: clientData.scope ?? null,
-    client_id_issued_at: clientData.client_id_issued_at ?? Math.floor(now / 1e3),
+    client_id_issued_at: clientData.client_id_issued_at === void 0 ? Math.floor(now / 1e3) : clientData.client_id_issued_at,
     _mcp_format: "v3_target",
     v: 2
   };
@@ -6400,7 +6417,7 @@ function extractCandidatesAndPlan(params) {
     let credToken = data.refreshToken ?? data.token?.refreshToken;
     if (!credToken && data.accessToken) {
       const tok = tokensByCredential.get(data.accessToken);
-      const rawRef = tok?.data?.refreshToken;
+      const rawRef = tok?.data?.refreshToken ?? tok?.data?.token?.refreshToken;
       if (rawRef && legacyDocId(rawRef) === d.id) {
         credToken = rawRef;
       } else {
@@ -6727,13 +6744,14 @@ function extractCandidatesAndPlan(params) {
     claimedAccessIds.add(tokEntry.credentialToken);
     const tokData = tokEntry.data || {};
     if (tokData.refreshFamilyId != null || tokData.familyId != null) continue;
-    if (typeof tokData.refreshToken !== "string" || tokData.refreshToken.length === 0) {
+    const rawRefresh = tokData.refreshToken ?? tokData.token?.refreshToken;
+    if (typeof rawRefresh !== "string" || rawRefresh.length === 0 || tokData.refreshToken != null && tokData.token?.refreshToken != null && tokData.refreshToken !== tokData.token.refreshToken) {
       malformedDocKeys.add(`tokens:${tokEntry.doc.id}`);
       reasons.malformedRecords++;
       continue;
     }
     const familyId = codec.id("family", tokEntry.credentialToken);
-    const refreshId = codec.id("refresh", tokData.refreshToken);
+    const refreshId = codec.id("refresh", rawRefresh);
     const newAccessId = codec.id("session", tokEntry.credentialToken);
     const candSources = [
       {
@@ -6744,8 +6762,8 @@ function extractCandidatesAndPlan(params) {
       }
     ];
     let baseRefEntry = void 0;
-    if (tokData.refreshToken) {
-      const rawRef = tokData.refreshToken;
+    if (rawRefresh) {
+      const rawRef = rawRefresh;
       baseRefEntry = refreshByCredential.get(rawRef);
       if (!baseRefEntry) {
         const byPhys = refreshByPhysicalId.get(legacyDocId(rawRef));
@@ -8000,25 +8018,30 @@ async function adoptFirestoreLegacyTokens(options) {
         const rData = receiptSnap.data();
         if (rData && rData.candidateId === c.id && rData.kind === "receipt") {
           validateReceipt(rData, namespace, control.epoch, control.migrationRunId);
+          if (rData.preparedDigest !== expectedPreparedDigest || rData.candidateDigest !== D("candidate", namespace, control.epoch, c.commitment) || rData.logicalDigest !== c.logicalDigest || rData.targetAfter.length !== c.targets.length) {
+            throw new CutoverFenceError("Existing receipt does not match its prepared candidate");
+          }
+          const boundTargets = new Map(c.targets.map((target) => [`${target.collection}:${target.id}`, target]));
           for (const t of rData.targetAfter) {
+            const key2 = `${t.collection}:${t.id}`;
+            const target = boundTargets.get(key2);
             const physicalCol = targetColMap[t.collection];
-            if (physicalCol) {
-              const post = c.postimageByTargetId?.get(t.id);
-              const docId = post?.id || post?.code || post?.client_id || post?.fingerprint || t.rawId;
-              const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
-              if (!targetSnap.exists) {
-                throw new CutoverFenceError(`Receipt exists for ${sanitizeId(c.id)} but target '${t.collection}/${sanitizeId(docId)}' missing in Firestore`);
-              }
-              const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, targetSnap.data());
-              if (recDigest !== t.recordDigest) {
-                throw new CutoverFenceError(`Receipt exists for ${sanitizeId(c.id)} but target '${t.collection}/${sanitizeId(docId)}' recordDigest mismatch`);
-              }
+            if (!target || !physicalCol || computeKeyedDocId(storeKey, "target-id", namespace, control.epoch, t.collection, target.rawId) !== t.id) {
+              throw new CutoverFenceError("Existing receipt target does not match its candidate");
+            }
+            boundTargets.delete(key2);
+            const targetSnap = await transaction.get(db.collection(physicalCol).doc(target.rawId));
+            if (!targetSnap.exists || computeTargetRecordDigest(storeKey, namespace, control.epoch, t.collection, t.id, targetSnap.data()) !== t.recordDigest) {
+              throw new CutoverFenceError("Existing receipt target postimage mismatch");
             }
           }
+          if (boundTargets.size) throw new CutoverFenceError("Existing receipt target set is incomplete");
           timer.assertUnderDeadline("Item retry check");
           return { status: rData.disposition === "retained" ? "retained" : "written" };
         }
+        throw new CutoverFenceError("Existing receipt does not match its prepared candidate");
       }
+      const verifiedSources = /* @__PURE__ */ new Set();
       for (const s of c.sources) {
         const physicalCol = colMap[s.collection];
         if (physicalCol && s.rawId) {
@@ -8030,6 +8053,7 @@ async function adoptFirestoreLegacyTokens(options) {
           if (recDigest !== s.recordDigest) {
             throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
           }
+          verifiedSources.add(`${physicalCol}\0${s.rawId}`);
         }
       }
       for (const t of c.targets) {
@@ -8058,6 +8082,11 @@ async function adoptFirestoreLegacyTokens(options) {
         if (computeKeyedDocId(storeKey, "target-id", namespace, control.epoch, t.collection, docId) !== t.id) throw new CutoverFenceError("Candidate target identity changed");
         const targetSnap = await transaction.get(db.collection(physicalCol).doc(docId));
         if (targetSnap.exists) {
+          const replacement = c.sourceActions.some((action) => action.action === "replace" && colMap[action.collection] === physicalCol && action.rawId === docId);
+          if (replacement && verifiedSources.has(`${physicalCol}\0${docId}`) && !isTargetFormatRow(physicalCol, targetSnap.data())) {
+            allTargetsAlreadyRetained = false;
+            continue;
+          }
           hasAnyTarget = true;
           existingTargetEntries.push({ collection: t.collection, physicalId: docId, data: targetSnap.data() || {} });
           retainedTargetRows.set(t.id, targetSnap.data());
@@ -8180,38 +8209,19 @@ async function adoptFirestoreLegacyTokens(options) {
         const recDigest = computeTargetRecordDigest(storeKey, namespace, control.epoch, colKey, targetId, data);
         targetDescriptors.push({ collection: colKey, id: targetId, recordDigest: recDigest });
         targetCounts[colKey]++;
-        targetRowsById.set(`${colKey}:${targetId}`, { ...data, id: d.id });
+        targetRowsById.set(`${colKey}:${targetId}`, { collection: colKey, physicalId: d.id, data });
       }
     }
     targetDescriptors.sort(compareDescriptors);
     const logicalItems = [];
     const commitments = prepared.candidateCommitments;
     for (const candidate of commitments) {
-      const targets = /* @__PURE__ */ new Map();
-      const retiredIds = [];
       const rows = candidate.targets.map((ref) => {
         const row = targetRowsById.get(`${ref.collection}:${ref.id}`);
         if (!row) throw new CutoverFenceError("Final target graph is incomplete");
-        return { ref, row };
+        return row;
       });
-      const family = rows.find(({ ref }) => ref.collection === "families")?.row;
-      for (const { ref, row } of rows) {
-        if (ref.collection === "refresh") {
-          if (!family || row.familyId !== family.id) throw new CutoverFenceError("Final refresh family mismatch");
-          const role = row.id === family.activeRefreshId ? "activeRefresh" : "prevRefresh";
-          if (targets.has(role)) throw new CutoverFenceError("Duplicate final refresh role");
-          targets.set(role, row);
-        } else if (ref.collection === "retiredRefreshTokens") {
-          if (!family || row.familyId !== family.id) throw new CutoverFenceError("Final retired refresh family mismatch");
-          retiredIds.push(row.id);
-        } else {
-          const role = ref.collection === "oauthClients" ? "clients" : ref.collection;
-          if (targets.has(role)) throw new CutoverFenceError("Duplicate final target role");
-          targets.set(role, row);
-        }
-      }
-      if (retiredIds.length) targets.set("retiredRefresh", { ids: retiredIds.sort(codeUnitCompare) });
-      const logical = projectTargetLogical(candidate, targets, codec);
+      const logical = projectTargetLogical(candidate, buildTargetProjectionMap(candidate, rows), codec);
       const digest = H(storeKey, "logical-record", namespace, control.epoch, [candidate.kind, logical]);
       if (digest !== candidate.logicalDigest) throw new CutoverFenceError("Final target semantic mismatch");
       logicalItems.push([candidate.id, digest]);

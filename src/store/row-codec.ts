@@ -257,7 +257,7 @@ export function encodeOAuthClientsRow(
     client_uri: clientData.client_uri ?? null,
     logo_uri: clientData.logo_uri ?? null,
     scope: clientData.scope ?? null,
-    client_id_issued_at: clientData.client_id_issued_at ?? Math.floor(now / 1000),
+    client_id_issued_at: clientData.client_id_issued_at === undefined ? Math.floor(now / 1000) : clientData.client_id_issued_at,
     _mcp_format: 'v3_target',
     v: 2,
   };
