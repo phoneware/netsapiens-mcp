@@ -8086,19 +8086,33 @@ async function adoptFirestoreLegacyTokens(options) {
         throw new CutoverFenceError("Existing receipt does not match its prepared candidate");
       }
       const verifiedSources = /* @__PURE__ */ new Set();
+      const sourceIdentities = /* @__PURE__ */ new Map();
+      const committedSources = new Map(candidateCommitment.sources.map((source) => [`${source.collection}:${source.id}`, source]));
+      const planItem = prepDoc.planSpec.candidates.find((item) => item.candidateId === c.id);
+      const actions = c.sourceActions.map((action) => ({ collection: action.collection, id: action.id, action: action.action }));
+      if (!planItem || C(actions) !== C(planItem.sourceActions)) throw new CutoverFenceError("Candidate source actions do not match the prepared plan");
       for (const s of c.sources) {
         const physicalCol = colMap[s.collection];
-        if (physicalCol && s.rawId) {
-          const docSnap = await transaction.get(db.collection(physicalCol).doc(s.rawId));
-          if (!docSnap.exists) {
-            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' disappeared concurrently`);
-          }
-          const recDigest = computeSourceRecordDigest(storeKey, namespace, control.epoch, s.collection, s.id, docSnap.data() || {});
-          if (recDigest !== s.recordDigest) {
-            throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
-          }
-          verifiedSources.add(`${physicalCol}\0${s.rawId}`);
+        const key2 = `${s.collection}:${s.id}`;
+        const committed = committedSources.get(key2);
+        if (!physicalCol || typeof s.rawId !== "string" || !s.rawId || !committed || committed.recordDigest !== s.recordDigest || computeKeyedDocId(storeKey, "source-id", namespace, control.epoch, s.collection, s.rawId) !== s.id) {
+          throw new CutoverFenceError("Candidate source identity does not match its prepared commitment");
         }
+        committedSources.delete(key2);
+        const docSnap = await transaction.get(db.collection(physicalCol).doc(s.rawId));
+        if (!docSnap.exists) {
+          throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' disappeared concurrently`);
+        }
+        const recDigest = computeSourceRecordDigest(storeKey, namespace, control.epoch, s.collection, s.id, docSnap.data() || {});
+        if (recDigest !== s.recordDigest) {
+          throw new CutoverFenceError(`Source document '${s.collection}/${sanitizeId(s.rawId)}' modified concurrently after preparation`);
+        }
+        verifiedSources.add(`${physicalCol}\0${s.rawId}`);
+        sourceIdentities.set(key2, s.rawId);
+      }
+      if (committedSources.size) throw new CutoverFenceError("Candidate source set is incomplete");
+      for (const action of c.sourceActions) {
+        if (sourceIdentities.get(`${action.collection}:${action.id}`) !== action.rawId) throw new CutoverFenceError("Candidate source action identity does not match its commitment");
       }
       for (const t of c.targets) {
         const post = c.postimageByTargetId?.get(t.id);

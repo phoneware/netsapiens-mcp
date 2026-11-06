@@ -1,7 +1,7 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "12d61d3e04d13103b6ac1077784115c01afdc051",
+  "commit": "1aa006535812f34fc261279b01a991f3fcd7b876",
   "profile": "migration",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
@@ -87,7 +87,7 @@
   "generated": [
     {
       "destination": "src/store/cutover-protocol.mjs",
-      "sha256": "520d75c173235ee98625e8c8b1bff97c5d2e424ac9f117ee9a208d5fe2cd7a24"
+      "sha256": "47659b1df56c2662aa48ecc7667a60f2d7a4cd6cdee696f2684a7d4f54185e8d"
     },
     {
       "destination": "src/store/cutover-protocol.d.ts",

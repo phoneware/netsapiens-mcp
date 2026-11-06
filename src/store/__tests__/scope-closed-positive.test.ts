@@ -287,10 +287,10 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(refused.message).toMatch(/Existing target graph does not equal the source projection/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
-  it('synthetic postimage fault preserves reorder invariance and rejects substituted identities', async () => {
+  it('synthetic plan faults preserve postimage reordering and reject identity or action substitutions', async () => {
     const anchor = 'timer.assertUnderDeadline(\"Preparation attempt\");\n    assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });';
     expect(closedBundle.toString('utf8').split(anchor)).toHaveLength(2);
-    for (const variant of ['reordered', 'substituted'] as const) {
+    for (const variant of ['reordered', 'substituted', 'action-substituted'] as const) {
       if (admin) { await admin.close(); admin = null; }
       await resetFencedNamespace(db, NS);
       const now = Date.now();
@@ -300,7 +300,9 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       }]]);
       const injection = variant === 'reordered'
         ? 'plan.items[0].prospectiveTargetPostimages.reverse();'
-        : 'plan.items[0].prospectiveTargetPostimages[0].id = \"wrong-target-identity\";';
+        : variant === 'substituted'
+          ? 'plan.items[0].prospectiveTargetPostimages[0].id = \"wrong-target-identity\";'
+          : 'plan.items[0].sourceActions[0].action = \"retain\";';
       const mutant = Buffer.from(closedBundle.toString('utf8').replace(anchor, `${anchor}\n    ${injection}`), 'utf8');
       const collectionGroups = scopeUnionUnchecked(NS);
       const fixture = fixtureFor({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, collectionGroups });
@@ -317,7 +319,9 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
         expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_ready');
       } else {
         expect(result.ok).toBe(false);
-        expect(result.message).toMatch(/Prospective target postimage identity does not match the source/);
+        expect(result.message).toMatch(variant === 'substituted'
+          ? /Prospective target postimage identity does not match the source/
+          : /source actions do not match its prepared specification/);
         expect(await snapshotNamespace(db, NS)).toEqual(before);
       }
     }
