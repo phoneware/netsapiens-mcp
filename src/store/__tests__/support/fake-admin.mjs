@@ -27,11 +27,11 @@ export async function startFakeAdmin({ databaseResource, policy, token = 'owner'
   const fieldResource = (group, fieldPath) => {
     const name = `${databaseResource}/collectionGroups/${group}/fields/${fieldPath}`;
     const override = overrideFor(group, fieldPath);
-    if (override) {
-      return { name, indexConfig: { usesAncestorConfig: false, indexes: override.indexes.map((mode) => restIndex(fieldPath, mode)) } };
-    }
-    // An unset field inherits the database default, exactly as the Admin API reports it.
-    return { name, indexConfig: { usesAncestorConfig: true, ancestorField: defaultName } };
+    const ttl = served.collections.find((entry) => entry.collectionGroup === group)?.ttl.find((entry) => entry.fieldPath === fieldPath);
+    const indexConfig = override
+      ? { usesAncestorConfig: false, indexes: override.indexes.map((mode) => restIndex(fieldPath, mode)) }
+      : { usesAncestorConfig: true, ancestorField: defaultName };
+    return { name, indexConfig, ...(ttl ? { ttlConfig: { state: ttl.state } } : {}) };
   };
 
   const send = (res, status, body) => {
@@ -60,8 +60,10 @@ export async function startFakeAdmin({ databaseResource, policy, token = 'owner'
       if (filter === 'indexConfig.usesAncestorConfig:false') {
         return send(res, 200, { fields: entry.overrides.map((override) => fieldResource(group, override.fieldPath)) });
       }
-      // The TTL listing: no TTL is signed in this fixture, so none is served.
-      return send(res, 200, { fields: [] });
+      if (filter === 'ttlConfig:*') {
+        return send(res, 200, { fields: entry.ttl.map((ttl) => fieldResource(group, ttl.fieldPath)) });
+      }
+      return send(res, 400, { error: { message: 'unsupported filter' } });
     }
     if (tail.length === 2 && kind === 'indexes') return send(res, 200, { indexes: [] });
     return send(res, 404, { error: { message: 'not found' } });

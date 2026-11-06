@@ -45,6 +45,7 @@ const fence = (db: Firestore) => db as unknown as FirestoreLike;
 interface ErrorScenario {
   readonly name: string;
   readonly errors: number | '>=1';
+  readonly reason?: string;
   readonly seed: () => Array<readonly [string, Record<string, unknown>]>;
 }
 
@@ -60,7 +61,7 @@ const errorScenarios = (): ErrorScenario[] => {
     },
     {
       name: 'partial target family in v3 causes migration conflict error',
-      errors: 1,
+      errors: '>=1', reason: 'partialTargets',
       seed: () => [
         [`${NS}_tokens_refresh_families/fam-partial-conflict`, {
           id: 'fam-partial-conflict', currentAccessToken: 'partial-acc', currentRefreshToken: 'partial-ref', retiredRefreshFingerprints: [], updatedAt: now,
@@ -78,7 +79,7 @@ const errorScenarios = (): ErrorScenario[] => {
     },
     {
       name: 'missing access or refresh token identifier rejects with error rather than inventing random IDs',
-      errors: 1,
+      errors: '>=1', reason: 'missingRefreshPointers',
       seed: () => [
         [`${NS}_tokens_refresh_families/fam-missing-ids`, { id: 'fam-missing-ids', retiredRefreshFingerprints: [], updatedAt: now }],
         [`${NS}_tokens_upstream/fam-missing-ids`, {
@@ -109,7 +110,7 @@ const errorScenarios = (): ErrorScenario[] => {
     },
     {
       name: 'classifies family-linked access token as orphan if it does not match currentAccessToken',
-      errors: 1,
+      errors: '>=1', reason: 'orphanAccessTokens',
       seed: () => [
         [`${NS}_tokens_refresh_families/fam-1`, { currentRefreshToken: 'ref-1', currentAccessToken: 'acc-legit', clientId: 'c1', createdAt: now, updatedAt: now }],
         [`${NS}_tokens_refresh/ref-1`, { familyId: 'fam-1', status: 'active', createdAt: now }],
@@ -203,6 +204,10 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
 
       const committed = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
       expect(committed.ok, 'a commit with migration errors must be refused').toBe(false);
+      if (scenario.reason) {
+        const reasonCount = new RegExp(`"${scenario.reason}":([1-9][0-9]*)`);
+        expect(committed.message).toMatch(reasonCount);
+      }
       expect(committed.exitStatus).not.toBe(0);
       expect(await snapshotNamespace(db, NS)).toEqual(before);
       expect((await getCutoverFenceRecord(fence(db), NS))?.state).toBe('fenced');

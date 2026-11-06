@@ -557,7 +557,7 @@ export class FirestoreBackend implements StoreBackend {
           refreshId: data.familyId,
           expiresAt: data.expiresAt,
           retainUntil: data.retainUntil,
-          nsExpiresAt: upData?.nsExpiresAt,
+          nsExpiresAt: upData?.nsExpiresAt ?? undefined,
           leaseOwner: upData?.leaseOwner,
           leaseUntil: upData?.leaseUntil,
           sealed: data.sealed,
@@ -581,7 +581,7 @@ export class FirestoreBackend implements StoreBackend {
           refreshId: accData.familyId,
           expiresAt: accData.expiresAt,
           retainUntil: accData.retainUntil,
-          nsExpiresAt: upData?.nsExpiresAt,
+          nsExpiresAt: upData?.nsExpiresAt ?? undefined,
           leaseOwner: upData?.leaseOwner,
           leaseUntil: upData?.leaseUntil,
           sealed: accData.sealed,
@@ -605,7 +605,7 @@ export class FirestoreBackend implements StoreBackend {
             refreshId: data.familyId,
             expiresAt: data.expiresAt,
             retainUntil: data.retainUntil,
-            nsExpiresAt: upData?.nsExpiresAt,
+            nsExpiresAt: upData?.nsExpiresAt ?? undefined,
             leaseOwner: upData?.leaseOwner,
             leaseUntil: upData?.leaseUntil,
             sealed: data.sealed,
@@ -620,12 +620,12 @@ export class FirestoreBackend implements StoreBackend {
             return undefined;
           }
 
-          if (upRef && upSnap?.exists && (next.leaseOwner !== upData?.leaseOwner || next.leaseUntil !== upData?.leaseUntil || next.nsExpiresAt !== upData?.nsExpiresAt)) {
+          if (upRef && upSnap?.exists && (next.leaseOwner !== upData?.leaseOwner || next.leaseUntil !== upData?.leaseUntil || next.nsExpiresAt !== current.nsExpiresAt)) {
             tx.set(upRef, upstreamData({
               ...upData!,
               leaseOwner: next.leaseOwner,
               leaseUntil: next.leaseUntil,
-              nsExpiresAt: next.nsExpiresAt,
+              nsExpiresAt: next.nsExpiresAt === current.nsExpiresAt ? upData!.nsExpiresAt : next.nsExpiresAt,
             }));
           }
 

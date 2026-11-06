@@ -52,7 +52,7 @@ export interface FamilyRow {
 export interface UpstreamGrantRow {
   id: string;
   grantVersion: number;
-  nsExpiresAt?: number;
+  nsExpiresAt?: number | null;
   leaseOwner?: string;
   leaseUntil?: number;
   updatedAt: number;

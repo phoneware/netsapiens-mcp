@@ -136,7 +136,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
       nsRefreshToken: 'legacy-ns-ref',
       nsUsername: 'legacy@domain.com',
       clientId: 'legacy-client',
-      seatId: 'seat-42',
+      extra: { seatId: 'seat-42' },
       ttlAt: new Date(Date.now() + 30 * 86_400_000),
     });
     if (options.malformedSeat) {
@@ -148,7 +148,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
         nsRefreshToken: 'bad-ns-ref',
         nsUsername: 'bad@domain.com',
         clientId: 'legacy-client',
-        seatId: '',
+        extra: { seatId: '' },
         ttlAt: new Date(Date.now() + 30 * 86_400_000),
       });
     }
@@ -194,7 +194,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     await startAdmin(fixture);
 
     const inspected = await runStep(fixture, 'mcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     const beforeDry = await snapshot('mcp');
@@ -217,7 +217,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     await startAdmin(fixture);
 
     const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     const commit = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: false, expectedSourceInventoryDigest: digest })
@@ -238,7 +238,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
 
     const beforeDry = await snapshot('pwmcp');
     const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const dry = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string })
     expect(dry.ok).toBe(false);
     expect(dry.message).toBe('Fresh index policy differs from the signed index policy');
@@ -259,7 +259,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
 
     const beforeDry = await snapshot('pwmcp');
     const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const dry = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'adopt', dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest as string })
     expect(dry.ok).toBe(false);
     expect(dry.message).toBe('Fresh index policy differs from the signed index policy');
@@ -274,7 +274,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     await startAdmin(fixture);
 
     const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     const beforeDry = await snapshot('pwmcp');
@@ -297,7 +297,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
     await startAdmin(fixture);
 
     const inspected = await runStep(fixture, 'pwmcp', bundleBytes, { action: 'inspect' })
-    expect(inspected.ok).toBe(true);
+    expect(inspected.ok, inspected.message).toBe(true);
     const digest = inspected.sourceInventoryDigest as string;
 
     await db.collection('pwmcp_tokens').doc('legacy-acc-3').set({
@@ -308,7 +308,7 @@ describe.skipIf(!gateOpen)('preparation proof on the genuine bundle, emulator an
       nsRefreshToken: 'legacy-ns-ref-3',
       nsUsername: 'later@domain.com',
       clientId: 'legacy-client',
-      seatId: 'seat-43',
+      extra: { seatId: 'seat-43' },
       ttlAt: new Date(Date.now() + 30 * 86_400_000),
     });
 

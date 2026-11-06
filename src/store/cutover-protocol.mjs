@@ -5567,7 +5567,7 @@ function encodeUpstreamRow(codec, familyId, grantVersion, upstream, now) {
   return {
     id: familyId,
     grantVersion,
-    nsExpiresAt: upstream.nsExpiresAt ?? void 0,
+    ...upstream.nsExpiresAt === void 0 ? {} : { nsExpiresAt: upstream.nsExpiresAt },
     updatedAt: now,
     sealed,
     v: 2

@@ -15,10 +15,22 @@ export function createSyntheticFixture({ canonicalJson, formatPAE, bundleBytes, 
   const subjectGroup = `${namespace}_refresh_families`;
   if (subjectDescriptor !== null && !groups.includes(subjectGroup)) throw new Error("Synthetic subject group is missing");
   const subjectMode = { queryScope: "COLLECTION", arrayConfig: "CONTAINS" };
-  const index = { schemaVersion: 2, kind: "firestore-index-policy", binding: { profile: "emulator", project, database, collectionGroups: groups }, policy: { default: { source: `${databaseResource}/collectionGroups/__default__/fields/*`, indexes: [] }, collections: groups.map((collectionGroup) => ({ collectionGroup, overrides: subjectDescriptor !== null && collectionGroup === subjectGroup ? [{ fieldPath: "subjectRefs", indexes: [subjectMode] }] : [], composites: [], ttl: [] })) }, provenance: { terraformRevision: "1".repeat(40), terraformPlanDigest: "2".repeat(64), databaseResource, paginationComplete: true } };
+  const ttlGroup = (group) => ["_sessions", "_auth_codes", "_resume_tokens"].some((suffix) => group.endsWith(suffix));
+  const index = { schemaVersion: 2, kind: "firestore-index-policy", binding: { profile: "emulator", project, database, collectionGroups: groups }, policy: { default: { source: `${databaseResource}/collectionGroups/__default__/fields/*`, indexes: [] }, collections: groups.map((collectionGroup) => ({ collectionGroup, overrides: subjectDescriptor !== null && collectionGroup === subjectGroup ? [{ fieldPath: "subjectRefs", indexes: [subjectMode] }] : [], composites: [], ttl: ttlGroup(collectionGroup) ? [{ fieldPath: "ttlAt", state: "ACTIVE" }] : [] })) }, provenance: { terraformRevision: "1".repeat(40), terraformPlanDigest: "2".repeat(64), databaseResource, paginationComplete: true } };
   const subjectName = `${databaseResource}/collectionGroups/${subjectGroup}/fields/subjectRefs`;
   const subjectField = { name: subjectName, indexConfig: { usesAncestorConfig: false, indexes: [{ queryScope: "COLLECTION", fields: [{ fieldPath: "subjectRefs", arrayConfig: "CONTAINS" }] }] } };
-  const adminObservation = { databaseResource, paginationComplete: true, defaultIndexes: { source: index.policy.default.source, chain: [index.policy.default.source], indexes: [] }, collections: groups.map((collectionGroup) => ({ collectionGroup, requiredFields: subjectDescriptor !== null && collectionGroup === subjectGroup ? ["subjectRefs"] : [], fields: subjectDescriptor !== null && collectionGroup === subjectGroup ? [{ name: subjectName, index: { source: subjectName, chain: [subjectName], indexes: subjectField.indexConfig.indexes }, ttlConfig: null }] : [], composites: [] })) };
+  const adminObservation = {
+    databaseResource, paginationComplete: true, defaultIndexes: { source: index.policy.default.source, chain: [index.policy.default.source], indexes: [] }, collections: groups.map((collectionGroup) => {
+      const fields = [];
+      if (subjectDescriptor !== null && collectionGroup === subjectGroup) fields.push({ name: subjectName, index: { source: subjectName, chain: [subjectName], indexes: subjectField.indexConfig.indexes }, ttlConfig: null });
+      if (ttlGroup(collectionGroup)) {
+        const name = `${databaseResource}/collectionGroups/${collectionGroup}/fields/ttlAt`;
+        fields.push({ name, index: { source: index.policy.default.source, chain: [name, index.policy.default.source], indexes: [] }, ttlConfig: { state: "ACTIVE" } });
+      }
+      fields.sort((a, b) => a.name.localeCompare(b.name));
+      return { collectionGroup, requiredFields: subjectDescriptor !== null && collectionGroup === subjectGroup ? ["subjectRefs"] : [], fields, composites: [] };
+    })
+  };
   const indexBytes = canonical(index), protocolDigest = digest(bundleBytes), indexSchemaDigest = digest(indexBytes), indexPolicyDigest = digest(canonical(index.policy));
   const source = "1".repeat(40), privateRunnerSha = "2".repeat(40), workflowSourceSha = "3".repeat(40), assemblyDigest = "4".repeat(64), childDigest = `sha256:${"5".repeat(64)}`, imageDigest = "6".repeat(64), packageIntegrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`, codeArtifact = `example.invalid/synthetic-service@sha256:${imageDigest}`;
   const observed = {

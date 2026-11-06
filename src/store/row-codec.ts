@@ -137,7 +137,7 @@ export function encodeUpstreamRow(
   return {
     id: familyId,
     grantVersion,
-    nsExpiresAt: upstream.nsExpiresAt ?? undefined,
+    ...(upstream.nsExpiresAt === undefined ? {} : { nsExpiresAt: upstream.nsExpiresAt }),
     updatedAt: now,
     sealed,
     v: 2,

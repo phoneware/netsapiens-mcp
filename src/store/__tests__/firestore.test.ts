@@ -7,6 +7,8 @@ import { adoptFirestoreLegacyTokens } from '../firestore-v2-adoption.js';
 import { createCodec, deriveStoreKey, LeaseLostError } from '../codec.js';
 import { runStoreConformance, type PersistedSnapshot, type PersistedValue } from '../conformance.js';
 import type { StoreBackend } from '../types.js';
+import { encodeAuthCodesRow, encodeOAuthClientsRow, encodeRefreshFamiliesRow, encodeRefreshRow, encodeResumeTokensRow, encodeSessionsRow, encodeUpstreamRow } from '../row-codec.js';
+import { normalizeValue } from '../../cutover/canonical-core.mjs';
 
 const host = process.env.FIRESTORE_EMULATOR_HOST;
 const required = process.env.NSMCP_REQUIRE_FIRESTORE_EMULATOR === '1';
@@ -88,6 +90,39 @@ describe.skipIf(!host)('Firestore emulator', () => {
    return JSON.stringify(Object.fromEntries(Object.entries(rows).map(([name, docs]) => [name, Object.fromEntries((docs as Array<{ key: string; fields: unknown }>).map(doc => [doc.key, doc.fields]))])));
   },
   cleanup,
+ });
+ it('encodes migration rows without undefined fields and preserves explicit nulls', async () => {
+  const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
+  const collection = db.collection(`encoder_${randomUUID().replaceAll('-', '')}`);
+  const codec = createCodec(key);
+  const now = Date.now();
+  const rows = [
+   encodeSessionsRow(codec, 'access', 'family', { clientId: 'client', expiresAt: now + 10000, serverBaseUrl: null }, now),
+   encodeRefreshFamiliesRow(codec, 'family', 1, 'refresh', 'access', { clientId: 'client', serverBaseUrl: null }, [], 'active', now),
+   encodeRefreshRow('refresh', 'family', 1, now),
+   encodeUpstreamRow(codec, 'without-expiry', 1, { nsAccessToken: 'access', nsUsername: 'user' }, now),
+   encodeUpstreamRow(codec, 'null-expiry', 1, { nsAccessToken: 'access', nsUsername: 'user', nsExpiresAt: null }, now),
+   encodeUpstreamRow(codec, 'with-expiry', 1, { nsAccessToken: 'access', nsUsername: 'user', nsExpiresAt: now }, now),
+   encodeAuthCodesRow(codec, 'code', { pending: { clientId: 'client', redirectUri: 'https://example.test', createdAt: now, state: null }, nsTokens: { access_token: 'token', refresh_token: null }, clientId: 'client', extra: { nested: { value: null } } }, now + 10000, now),
+   encodeResumeTokensRow('resume', now, now + 10000, now),
+   encodeOAuthClientsRow('client', { redirect_uris: ['https://example.test'], client_name: null }, now),
+  ];
+  try {
+   await expect(collection.doc('invalid').set({ nested: { value: undefined } })).rejects.toThrow();
+   for (const [index, row] of rows.entries()) {
+    expect(() => normalizeValue(row)).not.toThrow();
+    await collection.doc(String(index)).set(row);
+   }
+   expect((await collection.doc('3').get()).data()).not.toHaveProperty('nsExpiresAt');
+   expect((await collection.doc('4').get()).data()?.nsExpiresAt).toBeNull();
+   expect((await collection.doc('5').get()).data()?.nsExpiresAt).toBe(now);
+   expect((await collection.doc('8').get()).data()?.client_name).toBeNull();
+   const code = (await collection.doc('6').get()).data();
+   expect(codec.open(code?.sealed, `code:${codec.id('code', 'code')}`)).toMatchObject({ pending: { state: null }, nsTokens: { refresh_token: null }, extra: { nested: { value: null } } });
+  } finally {
+   await db.recursiveDelete(collection);
+   await db.terminate();
+  }
  });
  it('round trips an explicit client collection', async () => {
   const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
