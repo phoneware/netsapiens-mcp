@@ -42,25 +42,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     bundleBytes = readFileSync(BUNDLE_SOURCE);
     const text = bundleBytes.toString('utf8');
     expect(text.split(OPEN_SCOPE_TEXT).length - 1, 'open scope text must appear exactly once').toBe(1);
-    let synthetic = text.replace(OPEN_SCOPE_TEXT, CLOSED_SCOPE_TEXT);
-    const mutation = process.env.CUTOVER_PROOF_MUTATION;
-    const mutations: Record<string, Array<readonly [string, string]>> = {
-      'first-write-latch': [['if (!control.irreversible) {', 'if (false) {']],
-      'malformed-marker': [
-        ['validateMigrationIdentityFields(m, namespace, expectedEpoch, migrationRunId);', 'void m;'],
-        ['if (f[k] !== p[k] || m[k] !== p[k]) {', 'if (f[k] !== p[k]) {'],
-      ],
-      'unexpected-target': [['if (!expectedWrittenTargets.has(targetKey)) {', 'if (false) {']],
-      'finalization-latch': [['if (markerDoc.emptyNamespace !== true && !control.irreversible) {', 'if (false) {']],
-    };
-    if (mutation) {
-      if (!mutations[mutation]) throw new Error(`Unknown proof mutation ${mutation}`);
-      for (const [before, after] of mutations[mutation]) {
-        if (synthetic.split(before).length !== 2) throw new Error(`Mutation anchor is not unique: ${mutation}`);
-        synthetic = synthetic.replace(before, after);
-      }
-    }
-    closedBundle = Buffer.from(synthetic, 'utf8');
+    closedBundle = Buffer.from(text.replace(OPEN_SCOPE_TEXT, CLOSED_SCOPE_TEXT), 'utf8');
     db = new Firestore(EMULATOR);
   });
   afterEach(async () => {
