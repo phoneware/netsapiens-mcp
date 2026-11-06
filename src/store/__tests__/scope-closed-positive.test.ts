@@ -287,10 +287,10 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(refused.message).toMatch(/Existing target graph does not equal the source projection/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
-  it('synthetic plan faults preserve postimage reordering and reject identity or action substitutions', async () => {
+  it('synthetic plan faults preserve reordering and reject source, target or action substitutions', async () => {
     const anchor = 'timer.assertUnderDeadline(\"Preparation attempt\");\n    assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });';
     expect(closedBundle.toString('utf8').split(anchor)).toHaveLength(2);
-    for (const variant of ['reordered', 'substituted', 'action-substituted'] as const) {
+    for (const variant of ['reordered', 'substituted', 'action-substituted', 'source-digest', 'target-rebound'] as const) {
       if (admin) { await admin.close(); admin = null; }
       await resetFencedNamespace(db, NS);
       const now = Date.now();
@@ -302,7 +302,11 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
         ? 'plan.items[0].prospectiveTargetPostimages.reverse();'
         : variant === 'substituted'
           ? 'plan.items[0].prospectiveTargetPostimages[0].id = \"wrong-target-identity\";'
-          : 'plan.items[0].sourceActions[0].action = \"retain\";';
+          : variant === 'action-substituted'
+            ? 'plan.items[0].sourceActions[0].action = \"retain\";'
+            : variant === 'source-digest'
+              ? 'plan.prepared.candidateCommitments[0].sources[0].recordDigest = plan.prepared.candidateCommitments[0].sources[0].recordDigest === \"a\".repeat(64) ? \"b\".repeat(64) : \"a\".repeat(64); plan.prepared.planDigest = D(\"plan\", namespace, expectedEpoch, plan.prepared.planSpec);'
+              : 'plan.prepared.candidateCommitments[0].targets[0].id = \"b\".repeat(64); plan.items[0].targetReferences[0].id = \"b\".repeat(64); plan.items[0].receiptUpperBound.targetAfter[0].id = \"b\".repeat(64); plan.prepared.planDigest = D(\"plan\", namespace, expectedEpoch, plan.prepared.planSpec);';
       const mutant = Buffer.from(closedBundle.toString('utf8').replace(anchor, `${anchor}\n    ${injection}`), 'utf8');
       const collectionGroups = scopeUnionUnchecked(NS);
       const fixture = fixtureFor({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, collectionGroups });
@@ -321,7 +325,11 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
         expect(result.ok).toBe(false);
         expect(result.message).toMatch(variant === 'substituted'
           ? /Prospective target postimage identity does not match the source/
-          : /source actions do not match its prepared specification/);
+          : variant === 'action-substituted'
+            ? /source actions do not match its prepared specification/
+            : variant === 'source-digest'
+              ? /Candidate source does not match its snapshot commitment/
+              : /Candidate target references do not match the projected identities/);
         expect(await snapshotNamespace(db, NS)).toEqual(before);
       }
     }
