@@ -16,6 +16,7 @@ import {
 } from '../store/firestore-v2-adoption.js';
 import { createFirestoreStore, createFirestoreBackend, type FirestoreLike } from '../store/firestore.js';
 import { deriveStoreKey } from '../store/codec.js';
+import { parseCutoverFenceRecord } from '../store/cutover-protocol.mjs';
 
 class MockFirestore implements FirestoreLike {
   public collections = new Map<string, Map<string, Record<string, unknown>>>();
@@ -89,6 +90,18 @@ class MockFirestore implements FirestoreLike {
 }
 
 describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', () => {
+  it('rejects preparedManifestDigest on the canonical control record', () => {
+    expect(() => parseCutoverFenceRecord({
+      schemaVersion: 1,
+      namespace: 'mcp',
+      epoch: 1,
+      state: 'legacy_open',
+      activeOperations: 0,
+      irreversible: false,
+      preparedManifestDigest: 'a'.repeat(64),
+    }, 'mcp')).toThrow();
+  });
+
   const secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   const key = deriveStoreKey(secret);
   const setupFencedState = async (db: any, namespace: string, epoch: number = 1): Promise<void> => {

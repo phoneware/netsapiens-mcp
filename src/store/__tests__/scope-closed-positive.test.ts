@@ -160,4 +160,44 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(retry.ok, `activation retry refused: ${retry.message}`).toBe(true);
     expect(retry.result?.status).toBe('already_active');
   });
+
+  it('refuses an altered prepared snapshot before writing an item', async () => {
+    if (admin) { await admin.close(); admin = null; }
+    await resetFencedNamespace(db, NS);
+    const family = 'prepared-race-family';
+    const source = {
+      accessToken: 'prepared-race-access', refreshToken: 'prepared-race-refresh',
+      refreshFamilyId: family, clientId: 'prepared-race-client',
+    };
+    await seedDocs(db, [
+      [`${NS}_tokens_refresh_families/${family}`, {
+        id: family, currentAccessToken: source.accessToken, currentRefreshToken: source.refreshToken,
+        retiredRefreshFingerprints: [], updatedAt: Date.now(),
+      }],
+      [`${NS}_tokens_refresh/${source.refreshToken}`, {
+        familyId: family, status: 'active', accessToken: source.accessToken,
+        token: { ...source, expiresAt: Date.now() + 3600_000, nsAccessToken: 'upstream', nsRefreshToken: 'refresh', nsUsername: 'test@example.test' },
+      }],
+      [`${NS}_tokens_upstream/${family}`, {
+        grant: { access_token: 'upstream', refresh_token: 'refresh', username: 'test@example.test' },
+        expiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
+      }],
+      [`${NS}_tokens/${source.accessToken}`, source],
+    ]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const options = { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest };
+    mountFixture(fixture, 'adopt', options);
+    writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'prepared-race-runner.mjs')));
+    const result = await runFactory(argvFor('adopt', NS, options));
+    expect(result.mutated).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Prepared manifest changed before item transaction');
+    expect((await db.collection(`${NS}_tokens`).doc(source.accessToken).get()).data()).toEqual(source);
+    expect((await db.collection(`${NS}_sessions`).get()).empty).toBe(true);
+    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('migrating');
+  });
 });
