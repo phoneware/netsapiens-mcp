@@ -7,4 +7,5 @@ export * from './bearer.js';
 export * from './ledger.js';
 export * from './firestore-ledger.js';
 export * from './upstream-grant.js';
+export * from './bound-fenced-runtime.js';
 export * from './cutover-fence.js';

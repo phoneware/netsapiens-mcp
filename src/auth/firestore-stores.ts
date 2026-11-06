@@ -17,9 +17,13 @@ import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/share
 import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { StoredToken } from './token-store.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
-import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
-import type { RefreshLookupResult, RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
-import { FirestoreUpstreamGrantStore, RefreshSupersededError, assertGrantNotPending, nextGrantVersion, type AmbiguousGrantReasonCode, type EnsureFreshResult, type StoredUpstreamRecord } from './kit/upstream-grant.js';
+import { FirestoreTokenLedger, docId, type FirestoreTokenLedgerOptions } from './kit/firestore-ledger.js';
+import type { RefreshLookupResult, RefreshRotationResult, StoredRefreshFamily } from './kit/ledger.js';
+import type { UpstreamCompletion } from './legacy-kit/ledger.js';
+import { FirestoreUpstreamGrantStore, assertGrantWritable as assertGrantNotPending, nextGrantVersion, type AmbiguousGrantReasonCode, type StoredUpstreamRecord } from './kit/upstream-grant.js';
+import { FirestoreUpstreamGrantStore as UnfencedGrantStore, RefreshSupersededError, type EnsureFreshResult } from './legacy-kit/upstream-grant.js';
+import { FirestoreTokenLedger as UnfencedLedger } from './legacy-kit/firestore-ledger.js';
+import { createBoundFencedRuntime, type UpstreamCompletionReceipt } from './kit/bound-fenced-runtime.js';
 import { stripUndefined } from './kit/strip-undefined.js';
 import { CutoverFenceError, UpstreamUnavailableError, UpstreamRevokedError, kitCodeOf } from './kit/errors.js';
 import { UpstreamTimeoutError, UpstreamGrantRejectedError } from './netsapiens-auth-provider.js';
@@ -104,6 +108,16 @@ export interface NsUpstreamGrant {
  nsUserRole?: string;
  nsApiUrl?: string;
 }
+interface BoundRuntime {
+  grants: {
+    ensureFresh(familyId: string, options: { operation: LegacyOperationContext; target: { kind: 'rotate'; refreshToken: string; clientId: string } | { kind: 'access_update'; accessToken: string }; force?: boolean; now?: number; waitMs?: number; pollIntervalMs?: number; leaseMs?: number }): Promise<{ grant: NsUpstreamGrant; completion: UpstreamCompletionReceipt | null }>;
+    finalizeAccess(receipt: UpstreamCompletionReceipt, operation: LegacyOperationContext): Promise<StoredToken>;
+  };
+  ledger: {
+    rotate(oldRefreshToken: string, replacement: StoredToken, clientId: string, now?: number, options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletionReceipt | null }): Promise<RefreshRotationResult<StoredToken>>;
+  };
+}
+
 
 // ---------------------------------------------------------------------------
 // FirestoreTokenStore
@@ -115,10 +129,14 @@ export interface FirestoreTokenStoreOptions {
   db?: Firestore;
   now?: () => number;
   fence?: CutoverFenceConfig;
+  refreshUpstream?: (grant: NsUpstreamGrant) => Promise<{ grant: NsUpstreamGrant; expiresAt?: number }>;
 }
 
 export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   private readonly upstreamStore: FirestoreUpstreamGrantStore<NsUpstreamGrant>;
+  private readonly unfencedGrantStore?: UnfencedGrantStore<NsUpstreamGrant>;
+  private readonly unfencedLedger?: UnfencedLedger<StoredToken>;
+  private readonly boundRuntime?: BoundRuntime;
   private readonly localNow: () => number;
   private readonly rawDb: Firestore;
   private readonly tokensCollection: string;
@@ -136,7 +154,7 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     });
   const fenceConfig: CutoverFenceConfig | undefined = normalizeFenceConfig(opts.fence);
 
-    super({
+    const ledgerOptions: FirestoreTokenLedgerOptions<StoredToken> = {
       db,
       collection,
       refreshCollection: `${collection}_refresh`,
@@ -170,7 +188,8 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
         upstreamCollection: `${collection}_upstream`,
       },
       now: opts.now,
-    });
+    };
+    super(ledgerOptions);
 
     this.rawDb = db;
     this.tokensCollection = collection;
@@ -182,6 +201,30 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       now: opts.now,
       fence: fenceConfig,
     });
+    if (!fenceConfig?.enforce) {
+      this.unfencedGrantStore = new UnfencedGrantStore({ db, collection: `${collection}_upstream`, now: opts.now, fence: fenceConfig });
+      this.unfencedLedger = new UnfencedLedger(ledgerOptions);
+    }
+    if (fenceConfig?.enforce) {
+      if (!opts.refreshUpstream) throw new CutoverFenceError('Fenced token store requires a startup-bound upstream transport');
+      const validateGrant = (value: unknown): NsUpstreamGrant => {
+        if (!value || typeof value !== 'object') throw new UpstreamUnavailableError('Invalid upstream grant');
+        const grant = value as NsUpstreamGrant;
+        if (typeof grant.nsAccessToken !== 'string' || !grant.nsAccessToken.trim() ||
+            (grant.nsRefreshToken !== undefined && (typeof grant.nsRefreshToken !== 'string' || !grant.nsRefreshToken.trim())) ||
+            (grant.nsExpiresAt !== undefined && (!Number.isFinite(grant.nsExpiresAt) || grant.nsExpiresAt <= 0))) {
+          throw new UpstreamUnavailableError('Invalid upstream grant');
+        }
+        return grant;
+      };
+      this.boundRuntime = createBoundFencedRuntime<NsUpstreamGrant, StoredToken>({
+        db, fence: fenceConfig, ledger: ledgerOptions,
+        refresh: opts.refreshUpstream,
+        validateGrant,
+        applyGrant: (token, grant) => ({ ...token, ...grant }),
+        now: opts.now,
+      });
+    }
     this.localNow = opts.now ?? Date.now;
     logger.info('Firestore token store initialized', {
       collection,
@@ -225,6 +268,20 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     }
     return op;
   }
+  async ensureBoundRotation(familyId: string, refreshToken: string, clientId: string, operation: LegacyOperationContext) {
+    if (!this.boundRuntime) throw new CutoverFenceError('Bound runtime is unavailable');
+    return this.boundRuntime.grants.ensureFresh(familyId, {
+      operation, target: { kind: 'rotate', refreshToken, clientId }, force: true, now: this.localNow(),
+    });
+  }
+
+  async rotateBound(oldRefreshToken: string, replacement: StoredToken, clientId: string, operation: LegacyOperationContext, completion: UpstreamCompletionReceipt | null) {
+    if (!this.boundRuntime) throw new CutoverFenceError('Bound runtime is unavailable');
+    return this.boundRuntime.ledger.rotate(oldRefreshToken, replacement, clientId, this.localNow(), {
+      operation, upstreamCompletion: completion,
+    });
+  }
+
 
   // Backwards compatibility methods
   async get(accessToken: string, options?: { operation?: LegacyOperationContext }): Promise<StoredToken | undefined> {
@@ -276,8 +333,11 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
     replacement: StoredToken,
     expectedClientId: string,
     now?: number,
-  options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletion | null; useCurrentUpstream?: boolean },
+  options?: { operation?: LegacyOperationContext; upstreamCompletion?: UpstreamCompletionReceipt | null },
   ): Promise<RefreshRotationResult<StoredToken>> {
+    if (options?.upstreamCompletion) {
+      throw new CutoverFenceError('Upstream completion requires the paired bound runtime');
+    }
     const op = this.resolveOp(options);
     if (this.fenceConfig?.enforce && !op) {
       return await withLegacyOperation(
@@ -286,6 +346,19 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
       );
     }
   return super.rotate(oldRefreshToken, replacement, expectedClientId, now, { ...options, operation: op });
+  }
+
+  async rotateUnfenced(oldRefreshToken: string, replacement: StoredToken, clientId: string, now: number, completion: UpstreamCompletion | null, operation?: LegacyOperationContext) {
+    if (this.fenceConfig?.enforce || !this.unfencedLedger) throw new CutoverFenceError('Unfenced ledger adapter cannot run with fence enforcement');
+    return this.unfencedLedger.rotate(oldRefreshToken, replacement, clientId, now, { operation, upstreamCompletion: completion, useCurrentUpstream: true });
+  }
+
+  async ensureUnfencedRotation(familyId: string, refresh: (grant: NsUpstreamGrant) => Promise<{ grant: NsUpstreamGrant; expiresAt?: number }>, refreshToken: string, clientId: string, operation?: LegacyOperationContext) {
+    if (this.fenceConfig?.enforce || !this.unfencedGrantStore) throw new CutoverFenceError('Unfenced grant adapter cannot run with fence enforcement');
+    return this.unfencedGrantStore.ensureFresh(familyId, refresh, {
+      operation, now: this.localNow(), force: true, completeOperation: false,
+      expectedRefresh: { ref: this.refreshDocRef(refreshToken), clientId },
+    });
   }
 
   override async getByAccessToken(
@@ -446,10 +519,25 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
   if (!familyId) {
     throw new Error('Token document missing refreshFamilyId');
   }
+  if (this.boundRuntime) {
+    if (!op) throw new CutoverFenceError('Durable operation context is required');
+    const fresh = await this.boundRuntime.grants.ensureFresh(familyId, {
+      operation: op,
+      target: { kind: 'access_update', accessToken },
+      force: opts?.force,
+      now: this.localNow(),
+      leaseMs: opts?.leaseDurationMs,
+      waitMs: opts?.maxWaitMs,
+      pollIntervalMs: opts?.pollIntervalMs,
+    });
+    if (fresh.completion) return this.boundRuntime.grants.finalizeAccess(fresh.completion, op);
+    return { ...stored, ...fresh.grant };
+  }
 
   let fresh: EnsureFreshResult<NsUpstreamGrant>;
   try {
-   fresh = await this.upstreamStore.ensureFresh(
+   if (!this.unfencedGrantStore) throw new CutoverFenceError('Unfenced grant adapter is unavailable');
+   fresh = await this.unfencedGrantStore.ensureFresh(
       familyId,
       async (currentGrant: NsUpstreamGrant) => {
         const grantObj = (currentGrant as any)?.grant ?? currentGrant ?? {};

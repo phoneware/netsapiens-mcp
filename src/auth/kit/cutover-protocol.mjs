@@ -3355,17 +3355,7 @@ async function checkMutationGuardInTransaction(transaction, options) {
     );
   }
   if (opRecord.phase === "upstream_pending") {
-    const claim = options.pendingClaim;
-    if (!claim || claim.operationId !== options.operation.id || claim.storageId !== options.operation.storageId || claim.familyId !== opRecord.familyId || typeof claim.claimOwner !== "string" || !claim.claimOwner || operationStorageId(options.namespace, options.operation.id, options.identityKey) !== options.operation.storageId || operationKeyCheck(options.namespace, options.identityKey) !== options.operation.identityKeyCheck || claimOwnerStorageId(options.namespace, claim.claimOwner, options.identityKey) !== claim.ownerStorageId || !Number.isSafeInteger(claim.familyGeneration) || !Number.isSafeInteger(claim.grantVersion) || !Number.isSafeInteger(claim.leaseExpiresAt) || opRecord.ambiguousRemoteOutcome === true) {
-      throw new CutoverFenceError("A matching pending claim is required for grant completion");
-    }
-    const grantSnap = await transaction.get(
-      options.db.collection(`${options.namespace}_tokens_upstream`).doc(claim.familyId)
-    );
-    const grant = grantSnap.exists ? grantSnap.data() : void 0;
-    if (!grant || grant.operationId !== claim.storageId || grant.ambiguousOperationId !== claim.storageId || grant.leaseOwner !== claim.ownerStorageId || grant.familyGeneration !== claim.familyGeneration || grant.grantVersion !== claim.grantVersion || grant.leaseUntil !== claim.leaseExpiresAt || grant.leaseExpiresAt !== claim.leaseExpiresAt || grant.ambiguousOutcome) {
-      throw new CutoverFenceError("Pending grant ownership does not match");
-    }
+    throw new CutoverFenceError("Pending upstream operations require trusted completion");
   }
   const completeOperation = options.completeOperation ?? true;
   let bufferedCompletionTime;

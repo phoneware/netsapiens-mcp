@@ -36,6 +36,14 @@ export function requireFenceKey(config: CutoverFenceConfig): Uint8Array {
   return config.identityKey;
 }
 
+export function requireFenceIdentityKey(config: CutoverFenceConfig | undefined): Uint8Array {
+  const key = config?.identityKey;
+  if (!(key instanceof Uint8Array) || key.byteLength !== 32) {
+    throw new CutoverFenceError('A stable operation identity key is required');
+  }
+  return key;
+}
+
 export function assertOperationKey(config: CutoverFenceConfig | undefined, operation: LegacyOperationContext | undefined): void {
   if (!config?.enforce || !operation) return;
   const expected = operationStorageId(config.namespace, operation.id, requireFenceKey(config));

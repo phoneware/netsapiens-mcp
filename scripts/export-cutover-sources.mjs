@@ -36,7 +36,10 @@ const previousBytes = await readOptional(lockPath);
 const previous = previousBytes ? JSON.parse(previousBytes.toString('utf8')) : undefined;
 const profile = args.includes('--check') ? previous?.profile : value('--profile');
 if (profile !== 'bridge' && profile !== 'migration') throw new Error('Profile must be bridge or migration');
-const paths = profile === 'bridge' ? [...commonPaths, 'src/ledger.ts'] : commonPaths;
+const paths = profile === 'bridge'
+  ? [...commonPaths, 'src/ledger.ts', 'src/firestore-ledger.ts', 'src/upstream-grant.ts',
+    'src/bound-fenced-runtime.ts', 'src/strip-undefined.ts', 'src/index.ts']
+  : commonPaths;
 const generatedNames = profile === 'bridge'
   ? ['cutover-protocol.mjs', 'cutover-protocol.d.ts', 'cutover-protocol.d.mts']
   : ['cutover-protocol.mjs', 'cutover-protocol.d.ts'];

@@ -53,7 +53,10 @@ import {
 import { stripUndefined } from './kit/strip-undefined.js';
 import { DEFAULT_ACCESS_TOKEN_TTL_MS } from './kit/ledger.js';
 import { RefreshSupersededError } from './kit/upstream-grant.js';
-import type { TokenLedger, UpstreamCompletion } from './kit/ledger.js';
+import type { TokenLedger } from './kit/ledger.js';
+import type { UpstreamCompletion } from './legacy-kit/ledger.js';
+import { RefreshSupersededError as UnfencedRefreshSupersededError } from './legacy-kit/upstream-grant.js';
+import type { UpstreamCompletionReceipt } from './kit/bound-fenced-runtime.js';
 import type {
  OAuthClientInformationFull,
  OAuthTokens,
@@ -69,6 +72,7 @@ import {
  FirestoreAuthCodeStore,
  RetryableRefreshError,
  LeaseLostError,
+ type NsUpstreamGrant,
 } from './firestore-stores.js';
 import { nsScopeToTier, type UserRole } from './roles.js';
 import type {
@@ -630,7 +634,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (options.tokenStore) {
    this.tokenStore = options.tokenStore;
   } else if (useFirestore) {
-   this.tokenStore = new FirestoreTokenStore({ collection: tokensCollection, projectId, db: this.db, fence: this.fenceConfig });
+   this.tokenStore = new FirestoreTokenStore({
+    collection: tokensCollection, projectId, db: this.db, fence: this.fenceConfig, now: this.nowProvider,
+    refreshUpstream: async (current: NsUpstreamGrant) => {
+     if (!current.nsRefreshToken) throw new UpstreamUnavailableError('Upstream grant has no refresh token');
+     const result = await this.nsRefreshGrant(current.nsRefreshToken, current.nsApiUrl);
+     const expiresAt = result.expires_in === undefined ? undefined : this.nowProvider() + result.expires_in * 1000;
+     return {
+      grant: {
+       ...current,
+       nsAccessToken: result.access_token,
+       nsRefreshToken: result.refresh_token ?? current.nsRefreshToken,
+       nsExpiresAt: expiresAt,
+      },
+      expiresAt,
+     };
+    },
+   });
   } else {
    this.tokenStore = new TokenStore(options.tokenStorePath);
   }
@@ -1428,12 +1448,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     // Try to refresh the upstream NS token if we have a refresh token
     let nsTokens: NsTokenResponse;
     let upstreamCompletion: UpstreamCompletion | null = null;
+    let boundCompletion: UpstreamCompletionReceipt | null = null;
     if (stored.nsRefreshToken) {
      try {
-      if (this.tokenStore instanceof FirestoreTokenStore && stored.refreshFamilyId) {
+      if (this.tokenStore instanceof FirestoreTokenStore && this.fenceConfig?.enforce && stored.refreshFamilyId) {
+       if (!opCtx) throw new CutoverFenceError('Durable operation context is required');
+       const fresh = await this.tokenStore.ensureBoundRotation(stored.refreshFamilyId, refreshToken, stored.clientId, opCtx);
+       boundCompletion = fresh.completion;
+       const grant = fresh.grant;
+       nsTokens = {
+        access_token: grant.nsAccessToken,
+        refresh_token: grant.nsRefreshToken,
+        expires_in: grant.nsExpiresAt ? Math.max(1, Math.round((grant.nsExpiresAt - this.nowProvider()) / 1000)) : undefined,
+        username: grant.nsUsername ?? stored.nsUsername,
+        nsUserRole: grant.nsUserRole ?? stored.nsUserRole,
+        nsApiUrl: grant.nsApiUrl ?? stored.nsApiUrl,
+       };
+      } else if (this.tokenStore instanceof FirestoreTokenStore && stored.refreshFamilyId) {
        const storeWithRefresh = this.tokenStore as FirestoreTokenStore;
-       const upstreamStore = (storeWithRefresh as any).upstreamStore;
-       const upstreamGrant = await upstreamStore.ensureFresh(
+       const upstreamGrant = await storeWithRefresh.ensureUnfencedRotation(
         stored.refreshFamilyId,
         async (currentGrant: any) => {
          const grantObj = currentGrant?.grant ?? currentGrant ?? {};
@@ -1444,7 +1477,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
          return {
           grant: {
            nsAccessToken: res.access_token,
-           nsRefreshToken: res.refresh_token ?? stored.nsRefreshToken,
+           nsRefreshToken: res.refresh_token ?? grantObj.nsRefreshToken ?? stored.nsRefreshToken,
            nsExpiresAt: res.expires_in ? this.nowProvider() + res.expires_in * 1000 : undefined,
            nsUsername: stored.nsUsername,
            nsUserRole: stored.nsUserRole,
@@ -1453,10 +1486,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
           expiresAt: res.expires_in ? this.nowProvider() + res.expires_in * 1000 : undefined,
          };
         },
-        {
-         operation: opCtx, now: this.nowProvider(), force: true, completeOperation: false,
-         expectedRefresh: { ref: storeWithRefresh.refreshDocRef(refreshToken), clientId: stored.clientId }
-        },
+        refreshToken, stored.clientId, opCtx,
        );
        upstreamCompletion = upstreamGrant.completion;
        const effectiveGrant = upstreamGrant.grant;
@@ -1475,7 +1505,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        nsTokens.nsApiUrl = stored.nsApiUrl;
       }
      } catch (err: unknown) {
-      if (err instanceof RefreshSupersededError) {
+      if (err instanceof RefreshSupersededError || err instanceof UnfencedRefreshSupersededError) {
        const lookup = await (this.tokenStore as unknown as TokenLedger<StoredToken>).lookupRefresh(
         refreshToken, stored.clientId, this.nowProvider(), { operation: opCtx },
        );
@@ -1534,9 +1564,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
     try {
      if ('rotate' in this.tokenStore && typeof (this.tokenStore as unknown as { rotate: unknown }).rotate === 'function') {
-      const rotateOptions = { operation: opCtx, upstreamCompletion, useCurrentUpstream: true };
-      const rot = this.tokenStore instanceof FirestoreTokenStore
-       ? await this.tokenStore.rotate(refreshToken, replacement, stored.clientId, this.nowProvider(), rotateOptions)
+      const rot = this.tokenStore instanceof FirestoreTokenStore && this.fenceConfig?.enforce
+       ? await this.tokenStore.rotateBound(refreshToken, replacement, stored.clientId, opCtx!, boundCompletion)
+       : this.tokenStore instanceof FirestoreTokenStore
+       ? await this.tokenStore.rotateUnfenced(refreshToken, replacement, stored.clientId, this.nowProvider(), upstreamCompletion, opCtx)
        : await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
         refreshToken, replacement, stored.clientId, this.nowProvider(), { operation: opCtx },
       );
@@ -2069,6 +2100,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      timeout: 10_000,
     },
    );
+   if (!response.data || typeof response.data.access_token !== 'string' || !response.data.access_token.trim() ||
+       (response.data.refresh_token !== undefined &&
+        (typeof response.data.refresh_token !== 'string' || !response.data.refresh_token.trim())) ||
+       (response.data.expires_in !== undefined &&
+        (typeof response.data.expires_in !== 'number' || !Number.isFinite(response.data.expires_in) || response.data.expires_in <= 0))) {
+    throw new UpstreamUnavailableError('Invalid upstream token response');
+   }
 
    return {
     access_token: response.data.access_token,

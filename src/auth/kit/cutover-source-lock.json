@@ -1,15 +1,15 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "9c8acd39057490ecc9c202603faa02c3c2842edf",
+  "commit": "516cf83e957903b9fa50d9c0fce6970de9dfe5d1",
   "profile": "bridge",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "7daff053f1c0b2fa937701d61536d1e3b61e98da",
+      "blob": "6e4b472eb18d7c5ceaffee32a8f74b19318361f3",
       "destination": "src/auth/kit/cutover/canonical-core.mjs",
-      "sha256": "9ccd097420587760c89ceea76bc4ebd02b7adf451050c3ff513fd70a8719b95f"
+      "sha256": "bfb57b449ccd293eeb9e7dc432f112d52836558b742ea697ec961515230075d5"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
@@ -85,15 +85,45 @@
     },
     {
       "source": "packages/mcp-oauth-kit/src/ledger.ts",
-      "blob": "acf10d65d8910c3938869d625eca0a2603a38b88",
+      "blob": "e8d1e5ab9075805e5588aefad9739dae34c5e282",
       "destination": "src/auth/kit/ledger.ts",
-      "sha256": "f3d06318a357b586e5aae10d4ef1356bc25ed53f0165f4f96fc66151718a0fab"
+      "sha256": "eb83d6a16fa09dc10a9661097e6bbc46f86e0c5a74f412a65482985bb5fadc33"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/firestore-ledger.ts",
+      "blob": "42875bd6039ada441ec684b2d3559fab6a375f46",
+      "destination": "src/auth/kit/firestore-ledger.ts",
+      "sha256": "1cacc703c91d2c483b979c58a46ccf4714f8b3fa64dcc8ae8d921b9baa196b10"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/upstream-grant.ts",
+      "blob": "305760adf5bde6a17da0408c79ed7f956d7a118c",
+      "destination": "src/auth/kit/upstream-grant.ts",
+      "sha256": "ecdd3da0cbe8daf619c2ed6e3e803d951d65b14979881621fa6fb54355582eca"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/bound-fenced-runtime.ts",
+      "blob": "bbe568296d9f3e40c724b3a1d19dad6d76e8e985",
+      "destination": "src/auth/kit/bound-fenced-runtime.ts",
+      "sha256": "9619731098ced9c529d046d6bc9ec352149b9f4eea34078d08a7e6c6e9f0fb71"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/strip-undefined.ts",
+      "blob": "de61af3d2871d14295d0efd1216dd156cd696991",
+      "destination": "src/auth/kit/strip-undefined.ts",
+      "sha256": "59085c4fd7e0fe75ce4a642b2f22ea8a12fb46e7880aa963d2ccb4f554ed843b"
+    },
+    {
+      "source": "packages/mcp-oauth-kit/src/index.ts",
+      "blob": "e35b2f730c7aa52db609e1f188c25c8b2c82ab1f",
+      "destination": "src/auth/kit/index.ts",
+      "sha256": "e3456e16113ca6956ef255c8c487784b673233c7d9ee64bd062b7ab147240d88"
     }
   ],
   "generated": [
     {
       "destination": "src/auth/kit/cutover-protocol.mjs",
-      "sha256": "5af98fe9d22f49594731e177883ccab434b5d66ea716b00010c33121691da74c"
+      "sha256": "9787b93e07f2b4a154009cd14c99593371e1ac7bd317d6ab965cd3c926af42f6"
     },
     {
       "destination": "src/auth/kit/cutover-protocol.d.ts",

@@ -1,4 +1,5 @@
-import type { LegacyOperationContext, PendingClaim } from './cutover-fence.js';
+import type { LegacyOperationContext } from './cutover-fence.js';
+import type { UpstreamCompletionReceipt } from './bound-fenced-runtime.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const REFRESH_RETRY_WINDOW_MS = 30_000;
@@ -50,9 +51,7 @@ export type RefreshRotationResult<T extends BaseStoredToken> =
   | { status: 'replay' }
   | { status: 'missing' };
 
-export type UpstreamCompletion =
-  | Readonly<{ familyId: string; leaseOwner: string; operationId: null; pendingClaim?: never }>
-  | Readonly<{ familyId: string; leaseOwner: string; operationId: string; pendingClaim: PendingClaim }>;
+export type UpstreamCompletion = UpstreamCompletionReceipt;
 
 export interface TokenLedger<T extends BaseStoredToken> {
   issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T>;
