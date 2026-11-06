@@ -1,7 +1,7 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "1aa006535812f34fc261279b01a991f3fcd7b876",
+  "commit": "9c8acd39057490ecc9c202603faa02c3c2842edf",
   "profile": "bridge",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
@@ -37,9 +37,9 @@
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.mjs",
-      "blob": "a44b9855afe03e03e524943fabe0af0de20edf51",
+      "blob": "e8d219a29ebab61b90a8609de9656455958f924d",
       "destination": "src/auth/kit/store/netsapiens-projector.mjs",
-      "sha256": "ed8b3e7f44dbb643ad5df4cb72f6a480a3f68ee33e1a953589bae5737fae861a"
+      "sha256": "69f6f6030cdd55e4eba46df04a7a57675ec1589b611d2938bb565e7f2b18fbf7"
     },
     {
       "source": "packages/mcp-oauth-kit/src/store/netsapiens-projector.d.mts",
@@ -93,7 +93,7 @@
   "generated": [
     {
       "destination": "src/auth/kit/cutover-protocol.mjs",
-      "sha256": "24544329321aaea53d29cbd644d622ea44922a47181f58c9e4d60c4133f889fb"
+      "sha256": "5af98fe9d22f49594731e177883ccab434b5d66ea716b00010c33121691da74c"
     },
     {
       "destination": "src/auth/kit/cutover-protocol.d.ts",
