@@ -313,7 +313,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
       executedOp = true;
       const guard = await db.runTransaction(async (tx: any) => {
         const timer = startMonotonicTimer();
-        const g = await checkMutationGuardInTransaction(tx, { db: fence(db), namespace: NS, operation: ctx, timer });
+        const g = await checkMutationGuardInTransaction(tx, { db: fence(db), namespace: NS, operation: ctx, timer, identityKey: key });
         expect(g.control.state).toBe('legacy_open');
         g.bufferCompletion();
         g.assertPreReturn();

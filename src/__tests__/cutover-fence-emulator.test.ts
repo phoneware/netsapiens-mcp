@@ -142,7 +142,7 @@ describe.skipIf(!host)('Real Firestore Emulator Cutover Fence & Adoption Proof (
       executedOp = true;
       const guard = await db.runTransaction(async (tx) => {
         const timer = startMonotonicTimer();
-        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
+        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer, identityKey: key });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
         guard.assertPreReturn();

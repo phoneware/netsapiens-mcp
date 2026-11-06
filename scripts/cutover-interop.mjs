@@ -47,7 +47,7 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
             let onCommit;
             await db.runTransaction(async (transaction) => {
               const guard = await canonical.checkMutationGuardInTransaction(transaction, {
-                db, namespace, operation, timer: canonical.startMonotonicTimer(),
+                db, namespace, operation, identityKey: key, timer: canonical.startMonotonicTimer(),
               });
               guard.bufferCompletion();
               onCommit = guard.onCommit;
@@ -62,7 +62,7 @@ export async function runCutoverInterop({ migrationRoot, bridgeRoot, canonicalRo
         }
       }
       await bridge.withLegacyOperation({ db, namespace, kind: 'read', identityKey: key }, async (operation) => {
-        await canonical.releaseLegacyOperation(db, operation);
+        await canonical.releaseLegacyOperation(db, operation, key);
         assert.equal(operation.isCompleted(), true);
       });
       await assert.rejects(canonical.withLegacyOperation({ db, namespace, kind: 'token', identityKey: otherKey }, async () => { }));

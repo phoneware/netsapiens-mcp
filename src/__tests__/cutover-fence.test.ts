@@ -203,7 +203,7 @@ describe('Canonical Cutover Fence Protocol & State Machine (C1, C2, C7, C8)', ()
       // Inside transaction, checkMutationGuardInTransaction permits mutation
       const guard = await db.runTransaction(async (tx) => {
         const timer = startMonotonicTimer();
-        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer });
+        const guard = await checkMutationGuardInTransaction(tx, { db, namespace, operation: ctx, timer, identityKey: key });
         expect(guard.control.state).toBe('legacy_open');
         guard.bufferCompletion();
         guard.assertPreReturn();
