@@ -642,7 +642,7 @@ function buildSourceProjectionMap(candidate, entries, codec) {
     const clients = entries.filter((entry) => entry.collection === "clients" || entry.collection === "oauthClients");
     if (clients.length < 1 || clients.length > 2 || new Set(clients.map((entry) => entry.collection)).size !== clients.length) throw new CutoverFenceError("Invalid client source cardinality");
     for (const entry of clients) {
-      if (entry.physicalId !== clients[0].physicalId || entry.data.client_id !== void 0 && entry.data.client_id !== entry.physicalId) throw new CutoverFenceError("Source client identity mismatch");
+      if (entry.physicalId !== clients[0].physicalId || entry.data.client_id !== void 0 && entry.data.client_id !== entry.physicalId || entry.data.clientId !== void 0 && entry.data.clientId !== entry.physicalId) throw new CutoverFenceError("Source client identity mismatch");
     }
     const projected = clients.map((entry) => projectSourceLogical(candidate, /* @__PURE__ */ new Map([["clients", projectionEntry(entry, entry.physicalId)]]), codec, null));
     if (projected.length === 2 && JSON.stringify(projected[0]) !== JSON.stringify(projected[1])) throw new CutoverFenceError("Conflicting client logical projections");
@@ -661,12 +661,13 @@ function buildSourceProjectionMap(candidate, entries, codec) {
   return roles;
 }
 __name(buildSourceProjectionMap, "buildSourceProjectionMap");
-function buildTargetProjectionMap(candidate, entries) {
+function buildTargetProjectionMap(candidate, entries, options = {}) {
   assertEntrySet(entries);
   const roles = /* @__PURE__ */ new Map();
   const consumed2 = /* @__PURE__ */ new Set();
   const use = /* @__PURE__ */ __name((role, entry) => {
     if (roles.has(role) || consumed2.has(entry)) throw new CutoverFenceError("Duplicate target projection role");
+    if (options.requireIds && entry.collection !== "oauthClients" && entry.data.id !== entry.physicalId) throw new CutoverFenceError("Prospective target identity is missing or mismatched");
     if (entry.data.id !== void 0 && entry.data.id !== entry.physicalId) throw new CutoverFenceError("Target document identity mismatch");
     roles.set(role, projectionEntry(entry, entry.physicalId));
     consumed2.add(entry);
@@ -687,6 +688,7 @@ function buildTargetProjectionMap(candidate, entries) {
     }
     if (!roles.has("activeRefresh")) throw new CutoverFenceError("Target active refresh is missing");
     const retired = entriesFor(entries, "retiredRefreshTokens");
+    if (candidate.kind === "baseFormatTokens" && (roles.has("prevRefresh") || retired.length)) throw new CutoverFenceError("Base target graph contains extra refresh roles");
     for (const entry of retired) {
       if (entry.data.familyId !== family.physicalId || entry.data.id !== void 0 && entry.data.id !== entry.physicalId || entry.data.retiredAt !== void 0 && (!Number.isSafeInteger(entry.data.retiredAt) || entry.data.retiredAt <= 0)) {
         throw new CutoverFenceError("Target retired refresh identity mismatch");
@@ -698,7 +700,7 @@ function buildTargetProjectionMap(candidate, entries) {
     const collection = candidate.kind === "clients" ? "oauthClients" : candidate.kind === "authCodes" ? "authCodes" : candidate.kind === "resumeTokens" ? "resumeTokens" : null;
     if (!collection) throw new CutoverFenceError("Unsupported target projection kind");
     const entry = singleEntry(entries, collection);
-    if (collection === "oauthClients" && entry.data.client_id !== entry.physicalId) throw new CutoverFenceError("Target client identity mismatch");
+    if (collection === "oauthClients" && (entry.data.client_id !== entry.physicalId || entry.data.clientId !== void 0 && entry.data.clientId !== entry.physicalId)) throw new CutoverFenceError("Target client identity mismatch");
     use(collection === "oauthClients" ? "clients" : collection, entry);
   }
   if (consumed2.size !== entries.length) throw new CutoverFenceError("Unexpected target projection entry");
@@ -1631,7 +1633,7 @@ function isTargetFormatRow(collection, data) {
   }
   if (collection.endsWith("_auth_codes")) {
     const isTarget = typeof data.sealed === "string";
-    const legacyPayload = data.code !== void 0 || data.rawCode !== void 0 || data.clientId !== void 0 || data.redirectUri !== void 0 || data.pending !== void 0 || data.nsTokens !== void 0;
+    const legacyPayload = data.code !== void 0 || data.rawCode !== void 0 || data.clientId !== void 0 || data.client_id !== void 0 || data.redirectUri !== void 0 || data.redirect_uri !== void 0 || data.codeChallenge !== void 0 || data.code_challenge !== void 0 || data.nsAccessToken !== void 0 || data.pending !== void 0 || data.nsTokens !== void 0;
     const isSource = !isTarget && (legacyPayload || data.expiresAt !== void 0);
     if (isTarget && legacyPayload) throw new CutoverFenceError(`Ambiguous auth_codes document format in '${collection}'`);
     if (isTarget && !isSource) return true;
@@ -3990,22 +3992,64 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
     if (C(sorted(expectedTargets)) !== C(sorted(cand.targets))) throw new CutoverFenceError("Candidate target references do not match the projected identities");
     const item = planItems.get(cand.id);
     if (!item) throw new CutoverFenceError("Candidate plan item is missing");
-    const expectedByKey = new Map(expectedTargets.map((ref) => [`${ref.collection}:${ref.id}`, ref]));
-    if (expectedByKey.size !== expectedTargets.length) throw new CutoverFenceError("Projected target identity is duplicated");
-    const prospective = item.targetReferences.map((ref, index) => {
-      const key = `${ref.collection}:${ref.id}`;
-      const identity = expectedByKey.get(key);
-      if (!identity) throw new CutoverFenceError("Prospective target does not match its projected identity");
-      expectedByKey.delete(key);
-      return { collection: identity.collection, physicalId: identity.physicalId, data: item.prospectiveTargetPostimages[index] };
+    const expectedByIdentity = new Map(expectedTargets.map((ref) => [`${ref.collection}\0${ref.physicalId}`, ref]));
+    if (expectedByIdentity.size !== expectedTargets.length) throw new CutoverFenceError("Projected target identity is duplicated");
+    const postimagesByKey = /* @__PURE__ */ new Map();
+    const retiredPostimages = [];
+    for (const data of item.prospectiveTargetPostimages) {
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new CutoverFenceError("Malformed prospective target postimage");
+      let collection;
+      let physicalId;
+      if (cand.kind === "clients") {
+        collection = "oauthClients";
+        physicalId = data.client_id;
+      } else if (cand.kind === "authCodes") {
+        collection = "authCodes";
+        physicalId = data.id;
+      } else if (cand.kind === "resumeTokens") {
+        collection = "resumeTokens";
+        physicalId = data.id;
+      } else if (data.id === void 0) {
+        retiredPostimages.push(data);
+        continue;
+      } else if (data.activeRefreshId !== void 0) {
+        collection = "families";
+        physicalId = data.id;
+      } else if (data.grantVersion !== void 0) {
+        collection = "upstream";
+        physicalId = data.id;
+      } else if (data.retainUntil !== void 0) {
+        collection = "tokens";
+        physicalId = data.id;
+      } else if (data.status !== void 0) {
+        collection = "refresh";
+        physicalId = data.id;
+      } else throw new CutoverFenceError("Prospective target postimage has no recognized identity");
+      const identity = expectedByIdentity.get(`${collection}\0${physicalId}`);
+      if (!identity) throw new CutoverFenceError("Prospective target postimage identity does not match the source");
+      const key = `${identity.collection}:${identity.id}`;
+      if (postimagesByKey.has(key)) throw new CutoverFenceError("Duplicate prospective target identity");
+      postimagesByKey.set(key, { collection, physicalId, data });
+    }
+    const retired = expectedTargets.filter((ref) => ref.collection === "retiredRefreshTokens").sort((a, b) => canonicalCompare(a.id, b.id));
+    if (retired.length !== retiredPostimages.length || retiredPostimages.some((data) => C(data) !== C({ familyId: srcProj.familyId }))) {
+      throw new CutoverFenceError("Prospective retired target postimages do not match their source family");
+    }
+    for (const identity of retired) {
+      postimagesByKey.set(`${identity.collection}:${identity.id}`, { collection: identity.collection, physicalId: identity.physicalId, data: retiredPostimages[0] });
+    }
+    if (postimagesByKey.size !== expectedTargets.length) throw new CutoverFenceError("Prospective target identity set is incomplete");
+    const prospective = item.targetReferences.map((ref) => {
+      const entry = postimagesByKey.get(`${ref.collection}:${ref.id}`);
+      if (!entry) throw new CutoverFenceError("Prospective target reference has no matching postimage identity");
+      return entry;
     });
-    if (expectedByKey.size) throw new CutoverFenceError("Prospective target set is incomplete");
     const receiptTargets = prospective.map((entry) => {
       const id = computeKeyedDocId(storeKey, "target-id", namespace, epoch, entry.collection, entry.physicalId);
       return { collection: entry.collection, id, recordDigest: computeTargetRecordDigest(storeKey, namespace, epoch, entry.collection, id, entry.data) };
     });
     if (C(item.receiptUpperBound.targetAfter) !== C(receiptTargets)) throw new CutoverFenceError("Prospective receipt does not bind target postimages");
-    const prospectiveProjection = projectTargetLogical(cand, buildTargetProjectionMap(cand, prospective), codec);
+    const prospectiveProjection = projectTargetLogical(cand, buildTargetProjectionMap(cand, prospective, { requireIds: true }), codec);
     if (H(storeKey, "logical-record", namespace, epoch, [cand.kind, prospectiveProjection]) !== srcDigest) {
       throw new CutoverFenceError("Prospective target graph does not match its source projection");
     }
@@ -8068,7 +8112,7 @@ async function adoptFirestoreLegacyTokens(options) {
         physicalId: t.rawId,
         data: c.postimageByTargetId.get(t.id)
       }));
-      const prospectiveLogical = projectTargetLogical(c, buildTargetProjectionMap(c, prospectiveEntries), codec);
+      const prospectiveLogical = projectTargetLogical(c, buildTargetProjectionMap(c, prospectiveEntries, { requireIds: true }), codec);
       if (H(storeKey, "logical-record", namespace, control.epoch, [c.kind, prospectiveLogical]) !== c.logicalDigest) {
         throw new CutoverFenceError("Candidate target postimages do not match the source projection");
       }

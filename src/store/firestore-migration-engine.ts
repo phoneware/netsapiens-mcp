@@ -2348,7 +2348,7 @@ export async function adoptFirestoreLegacyTokens(options: MigrationContext & {
       const prospectiveEntries = c.targets.map((t: { collection: string; id: string; rawId: string }) => ({
         collection: t.collection, physicalId: t.rawId, data: c.postimageByTargetId.get(t.id),
       }));
-      const prospectiveLogical = projectTargetLogical(c, buildTargetProjectionMap(c, prospectiveEntries), codec);
+      const prospectiveLogical = projectTargetLogical(c, buildTargetProjectionMap(c, prospectiveEntries, { requireIds: true }), codec);
       if (H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, prospectiveLogical]) !== c.logicalDigest) {
         throw new CutoverFenceError('Candidate target postimages do not match the source projection');
       }

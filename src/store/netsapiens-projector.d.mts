@@ -31,7 +31,7 @@ export interface ProjectionSnapshotEntry {
   readonly data: Readonly<Record<string, unknown>>;
 }
 export function buildSourceProjectionMap(candidate: ProjectorCandidate, entries: readonly ProjectionSnapshotEntry[], codec: Codec): Map<string, Record<string, unknown>>;
-export function buildTargetProjectionMap(candidate: ProjectorCandidate, entries: readonly ProjectionSnapshotEntry[]): Map<string, Record<string, unknown>>;
+export function buildTargetProjectionMap(candidate: ProjectorCandidate, entries: readonly ProjectionSnapshotEntry[], options?: { requireIds?: boolean }): Map<string, Record<string, unknown>>;
 
 // The return shapes of the source projections, as the projector builds them (netsapiens-projector.mjs).
 export interface PreviousRefreshProjection {

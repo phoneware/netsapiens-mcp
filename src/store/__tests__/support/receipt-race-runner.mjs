@@ -1,59 +1,100 @@
-// Test-only barrier around real emulator transactions. No receipt or target is fabricated.
+// Test-only IPC barriers around actual emulator transactions. Each process invokes the protected factory once.
 import { readFileSync } from 'node:fs';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { FieldPath, Firestore } from '@google-cloud/firestore';
 
-let releaseFirst;
-let signalPrepared;
-const prepared = new Promise((resolve) => { signalPrepared = resolve; });
-let releaseSecond;
-const firstMayContinue = new Promise((resolve) => { releaseFirst = resolve; });
-const secondMayContinue = new Promise((resolve) => { releaseSecond = resolve; });
-let firstPrepared = false;
-let secondCommitted = false;
-let firstObservedReceipt = false;
+const worker = typeof process.send === 'function';
+const bundle = await import('file:///opt/cutover/cutover-protocol.mjs');
+let context;
+let child;
+let finishedProof = false;
 try {
-  const bundle = await import('file:///opt/cutover/cutover-protocol.mjs');
-  const first = await bundle.createProtectedFirestoreMigrationContext({ Firestore, FieldPath });
-  const second = await bundle.createProtectedFirestoreMigrationContext({ Firestore, FieldPath });
+  context = await bundle.createProtectedFirestoreMigrationContext({ Firestore, FieldPath });
   const request = JSON.parse(readFileSync('/run/cutover/request.json', 'utf8'));
   if (request.action !== 'adopt' || request.options.dryRun !== false) throw new Error('Receipt race requires an adopt commit');
-  const firstTransaction = first.db.runTransaction.bind(first.db);
-  first.db.runTransaction = async (...args) => {
-    const result = await firstTransaction(...args);
-    if (!firstPrepared && result?.dryRun === false && result?.isResume === false) {
-      signalPrepared();
-      firstPrepared = true;
-      await firstMayContinue;
-    } else if (secondCommitted && result?.status === 'written') {
-      firstObservedReceipt = true;
-    }
-    return result;
-  };
-  const secondTransaction = second.db.runTransaction.bind(second.db);
-  second.db.runTransaction = async (...args) => {
-    const result = await secondTransaction(...args);
-    if (!secondCommitted && result?.status === 'written') {
-      secondCommitted = true;
-      releaseFirst();
-      await secondMayContinue;
-      throw new Error('injected second-runner stop after committed item');
-    }
-    return result;
-  };
   const options = { dryRun: false, expectedSourceInventoryDigest: request.options.expectedSourceInventoryDigest };
-  const firstRun = bundle.adoptFirestoreLegacyTokens({ ...first, ...options });
-  // Start the second only after the first preparation has committed.
-  await Promise.race([prepared, firstRun.then(() => { throw new Error('First runner completed before preparation barrier'); })]);
-  const secondRun = bundle.adoptFirestoreLegacyTokens({ ...second, ...options }).catch((error) => error);
-  let result;
-  try {
-    result = await Promise.race([firstRun, secondRun.then((value) => { throw value instanceof Error ? value : new Error('Second runner completed before the item barrier'); })]);
-  } finally { releaseSecond(); }
-  const secondResult = await secondRun;
-  process.stdout.write(`${JSON.stringify({ ok: true, firstPrepared, secondCommitted, firstObservedReceipt, result, secondStopped: secondResult instanceof Error && secondResult.message === 'injected second-runner stop after committed item' })}\n`);
+  const snapshot = async () => {
+    const names = bundle.getCutoverDistinctCollectionNames(context.namespace);
+    const groups = [...new Set([...Object.values(names.source), ...Object.values(names.target), `${context.namespace}_meta`])].sort();
+    const rows = [];
+    for (const group of groups) {
+      const docs = await context.db.collection(group).get();
+      for (const doc of docs.docs) rows.push([`${group}/${doc.id}`, doc.data()]);
+    }
+    const operations = await context.db.collection(`${context.namespace}_meta`).doc('cutover_fence').collection('operations').get();
+    for (const doc of operations.docs) rows.push([`operations/${doc.id}`, doc.data()]);
+    return JSON.stringify(rows.sort((a, b) => a[0].localeCompare(b[0])));
+  };
+  const original = context.db.runTransaction.bind(context.db);
+  if (worker) {
+    let committed = false;
+    context.db.runTransaction = async (...args) => {
+      const result = await original(...args);
+      if (!committed && result?.status === 'written') {
+        committed = true;
+        process.send?.({ phase: 'item-committed' });
+        await new Promise((resolve) => process.once('message', resolve));
+        throw new Error('injected worker stop after committed item');
+      }
+      return result;
+    };
+    try {
+      await bundle.adoptFirestoreLegacyTokens({ ...context, ...options });
+      process.send?.({ phase: 'unexpected-completion' });
+    } catch (error) {
+      process.send?.({ phase: 'worker-stopped', expected: error instanceof Error && error.message === 'injected worker stop after committed item' });
+    }
+  } else {
+    let prepared = false;
+    let workerCommitted = false;
+    let receiptObserved = false;
+    let resumeFirst;
+    let signalPrepared;
+    const firstMayContinue = new Promise((resolve) => { resumeFirst = resolve; });
+    const preparedBarrier = new Promise((resolve) => { signalPrepared = resolve; });
+    context.db.runTransaction = async (...args) => {
+      const result = await original(...args);
+      if (!prepared && result?.dryRun === false && result?.isResume === false) {
+        prepared = true;
+        signalPrepared();
+        await firstMayContinue;
+      } else if (workerCommitted && result?.status === 'written') {
+        receiptObserved = true;
+      }
+      return result;
+    };
+    const firstRun = bundle.adoptFirestoreLegacyTokens({ ...context, ...options });
+    await Promise.race([preparedBarrier, firstRun.then(() => { throw new Error('First runner completed before preparation barrier'); })]);
+    child = fork(fileURLToPath(import.meta.url), process.argv.slice(2), { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/root' } });
+    let workerStopped;
+    let workerFailed;
+    let workerFinished = false;
+    const stopped = new Promise((resolve, reject) => { workerStopped = resolve; workerFailed = reject; });
+    child.on('message', (message) => {
+      if (message?.phase === 'item-committed') { workerCommitted = true; resumeFirst(); }
+      else if (message?.phase === 'worker-stopped') { workerFinished = true; workerStopped(message.expected === true); }
+      else if (message?.phase === 'error' || message?.phase === 'unexpected-completion') workerFailed(new Error('Worker failed before completing the receipt barrier'));
+    });
+    child.once('error', workerFailed);
+    child.once('exit', (code) => { if (!workerFinished) workerFailed(new Error(`Worker exited before stop acknowledgment (${code})`)); });
+    const result = await Promise.race([firstRun, stopped.then(() => { throw new Error('Worker stopped before first runner completed'); })]);
+    const beforeStop = await snapshot();
+    child.send?.('stop');
+    const secondStopped = await stopped;
+    const unchangedAfterStop = beforeStop === await snapshot();
+    process.stdout.write(`${JSON.stringify({ ok: true, firstPrepared: prepared, secondCommitted: workerCommitted, firstObservedReceipt: receiptObserved, secondStopped, unchangedAfterStop, result })}\n`);
+    finishedProof = true;
+  }
 } catch (error) {
-  releaseFirst?.();
-  releaseSecond?.();
-  process.stdout.write(`${JSON.stringify({ ok: false, firstPrepared, secondCommitted, firstObservedReceipt, message: error instanceof Error ? error.message : String(error) })}\n`);
+  if (worker) process.send?.({ phase: 'error' });
+  else process.stdout.write(`${JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error) })}\n`);
   process.exitCode = 1;
+} finally {
+  if (context?.db) await context.db.terminate();
+  if (worker) process.disconnect?.();
+  else if (child?.connected) {
+    if (!finishedProof) child.kill();
+    else child.disconnect();
+  }
 }

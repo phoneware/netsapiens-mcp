@@ -287,6 +287,41 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(refused.message).toMatch(/Existing target graph does not equal the source projection/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
+  it('synthetic postimage fault preserves reorder invariance and rejects substituted identities', async () => {
+    const anchor = 'timer.assertUnderDeadline(\"Preparation attempt\");\n    assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });';
+    expect(closedBundle.toString('utf8').split(anchor)).toHaveLength(2);
+    for (const variant of ['reordered', 'substituted'] as const) {
+      if (admin) { await admin.close(); admin = null; }
+      await resetFencedNamespace(db, NS);
+      const now = Date.now();
+      await seedDocs(db, [[`${NS}_tokens/swap-access`, {
+        accessToken: 'swap-access', refreshToken: 'swap-refresh', clientId: 'client', expiresAt: now + 60000,
+        nsAccessToken: 'upstream', nsUsername: 'user',
+      }]]);
+      const injection = variant === 'reordered'
+        ? 'plan.items[0].prospectiveTargetPostimages.reverse();'
+        : 'plan.items[0].prospectiveTargetPostimages[0].id = \"wrong-target-identity\";';
+      const mutant = Buffer.from(closedBundle.toString('utf8').replace(anchor, `${injection}\n    ${anchor}`), 'utf8');
+      const collectionGroups = scopeUnionUnchecked(NS);
+      const fixture = fixtureFor({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, collectionGroups });
+      admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+      const inspected = await runStep({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+      expect(inspected.ok, inspected.message).toBe(true);
+      const before = await snapshotNamespace(db, NS);
+      const result = await runStep({
+        bundleBytes: mutant, namespace: NS, epoch: EPOCH, action: 'adopt',
+        options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
+      });
+      if (variant === 'reordered') {
+        expect(result.ok, result.message).toBe(true);
+        expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_ready');
+      } else {
+        expect(result.ok).toBe(false);
+        expect(result.message).toMatch(/Prospective target postimage identity does not match the source/);
+        expect(await snapshotNamespace(db, NS)).toEqual(before);
+      }
+    }
+  });
   it('signed concurrent item retry verifies retired targets through the bound receipt', async () => {
     await resetFencedNamespace(db, NS);
     const now = Date.now();
@@ -306,7 +341,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'receipt-race-runner.mjs')));
     const raced = await runFactory(argvFor('adopt', NS, options));
     expect(raced.ok, raced.message).toBe(true);
-    expect(raced).toMatchObject({ firstPrepared: true, secondCommitted: true, firstObservedReceipt: true, secondStopped: true });
+    expect(raced).toMatchObject({ firstPrepared: true, secondCommitted: true, firstObservedReceipt: true, secondStopped: true, unchangedAfterStop: true });
     expect((await db.collection(`${NS}_retired_refresh`).doc('retired-proof').get()).data()).toEqual({ familyId: 'race-family' });
     const metadata = await db.collection(`${NS}_meta`).get();
     const receipts = metadata.docs.filter((doc) => doc.id.startsWith(`migration_receipt_${EPOCH}_`));
