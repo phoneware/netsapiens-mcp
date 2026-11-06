@@ -175,7 +175,9 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       const actual = (await db.doc(path).get()).data();
       expect(actual).toEqual(name === target ? { ...rows[name as keyof typeof rows], raceMarker: 'changed-after-preparation' } : rows[name as keyof typeof rows]);
     }
-    expect((await db.collection(`${NS}_sessions`).get()).empty).toBe(true);
+    for (const group of ['sessions', 'refresh_families', 'refresh', 'upstream', 'retired_refresh', 'oauth_clients', 'auth_codes', 'resume_tokens']) {
+      expect((await db.collection(`${NS}_${group}`).get()).empty, `${group} must not contain an item write`).toBe(true);
+    }
     const control = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
     expect(control?.state).toBe('migrating');
     expect(control?.irreversible).not.toBe(true);

@@ -513,7 +513,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
     });
     expect(refused.ok).toBe(false);
-    expect(refused.message).toMatch(/Target family identity mismatch/);
+    expect(refused.message).toMatch(/Cannot prepare migration.*"partialTargets":[1-9]/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
     await db.collection(`${NS}_upstream`).doc(familyId).set(
       encodeUpstreamRow(codec, familyId, 1, { nsAccessToken: 'upstream', nsUsername: 'user', nsExpiresAt: null }, now),
@@ -545,8 +545,52 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
     });
     expect(refused.ok).toBe(false);
-    expect(refused.message).toMatch(/Existing target graph does not equal the source projection/);
+    expect(refused.message).toMatch(/Cannot prepare migration.*"partialTargets":[1-9]/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+  it.each([
+    ['target-only family', `${NS}_refresh_families/orphan`, { id: 'orphan' }],
+    ['shared OAuth collection', `${NS}_oauth_clients/orphan`, { client_id: 'orphan', _mcp_format: 'v3_target' }],
+  ])('rejects an unclaimed target in %s before writes', async (_label, path, row) => {
+    await resetFencedNamespace(db, NS);
+    await seedDocs(db, [[path, row]]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    expect(inspected.reasons?.partialTargets).toBeGreaterThan(0);
+    const options = { expectedSourceInventoryDigest: inspected.sourceInventoryDigest };
+    const dry = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt', options: { ...options, dryRun: true }, collectionGroups });
+    expect(dry.ok, dry.message).toBe(true);
+    expect(dry.report?.errors).toBeGreaterThan(0);
+    const refused = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt', options: { ...options, dryRun: false }, collectionGroups });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/Cannot prepare migration.*"partialTargets":[1-9]/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+
+  it('refuses a target inserted after observation before preparing any migration writes', async () => {
+    await resetFencedNamespace(db, NS);
+    await seedDocs(db, [[`${NS}_tokens/race-access`, {
+      accessToken: 'race-access', refreshToken: 'race-refresh', clientId: 'client', expiresAt: Date.now() + 60000,
+      nsAccessToken: 'upstream', nsUsername: 'user',
+    }]]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const options = { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest };
+    mountFixture(fixture, 'adopt', options);
+    writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'target-race-runner.mjs')));
+    const refused = await runFactory(argvFor('adopt', NS, options));
+    expect(refused.inserted, refused.message).toBe(true);
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/Cannot prepare migration.*"partialTargets":[1-9]/);
+    expect(await snapshotNamespace(db, NS)).toEqual([...before, `${NS}_refresh_families/inserted-target={"id":"inserted-target"}`].sort());
   });
   it('synthetic plan faults preserve reordering and reject source, target or action substitutions', async () => {
     const anchor = 'timer.assertUnderDeadline(\"Preparation attempt\");\n    assertPreparationGate(db, { completePlan: plan, expectedIdentity: preparationIdentity, sourceInventoryDigest });';
