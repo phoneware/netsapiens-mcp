@@ -18,6 +18,15 @@ try {
   process.exit(2);
 }
 const matches = value => patterns.some(pattern => { pattern.lastIndex = 0; return pattern.test(value); });
+const matchedLines = value => {
+  const lines = new Set();
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(value);
+    if (match) lines.add(value.slice(0, match.index).split('\n').length);
+  }
+  return [...lines].sort((a, b) => a - b);
+};
 const run = (command, args) => execFileSync(command, args, { maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 let found = false;
 const report = location => { console.log(`MATCH ${location}`); found = true; };
@@ -26,7 +35,10 @@ try {
   if (mode === '--tree' && process.argv.length === 3) {
     const files = run('git', ['ls-files', '-z']).toString().split('\0').filter(Boolean);
     for (const file of files) {
-      if (!file.startsWith('spec/') && matches(readFileSync(file).toString('utf8'))) report(file);
+      if (!file.startsWith('spec/')) {
+        const lines = matchedLines(readFileSync(file).toString('utf8'));
+        if (lines.length) report(`${file}:${lines.join(',')}`);
+      }
     }
   } else if (mode === '--pack' && process.argv.length === 4) {
     const archive = process.argv[3];
