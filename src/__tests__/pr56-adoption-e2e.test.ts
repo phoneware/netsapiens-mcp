@@ -4,7 +4,7 @@
 // mocked, and any other upstream call is refused, so this test performs no live vendor write.
 // Runs only where containerGateOpen() holds. Never touches an existing /opt/cutover or /run/cutover.
 // UNVERIFIED until run under the gate.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
@@ -15,8 +15,8 @@ import { deriveStoreKey } from '../store/codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../store/firestore.js';
 import { getCutoverFenceRecord } from '../store/firestore-v2-adoption.js';
 import { startFakeAdmin } from '../store/__tests__/support/fake-admin.mjs';
-import { assertCanOwnMounts, containerGateOpen, releaseMounts } from '../store/__tests__/support/mounts.mjs';
-import { fixtureFor, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
+import { assertCanOwnMounts, containerGateOpen, releaseMounts, OPT } from '../store/__tests__/support/mounts.mjs';
+import { argvFor, fixtureFor, mountFixture, runFactory, runStep, sessionSecretOf } from '../store/__tests__/support/runner-harness.mjs';
 import { EMULATOR, EPOCH, resetFencedNamespace, seedDocs, snapshotNamespace } from '../store/__tests__/support/emulator-seed.js';
 import { closedBundleBytes } from '../store/__tests__/support/closed-bundle.mjs';
 
@@ -83,6 +83,45 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       expect(await snapshotNamespace(db, NS)).toEqual(before);
     }
   });
+  it('rejects contradictory family, refresh and embedded ownership aliases without writes', async () => {
+    const variants = [
+      { family: { currentAccessToken: 'access.one' } },
+      { family: { currentRefreshToken: 'refresh.one' } },
+      { refresh: { accessToken: 'access.one' } },
+      { refresh: { refreshToken: 'refresh.one' } },
+      { refresh: { familyId: 'other-family' } },
+      { refresh: { family_id: 'other-family' } },
+      { token: { familyId: 'other-family' } },
+      { token: { refreshFamilyId: 'other-family' } },
+      { token: { family_id: 'other-family' } },
+    ];
+    for (const variant of variants) {
+      if (admin) { await admin.close(); admin = null; }
+      await resetFencedNamespace(db, NS);
+      const token = { accessToken: 'access/one', refreshToken: 'refresh/one', clientId: 'client', expiresAt: Date.now() + 60000, ...variant.token };
+      await seedDocs(db, [
+        [`${NS}_tokens_refresh_families/family`, { currentAccessToken: 'access/one', currentRefreshToken: 'refresh/one', ...variant.family }],
+        [`${NS}_tokens_refresh/refresh_one`, { familyId: 'family', status: 'active', token, ...variant.refresh }],
+        [`${NS}_tokens_upstream/family`, { nsAccessToken: 'upstream', nsUsername: 'user' }],
+      ]);
+      const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+      admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+      const before = await snapshotNamespace(db, NS);
+      const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+      if (inspected.ok) {
+        expect(Object.values(inspected.reasons ?? {}).some((n) => typeof n === 'number' && n > 0)).toBe(true);
+        const refused = await runStep({
+          bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt',
+          options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }
+        });
+        expect(refused.ok).toBe(false);
+        expect(refused.message).toMatch(/Cannot prepare migration/);
+      } else {
+        expect(inspected.message).toMatch(/identity mismatch|family mismatch|credential identity/);
+      }
+      expect(await snapshotNamespace(db, NS)).toEqual(before);
+    }
+  });
   it('refuses a surviving source changed after inspection without migration writes', async () => {
     await resetFencedNamespace(db, NS);
     const token = { accessToken: 'ttl-access', refreshToken: 'ttl-refresh', clientId: 'client', expiresAt: Date.now() + 60000 };
@@ -103,6 +142,86 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
     });
     expect(refused.ok).toBe(false);
     expect(refused.message).toMatch(/Source inventory digest mismatch/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+  it.each(['family', 'refresh', 'upstream'])('rejects a changed %s source after preparation before any item write', async (target) => {
+    await resetFencedNamespace(db, NS);
+    const token = { accessToken: 'race-access', refreshToken: 'race-refresh', clientId: 'client', expiresAt: Date.now() + 60000 };
+    const paths = {
+      family: `${NS}_tokens_refresh_families/race-family`,
+      refresh: `${NS}_tokens_refresh/race-refresh`,
+      upstream: `${NS}_tokens_upstream/race-family`,
+    };
+    const rows = {
+      family: { currentAccessToken: token.accessToken, currentRefreshToken: token.refreshToken },
+      refresh: { familyId: 'race-family', status: 'active', token },
+      upstream: { nsAccessToken: 'upstream', nsUsername: 'same-user' },
+    };
+    await seedDocs(db, Object.entries(paths).map(([name, path]) => [path, rows[name as keyof typeof rows]] as const));
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const options = { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest };
+    mountFixture(fixture, 'adopt', options);
+    const runner = readFileSync(resolve(here, '../store/__tests__/support/source-race-runner.mjs'), 'utf8');
+    expect(runner.split('SOURCE_RACE_TARGET')).toHaveLength(2);
+    writeFileSync(resolve(OPT, 'runner.mjs'), runner.replace('SOURCE_RACE_TARGET', target));
+    const result = await runFactory(argvFor('adopt', NS, options));
+    expect(result.mutated, result.message).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/modified concurrently after preparation/);
+    for (const [name, path] of Object.entries(paths)) {
+      const actual = (await db.doc(path).get()).data();
+      expect(actual).toEqual(name === target ? { ...rows[name as keyof typeof rows], raceMarker: 'changed-after-preparation' } : rows[name as keyof typeof rows]);
+    }
+    expect((await db.collection(`${NS}_sessions`).get()).empty).toBe(true);
+    const control = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    expect(control?.state).toBe('migrating');
+    expect(control?.irreversible).not.toBe(true);
+  });
+  it.each(['refresh', 'upstream'])('rejects same-subject cross-family %s substitution through the signed runner', async (role) => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    for (const family of ['first', 'second']) {
+      const access = `${family}-access`;
+      const refresh = `${family}-refresh`;
+      await seedDocs(db, [
+        [`${NS}_tokens_refresh_families/${family}`, { currentAccessToken: access, currentRefreshToken: refresh }],
+        [`${NS}_tokens_refresh/${refresh}`, {
+          familyId: family, status: 'active', token: {
+            accessToken: access, refreshToken: refresh, clientId: 'client', expiresAt: now + 60000,
+            nsUsername: 'same-user', extra: { seatId: 'same-seat' },
+          }
+        }],
+        [`${NS}_tokens_upstream/${family}`, { nsAccessToken: `${family}-upstream`, nsUsername: 'same-user' }],
+      ]);
+    }
+    const normalFixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: normalFixture.index.provenance.databaseResource, policy: normalFixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const control = await runStep({ bundleBytes, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    expect(control.ok, control.message).toBe(true);
+    expect(control.scanned).toBe(2);
+    const dry = await runStep({
+      bundleBytes, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: true, expectedSourceInventoryDigest: control.sourceInventoryDigest }
+    });
+    expect(dry.ok, dry.message).toBe(true);
+    expect(dry.report).toMatchObject({ scanned: 2, errors: 0 });
+    await admin.close(); admin = null;
+
+    const anchor = '    const sourcesMap = buildSourceProjectionMap({ id: candidateId, kind: \"pr56Families\", targets: candTargets, logicalDigest: \"\" }, sourceEntries, codec);';
+    expect(bundleBytes.toString('utf8').split(anchor)).toHaveLength(2);
+    const injection = role === 'refresh'
+      ? 'if (familyId === \"first\") { const other = refreshByCredential.get(\"second-refresh\"); sourceEntries[1] = { collection: \"refresh\", physicalId: other.physicalId, data: other.data }; }'
+      : 'if (familyId === \"first\") sourceEntries[2] = { collection: \"upstream\", physicalId: \"second\", data: upstreamById.get(\"second\") };';
+    const mutant = Buffer.from(bundleBytes.toString('utf8').replace(anchor, `    ${injection}\n${anchor}`));
+    const fixture = fixtureFor({ bundleBytes: mutant, namespace: NS, epoch: EPOCH });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const refused = await runStep({ bundleBytes: mutant, namespace: NS, epoch: EPOCH, action: 'inspect' });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(role === 'refresh' ? /Source refresh family mismatch/ : /Source family identity mismatch/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
 

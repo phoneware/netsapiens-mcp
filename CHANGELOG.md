@@ -35,3 +35,4 @@ All notable changes to this project will be documented in this file.
 - Streamable HTTP and stdio transports with OAuth 2.1 authorization code flow and PKCE.
 - OAuth permanence: permanent refresh families, 30-second replay grace window for response-lost retries, late-replay family revocation, tool-call 401 automatic upstream refresh retry, and transactional v2.4 Firestore adoption.
 - Signed Firestore adoption can reconstruct a PR56 session from its complete, identity-consistent refresh record when its access document was removed by TTL, without extending the stored bearer expiry.
+- Firestore adoption checks existing target graphs during dry runs and before preparation, rejecting partial or conflicting targets before migration writes.

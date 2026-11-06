@@ -1584,6 +1584,40 @@ function computePreflightSummaryFromPlan(plan: any, sourceInventoryDigest: strin
   };
 }
 
+// Classify target rows from the same transactional snapshot used to derive the source plan.
+function classifyExistingTargets(
+  candidates: any[], targetDocsByKey: Map<string, any[]>, reasons: Record<string, number>,
+  codec: ReturnType<typeof createCodec>, storeKey: Uint8Array, namespace: string, epoch: number,
+): number {
+  const targets = new Map<string, any>();
+  for (const [collection, docs] of targetDocsByKey) {
+    for (const doc of docs) targets.set(`${collection}:${doc.id}`, { collection, physicalId: doc.id, data: doc.data() || {} });
+  }
+  let retained = 0;
+  const claimed = new Set<string>();
+  for (const candidate of candidates) {
+    const entries = candidate.targets.map((target: { collection: string; rawId: string }) => targets.get(`${target.collection}:${target.rawId}`)).filter(Boolean);
+    if (!entries.length) continue;
+    let equivalent = false;
+    if (entries.length === candidate.targets.length) {
+      try {
+        const logical = projectTargetLogical(candidate, buildTargetProjectionMap(candidate, entries), codec);
+        equivalent = H(storeKey, 'logical-record', namespace, epoch, [candidate.kind, logical]) === candidate.logicalDigest;
+      } catch (error) {
+        if (!isCutoverFenceError(error)) throw error;
+      }
+    }
+    if (equivalent) retained++;
+    else reasons.partialTargets++;
+    for (const target of candidate.targets) {
+      const key = `${target.collection}:${target.rawId}`;
+      if (targets.has(key)) claimed.add(key);
+    }
+  }
+  for (const key of targets.keys()) if (!claimed.has(key)) reasons.partialTargets++;
+  return retained;
+}
+
 export async function inspectFirestoreLegacyMigration(options: MigrationContext): Promise<{
   sourceInventoryDigest: string;
   scanned: number;
@@ -1706,66 +1740,7 @@ export async function inspectFirestoreLegacyMigration(options: MigrationContext)
 
     timer.assertUnderDeadline('Preflight scan');
 
-    const targetDocMapById = new Map<string, any>();
-    for (const [colKey, docs] of targetDocsByKey.entries()) {
-      for (const d of docs) {
-        targetDocMapById.set(`${colKey}:${d.id}`, { collection: colKey, physicalId: d.id, data: d.data() || {} });
-      }
-    }
-
-    let prospectiveRetained = 0;
-    const claimedTargetIds = new Set<string>();
-
-    for (const c of candidates) {
-      const targetEntries = c.targets.map((target: { collection: string; rawId: string }) => targetDocMapById.get(`${target.collection}:${target.rawId}`)).filter(Boolean);
-      const existingCount = targetEntries.length;
-
-      if (existingCount === 0) {
-        continue;
-      }
-
-      if (existingCount !== c.targets.length) {
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
-        }
-        continue;
-      }
-
-      // Only a stored-target decode or projection refusal is a partial target. Everything else propagates.
-      let derivedDigest: string;
-      try {
-        const decodedLogical = projectTargetLogical(c, buildTargetProjectionMap(c, targetEntries), codec);
-        derivedDigest = H(storeKey, 'logical-record', namespace, control.epoch, [c.kind, decodedLogical]);
-      } catch (err) {
-        if (!isCutoverFenceError(err)) throw err;
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
-        }
-        continue;
-      }
-      if (derivedDigest === c.logicalDigest) {
-        prospectiveRetained++;
-        for (const t of c.targets) {
-          claimedTargetIds.add(`${t.collection}:${t.rawId}`);
-        }
-      } else {
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key)) claimedTargetIds.add(key);
-        }
-      }
-    }
-
-    for (const key of targetDocMapById.keys()) {
-      if (!claimedTargetIds.has(key)) {
-        reasons.partialTargets++;
-      }
-    }
+    const prospectiveRetained = classifyExistingTargets(candidates, targetDocsByKey, reasons, codec, storeKey, namespace, control.epoch);
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
     const prospectiveWritten = Object.values(expectedTargetCounts).reduce((a, b) => a + b, 0);
 
@@ -1828,6 +1803,8 @@ async function readPreparationInputs(transaction: any, input: {
 
   const sourceDocsByKey = new Map<string, any[]>();
   for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
+  const targetDocsByKey = new Map<string, any[]>();
+  for (const k of TARGET_COUNT_KEYS) targetDocsByKey.set(k, []);
 
   const sourcePhysicalToKey: Record<string, string> = {};
   for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
@@ -1845,18 +1822,17 @@ async function readPreparationInputs(transaction: any, input: {
     if (isSourceCol && !isTargetCol) {
       const colKey = sourcePhysicalToKey[colName];
       sourceDocsByKey.set(colKey, snap.docs);
+    } else if (isTargetCol && !isSourceCol) {
+      targetDocsByKey.set(targetPhysicalToKey[colName], snap.docs);
     } else if (isSourceCol && isTargetCol) {
-      const srcKey = sourcePhysicalToKey[colName];
-      const tgtKey = targetPhysicalToKey[colName];
       const sDocs = [];
+      const tDocs = [];
       for (const doc of snap.docs) {
-        const data = doc.data() || {};
-        // Pass physical colName to isTargetFormatRow
-        if (!isTargetFormatRow(colName, data)) {
-          sDocs.push(doc);
-        }
+        if (isTargetFormatRow(colName, doc.data() || {})) tDocs.push(doc);
+        else sDocs.push(doc);
       }
-      sourceDocsByKey.set(srcKey, sDocs);
+      sourceDocsByKey.set(sourcePhysicalToKey[colName], sDocs);
+      targetDocsByKey.set(targetPhysicalToKey[colName], tDocs);
     }
   }
 
@@ -1875,6 +1851,7 @@ async function readPreparationInputs(transaction: any, input: {
     indexSchemaDigest,
     now: Date.now(),
   });
+  classifyExistingTargets(candidates, targetDocsByKey, plan.prepared.reasons, createCodec(storeKey), storeKey, namespace, epoch);
 
   return { candidates, sourceInventoryDigest, plan };
 }

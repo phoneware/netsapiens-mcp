@@ -87,7 +87,7 @@
   "generated": [
     {
       "destination": "src/store/cutover-protocol.mjs",
-      "sha256": "f8631fd0d86b85750c19fc700acffd394a182198b5db08d03efd5052c14232fe"
+      "sha256": "216c97e8476157e1e53ff612b5e264e975e7e5e7841624359298de68c75bc545"
     },
     {
       "destination": "src/store/cutover-protocol.d.ts",

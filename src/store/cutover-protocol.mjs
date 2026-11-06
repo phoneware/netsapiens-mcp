@@ -7485,6 +7485,36 @@ function computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest
   };
 }
 __name(computePreflightSummaryFromPlan, "computePreflightSummaryFromPlan");
+function classifyExistingTargets(candidates, targetDocsByKey, reasons, codec, storeKey, namespace, epoch) {
+  const targets = /* @__PURE__ */ new Map();
+  for (const [collection, docs] of targetDocsByKey) {
+    for (const doc of docs) targets.set(`${collection}:${doc.id}`, { collection, physicalId: doc.id, data: doc.data() || {} });
+  }
+  let retained = 0;
+  const claimed = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const entries = candidate.targets.map((target) => targets.get(`${target.collection}:${target.rawId}`)).filter(Boolean);
+    if (!entries.length) continue;
+    let equivalent = false;
+    if (entries.length === candidate.targets.length) {
+      try {
+        const logical = projectTargetLogical(candidate, buildTargetProjectionMap(candidate, entries), codec);
+        equivalent = H(storeKey, "logical-record", namespace, epoch, [candidate.kind, logical]) === candidate.logicalDigest;
+      } catch (error) {
+        if (!isCutoverFenceError(error)) throw error;
+      }
+    }
+    if (equivalent) retained++;
+    else reasons.partialTargets++;
+    for (const target of candidate.targets) {
+      const key = `${target.collection}:${target.rawId}`;
+      if (targets.has(key)) claimed.add(key);
+    }
+  }
+  for (const key of targets.keys()) if (!claimed.has(key)) reasons.partialTargets++;
+  return retained;
+}
+__name(classifyExistingTargets, "classifyExistingTargets");
 async function inspectFirestoreLegacyMigration(options) {
   assertValidMigrationContext2(options);
   const binding = assertProtectedContext(options, { operation: "inspect", options: {} });
@@ -7574,59 +7604,7 @@ async function inspectFirestoreLegacyMigration(options) {
       now: Date.now()
     });
     timer.assertUnderDeadline("Preflight scan");
-    const targetDocMapById = /* @__PURE__ */ new Map();
-    for (const [colKey, docs] of targetDocsByKey.entries()) {
-      for (const d of docs) {
-        targetDocMapById.set(`${colKey}:${d.id}`, { collection: colKey, physicalId: d.id, data: d.data() || {} });
-      }
-    }
-    let prospectiveRetained = 0;
-    const claimedTargetIds = /* @__PURE__ */ new Set();
-    for (const c of candidates) {
-      const targetEntries = c.targets.map((target) => targetDocMapById.get(`${target.collection}:${target.rawId}`)).filter(Boolean);
-      const existingCount = targetEntries.length;
-      if (existingCount === 0) {
-        continue;
-      }
-      if (existingCount !== c.targets.length) {
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key2 = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key2)) claimedTargetIds.add(key2);
-        }
-        continue;
-      }
-      let derivedDigest;
-      try {
-        const decodedLogical = projectTargetLogical(c, buildTargetProjectionMap(c, targetEntries), codec);
-        derivedDigest = H(storeKey, "logical-record", namespace, control.epoch, [c.kind, decodedLogical]);
-      } catch (err) {
-        if (!isCutoverFenceError(err)) throw err;
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key2 = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key2)) claimedTargetIds.add(key2);
-        }
-        continue;
-      }
-      if (derivedDigest === c.logicalDigest) {
-        prospectiveRetained++;
-        for (const t of c.targets) {
-          claimedTargetIds.add(`${t.collection}:${t.rawId}`);
-        }
-      } else {
-        reasons.partialTargets++;
-        for (const t of c.targets) {
-          const key2 = `${t.collection}:${t.rawId}`;
-          if (targetDocMapById.has(key2)) claimedTargetIds.add(key2);
-        }
-      }
-    }
-    for (const key2 of targetDocMapById.keys()) {
-      if (!claimedTargetIds.has(key2)) {
-        reasons.partialTargets++;
-      }
-    }
+    const prospectiveRetained = classifyExistingTargets(candidates, targetDocsByKey, reasons, codec, storeKey, namespace, control.epoch);
     const preflight = computePreflightSummaryFromPlan(plan, sourceInventoryDigest, planDigest);
     const prospectiveWritten = Object.values(expectedTargetCounts).reduce((a, b) => a + b, 0);
     return {
@@ -7667,6 +7645,8 @@ async function readPreparationInputs(transaction, input) {
   const distinctColNames = Array.from(/* @__PURE__ */ new Set([...Object.values(sourceNames), ...Object.values(targetNames)])).sort();
   const sourceDocsByKey = /* @__PURE__ */ new Map();
   for (const k of PHYSICAL_COUNT_KEYS) sourceDocsByKey.set(k, []);
+  const targetDocsByKey = /* @__PURE__ */ new Map();
+  for (const k of TARGET_COUNT_KEYS) targetDocsByKey.set(k, []);
   const sourcePhysicalToKey = {};
   for (const [k, name] of Object.entries(sourceNames)) sourcePhysicalToKey[name] = k;
   const targetPhysicalToKey = {};
@@ -7679,17 +7659,17 @@ async function readPreparationInputs(transaction, input) {
     if (isSourceCol && !isTargetCol) {
       const colKey = sourcePhysicalToKey[colName];
       sourceDocsByKey.set(colKey, snap.docs);
+    } else if (isTargetCol && !isSourceCol) {
+      targetDocsByKey.set(targetPhysicalToKey[colName], snap.docs);
     } else if (isSourceCol && isTargetCol) {
-      const srcKey = sourcePhysicalToKey[colName];
-      const tgtKey = targetPhysicalToKey[colName];
       const sDocs = [];
+      const tDocs = [];
       for (const doc of snap.docs) {
-        const data = doc.data() || {};
-        if (!isTargetFormatRow(colName, data)) {
-          sDocs.push(doc);
-        }
+        if (isTargetFormatRow(colName, doc.data() || {})) tDocs.push(doc);
+        else sDocs.push(doc);
       }
-      sourceDocsByKey.set(srcKey, sDocs);
+      sourceDocsByKey.set(sourcePhysicalToKey[colName], sDocs);
+      targetDocsByKey.set(targetPhysicalToKey[colName], tDocs);
     }
   }
   const { candidates, sourceInventoryDigest, plan } = extractCandidatesAndPlan({
@@ -7707,6 +7687,7 @@ async function readPreparationInputs(transaction, input) {
     indexSchemaDigest,
     now: Date.now()
   });
+  classifyExistingTargets(candidates, targetDocsByKey, plan.prepared.reasons, createCodec(storeKey), storeKey, namespace, epoch);
   return { candidates, sourceInventoryDigest, plan };
 }
 __name(readPreparationInputs, "readPreparationInputs");
