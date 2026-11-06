@@ -1242,6 +1242,24 @@ void [control, operationRef, operations];
         const result = await runCommand('npm', ['install', '--legacy-peer-deps', tarball], { cwd: root });
         if (result.status !== 0) throw new Error(`Interop install failed:\n${result.stdout}\n${result.stderr}`);
       }
+      const bridgeTypes = await runCommand('npm', ['install', '--legacy-peer-deps', '--no-save', 'typescript@5.9.3', '@types/node@22', '@types/express@4'], { cwd: bridgeRoot });
+      if (bridgeTypes.status !== 0) throw new Error(`Bridge typecheck setup failed:\n${bridgeTypes.stdout}\n${bridgeTypes.stderr}`);
+      fs.writeFileSync(path.join(bridgeRoot, 'consumer.mts'), `
+import {
+    withLegacyOperation, checkMutationGuardInTransaction, startMonotonicTimer,
+    type LegacyOperationContext, type PendingClaim, type CutoverFenceConfig,
+} from 'netsapiens-mcp/lib';
+declare const context: LegacyOperationContext;
+declare const pending: PendingClaim;
+declare const config: CutoverFenceConfig;
+const id: string = context.storageId;
+const owner: string = pending.claimOwner;
+const enabled: boolean = config.enforce;
+void [withLegacyOperation, checkMutationGuardInTransaction, startMonotonicTimer, id, owner, enabled];
+`);
+      const bridgeTypecheck = await runCommand('npx', ['tsc', '--noEmit', '--strict', '--skipLibCheck', 'false', '--module', 'ESNext', '--moduleResolution', 'Bundler', '--target', 'ES2022', 'consumer.mts'], { cwd: bridgeRoot });
+      if (bridgeTypecheck.status !== 0) throw new Error(`Packed bridge declaration check failed:\n${bridgeTypecheck.stdout}\n${bridgeTypecheck.stderr}`);
+      pass('cutover-interop', 'packed-bridge-declarations');
       const firestore = await runCommand('npm', ['install', '--legacy-peer-deps', '--no-save', '@google-cloud/firestore@8.6.0'], { cwd: tempDir });
       if (firestore.status !== 0) throw new Error(`Firestore install failed:\n${firestore.stdout}\n${firestore.stderr}`);
       const { runCutoverInterop } = await import('./cutover-interop.mjs');
