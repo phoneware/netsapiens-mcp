@@ -438,7 +438,7 @@ export function extractCandidatesAndPlan(params: {
     let credToken = data.refreshToken ?? data.token?.refreshToken;
     if (!credToken && data.accessToken) {
       const tok = tokensByCredential.get(data.accessToken);
-      const rawRef = tok?.data?.refreshToken;
+      const rawRef = tok?.data?.refreshToken ?? tok?.data?.token?.refreshToken;
       if (rawRef && legacyDocId(rawRef) === d.id) {
         credToken = rawRef;
       } else {
@@ -806,13 +806,15 @@ export function extractCandidatesAndPlan(params: {
     // Leave it unclaimed for the orphan census below; otherwise projection may throw on unrelated
     // missing base fields and never report the broken family link.
     if (tokData.refreshFamilyId != null || tokData.familyId != null) continue;
-    if (typeof tokData.refreshToken !== 'string' || tokData.refreshToken.length === 0) {
+    const rawRefresh = tokData.refreshToken ?? tokData.token?.refreshToken;
+    if (typeof rawRefresh !== 'string' || rawRefresh.length === 0 ||
+      (tokData.refreshToken != null && tokData.token?.refreshToken != null && tokData.refreshToken !== tokData.token.refreshToken)) {
       malformedDocKeys.add(`tokens:${tokEntry.doc.id}`);
       reasons.malformedRecords++;
       continue;
     }
     const familyId = codec.id('family', tokEntry.credentialToken);
-    const refreshId = codec.id('refresh', tokData.refreshToken);
+    const refreshId = codec.id('refresh', rawRefresh);
     const newAccessId = codec.id('session', tokEntry.credentialToken);
 
     const candSources = [
@@ -824,8 +826,8 @@ export function extractCandidatesAndPlan(params: {
       },
     ];
     let baseRefEntry: any = undefined;
-    if (tokData.refreshToken) {
-      const rawRef = tokData.refreshToken;
+    if (rawRefresh) {
+      const rawRef = rawRefresh;
       baseRefEntry = refreshByCredential.get(rawRef);
       if (!baseRefEntry) {
         const byPhys = refreshByPhysicalId.get(legacyDocId(rawRef));
