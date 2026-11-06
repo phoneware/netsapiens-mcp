@@ -220,6 +220,7 @@ describe('Version Differential & Runtime Availability', () => {
     // 7. Initialize MCP session and query tools on 44.4.10
     const mcpInit44 = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token44}`)
       .send({
         jsonrpc: '2.0',
@@ -238,6 +239,7 @@ describe('Version Differential & Runtime Availability', () => {
 
     const toolsList44Res = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token44}`)
       .set('mcp-session-id', sid44)
       .send({
@@ -269,6 +271,7 @@ describe('Version Differential & Runtime Availability', () => {
     // search_api never returns 46.0-only tool on 44.4.10
     const searchRes = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token44}`)
       .set('mcp-session-id', sid44)
       .send({
@@ -289,6 +292,7 @@ describe('Version Differential & Runtime Availability', () => {
     const initialHealthReqs = fake44.requests.filter((r) => r.path === '/health' || r.path.endsWith('/health')).length;
     const callApiRes = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token44}`)
       .set('mcp-session-id', sid44)
       .send({
@@ -317,6 +321,7 @@ describe('Version Differential & Runtime Availability', () => {
     // 8. Initialize MCP session and query tools on 46.0.2
     const mcpInit46 = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token46}`)
       .send({
         jsonrpc: '2.0',
@@ -335,6 +340,7 @@ describe('Version Differential & Runtime Availability', () => {
 
     const toolsList46Res = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token46}`)
       .set('mcp-session-id', sid46)
       .send({
@@ -352,6 +358,7 @@ describe('Version Differential & Runtime Availability', () => {
     // 46.0-only tool is present on 46.0.2 when running search_api or listing
     const search46Res = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token46}`)
       .set('mcp-session-id', sid46)
       .send({
@@ -375,6 +382,7 @@ describe('Version Differential & Runtime Availability', () => {
 
     const mcpInit500 = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token500}`)
       .send({
         jsonrpc: '2.0',
@@ -391,6 +399,7 @@ describe('Version Differential & Runtime Availability', () => {
     const sid500 = mcpInit500.headers['mcp-session-id'];
     const toolsList500Res = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token500}`)
       .set('mcp-session-id', sid500)
       .send({
@@ -421,6 +430,7 @@ describe('Version Differential & Runtime Availability', () => {
 
     const toolsListStaleRes = await request(server)
       .post('/mcp')
+      .set('Accept', 'application/json, text/event-stream')
       .set('Authorization', `Bearer ${token44}`)
       .set('mcp-session-id', sid44)
       .send({
@@ -473,6 +483,7 @@ describe('Version Differential & Runtime Availability', () => {
 
       const mcpInit = await request(server)
         .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
         .set('Authorization', `Bearer ${token45}`)
         .send({
           jsonrpc: '2.0',
@@ -493,6 +504,7 @@ describe('Version Differential & Runtime Availability', () => {
       // and call_api refuses it with basis documented and no upstream request.
       const searchRes = await request(server)
         .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
         .set('Authorization', `Bearer ${token45}`)
         .set('mcp-session-id', sid)
         .send({
@@ -507,6 +519,7 @@ describe('Version Differential & Runtime Availability', () => {
       const reqCountBefore = fake45.requests.filter((r) => r.path.includes('/health')).length;
       const callRes = await request(server)
         .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
         .set('Authorization', `Bearer ${token45}`)
         .set('mcp-session-id', sid)
         .send({
@@ -554,6 +567,7 @@ describe('Version Differential & Runtime Availability', () => {
       // Calling GET /domains/{domain}/recordingstorage returns 404 No Route Found from fake
       const res404 = await request(server)
         .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
         .set('Authorization', `Bearer ${token45}`)
         .set('mcp-session-id', sid)
         .send({
@@ -634,17 +648,24 @@ describe('Version Differential & Runtime Availability', () => {
       const events: string[] = [];
       const addr = server.address();
       const port = addr && typeof addr === 'object' ? addr.port : 0;
+      let streamReady!: () => void;
+      let streamFailed!: (error: Error) => void;
+      const connected = new Promise<void>((resolve, reject) => { streamReady = resolve; streamFailed = reject; });
       const sseClient = http.get(
         `http://127.0.0.1:${port}/mcp`,
-        { headers: { Authorization: `Bearer ${token}`, 'mcp-session-id': sid } },
+        { headers: { Authorization: `Bearer ${token}`, 'mcp-session-id': sid, Accept: 'text/event-stream' } },
         (res) => {
-          res.on('data', (chunk) => {
-            events.push(chunk.toString('utf8'));
-          });
+          if (res.statusCode !== 200 || !res.headers['content-type']?.startsWith('text/event-stream')) {
+            streamFailed(new Error(`MCP event stream refused: ${res.statusCode}`));
+            res.resume();
+            return;
+          }
+          res.on('data', (chunk) => { events.push(chunk.toString('utf8')); });
+          streamReady();
         },
       );
-      sseClient.on('error', () => {});
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      sseClient.on('error', streamFailed);
+      await connected;
       // Update fake version and wait for TTL
       fake.setApiVersion('46.0.2');
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -652,6 +673,7 @@ describe('Version Differential & Runtime Availability', () => {
       // Trigger request on session to exercise refresh detection
       await request(server)
         .post('/mcp')
+        .set('Accept', 'application/json, text/event-stream')
         .set('Authorization', `Bearer ${token}`)
         .set('mcp-session-id', sid)
         .send({
