@@ -1,7 +1,7 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "12d61d3e04d13103b6ac1077784115c01afdc051",
+  "commit": "1aa006535812f34fc261279b01a991f3fcd7b876",
   "profile": "bridge",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
