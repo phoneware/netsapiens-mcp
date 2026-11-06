@@ -1,15 +1,15 @@
 {
   "generator": 1,
   "repository": "phoneware/monorepo",
-  "commit": "9c8acd39057490ecc9c202603faa02c3c2842edf",
+  "commit": "8a1b46e803903283744f4bdce1ffc2a1708411b0",
   "profile": "migration",
   "entrypoint": "src/cutover/protocol.entry.mjs",
   "files": [
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.mjs",
-      "blob": "7daff053f1c0b2fa937701d61536d1e3b61e98da",
+      "blob": "6e4b472eb18d7c5ceaffee32a8f74b19318361f3",
       "destination": "src/cutover/canonical-core.mjs",
-      "sha256": "9ccd097420587760c89ceea76bc4ebd02b7adf451050c3ff513fd70a8719b95f"
+      "sha256": "bfb57b449ccd293eeb9e7dc432f112d52836558b742ea697ec961515230075d5"
     },
     {
       "source": "packages/mcp-oauth-kit/src/cutover/canonical-core.d.mts",
@@ -87,7 +87,7 @@
   "generated": [
     {
       "destination": "src/store/cutover-protocol.mjs",
-      "sha256": "216c97e8476157e1e53ff612b5e264e975e7e5e7841624359298de68c75bc545"
+      "sha256": "a0f84185542b7ce049cf3b8f0e1e4ed82084e49301f86b6be18226cdbf98df23"
     },
     {
       "destination": "src/store/cutover-protocol.d.ts",
