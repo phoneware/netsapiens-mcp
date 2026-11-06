@@ -28,17 +28,17 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { InvalidTokenError, InvalidGrantError, ServerError, TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import {
-  type CutoverFenceConfig,
-  type LegacyOperationContext,
-  type SupportedCutoverNamespace,
-  withLegacyOperation,
+ type CutoverFenceConfig,
+ type LegacyOperationContext,
+ type SupportedCutoverNamespace,
+ withLegacyOperation,
  normalizeFenceConfig,
  requireFenceKey,
  assertOperationKey,
  startMonotonicTimer,
-  checkMutationGuardInTransaction,
-  type GuardMutationResult,
-  requestOperationContext,
+ checkMutationGuardInTransaction,
+ type GuardMutationResult,
+ requestOperationContext,
 } from './kit/cutover-fence.js';
 import {
  UpstreamRevokedError,
@@ -623,8 +623,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   const detectedNs = tokensCollection.startsWith('readonly_mcp')
    ? 'readonly_mcp'
    : tokensCollection.startsWith('pwmcp')
-   ? 'pwmcp'
-   : 'mcp';
+    ? 'pwmcp'
+    : 'mcp';
   this.fenceConfig = normalizeFenceConfig(options.fence ?? (process.env.MCP_FENCE_ENFORCE === 'true' ? { namespace: detectedNs, enforce: true } : undefined));
 
   if (options.tokenStore) {
@@ -1165,6 +1165,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
         db: this.db!,
         namespace: this.fenceNamespace,
         operation: opCtx,
+        identityKey: requireFenceKey(this.fenceConfig),
         timer,
         completeOperation: true,
         now: this.nowProvider,
@@ -1244,6 +1245,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       db: this.db!,
       namespace: this.fenceNamespace,
       operation: options?.operation,
+      identityKey: requireFenceKey(this.fenceConfig),
       timer,
       completeOperation: options?.completeOperation !== false,
       now: this.nowProvider,
@@ -1251,22 +1253,22 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      committedGuard = guard;
     }
     const snap = await transaction.get(docRef);
-     if (snap.exists) {
-      guard?.bufferCompletion(this.nowProvider());
+    if (snap.exists) {
+     guard?.bufferCompletion(this.nowProvider());
      guard?.assertPreReturn();
-      return false;
-     }
-     const now = this.nowProvider();
-     const expiresAt = now + 2 * 60 * 60 * 1000;
-     guard?.bufferCompletion(now);
-     transaction.set(docRef, {
-      consumedAt: now,
-      expiresAt,
-      ttlAt: new Date(expiresAt),
-     });
-    guard?.assertPreReturn();
-     return true;
+     return false;
+    }
+    const now = this.nowProvider();
+    const expiresAt = now + 2 * 60 * 60 * 1000;
+    guard?.bufferCompletion(now);
+    transaction.set(docRef, {
+     consumedAt: now,
+     expiresAt,
+     ttlAt: new Date(expiresAt),
     });
+    guard?.assertPreReturn();
+    return true;
+   });
    committedGuard?.onCommit();
    return result;
   }
@@ -1493,12 +1495,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        throw new InvalidGrantError('Upstream token refresh failed. Please re-authenticate.');
       }
       const isTimeout =
-        err instanceof UpstreamTimeoutError ||
-        (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
-        (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
-        (err instanceof Error && err.message.toLowerCase().includes('timeout'));
+       err instanceof UpstreamTimeoutError ||
+       (err && typeof err === 'object' && 'code' in err && ((err as { code: unknown }).code === 'ETIMEDOUT' || (err as { code: unknown }).code === 'ECONNABORTED')) ||
+       (err && typeof err === 'object' && 'name' in err && (err as { name: unknown }).name === 'UpstreamTimeoutError') ||
+       (err instanceof Error && err.message.toLowerCase().includes('timeout'));
       if (!(err instanceof UpstreamRequestRejectedError) && !opCtx?.isAmbiguousRemoteOutcome()) {
-      opCtx?.markAmbiguousRemoteOutcome(isTimeout ? 'upstream_timeout' : 'upstream_transport_error');
+       opCtx?.markAmbiguousRemoteOutcome(isTimeout ? 'upstream_timeout' : 'upstream_transport_error');
       }
       throw toTokenEndpointError(err);
      }
@@ -1537,7 +1539,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
        ? await this.tokenStore.rotate(refreshToken, replacement, stored.clientId, this.nowProvider(), rotateOptions)
        : await (this.tokenStore as unknown as TokenLedger<StoredToken>).rotate(
         refreshToken, replacement, stored.clientId, this.nowProvider(), { operation: opCtx },
-      );
+       );
       if (rot.status === 'retry') {
        const remainingSec = Math.max(1, Math.round((rot.token.expiresAt - this.nowProvider()) / 1000));
        return {
