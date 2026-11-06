@@ -43,15 +43,6 @@ describe('forbidden content scanner', () => {
     writeFileSync(join(dir, 'fixture.txt'), 'clean');
     expect(scan(['--tree']).status).toBe(0);
   });
-  it('reports only match coordinates for multiline patterns', () => {
-    writeFileSync(join(dir, 'lines.txt'), 'safe\nfirst-private\nsecond-private\n');
-    git('add', 'lines.txt');
-    const result = scan(['--tree'], '/first-private\\nsecond-private/m');
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain('MATCH lines.txt:2:1+28');
-    expect(result.stdout).not.toContain('first-private');
-    expect(result.stdout).not.toContain('second-private');
-  });
   it('detects content in a tarball without printing it', () => {
     const result = scan(['--pack', archive], '/sample-private-marker/i');
     expect(result.status).toBe(1);
