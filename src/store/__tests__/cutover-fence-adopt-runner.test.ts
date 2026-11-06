@@ -88,6 +88,16 @@ const errorScenarios = (): ErrorScenario[] => {
       ],
     },
     {
+      name: 'sparse family pointer lacking a recoverable refresh credential is refused without writes',
+      errors: '>=1', reason: 'missingRefreshPointers',
+      seed: () => [
+        [`${NS}_tokens_refresh_families/sparse-family`, { currentAccessToken: 'sparse-access', currentRefreshToken: 'sparse-refresh' }],
+        [`${NS}_tokens_refresh/sparse-refresh`, { familyId: 'sparse-family', status: 'active' }],
+        [`${NS}_tokens_upstream/sparse-family`, { nsAccessToken: 'upstream', nsUsername: 'user' }],
+        [`${NS}_tokens/sparse-access`, { accessToken: 'sparse-access', familyId: 'sparse-family', clientId: 'client', expiresAt: now + 60000 }],
+      ],
+    },
+    {
       name: 'classifies orphan refresh pointers and orphan upstream grants as errors',
       errors: 2,
       seed: () => [
@@ -227,11 +237,13 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     ]);
     await startAdmin(NS);
     const digest = await inspectDigest();
+    const before = await snapshotNamespace(db, NS);
     const report = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest })
     expect(report.ok).toBe(true);
     expect(report.report?.errors).toBe(0);
     expect(report.report?.scanned).toBe(1);
     expect(report.report?.migrated).toBe(0);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
 
     // No v3 documents or v2_adopted marker were written during the dry run.
     expect((await db.collection(`${NS}_refresh_families`).get()).empty).toBe(true);
@@ -240,6 +252,31 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     expect(ctrl?.state).toBe('fenced');
     expect(ctrl?.irreversible).toBe(false);
     expect(ctrl?.migrationRunId).toBeUndefined();
+  });
+  it('signed empty migration latches the first backend access write', async () => {
+    await resetFencedNamespace(db, NS);
+    await startAdmin(NS);
+    const before = await snapshotNamespace(db, NS);
+    const digest = await inspectDigest();
+    const dry = await step('adopt', { dryRun: true, expectedSourceInventoryDigest: digest });
+    expect(dry.ok, dry.message).toBe(true);
+    expect(dry.report).toMatchObject({ errors: 0, scanned: 0, migrated: 0 });
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+    const committed = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest });
+    expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report).toMatchObject({ errors: 0, scanned: 0, migrated: 0 });
+    const ready = await getCutoverFenceRecord(fence(db), NS);
+    expect(ready).toMatchObject({ state: 'v3_ready', emptyNamespace: true, irreversible: false });
+    expect((await db.collection(`${NS}_meta`).doc('v2_adopted').get()).data()).toMatchObject({ emptyNamespace: true });
+    await expect(transitionCutoverFenceState(fence(db), NS, { toState: 'legacy_open', expectedEpoch: EPOCH })).rejects.toThrow();
+    const activated = await step('activate', { migrationManifestDigest: ready!.migrationManifestDigest! });
+    expect(activated.ok, activated.message).toBe(true);
+    expect(await getCutoverFenceRecord(fence(db), NS)).toMatchObject({ state: 'v3_active', irreversible: false });
+    const fixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    const backend = createFirestoreBackend({ db: fence(db), namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    await backend.putAccess({ id: 'first-access', familyId: 'family', expiresAt: Date.now() + 60000, retainUntil: Date.now() + 120000, sealed: 'synthetic' });
+    expect(await backend.getAccess('first-access')).toMatchObject({ id: 'first-access' });
+    expect(await getCutoverFenceRecord(fence(db), NS)).toMatchObject({ state: 'v3_active', irreversible: true, emptyNamespace: false });
   });
 
   it('a clean commit migrates to v3_ready; ordinary writers are refused there and allowed only after v3_active', async () => {
@@ -303,6 +340,7 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     await resetNamespaceWithoutFence(db, NS);
     const init = await initializeCutoverFence(fence(db), NS, { initialEpoch: 1 });
     expect(init.state).toBe('legacy_open');
+    expect(init.epoch).toBe(1);
     expect(init.activeOperations).toBe(0);
     expect(init.irreversible).toBe(false);
     await seedDocs(db, [
@@ -344,11 +382,19 @@ describe.skipIf(!gateOpen)('cutover fence adoption on the protected runner and e
     const adopted = await step('adopt', { dryRun: false, expectedSourceInventoryDigest: digest })
     expect(adopted.ok, `adopt refused: ${adopted.message}`).toBe(true);
     expect(adopted.report?.errors).toBe(0);
+    expect(adopted.report?.migrated).toBe(1);
 
     const finalRecord = await getCutoverFenceRecord(fence(db), NS);
     expect(finalRecord?.state).toBe('v3_ready');
     expect(finalRecord?.irreversible).toBe(true);
     expect(finalRecord?.migrationManifestDigest).toBeDefined();
+    const readyFixture = fixtureFor({ bundleBytes, namespace: NS, epoch: EPOCH });
+    const readyKey = deriveStoreKey(sessionSecretOf(readyFixture));
+    const readyBackend = createFirestoreBackend({ db: fence(db), namespace: NS, key: readyKey });
+    const readyStore = createFirestoreStore({ db: fence(db), namespace: NS, key: readyKey });
+    await expect(readyBackend.getAccess('tok-1')).rejects.toThrow(CutoverRefusedError);
+    await expect(readyBackend.getRefresh('ref-1')).rejects.toThrow(CutoverRefusedError);
+    await expect(readyStore.sessions.get('tok-1')).rejects.toThrow(CutoverRefusedError);
 
     await expect(transitionCutoverFenceState(fence(db), NS, { fromState: 'v3_ready', toState: 'legacy_open', expectedEpoch: finalRecord!.epoch }))
       .rejects.toThrow(/Illegal cutover state transition/);

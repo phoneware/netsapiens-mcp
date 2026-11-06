@@ -31,11 +31,14 @@ jobs:
             gcloud emulators firestore start --host-port=0.0.0.0:8080
           for _ in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
           docker logs fs-emu; exit 1
-      - run: npm test
+      - name: Prepare isolated signed-proof mounts
+        run: sudo chmod 0777 /opt /run
+      - run: npm run check:cutover && npx vitest run --no-file-parallelism
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
           NSMCP_REQUIRE_FIRESTORE_EMULATOR: 1
+          NETSAPIENS_CUTOVER_CONTAINER: '1'
       - run: npm run build
       - run: git diff --exit-code
       - name: Scan tracked content

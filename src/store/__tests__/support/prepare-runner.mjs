@@ -45,5 +45,5 @@ try {
     reply({ ok: false, message: 'unsupported protected action' }, 1);
   }
 } catch (error) {
-  reply({ ok: false, message: error instanceof Error ? error.message : String(error) }, 1);
+  reply({ ok: false, name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }, 1);
 }

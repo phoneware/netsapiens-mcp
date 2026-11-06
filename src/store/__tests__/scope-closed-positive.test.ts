@@ -18,6 +18,7 @@ import { createCodec, deriveStoreKey } from '../codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
 import { encodeOAuthClientsRow, encodeRefreshFamiliesRow, encodeRefreshRow, encodeSessionsRow, encodeUpstreamRow } from '../row-codec.js';
+import { CutoverRefusedError } from '../errors.js';
 import { D, finalizeMigrationInTransaction, startMonotonicTimer } from '../../cutover/canonical-core.mjs';
 import { startFakeAdmin } from './support/fake-admin.mjs';
 import { OPT, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
@@ -171,24 +172,28 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(await snapshotNamespace(db, NS)).toEqual(before);
   });
   it('signed migration accepts the statusless legacy base refresh pointer', async () => {
-    await resetFencedNamespace(db, NS);
-    const now = Date.now();
-    await seedDocs(db, [
-      [`${NS}_tokens/base-access`, { accessToken: 'base-access', refreshToken: 'base-refresh', clientId: 'client', expiresAt: now + 60000, nsAccessToken: 'upstream', nsUsername: 'user' }],
-      [`${NS}_tokens_refresh/base-refresh`, { accessToken: 'base-access' }],
-    ]);
-    const collectionGroups = scopeUnionUnchecked(NS);
-    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
-    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
-    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
-    expect(inspected.ok, inspected.message).toBe(true);
-    const committed = await runStep({
-      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
-      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
-    });
-    expect(committed.ok, committed.message).toBe(true);
-    expect(committed.report?.migrated).toBe(1);
-    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_ready');
+    for (const pointer of [{ accessToken: 'base-access' }, { accessToken: 'base-access', status: 'active', createdAt: Date.now() }]) {
+      if (admin) { await admin.close(); admin = null; }
+      await resetFencedNamespace(db, NS);
+      const now = Date.now();
+      await seedDocs(db, [
+        [`${NS}_tokens/base-access`, { accessToken: 'base-access', refreshToken: 'base-refresh', clientId: 'client', expiresAt: now + 60000, nsAccessToken: 'upstream', nsUsername: 'user' }],
+        [`${NS}_tokens_refresh/base-refresh`, pointer],
+      ]);
+      const collectionGroups = scopeUnionUnchecked(NS);
+      const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+      admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+      const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+      expect(inspected.ok, inspected.message).toBe(true);
+      const committed = await runStep({
+        bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+        options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
+      });
+      expect(committed.ok, committed.message).toBe(true);
+      expect(committed.report?.errors).toBe(0);
+      expect(committed.report?.migrated).toBe(1);
+      expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('v3_ready');
+    }
   });
   it('signed migration preserves both family and unattached base sessions and their TTL policies', async () => {
     await resetFencedNamespace(db, NS);
@@ -211,6 +216,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
     });
     expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report?.errors).toBe(0);
     expect(committed.report?.migrated).toBe(2);
     const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
     const activated = await runStep({
@@ -220,9 +226,15 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(activated.ok, activated.message).toBe(true);
     const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
     expect(await store.sessions.getByRefreshToken('pr56-ref')).toMatchObject({ clientId: 'pr56-client', nsUsername: 'user@pr56.com' });
-    expect(await store.sessions.getByRefreshToken('legacy-ref-2')).toMatchObject({ clientId: 'legacy-client', nsUsername: 'legacy@domain.com', extra: {} });
-    expect((await db.collection(`${NS}_refresh_families`).doc(family).get()).data()?.ttlAt).toBeUndefined();
-    expect((await db.collection(`${NS}_upstream`).doc(family).get()).data()?.ttlAt).toBeUndefined();
+    const unattached = await store.sessions.getByRefreshToken('legacy-ref-2');
+    expect(unattached).toMatchObject({ clientId: 'legacy-client', nsUsername: 'legacy@domain.com' });
+    expect(unattached?.extra).toEqual({});
+    const familyDoc = await db.collection(`${NS}_refresh_families`).doc(family).get();
+    const upstreamDoc = await db.collection(`${NS}_upstream`).doc(family).get();
+    expect(familyDoc.exists).toBe(true);
+    expect(upstreamDoc.exists).toBe(true);
+    expect(familyDoc.data()?.ttlAt).toBeUndefined();
+    expect(upstreamDoc.data()?.ttlAt).toBeUndefined();
     for (const doc of (await db.collection(`${NS}_refresh`).get()).docs) expect(doc.data().ttlAt).toBeUndefined();
     const sessions = await db.collection(`${NS}_sessions`).get();
     expect(sessions.size).toBeGreaterThan(0);
@@ -249,8 +261,10 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups,
     });
     expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report?.errors).toBe(0);
     expect(committed.report?.migrated).toBe(1);
     const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    expect(ready?.state).toBe('v3_ready');
     const key = deriveStoreKey(sessionSecretOf(fixture));
     const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key });
     const codeId = createCodec(key).id('code', code);
@@ -258,7 +272,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const beforeRefusal = await snapshotNamespace(db, NS);
     const issued = { accessToken: 'issued-acc-1', refreshToken: 'issued-ref-1' };
     const session = { clientId, expiresAt: now + 3600000, nsAccessToken: 'ns-auth-tok', nsRefreshToken: 'ns-auth-ref', nsUsername: 'authuser@domain.com', serverBaseUrl };
-    await expect(store.authCodes.redeemAndIssue(code, { serverBaseUrl, clientId }, issued, session, codeBefore.sealed)).rejects.toThrow(/active ownership|v3_active/i);
+    await expect(store.authCodes.redeemAndIssue(code, { serverBaseUrl, clientId }, issued, session, codeBefore.sealed)).rejects.toThrow(CutoverRefusedError);
     expect(await snapshotNamespace(db, NS)).toEqual(beforeRefusal);
     expect((await db.collection(`${NS}_auth_codes`).doc(codeId).get()).exists).toBe(true);
     const activated = await runStep({
@@ -270,6 +284,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(preview?.data.pending.codeChallenge).toBe('challenge-xyz');
     expect(await store.authCodes.redeemAndIssue(code, { serverBaseUrl, clientId }, issued, session, preview!.sealed)).toBeDefined();
     expect(await store.authCodes.redeem(code, { serverBaseUrl, clientId })).toBeUndefined();
+    expect((await db.collection(`${NS}_auth_codes`).doc(codeId).get()).exists).toBe(false);
     expect(await store.sessions.get(issued.accessToken)).toMatchObject({ clientId, nsUsername: 'authuser@domain.com' });
   });
   it('signed inspection refuses a retired fingerprint claimed by two families without writes', async () => {
@@ -290,6 +305,13 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
     expect(inspected.ok, inspected.message).toBe(true);
     expect(inspected.reasons?.conflictingClaims).toBeGreaterThan(0);
+    const dry = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
+    });
+    expect(dry.ok, dry.message).toBe(true);
+    expect(dry.report?.errors).toBeGreaterThanOrEqual(1);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
     const refused = await runStep({
       bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
       options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
@@ -300,19 +322,20 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
   });
   it('signed migration preserves matching client records and refuses conflicting client metadata', async () => {
     const collectionGroups = scopeUnionUnchecked(NS);
-    for (const conflict of [false, true]) {
+    for (const variant of ['matching', 'oauthOnly', 'conflict'] as const) {
       if (admin) { await admin.close(); admin = null; }
       await resetFencedNamespace(db, NS);
       const issuedAt = 1700000000;
-      await seedDocs(db, [
-        [`${NS}_clients/client`, { client_id: 'client', client_name: 'V2.4 Default Client', redirect_uris: ['https://a.example.com', 'https://b.example.com'], token_endpoint_auth_method: 'none', client_id_issued_at: issuedAt }],
-        [`${NS}_oauth_clients/client`, { client_id: 'client', client_name: 'V2.4 Default Client', redirect_uris: conflict ? ['https://different.example.com'] : ['https://b.example.com', 'https://a.example.com'], token_endpoint_auth_method: 'none', client_id_issued_at: issuedAt }],
-      ]);
+      const docs: Array<readonly [string, Record<string, unknown>]> = [
+        [`${NS}_oauth_clients/client`, { client_id: 'client', client_name: 'V2.4 Default Client', redirect_uris: variant === 'conflict' ? ['https://different.example.com'] : ['https://b.example.com', 'https://a.example.com'], token_endpoint_auth_method: 'none', client_id_issued_at: issuedAt }],
+      ];
+      if (variant !== 'oauthOnly') docs.push([`${NS}_clients/client`, { client_id: 'client', client_name: 'V2.4 Default Client', redirect_uris: ['https://a.example.com', 'https://b.example.com'], token_endpoint_auth_method: 'none', client_id_issued_at: issuedAt }]);
+      await seedDocs(db, docs);
       const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
       admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
       const before = await snapshotNamespace(db, NS);
       const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
-      if (conflict) {
+      if (variant === 'conflict') {
         expect(inspected.ok).toBe(false);
         expect(inspected.message).toMatch(/Conflicting client logical projections/);
         expect(await snapshotNamespace(db, NS)).toEqual(before);
@@ -324,6 +347,7 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
         options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
       });
       expect(committed.ok, committed.message).toBe(true);
+      expect(committed.report?.errors).toBe(0);
       expect(committed.report?.migrated).toBe(1);
       const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
       const activated = await runStep({
@@ -334,6 +358,34 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
       const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
       expect(await store.clients.getClient('client')).toMatchObject({ client_name: 'V2.4 Default Client' });
     }
+  });
+  it('signed migration converts an id-less legacy resume token in place after a no-write dry run', async () => {
+    await resetFencedNamespace(db, NS);
+    const now = Date.now();
+    const resumeId = 'legacy-resume-only';
+    await seedDocs(db, [[`${NS}_resume_tokens/${resumeId}`, { consumedAt: now, expiresAt: now + 60000 }]]);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const before = await snapshotNamespace(db, NS);
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const dry = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: true, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
+    });
+    expect(dry.ok, dry.message).toBe(true);
+    expect(dry.report).toMatchObject({ errors: 0, scanned: 1, migrated: 0 });
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+    const committed = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt',
+      options: { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest }, collectionGroups
+    });
+    expect(committed.ok, committed.message).toBe(true);
+    expect(committed.report).toMatchObject({ errors: 0, migrated: 1 });
+    const converted = await db.collection(`${NS}_resume_tokens`).doc(resumeId).get();
+    expect(converted.exists).toBe(true);
+    expect(converted.data()).toMatchObject({ id: resumeId, v: 2 });
   });
   it('signed migration preserves raw credential identities, predecessor and legacy replay TTL', async () => {
     await resetFencedNamespace(db, NS);
@@ -415,15 +467,19 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     const stopped = await runFactory(argvFor('adopt', NS, options));
     expect(stopped.prepared, stopped.message).toBe(true);
     expect(stopped.message).toMatch(/injected stop after committed preparation/);
-    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.state).toBe('migrating');
+    expect(await getCutoverFenceRecord(db as unknown as FirestoreLike, NS)).toMatchObject({
+      state: 'migrating', epoch: EPOCH, migrationRunId: fixture.request.identity.migrationRunId,
+    });
     const before = await snapshotNamespace(db, NS);
     const wrongRun = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, nonce: '2', action: 'adopt', options, collectionGroups });
     expect(wrongRun.ok).toBe(false);
+    expect(wrongRun.name).toBe('CutoverFenceError');
     expect(wrongRun.message).toMatch(/migrationRunId mismatch/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
     const wrongEpoch = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH + 1, action: 'adopt', options, collectionGroups });
     expect(wrongEpoch.ok).toBe(false);
-    expect(wrongEpoch.message).toMatch(/Epoch mismatch/);
+    expect(wrongEpoch.name).toBe('CutoverFenceError');
+    expect(wrongEpoch.message).toMatch(/Epoch mismatch in adopt: expected 3, got 2/);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
     const resumed = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'adopt', options, collectionGroups });
     expect(resumed.ok, resumed.message).toBe(true);
@@ -757,7 +813,8 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(await snapshotNamespace(db, NS)).toEqual(beforeAbort);
     await store.clients.registerClient({ redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
     const active = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
-    expect(active).toMatchObject({ state: 'v3_active', irreversible: true, emptyNamespace: false });
+    expect(active?.irreversible, 'first credential write must latch irreversible').toBe(true);
+    expect(active).toMatchObject({ state: 'v3_active', emptyNamespace: false });
     await expect(transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
       toState: 'legacy_open', expectedEpoch: EPOCH,
     })).rejects.toThrow();
