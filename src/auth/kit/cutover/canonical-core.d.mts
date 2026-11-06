@@ -320,6 +320,7 @@ export function withLegacyOperation<R>(
 export function releaseLegacyOperation(
   db: FirestoreLike,
   ctx: LegacyOperationContext,
+  identityKey: Uint8Array,
   outcome?: 'completed' | 'failed',
   nowProvider?: () => number,
 ): Promise<void>;
@@ -327,6 +328,7 @@ export function releaseLegacyOperation(
 export function markOperationAmbiguous(
   db: FirestoreLike,
   ctx: LegacyOperationContext,
+  identityKey: Uint8Array,
   nowProvider?: () => number,
 ): Promise<void>;
 
@@ -343,13 +345,10 @@ export function checkV3MutationGuardInTransaction(
 ): Promise<{ control: CutoverFenceControlRecord; bufferMutation(): void; assertPreReturn(): void }>;
 
 
-export interface GuardMutationOptions {
+export type GuardMutationOptions = {
   db: FirestoreLike;
   namespace: SupportedCutoverNamespace;
-  operation: LegacyOperationContext;
   completeOperation?: boolean;
-  /** Required when pendingClaim is supplied; never persisted. */
-  identityKey?: Uint8Array;
   pendingClaim?: {
     familyId: string;
     operationId: string;
@@ -362,7 +361,10 @@ export interface GuardMutationOptions {
   };
   now?: () => number;
   timer: MonotonicTimer;
-}
+} & (
+  | { operation: LegacyOperationContext; identityKey: Uint8Array }
+  | { operation?: undefined; identityKey?: undefined }
+);
 
 export type PendingClaim = NonNullable<GuardMutationOptions['pendingClaim']>;
 
@@ -385,8 +387,25 @@ export function isLegacyMutationPermittedInTransaction(
   transaction: TransactionLike,
   db: FirestoreLike,
   namespace: string,
+  operation: LegacyOperationContext,
+  timer: MonotonicTimer,
+  identityKey: Uint8Array,
+): Promise<{ permitted: boolean; control: CutoverFenceControlRecord }>;
+export function isLegacyMutationPermittedInTransaction(
+  transaction: TransactionLike,
+  db: FirestoreLike,
+  namespace: string,
+  operation: undefined,
+  timer: MonotonicTimer,
+  identityKey?: Uint8Array,
+): Promise<{ permitted: boolean; control: CutoverFenceControlRecord }>;
+export function isLegacyMutationPermittedInTransaction(
+  transaction: TransactionLike,
+  db: FirestoreLike,
+  namespace: string,
   operation: LegacyOperationContext | undefined,
   timer: MonotonicTimer,
+  identityKey: Uint8Array,
 ): Promise<{ permitted: boolean; control: CutoverFenceControlRecord }>;
 
 export interface ClaimUpstreamGrantOptions {
