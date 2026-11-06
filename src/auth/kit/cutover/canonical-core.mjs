@@ -358,6 +358,7 @@ export function isTargetFormatRow(collection, data) {
 
   if (collection.endsWith('_resume_tokens')) {
     const isTarget = data.v === 2 && data._mcp_format === 'v3_target';
+    if (isTarget && (data.token !== undefined || data.resumeToken !== undefined)) throw new CutoverFenceError(`Ambiguous resume_tokens document format in '${collection}'`);
     const isSource = data.v === undefined && data._mcp_format === undefined && (data.consumedAt !== undefined || data.expiresAt !== undefined || data.token !== undefined);
     if (isTarget && !isSource) return true;
     if (isSource && !isTarget) return false;
@@ -2930,6 +2931,11 @@ async function revalidatePreparationSnapshot(transaction, db, options, control) 
       return { collection: identity.collection, physicalId: identity.physicalId, data: item.prospectiveTargetPostimages[index] };
     });
     if (expectedByKey.size) throw new CutoverFenceError('Prospective target set is incomplete');
+    const receiptTargets = prospective.map((entry) => {
+      const id = computeKeyedDocId(storeKey, 'target-id', namespace, epoch, entry.collection, entry.physicalId);
+      return { collection: entry.collection, id, recordDigest: computeTargetRecordDigest(storeKey, namespace, epoch, entry.collection, id, entry.data) };
+    });
+    if (C(item.receiptUpperBound.targetAfter) !== C(receiptTargets)) throw new CutoverFenceError('Prospective receipt does not bind target postimages');
     const prospectiveProjection = projectTargetLogical(cand, buildTargetProjectionMap(cand, prospective), codec);
     if (H(storeKey, 'logical-record', namespace, epoch, [cand.kind, prospectiveProjection]) !== srcDigest) {
       throw new CutoverFenceError('Prospective target graph does not match its source projection');
@@ -4388,6 +4394,8 @@ export function validateCompleteMigrationPlanForIdentity(plan, expected) {
   }
 
   const covered = new Set();
+  validatePlanSpec(prep.planSpec, prep, ns, expected.epoch, expected.migrationRunId);
+  const specifications = new Map(prep.planSpec.candidates.map((entry) => [entry.candidateId, entry]));
   for (const item of plan.items) {
     const c = candidates.get(item.candidateId);
     if (!c) throw new CutoverFenceError(`Plan item '${item.candidateId}' has no prepared candidate`);
@@ -4417,6 +4425,10 @@ export function validateCompleteMigrationPlanForIdentity(plan, expected) {
     const refKeys = new Set(gotSources);
     if (actionKeys.length !== refKeys.size || !actionKeys.every((k) => refKeys.has(k))) {
       throw new CutoverFenceError(`Plan item '${item.candidateId}' source actions are not exactly the source references`);
+    }
+    const specification = specifications.get(item.candidateId);
+    if (!specification || C(specification.sourceActions) !== C(item.sourceActions)) {
+      throw new CutoverFenceError(`Plan item '${item.candidateId}' source actions do not match its prepared specification`);
     }
   }
   if (covered.size !== candidates.size) {
