@@ -151,6 +151,10 @@ export class FakeDocumentReference {
     return `${this.parentPath}/${this.id}`;
   }
 
+  collection(collectionPath: string): FakeCollectionReference {
+    return new FakeCollectionReference(this.firestore, `${this.path}/${collectionPath}`);
+  }
+
   async get(): Promise<FakeDocumentSnapshot> {
     this.firestore.checkOutage();
     const map = this.firestore.getCollectionMap(this.parentPath);
