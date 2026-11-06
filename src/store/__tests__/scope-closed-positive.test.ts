@@ -12,12 +12,13 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Firestore } from '@google-cloud/firestore';
+import { FieldPath, FieldValue, Firestore } from '@google-cloud/firestore';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createCodec, deriveStoreKey } from '../codec.js';
 import { createFirestoreStore, type FirestoreLike } from '../firestore.js';
 import { getCutoverFenceRecord, transitionCutoverFenceState } from '../firestore-v2-adoption.js';
 import { encodeOAuthClientsRow, encodeRefreshFamiliesRow, encodeRefreshRow, encodeSessionsRow, encodeUpstreamRow } from '../row-codec.js';
+import { D, finalizeMigrationInTransaction, startMonotonicTimer } from '../../cutover/canonical-core.mjs';
 import { startFakeAdmin } from './support/fake-admin.mjs';
 import { OPT, assertCanOwnMounts, containerGateOpen, releaseMounts } from './support/mounts.mjs';
 import { argvFor, fixtureFor, mountFixture, runFactory, runStep, scopeUnionUnchecked, sessionSecretOf } from './support/runner-harness.mjs';
@@ -108,6 +109,33 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(refused.message).toMatch(/marker|ownership/i);
     expect(await snapshotNamespace(db, NS)).toEqual(before);
     await markerRef.set(marker);
+    const restored = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate', options, collectionGroups });
+    expect(restored.ok, restored.message).toBe(true);
+  });
+  it('empty finalization rejects a nonzero count on an otherwise coherent signed fixture', async () => {
+    const { collectionGroups, options } = await emptyReadyFixture();
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    const meta = db.collection(`${NS}_meta`);
+    const controlRef = meta.doc('cutover_fence');
+    const markerRef = meta.doc('v2_adopted');
+    const finalRef = meta.doc(`migration_manifest_${EPOCH}`);
+    const control = (await controlRef.get()).data()!;
+    const marker = (await markerRef.get()).data()!;
+    const final = (await finalRef.get()).data()!;
+    await markerRef.delete();
+    await finalRef.delete();
+    await controlRef.update({ state: 'migrating', emptyNamespace: FieldValue.delete(), migrationManifestDigest: FieldValue.delete() });
+    const alteredFinal = { ...final, scanned: 1 };
+    const coherentMarker = { ...marker, migrationManifestDigest: D('final', NS, EPOCH, alteredFinal) };
+    const before = await snapshotNamespace(db, NS);
+    await expect(db.runTransaction(async (transaction) => finalizeMigrationInTransaction(
+      transaction as never, db as unknown as FirestoreLike,
+      { namespace: NS, finalDoc: alteredFinal, markerDoc: coherentMarker, storeKey: deriveStoreKey(sessionSecretOf(fixture)), FieldPath, timer: startMonotonicTimer() },
+    ))).rejects.toThrow(/Counts must be 0 for emptyNamespace final manifest/);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+    await controlRef.set(control);
+    await markerRef.set(marker);
+    await finalRef.set(final);
     const restored = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate', options, collectionGroups });
     expect(restored.ok, restored.message).toBe(true);
   });
