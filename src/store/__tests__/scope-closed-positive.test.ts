@@ -90,6 +90,88 @@ describe.skipIf(!gateOpen)('positive integration on a synthetic closed scope (em
     expect(restored.ok, restored.message).toBe(true);
   }
 
+  it('observes atomic prepared state before the signed engine finalizes and activates', async () => {
+    await resetFencedNamespace(db, NS);
+    const collectionGroups = scopeUnionUnchecked(NS);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    admin = await startFakeAdmin({ databaseResource: fixture.index.provenance.databaseResource, policy: fixture.index.policy, token: 'owner' });
+    const inspected = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'inspect', collectionGroups });
+    expect(inspected.ok, inspected.message).toBe(true);
+    const options = { dryRun: false, expectedSourceInventoryDigest: inspected.sourceInventoryDigest };
+    mountFixture(fixture, 'adopt', options);
+    writeFileSync(resolve(OPT, 'runner.mjs'), readFileSync(resolve(here, 'support', 'prepared-boundary-runner.mjs')));
+    const committed = await runFactory(argvFor('adopt', NS, options));
+    expect(committed.ok, committed.message).toBe(true);
+    expect(committed.boundary.control).toMatchObject({ state: 'migrating', epoch: EPOCH, irreversible: false });
+    expect(committed.boundary.prepared).toMatchObject({ kind: 'prepared', epoch: EPOCH, namespace: NS });
+    expect(committed.boundary.prepared.migrationRunId).toBe(committed.boundary.control.migrationRunId);
+    expect(committed.boundary.finalExists).toBe(false);
+    expect(committed.boundary.markerExists).toBe(false);
+    const ready = await getCutoverFenceRecord(db as unknown as FirestoreLike, NS);
+    expect(ready).toMatchObject({ state: 'v3_ready', emptyNamespace: true, irreversible: false });
+    const activated = await runStep({
+      bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate',
+      options: { migrationManifestDigest: ready!.migrationManifestDigest! }, collectionGroups,
+    });
+    expect(activated.ok, activated.message).toBe(true);
+    expect(activated.result.status).toBe('activated');
+    expect(await getCutoverFenceRecord(db as unknown as FirestoreLike, NS)).toMatchObject({ state: 'v3_active', epoch: EPOCH, irreversible: false });
+  });
+
+  it('closing refuses reopening with the irreversible latch from a real protected migration', async () => {
+    const { collectionGroups, options } = await emptyReadyFixture();
+    const activated = await runStep({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, action: 'activate', options, collectionGroups });
+    expect(activated.ok, activated.message).toBe(true);
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    const store = createFirestoreStore({ db: db as unknown as FirestoreLike, namespace: NS, key: deriveStoreKey(sessionSecretOf(fixture)) });
+    await store.clients.registerClient({ redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
+    expect((await getCutoverFenceRecord(db as unknown as FirestoreLike, NS))?.irreversible).toBe(true);
+    const controlRef = db.collection(`${NS}_meta`).doc('cutover_fence');
+    await controlRef.set({ schemaVersion: 1, namespace: NS, epoch: EPOCH, state: 'closing', activeOperations: 0, irreversible: true });
+    const before = await snapshotNamespace(db, NS);
+    await expect(transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+      fromState: 'closing', toState: 'legacy_open', expectedEpoch: EPOCH,
+    })).rejects.toThrow(/irreversible migration latch is engaged/i);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+
+  it('closing refuses reopening when the real protected migration left an ownership marker', async () => {
+    await emptyReadyFixture();
+    const meta = db.collection(`${NS}_meta`);
+    expect((await meta.doc('v2_adopted').get()).data()).toMatchObject({ kind: 'ownership', emptyNamespace: true });
+    await meta.doc('cutover_fence').set({ schemaVersion: 1, namespace: NS, epoch: EPOCH, state: 'closing', activeOperations: 0, irreversible: false });
+    const before = await snapshotNamespace(db, NS);
+    await expect(transitionCutoverFenceState(db as unknown as FirestoreLike, NS, {
+      fromState: 'closing', toState: 'legacy_open', expectedEpoch: EPOCH,
+    })).rejects.toThrow(/durable v2_adopted ownership marker exists/i);
+    expect(await snapshotNamespace(db, NS)).toEqual(before);
+  });
+
+  it('real finalization evidence rejects an immutable marker retry and a missing prepared manifest', async () => {
+    const { collectionGroups } = await emptyReadyFixture();
+    const fixture = fixtureFor({ bundleBytes: closedBundle, namespace: NS, epoch: EPOCH, collectionGroups });
+    const meta = db.collection(`${NS}_meta`);
+    const controlRef = meta.doc('cutover_fence');
+    const prepRef = meta.doc(`migration_prepared_${EPOCH}`);
+    const final = (await meta.doc(`migration_manifest_${EPOCH}`).get()).data()!;
+    const marker = (await meta.doc('v2_adopted').get()).data()!;
+    const finalize = (finalDoc: Record<string, unknown>, markerDoc: Record<string, unknown>) => db.runTransaction((transaction) =>
+      finalizeMigrationInTransaction(transaction as never, db as unknown as FirestoreLike, {
+        namespace: NS, finalDoc, markerDoc, storeKey: deriveStoreKey(sessionSecretOf(fixture)), FieldPath, timer: startMonotonicTimer(),
+      }));
+    const beforeRetry = await snapshotNamespace(db, NS);
+    const retry = await finalize(final, marker);
+    expect(retry.state).toBe('v3_ready');
+    expect(await snapshotNamespace(db, NS)).toEqual(beforeRetry);
+    await expect(finalize(final, { ...marker, adoptedAt: marker.adoptedAt + 1 })).rejects.toThrow(/immutable retry violation/i);
+    expect(await snapshotNamespace(db, NS)).toEqual(beforeRetry);
+    await controlRef.update({ state: 'migrating', emptyNamespace: FieldValue.delete(), migrationManifestDigest: FieldValue.delete() });
+    await prepRef.delete();
+    const beforeMissing = await snapshotNamespace(db, NS);
+    await expect(finalize(final, marker)).rejects.toThrow(/prepared manifest missing/i);
+    expect(await snapshotNamespace(db, NS)).toEqual(beforeMissing);
+  });
+
   it('signed activation refuses a wrong marker run ID without writes', async () => {
     await assertMarkerRefusal((marker) => ({ ...marker, migrationRunId: 'wrong-run' }), /migrationRunId mismatch/i);
   });
