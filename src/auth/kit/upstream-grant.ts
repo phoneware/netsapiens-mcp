@@ -618,8 +618,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           throw new UpstreamUnavailableError('Lease owner changed during refresh');
         }
 
-          const nextGrantVersion = (pendingClaim?.grantVersion ?? current.grantVersion ?? current.version ?? 1) +
-            (canonicalJsonStringify(current.grant) === canonicalJsonStringify(committedRefresh.grant) ? 0 : 1);
+          const nextVersion = nextGrantVersion(current, committedRefresh.grant);
         const isTerminal = options?.completeOperation !== false;
         if (isTerminal) {
           guard?.bufferCompletion(commitNow);
@@ -634,7 +633,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
               leaseExpiresAt: isTerminal ? null : pendingClaim?.leaseExpiresAt,
               leaseOwner: isTerminal ? null : (pendingClaim?.ownerStorageId ?? leaseOwner),
               operationId: isTerminal ? null : pendingClaim?.storageId,
-              grantVersion: nextGrantVersion,
+              grantVersion: nextVersion,
             ambiguousOutcome: null,
             ambiguousReason: null,
             ambiguousAt: null,
@@ -644,7 +643,7 @@ export class FirestoreUpstreamGrantStore<G> implements UpstreamGrantStore<G> {
           { merge: true },
         );
           timer.assertUnderDeadline('upstream commit pre-return');
-          return pendingClaim ? { ...pendingClaim, grantVersion: nextGrantVersion } : undefined;
+          return pendingClaim ? { ...pendingClaim, grantVersion: nextVersion } : undefined;
         });
       };
       const finalizedClaim = op?.trackWriter ? await op.trackWriter(runCommitTx) : await runCommitTx();

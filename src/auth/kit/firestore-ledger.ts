@@ -20,7 +20,7 @@ import {
 } from './ledger.js';
 import { StoreUnavailableError, CutoverFenceError, CutoverRefusedError, kitCodeOf } from './errors.js';
 import { stripUndefined } from './strip-undefined.js';
-import { assertGrantNotPending, type StoredUpstreamRecord } from './upstream-grant.js';
+import { assertGrantNotPending, nextGrantVersion, type StoredUpstreamRecord } from './upstream-grant.js';
 import {
   type CutoverFenceConfig,
   checkMutationGuardInTransaction,
@@ -28,7 +28,6 @@ import {
  requireFenceKey,
  assertOperationKey,
  startMonotonicTimer,
- canonicalJsonStringify,
  isLegacyMutationPermittedInTransaction,
   getCutoverFenceRecord,
   getCutoverOperationDocRef,
@@ -162,10 +161,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
             guardResult = guard;
       const { generation, upstream } = await this.assertIssueNotPending(transaction, stored, familyId);
       const nextUpstream = this.legacy?.toUpstream?.(stored as unknown as Record<string, unknown>);
-      const oldVersion = upstream?.grantVersion ?? upstream?.version ?? 1;
-      if (!Number.isSafeInteger(oldVersion) || oldVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
-      const grantVersion = oldVersion + (upstream && nextUpstream &&
-       canonicalJsonStringify(upstream.grant) !== canonicalJsonStringify(nextUpstream.grant) ? 1 : 0);
+      const grantVersion = nextUpstream ? nextGrantVersion(upstream, nextUpstream.grant) : upstream?.grantVersion ?? upstream?.version ?? 1;
+      if (!Number.isSafeInteger(grantVersion) || grantVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
             guard.bufferCompletion(this.nowProvider());
             transaction.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
             transaction.set(
@@ -215,10 +212,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       await this.db.runTransaction(async (batch) => {
     const { generation, upstream } = await this.assertIssueNotPending(batch, stored, familyId);
     const nextUpstream = this.legacy?.toUpstream?.(stored as unknown as Record<string, unknown>);
-    const oldVersion = upstream?.grantVersion ?? upstream?.version ?? 1;
-    if (!Number.isSafeInteger(oldVersion) || oldVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
-    const grantVersion = oldVersion + (upstream && nextUpstream &&
-     canonicalJsonStringify(upstream.grant) !== canonicalJsonStringify(nextUpstream.grant) ? 1 : 0);
+    const grantVersion = nextUpstream ? nextGrantVersion(upstream, nextUpstream.grant) : upstream?.grantVersion ?? upstream?.version ?? 1;
+    if (!Number.isSafeInteger(grantVersion) || grantVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
       batch.set(this.accessCol().doc(docId(stored.accessToken)), accessPayload);
       batch.set(
         this.refreshCol().doc(docId(stored.refreshToken)),
@@ -846,10 +841,8 @@ export class FirestoreTokenLedger<T extends BaseStoredToken> implements TokenLed
       const accessPayload = stripUndefined({ ...stored, ...extras });
       const upstreamData = upstreamRef && this.legacy?.toUpstream
        ? this.legacy.toUpstream(stored as unknown as Record<string, unknown>) : undefined;
-      const priorVersion = upstreamRecord?.grantVersion ?? upstreamRecord?.version ?? 1;
-      if (!Number.isSafeInteger(priorVersion) || priorVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
-      const nextVersion = priorVersion + (upstreamRecord && upstreamData &&
-       canonicalJsonStringify(upstreamRecord.grant) !== canonicalJsonStringify(upstreamData.grant) ? 1 : 0);
+      const nextVersion = upstreamData ? nextGrantVersion(upstreamRecord, upstreamData.grant) : upstreamRecord?.grantVersion ?? upstreamRecord?.version ?? 1;
+      if (!Number.isSafeInteger(nextVersion) || nextVersion < 1) throw new CutoverFenceError('Upstream grant version is invalid');
         guard?.bufferCompletion(now);
 
         if (adoptedDocToWrite) {
