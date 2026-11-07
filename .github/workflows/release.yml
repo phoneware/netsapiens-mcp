@@ -76,8 +76,6 @@ jobs:
         with:
           subject-path: ${{ env.TARBALL }}
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           case "$VERSION" in
             *-*) npm publish "$TARBALL" --access public --tag next --provenance ;;
