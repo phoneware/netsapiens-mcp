@@ -15,7 +15,9 @@ export function protocolSourceFiles(srcRoot) {
   (function walk(dir) {
     for (const entry of readdirSync(dir)) {
       const path = join(dir, entry);
-      if (statSync(path).isDirectory()) walk(path);
+      if (statSync(path).isDirectory()) {
+        if (entry !== '__tests__') walk(path);
+      }
       else if (entry.endsWith('.mjs') || entry.endsWith('.d.mts')) found.push(relative(srcRoot, path));
     }
   })(srcRoot);
