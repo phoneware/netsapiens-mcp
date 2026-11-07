@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentReference, Firestore } from '@google-cloud/firestore';
@@ -2177,29 +2178,41 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     const server = app.listen(0);
     const port = (server.address() as any).port;
-    const controller = new AbortController();
+    let sseReq: http.ClientRequest | undefined;
     try {
+      const sseResp = await new Promise<{ status: number; contentType: string }>((resolve) => {
+        sseReq = http.request(
+          {
+            hostname: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${testAccessToken}`,
+              Accept: 'text/event-stream',
+              'mcp-session-id': liveSessionId,
+            },
+          },
+          (res) => {
+            resolve({
+              status: res.statusCode ?? 0,
+              contentType: String(res.headers['content-type'] ?? ''),
+            });
+          },
+        );
+        sseReq.on('error', () => {});
+        sseReq.end();
+      });
 
-    const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
-      headers: {
-        Authorization: `Bearer ${testAccessToken}`,
-        Accept: 'text/event-stream',
-        'mcp-session-id': liveSessionId,
-      },
-      signal: controller.signal,
-    });
+      expect(sseResp.status).toBe(200);
+      expect(sseResp.contentType).toContain('text/event-stream');
 
-    const sseResp = await fetchPromise;
-    expect(sseResp.status).toBe(200);
-    expect(sseResp.headers.get('content-type')).toContain('text/event-stream');
-
-    expect(observedActiveCountDuringVerify).toBe(1);
+      expect(observedActiveCountDuringVerify).toBe(1);
 
       await waitForAdmissionDrain(db, namespace);
-
     } finally {
-    controller.abort();
-    await new Promise<void>((r) => server.close(() => r()));
+      sseReq?.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 
@@ -2328,7 +2341,6 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const { app } = createApp(authProvider);
     const server = app.listen(0);
     const port = (server.address() as any).port;
-    const controller = new AbortController();
     const pending = {
       clientId: 'test_client_id',
       redirectUri: 'http://localhost/callback',
@@ -2338,13 +2350,25 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       state: 'test-oauth-state',
     };
     const signedState = signValue(pending, 600);
+    const body = JSON.stringify({ username: 'realuser', password: 'realpassword', auth_state: signedState });
 
-    const fetchPromise = fetch(`http://127.0.0.1:${port}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'realuser', password: 'realpassword', auth_state: signedState }),
-      signal: controller.signal,
-    }).catch(() => {});
+    let clientReq: http.ClientRequest | undefined;
+    const reqPromise = new Promise<void>((resolve) => {
+      clientReq = http.request({
+        hostname: '127.0.0.1',
+        port,
+        path: '/login',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      });
+      clientReq.on('error', () => resolve());
+      clientReq.on('close', () => resolve());
+      clientReq.write(body);
+      clientReq.end();
+    });
 
     for (let i = 0; i < 30; i++) {
       if (inFlight) break;
@@ -2352,14 +2376,14 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     }
     expect(inFlight).toBe(true);
 
-    controller.abort();
+    clientReq?.destroy();
+    await reqPromise;
     await new Promise((r) => setTimeout(r, 50));
 
     const duringDisconnectControl = await getCutoverFenceRecord(db, namespace);
     expect(duringDisconnectControl?.activeOperations).toBe(1);
 
     releaseBarrier();
-    await fetchPromise;
 
     let activeOps = 1;
     for (let i = 0; i < 30; i++) {
