@@ -102,6 +102,7 @@
   },
   "files": [
     "build/**/*",
+    "!build/**/__tests__/**",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

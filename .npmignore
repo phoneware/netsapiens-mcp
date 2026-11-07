@@ -10,6 +10,7 @@ tests/
 src/__tests__/
 __tests__/
 **/__tests__/**
+build/**/__tests__/**
 *.test.js
 *.test.ts
 *.spec.js
