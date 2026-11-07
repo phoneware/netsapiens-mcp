@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          registry-url: 'https://registry.npmjs.org'
       - name: Verify npm version
         run: |
           node -e '
@@ -75,10 +76,12 @@ jobs:
         with:
           subject-path: ${{ env.TARBALL }}
       - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           case "$VERSION" in
-            *-*) npm publish "$TARBALL" --access public --tag next ;;
-            *) npm publish "$TARBALL" --access public ;;
+            *-*) npm publish "$TARBALL" --access public --tag next --provenance ;;
+            *) npm publish "$TARBALL" --access public --provenance ;;
           esac
       - name: Create GitHub Release
         env:
