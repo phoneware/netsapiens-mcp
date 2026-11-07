@@ -329,7 +329,7 @@ describe('Tool call arguments and scope resolution', () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 
-  it('adds username to Detected NS user role log line', async () => {
+  it('does not include the username in the detected role log', async () => {
     const infoSpy = vi.spyOn(logger, 'info');
 
     vi.spyOn(axios, 'get').mockResolvedValue({
@@ -351,7 +351,7 @@ describe('Tool call arguments and scope resolution', () => {
 
       const roleLogs = infoSpy.mock.calls.filter((c) => c[0] === 'Detected NS user role');
       expect(roleLogs.length).toBe(1);
-      expect(roleLogs[0][1]?.username).toBe('pat');
+      expect(roleLogs[0][1]).not.toHaveProperty('username');
       expect(roleLogs[0][1]?.role).toBe('domain_admin');
     } finally {
       infoSpy.mockRestore();

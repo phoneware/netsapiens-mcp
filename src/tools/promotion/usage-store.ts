@@ -63,9 +63,9 @@ export class FirestoreUsageStore implements UsageStore {
   private cache = new Map<string, { fetchedAt: number; data: Map<string, UsageRecord> }>();
   private static readonly CACHE_TTL_MS = 30_000;
 
-  constructor(opts: { collection?: string; projectId?: string } = {}) {
+  constructor(opts: { collection?: string; projectId?: string; db?: Firestore } = {}) {
     this.collection = opts.collection ?? 'mcp_tool_usage';
-    this.db = new Firestore({ projectId: opts.projectId });
+    this.db = opts.db ?? new Firestore({ projectId: opts.projectId, ignoreUndefinedProperties: true });
     logger.info('Firestore usage store initialized', { collection: this.collection });
   }
 

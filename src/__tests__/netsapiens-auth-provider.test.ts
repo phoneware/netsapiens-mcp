@@ -426,7 +426,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
       });
     });
 
-    it('surfaces NS error messages in the login error page on failed grant', async () => {
+    it('redacts upstream error messages on failed login', async () => {
       const { app } = await importApp();
       const reg = await request(app)
         .post('/register')
@@ -454,7 +454,8 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
         .type('form')
         .send({ username: 'x', password: 'y', auth_state: authState })
         .expect(200);
-      expect(r.text).toContain('Invalid User Login');
+      expect(r.text).toContain('Authentication failed');
+      expect(r.text).not.toContain('Invalid User Login');
     });
 
     it('shows expired-session page when the post carries no state', async () => {
@@ -733,7 +734,8 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
         .type('form')
         .send({ username: 'alice', password: 'wrong', auth_state: authState })
         .expect(200);
-      expect(failed.text).toContain('Invalid User Login');
+      expect(failed.text).toContain('Authentication failed');
+      expect(failed.text).not.toContain('Invalid User Login');
 
       const retryState = hiddenField(failed.text, 'auth_state');
       expect(retryState).toBeTruthy();

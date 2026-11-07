@@ -1,14 +1,18 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/errors.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
 import {
  InvalidGrantError,
  OAuthError,
  TemporarilyUnavailableError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
-export type KitErrorCode = 'store_unavailable' | 'upstream_unavailable' | 'upstream_revoked';
+export type KitErrorCode =
+  | 'store_unavailable'
+  | 'upstream_unavailable'
+  | 'upstream_revoked'
+  | 'cutover_refused'
+  | 'cutover_fence_error';
 
 export abstract class KitError extends Error {
- abstract readonly kitCode: KitErrorCode;
+  abstract readonly kitCode: KitErrorCode;
 }
 
 export class StoreUnavailableError extends KitError {
@@ -29,6 +33,9 @@ export class UpstreamUnavailableError extends KitError {
  }
 }
 
+/** A token endpoint explicitly rejected the request without issuing a grant. */
+export class UpstreamRequestRejectedError extends UpstreamUnavailableError { }
+
 export class UpstreamRevokedError extends KitError {
  readonly kitCode = 'upstream_revoked';
 
@@ -38,23 +45,27 @@ export class UpstreamRevokedError extends KitError {
  }
 }
 
+export { CutoverFenceError, CutoverRefusedError } from './cutover-protocol.mjs';
+
 /**
  * Matches KitError codes structurally.
  * Never relies on instanceof alone because multiple kit copies can exist
  * in the same process across dependency boundaries or tarball imports.
  */
 export function kitCodeOf(err: unknown): KitErrorCode | undefined {
- if (err && typeof err === 'object' && 'kitCode' in err) {
-  const code = err.kitCode;
-  if (
-   code === 'store_unavailable' ||
-   code === 'upstream_unavailable' ||
-   code === 'upstream_revoked'
-  ) {
-   return code;
+  if (err && typeof err === 'object' && 'kitCode' in err) {
+    const code = err.kitCode;
+    if (
+      code === 'store_unavailable' ||
+      code === 'upstream_unavailable' ||
+      code === 'upstream_revoked' ||
+      code === 'cutover_refused' ||
+      code === 'cutover_fence_error'
+    ) {
+      return code;
+    }
   }
- }
- return undefined;
+  return undefined;
 }
 
 /**
@@ -131,15 +142,19 @@ export function toTokenEndpointError(
  err: unknown,
  log?: (err: unknown) => void,
 ): OAuthError {
- const code = kitCodeOf(err);
- if (code === 'store_unavailable' || code === 'upstream_unavailable') {
-  const message = err instanceof Error ? err.message : 'Temporarily unavailable';
-  return new TemporarilyUnavailableError(message);
- }
- if (code === 'upstream_revoked') {
-  const message = err instanceof Error ? err.message : 'Upstream grant revoked';
-  return new InvalidGrantError(message);
- }
+  const code = kitCodeOf(err);
+  if (code === 'store_unavailable' || code === 'upstream_unavailable') {
+    const message = err instanceof Error ? err.message : 'Temporarily unavailable';
+    return new TemporarilyUnavailableError(message);
+  }
+  if (code === 'cutover_refused' || code === 'cutover_fence_error') {
+    const message = err instanceof Error ? err.message : 'Service temporarily unavailable during cutover';
+    return new TemporarilyUnavailableError(message);
+  }
+  if (code === 'upstream_revoked') {
+    const message = err instanceof Error ? err.message : 'Upstream grant revoked';
+    return new InvalidGrantError(message);
+  }
 
  if (err instanceof InvalidGrantError) {
   return err;

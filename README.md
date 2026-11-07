@@ -89,6 +89,13 @@ export MCP_SESSION_SECRET=<32+ random hex>     # signs and seals login-state blo
 npm start
 ```
 
+When `MCP_FENCE_ENFORCE=true`, set `MCP_SESSION_SECRET` to the same stable
+value of at least 32 characters on every writer in the namespace. The bridge
+derives its cutover identity key from that secret; the ephemeral login-state
+fallback cannot be used for a fenced deployment. Changing the secret requires
+a separately reviewed identity migration. Enabling the fence does not
+authorize a migration or resolve existing raw operation records.
+
 Connect from Claude / ChatGPT by giving it the URL `https://mcp.example.com/mcp`. The client will DCR-register, redirect the user to `/authorize`, the user signs in, and the bearer flows back to the AI automatically.
 
 ### Stateless by default

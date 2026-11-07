@@ -563,7 +563,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   expect(refreshed.nsAccessToken).toBe('new-ns-token-acquired');
  });
 
- it('revoke during an in-flight refresh leaves the token revoked', async () => {
+ it('revoke during an in-flight refresh refuses without deleting the claim', async () => {
   const collection = `tokens_${randomBytes(4).toString('hex')}`;
   const store = new FirestoreTokenStore({
    collection,
@@ -583,25 +583,19 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    nsUserRole: 'domain_admin',
   });
 
-  // Start refresh and delete/revoke the token while refresh is in flight
-  await expect(
-   store.refreshNsToken(bearerToken, async () => {
-    // Delete/revoke while in flight
-    await store.delete(bearerToken);
+  const refreshed = await store.refreshNsToken(bearerToken, async () => {
+   await expect(store.delete(bearerToken)).rejects.toThrow();
     return {
-     access_token: 'new-ns-token-should-not-resurrect',
+    access_token: 'new-ns-token',
      refresh_token: 'new-ns-refresh-token',
      expires_in: 3600,
     };
-   }),
-  ).rejects.toThrow();
-
-  // Deletion must be authoritative: token document must no longer exist!
-  const surviving = await store.get(bearerToken);
-  expect(surviving).toBeUndefined();
+  });
+  expect(refreshed.nsAccessToken).toBe('new-ns-token');
+  expect((await store.get(bearerToken))?.nsAccessToken).toBe('new-ns-token');
  });
 
- it('an expired lease late completion cannot overwrite newer credentials or clear new owner lease', async () => {
+ it('expired claims do not permit takeover and stale owners cannot overwrite another claim', async () => {
   const collection = `tokens_${randomBytes(4).toString('hex')}`;
   const store1 = new FirestoreTokenStore({
    collection,
@@ -626,11 +620,13 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   });
 
   const { promise: slowRefreshPromise, resolve: resolveSlowRefresh } = deferred<unknown>();
+  const { promise: claimStarted, resolve: notifyClaimStarted } = deferred<void>();
 
   // Store 1 starts refresh with short lease, but its refresh call hangs
   const store1Promise = store1.refreshNsToken(
    bearerToken,
    async () => {
+    notifyClaimStarted();
     await slowRefreshPromise;
     return {
      access_token: 'token-late-store1',
@@ -641,28 +637,19 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    { maxWaitMs: 5000, leaseDurationMs: 100 },
   );
 
-  // Wait for store1's lease to expire and store2 to take over
-  await new Promise((r) => setTimeout(r, 200));
-
-  // Store 2 completes a newer refresh
-  const refreshedStore2 = await store2.refreshNsToken(
-   bearerToken,
-   async () => ({
-    access_token: 'token-newer-store2',
-    refresh_token: 'refresh-newer-store2',
-    expires_in: 3600,
-   }),
-   { maxWaitMs: 5000, leaseDurationMs: 5000 },
-  );
-  expect(refreshedStore2.nsAccessToken).toBe('token-newer-store2');
-
-  // Now let store 1 finish late
+  await claimStarted;
+  const original = await store2.get(bearerToken);
+  const upstream = store2.upstreamDocRef(original!.refreshFamilyId!);
+  await upstream.set({ leaseUntil: 0 }, { merge: true });
+  const takeover = vi.fn(async () => ({ access_token: 'unexpected', expires_in: 3600 }));
+  await expect(store2.refreshNsToken(bearerToken, takeover, { maxWaitMs: 500, leaseDurationMs: 5000 }))
+   .rejects.toThrow();
+  expect(takeover).not.toHaveBeenCalled();
+  await upstream.set({ leaseOwner: 'simulated-other-owner', leaseUntil: Date.now() + 5000 }, { merge: true });
   resolveSlowRefresh(null);
   await expect(store1Promise).rejects.toThrow();
-
-  // Verify store 1's late completion did NOT overwrite store 2's newer credentials
-  const currentToken = await store2.get(bearerToken);
-  expect(currentToken?.nsAccessToken).toBe('token-newer-store2');
+  expect((await upstream.get()).data()?.leaseOwner).toBe('simulated-other-owner');
+  expect((await store2.get(bearerToken))?.nsAccessToken).toBe('token-v1');
  });
 
  it('second post of the same resume token is refused across instances', async () => {
@@ -847,7 +834,7 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   expect(rawDataAfter.ttlAt).toBeInstanceOf(Timestamp);
  });
 
- it('lease-loss during verifyAccessToken does not delete a bearer that was refreshed by another instance', async () => {
+ it('lease-loss during verifyAccessToken does not delete the bearer or the new claim', async () => {
   process.env.MCP_PERSISTENCE = 'firestore';
   const collection = `tokens_${randomBytes(4).toString('hex')}`;
   const clientsCollection = `clients_${randomBytes(4).toString('hex')}`;
@@ -909,19 +896,12 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    expires_in: 3600,
   }));
   const firstGrant = vi.fn(async () => {
-   // This callback runs only after provider 1's acquisition transaction commits.
-   // Make takeover eligible without waiting for wall-clock expiry.
-   await tokenRef.update({ refreshLockUntil: 0 });
-
-   // Complete the real second-instance refresh before provider 1 returns.
-   await store2.refreshNsToken(bearerToken, newerGrant);
-
-   return {
-    access_token: 'late-ns-token-provider1',
-    refresh_token: 'late-refresh-provider1',
-    expires_in: 3600,
-    username: 'shared@domain.com',
-   };
+   const tokenSnap = await tokenRef.get();
+   const familyId = tokenSnap.data()?.refreshFamilyId;
+   await store1WithDb.db.collection(`${collection}_upstream`).doc(familyId).set(
+    { leaseOwner: 'simulated-other-owner', leaseUntil: Date.now() + 5000 }, { merge: true },
+   );
+   return { access_token: 'late-ns-token-provider1', refresh_token: 'late-refresh-provider1', expires_in: 3600 };
   });
 
   const mutableProvider1 = provider1 as unknown as {
@@ -935,17 +915,17 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
    .send();
 
   expect(firstGrant).toHaveBeenCalledOnce();
-  expect(newerGrant).toHaveBeenCalledOnce();
+  expect(newerGrant).not.toHaveBeenCalled();
   expect(refresh1).toHaveBeenCalledOnce();
   await expect(refresh1.mock.results[0].value).rejects.toBeInstanceOf(LeaseLostError);
 
   store2.clearCache();
   const surviving = await store2.get(bearerToken);
-  expect(surviving).toMatchObject({
-   nsAccessToken: 'fresh-ns-token-provider2',
-   nsRefreshToken: 'fresh-refresh-provider2',
-  });
-  expect(res1.status).toBe(200);
+  expect(surviving).toMatchObject({ nsAccessToken: 'old-ns-token', nsRefreshToken: 'ns-refresh-token' });
+  const familyId = (await tokenRef.get()).data()?.refreshFamilyId;
+  expect((await store1WithDb.db.collection(`${collection}_upstream`).doc(familyId).get()).data()?.leaseOwner)
+   .toBe('simulated-other-owner');
+  expect(res1.status).toBe(500);
  });
 
  it('upstream timeout during verifyAccessToken does not delete bearer token and returns 500', async () => {
