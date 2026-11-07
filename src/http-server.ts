@@ -189,37 +189,40 @@ export async function startHttpServer(): Promise<HttpServer> {
  process.once('SIGINT', onShutdown);
  process.once('SIGTERM', onShutdown);
 
- const httpServer = app.listen(port, host, () => {
-  logger.info('NetSapiens MCP HTTP server started', {
-   host,
-   port,
-   mode: isStatelessMode() ? 'stateless' : 'session',
-   authorize: `${baseUrl.origin}/authorize`,
-   mcp: mcpUrl.href,
+ return new Promise((resolve, reject) => {
+  const httpServer = app.listen(port, host, () => {
+   logger.info('NetSapiens MCP HTTP server started', {
+    host,
+    port,
+    mode: isStatelessMode() ? 'stateless' : 'session',
+    authorize: `${baseUrl.origin}/authorize`,
+    mcp: mcpUrl.href,
+   });
+   if (isStatelessMode() && process.env.MCP_CONFIRM_DESTRUCTIVE === 'true') {
+    logger.warn(
+     'MCP_CONFIRM_DESTRUCTIVE is on but MCP_STATELESS was forced true. ' +
+     'Elicitation prompts need a session to reach the client, so destructive ' +
+     'calls will fall back to MCP_CONFIRM_FALLBACK (default: refuse). ' +
+     'Set MCP_STATELESS=false to keep the confirmation gate.',
+    );
+   }
+   if (config.debug) {
+    logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
+   }
+   const origins = [...new Set(platforms.map((p) => new URL(p.apiUrl).origin))];
+   void warmVersionCache(origins).catch((err) => {
+    logger.warn('Failed to warm version cache on startup', { error: String(err) });
+   });
+   resolve(httpServer);
   });
-  if (isStatelessMode() && process.env.MCP_CONFIRM_DESTRUCTIVE === 'true') {
-   logger.warn(
-    'MCP_CONFIRM_DESTRUCTIVE is on but MCP_STATELESS was forced true. ' +
-    'Elicitation prompts need a session to reach the client, so destructive ' +
-    'calls will fall back to MCP_CONFIRM_FALLBACK (default: refuse). ' +
-    'Set MCP_STATELESS=false to keep the confirmation gate.',
-   );
-  }
-  if (config.debug) {
-   logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
-  }
-  const origins = [...new Set(platforms.map((p) => new URL(p.apiUrl).origin))];
-  void warmVersionCache(origins).catch((err) => {
-   logger.warn('Failed to warm version cache on startup', { error: String(err) });
+
+  httpServer.once('error', reject);
+
+  httpServer.on('close', () => {
+   process.removeListener('SIGINT', onShutdown);
+   process.removeListener('SIGTERM', onShutdown);
   });
  });
-
- httpServer.on('close', () => {
-  process.removeListener('SIGINT', onShutdown);
-  process.removeListener('SIGTERM', onShutdown);
- });
-
- return httpServer;
 }
 
 /**

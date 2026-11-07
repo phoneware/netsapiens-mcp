@@ -980,6 +980,88 @@ async function main() {
         MCP_STATELESS: 'false',
       };
 
+      // 2. Negative proof: verify uninitialized Firestore fails closed on DCR client registration
+      const uninitPort = await getAvailablePort();
+      const uninitSrv = await startMcpServerProcess(tempDir, {
+        ...fsEnvCommon,
+        MCP_PORT: String(uninitPort),
+      });
+      try {
+        await waitForHealth(uninitPort);
+        const uninitReg = await fetch(`http://127.0.0.1:${uninitPort}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            redirect_uris: ['http://localhost/callback'],
+            client_name: 'e2e-uninit-test',
+            token_endpoint_auth_method: 'none',
+          }),
+        });
+        if (uninitReg.status !== 500) {
+          fail('firestore', 'uninitialized-fence-rejection', `expected uninitialized DCR to fail with status 500, got ${uninitReg.status}`);
+        }
+        pass('firestore', 'uninitialized-fence-rejection');
+      } finally {
+        await uninitSrv.stop();
+      }
+
+      // 3. Seed emulator with valid v3_active cutover fence and matching ownership marker for namespace mcp
+      const seedScriptPath = path.join(tempDir, 'seed-emulator-fence.mjs');
+      fs.writeFileSync(
+        seedScriptPath,
+        `import { Firestore } from '@google-cloud/firestore';
+
+const projectId = process.env.GOOGLE_CLOUD_PROJECT || 'firestore-test';
+const namespace = process.env.MCP_STORE_NAMESPACE || 'mcp';
+const db = new Firestore({ projectId });
+
+const now = Date.now();
+const runId = 'migration-e2e-seed-01';
+const manifestDigest = '0'.repeat(64);
+const codeSha = '17e13f2b8a7258d037f09efb3a3684393ea61bdd';
+
+await db.collection(\`\${namespace}_meta\`).doc('cutover_fence').set({
+  schemaVersion: 1,
+  namespace,
+  epoch: 2,
+  state: 'v3_active',
+  activeOperations: 0,
+  irreversible: false,
+  emptyNamespace: true,
+  migrationRunId: runId,
+  migrationManifestDigest: manifestDigest,
+  createdAt: now,
+  updatedAt: now,
+  codeSha,
+  codeArtifact: 'netsapiens-mcp@3.0.0',
+});
+
+await db.collection(\`\${namespace}_meta\`).doc('v2_adopted').set({
+  schemaVersion: 2,
+  namespace,
+  epoch: 2,
+  migrationRunId: runId,
+  codeSha,
+  codeArtifact: 'netsapiens-mcp@3.0.0',
+  packageIntegrity: 'sha512-' + 'a'.repeat(86) + '==',
+  protocolDigest: '1'.repeat(64),
+  assemblyDigest: '2'.repeat(64),
+  indexSchemaDigest: '3'.repeat(64),
+  encoderVersion: 1,
+  planDigest: '4'.repeat(64),
+  kind: 'ownership',
+  preparedDigest: '5'.repeat(64),
+  migrationManifestDigest: manifestDigest,
+  emptyNamespace: true,
+  adoptedAt: now,
+});
+await db.terminate();
+`
+      );
+      execSync('node seed-emulator-fence.mjs', { cwd: tempDir, env: fsEnvCommon, stdio: 'pipe' });
+      pass('firestore', 'emulator-fence-seeded');
+
+      // 4. Start Server 1 on seeded emulator
       const srv1 = await startMcpServerProcess(tempDir, {
         ...fsEnvCommon,
         MCP_PORT: String(port1),
