@@ -1153,7 +1153,7 @@ async function cleanup(ns) {
 
 runStoreConformance({
   name: 'firestore-consumer',
-  capabilities: { persistent: true, multiInstance: true, exclusive: false, expiry: 'ttl-policy' },
+  capabilities: { persistent: true, multiInstance: true, subjectGuards: true, exclusive: false, expiry: 'ttl-policy' },
   async openBackend(ns) {
     const db = new Firestore({ projectId, ignoreUndefinedProperties: false });
     handles.set(ns, [...(handles.get(ns) ?? []), db]);
