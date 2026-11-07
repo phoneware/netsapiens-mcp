@@ -5,13 +5,40 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_addresses_for_domain: ToolDefinition = {
   schema: {
     name: 'get_addresses_for_domain',
-    description: 'Get Addresses for Domain — [GET /domains/{domain}/addresses]',
+    description: 'List domain addresses — Returns the domain-level and site addresses of a domain, the emergency (E911) addresses users and devices are assigned. Personal addresses and endpoints are left out unless you add `show_all_personal=yes`.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain. Super User Read Only scope can read.  An address is one of three kinds, set by its `user` field: `*` for a domain-level address that every user in the domain can see, a site name for a site address, or an extension for a personal address. To use an address, set its `emergency-address-id` on a device, a user, a site, or the domain. A device without one uses its user\\\'s address, a user without one uses its site\\\'s, and a site without one uses the domain\\\'s. User and device reads report where the address came from in `emergency-address-source`: `user_level`, `site_level`, or `domain_level`.  Each address carries `count-users-configured`, the number of users assigned it, and `address-formatted-pretty`. `address-is-default-for-site` is `true` on a site\\\'s own address, `domain_default` is `true` on the domain\\\'s, and `site_address` is `true` on any other address a site owns.  Filter with `address-name` (contains) and `caller-name` (exact). Page with `start` and `limit`. `limit` defaults to `100`, and `0` returns every address. `GET /domains/{domain}/addresses/count` counts the addresses, and returns `404` when the domain does not exist. — [GET /domains/{domain}/addresses]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "show_all_personal": {
+                      "type": "string",
+                      "description": "`yes` returns every address in the domain: domain-level, site, and personal addresses, and the endpoint rows. By default only domain-level and site addresses are returned. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses whose name contains this text."
+                },
+                "caller-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses with exactly this caller name."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most addresses to return. Defaults to `100`. `0` returns every address. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -19,16 +46,28 @@ export const get_addresses_for_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['show_all_personal', 'address-name', 'caller-name', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/addresses',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,80 +82,89 @@ export const get_addresses_for_domain: ToolDefinition = {
 export const create_address_for_domain: ToolDefinition = {
   schema: {
     name: 'create_address_for_domain',
-    description: 'Create Address for Domain — [POST /domains/{domain}/addresses]',
+    description: 'Create domain address — Creates an emergency (E911) address in a domain. Without `user` in the body it is a domain-level address that every user in the domain can see. Send a site name in `user` to create a site address.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain.  `address-name` and `address-line-1` are required. `emergency-address-id` is optional: without it the API generates one, `a-` followed by 13 hexadecimal characters. An ID already used in any domain returns `409`. To add an address the carrier has checked, call `POST /domains/{domain}/addresses/validate` first, then send its `emergency-address-id`, `address-formatted-pidflo`, and `carrier` with the other fields. `address-formatted-pidflo` is used only together with a supported `carrier`: `bandwidth`, `brightlink`, `inteliquent`, or `voipinno`. Without one, the address is saved with an empty `address-formatted-pidflo`.  Returns `200` with the address as stored. The address is stored shortly after the response, so a read straight after may not show it yet. Users, devices, and domains already assigned this ID get the new location. Send `address-postal-code` as a string so leading zeros are kept.  To use an address, set its `emergency-address-id` on a device, a user, a site, or the domain. A device without one uses its user\\\'s address, a user without one uses its site\\\'s, and a site without one uses the domain\\\'s. User and device reads report where the address came from in `emergency-address-source`: `user_level`, `site_level`, or `domain_level`. — [POST /domains/{domain}/addresses]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "This is an autogenerated ID for the Address."
+                      "description": "The address ID. IDs the API generates are `a-` followed by 13 hexadecimal characters. Paths accept only letters, digits, spaces, and `* . - _ '`. Optional: without it the API generates one. An ID used in any domain returns `409`."
                 },
                 "address-name": {
                       "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "A label for the address, shown when users pick one."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
+                      "description": "The caller name stored with the address."
                 },
                 "address-line-1": {
                       "type": "string",
-                      "description": "This is the address line 1 for the address"
+                      "description": "The house number and street. The house number is the text up to the first space."
                 },
                 "address-line-2": {
                       "type": "string",
-                      "description": "This is the address line 2 for the address"
+                      "description": "The suite, unit, or floor."
                 },
                 "address-city": {
                       "type": "string",
-                      "description": "This is the city for the address"
+                      "description": "The city."
                 },
                 "address-state-province-abbreviation": {
                       "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
+                      "description": "The state or province code, such as `CA`."
                 },
                 "address-postal-code": {
                       "type": "string",
-                      "description": "This is the postal code for the address"
+                      "description": "The postal code. Send it as a string to keep leading zeros."
                 },
                 "address-country-abbreviation": {
                       "type": "string",
-                      "description": "This is the country appreviation for the address"
+                      "description": "The country code, such as `US` or `CA`."
                 },
                 "address-location-description": {
                       "type": "string",
-                      "description": "This is an optional location description for the address"
+                      "description": "Where in the building, such as a room or desk."
                 },
                 "ip-address-public": {
                       "type": "string",
-                      "description": "This is the public IP of the client window creating the address."
+                      "description": "A public IP address stored with the address, as sent. The API does not detect it."
                 },
                 "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address"
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier, as returned by validate. `address-formatted-pidflo` is used only with one of these values. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
+                },
+                "user": {
+                      "type": "string",
+                      "description": "`POST /domains/{domain}/addresses` only: leave it out for a domain-level address, or send a site name for a site address. On a user path, the path decides."
                 }
           },
           "required": [
                 "domain",
-                "emergency-address-id",
                 "address-name",
-                "caller-name",
-                "address-line-1",
-                "address-city",
-                "address-state-province-abbreviation",
-                "address-postal-code",
-                "address-country-abbreviation",
-                "address-formatted-pidflo"
+                "address-line-1"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/addresses',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -124,7 +172,7 @@ export const create_address_for_domain: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['emergency-address-id', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'ip-address-public', 'address-formatted-pidflo', 'carrier'];
+    const bodyParamNames = ['emergency-address-id', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'ip-address-public', 'address-formatted-pidflo', 'carrier', 'user'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -148,67 +196,65 @@ export const create_address_for_domain: ToolDefinition = {
 export const validate_address: ToolDefinition = {
   schema: {
     name: 'validate_address',
-    description: 'Validate Address — [POST /domains/{domain}/addresses/validate]',
+    description: 'Validate address — Checks an address with the platform\\\'s emergency calling carrier and returns it in the carrier\\\'s standard form. It does not save the address. Send the result to `POST /domains/{domain}/addresses` to save it.  Requires Office Manager, Site Manager, Reseller, or Super User scope. It counts as a create, so read-only scopes and Basic User scope cannot call it.  The carrier is set for the whole platform, so you cannot choose it. Send `address-line-1`, `address-line-2`, `address-city`, `address-state-province-abbreviation`, `address-postal-code`, and `address-country-abbreviation`. The house number is read from `address-line-1` up to the first space. `address-name` and `caller-name` are returned as sent. Send `emergency-address-id` to check an existing address again. Without it, the response carries a new one, `a-` followed by 13 hexadecimal characters.  A valid address returns `200` with `address-formatted-pidflo`, the standardized address as an object whose keys depend on the carrier, and `carrier`. An address the carrier rejects also returns `200`, with `valid: false` and the carrier\\\'s `reason`. Fix the address and validate again. A platform with no carrier set up answers `valid: false` with `reason` `Vendor not configured`.  With the `bandwidth` carrier the check takes a few seconds, and it registers the address with the carrier under its `emergency-address-id`. — [POST /domains/{domain}/addresses/validate]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "emergency-address-id": {
-                      "type": "string",
-                      "description": "A hash for the identifier of the address for both carrier and NS side."
-                },
-                "address-name": {
-                      "type": "string",
-                      "description": "address-name"
-                },
-                "caller-name": {
-                      "type": "string",
-                      "description": "caller-name"
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "address-line-1": {
                       "type": "string",
-                      "description": "address-line-1"
+                      "description": "The house number and street. The house number is the text up to the first space."
                 },
                 "address-line-2": {
                       "type": "string",
-                      "description": "address-line-2"
-                },
-                "address-country-abbreviation": {
-                      "type": "string",
-                      "description": "address-country-abbreviation"
-                },
-                "address-state-province-abbreviation": {
-                      "type": "string",
-                      "description": "address-state-province-abbreviation"
+                      "description": "The suite, unit, or floor."
                 },
                 "address-city": {
                       "type": "string",
-                      "description": "address-city"
+                      "description": "The city."
+                },
+                "address-state-province-abbreviation": {
+                      "type": "string",
+                      "description": "The state or province code, such as `CA`."
                 },
                 "address-postal-code": {
                       "type": "string",
-                      "description": "address-postal-code"
+                      "description": "The postal code. Send it as a string to keep leading zeros."
+                },
+                "address-country-abbreviation": {
+                      "type": "string",
+                      "description": "The country code, such as `US` or `CA`."
                 },
                 "address-location-description": {
                       "type": "string",
-                      "description": "address-location-description"
+                      "description": "Where in the building, such as a room or desk."
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Returned as sent."
+                },
+                "caller-name": {
+                      "type": "string",
+                      "description": "Returned as sent."
+                },
+                "emergency-address-id": {
+                      "type": "string",
+                      "description": "Send it to check an existing address again. Without it, the response carries a new ID."
                 }
           },
           "required": [
-                "domain",
-                "address-name",
-                "caller-name",
-                "address-line-1",
-                "address-country-abbreviation",
-                "address-state-province-abbreviation",
-                "address-city",
-                "address-postal-code",
-                "address-location-description"
+                "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/addresses/validate',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -216,7 +262,7 @@ export const validate_address: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['emergency-address-id', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-country-abbreviation', 'address-state-province-abbreviation', 'address-city', 'address-postal-code', 'address-location-description'];
+    const bodyParamNames = ['address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'address-name', 'caller-name', 'emergency-address-id'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -240,80 +286,85 @@ export const validate_address: ToolDefinition = {
 export const update_address_for_domain: ToolDefinition = {
   schema: {
     name: 'update_address_for_domain',
-    description: 'Update Address for Domain — [PUT /domains/{domain}/addresses/{emergency-address-id}]',
+    description: 'Update domain address — Changes an emergency (E911) address in a domain, addressed by its `emergency-address-id`.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain.  An ID that is not in this domain returns `404`, and nothing is changed.  `address-name` is required. Send the other fields you want to change. `address-formatted-pidflo` is used only together with a supported `carrier`: `bandwidth`, `brightlink`, `inteliquent`, or `voipinno`. Without one, the address is saved with an empty `address-formatted-pidflo`. To change the street, validate the new address first and send its `address-formatted-pidflo` and `carrier`.  A `202` means the change is accepted and applied shortly after. Users, devices, sites, and domains assigned this address get the new location. — [PUT /domains/{domain}/addresses/{emergency-address-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "emergency-address-id"
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
                 },
                 "address-name": {
                       "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "A label for the address, shown when users pick one."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
+                      "description": "The caller name stored with the address."
                 },
                 "address-line-1": {
                       "type": "string",
-                      "description": "This is the address line 1 for the address"
+                      "description": "The house number and street. The house number is the text up to the first space."
                 },
                 "address-line-2": {
                       "type": "string",
-                      "description": "This is the address line 2 for the address"
+                      "description": "The suite, unit, or floor."
                 },
                 "address-city": {
                       "type": "string",
-                      "description": "This is the city for the address"
+                      "description": "The city."
                 },
                 "address-state-province-abbreviation": {
                       "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
+                      "description": "The state or province code, such as `CA`."
                 },
                 "address-postal-code": {
                       "type": "string",
-                      "description": "This is the postal code for the address"
+                      "description": "The postal code. Send it as a string to keep leading zeros."
                 },
                 "address-country-abbreviation": {
                       "type": "string",
-                      "description": "This is the country appreviation for the address"
+                      "description": "The country code, such as `US` or `CA`."
                 },
                 "address-location-description": {
                       "type": "string",
-                      "description": "This is an optional location description for the address"
+                      "description": "Where in the building, such as a room or desk."
                 },
                 "ip-address-public": {
                       "type": "string",
-                      "description": "This is the public IP of the client window creating the address."
+                      "description": "A public IP address stored with the address, as sent. The API does not detect it."
                 },
                 "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address"
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier, as returned by validate. `address-formatted-pidflo` is used only with one of these values. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
                 }
           },
           "required": [
                 "domain",
                 "emergency-address-id",
-                "address-name",
-                "caller-name",
-                "address-line-1",
-                "address-city",
-                "address-state-province-abbreviation",
-                "address-postal-code",
-                "address-country-abbreviation",
-                "address-formatted-pidflo"
+                "address-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/addresses/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'emergency-address-id'];
@@ -345,17 +396,17 @@ export const update_address_for_domain: ToolDefinition = {
 export const delete_address_for_domain: ToolDefinition = {
   schema: {
     name: 'delete_address_for_domain',
-    description: 'Delete Address For Domain — [DELETE /domains/{domain}/addresses/{emergency-address-id}]',
+    description: 'Delete domain address — Deletes an emergency (E911) address in a domain, addressed by its `emergency-address-id`. It can be a domain-level, site, or personal address.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain.  An ID that is not in this domain returns `404`. Deleting an address also removes it from the carrier for `bandwidth` and `brightlink`, and clears `emergency-address-id` on every user, device, site, and domain that used it. Those then fall back to the site address, then the domain address.  A `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/addresses/{emergency-address-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "emergency-address-id"
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
                 }
           },
           "required": [
@@ -363,6 +414,12 @@ export const delete_address_for_domain: ToolDefinition = {
                 "emergency-address-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/addresses/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'emergency-address-id'];
@@ -388,21 +445,21 @@ export const delete_address_for_domain: ToolDefinition = {
 export const get_address_using_address_id: ToolDefinition = {
   schema: {
     name: 'get_address_using_address_id',
-    description: 'Get Address Using Address ID — [GET /domains/{domain}/users/{user}/addresses/{emergency-address-id}]',
+    description: 'Read user address — Returns one of a user\\\'s emergency (E911) addresses, addressed by its `emergency-address-id`, with `address-formatted-pretty` added.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain. Super User Read Only scope can read.  The address must belong to the user in the path. Any other ID returns `404`. To read a domain-level or site address, use `GET /domains/{domain}/addresses/{emergency-address-id}`. — [GET /domains/{domain}/users/{user}/addresses/{emergency-address-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "emergency-address-id"
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
                 }
           },
           "required": [
@@ -411,6 +468,12 @@ export const get_address_using_address_id: ToolDefinition = {
                 "emergency-address-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/addresses/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'emergency-address-id'];
@@ -436,85 +499,90 @@ export const get_address_using_address_id: ToolDefinition = {
 export const update_address_for_user: ToolDefinition = {
   schema: {
     name: 'update_address_for_user',
-    description: 'Update Address for User — [PUT /domains/{domain}/users/{user}/addresses/{emergency-address-id}]',
+    description: 'Update user address — Changes one of a user\\\'s emergency (E911) addresses, addressed by its `emergency-address-id`.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain.  The address must belong to the user in the path. A shared domain or site address can be changed here only by Office Manager, Site Manager, Reseller, or Super User scope. Any other ID returns `404`, and nothing is changed.  `address-name` is required. Send the other fields you want to change. `address-formatted-pidflo` is used only together with a supported `carrier`: `bandwidth`, `brightlink`, `inteliquent`, or `voipinno`. Without one, the address is saved with an empty `address-formatted-pidflo`. To change the street, validate the new address first and send its `address-formatted-pidflo` and `carrier`.  A `202` means the change is accepted and applied shortly after. Users, devices, sites, and domains assigned this address get the new location. — [PUT /domains/{domain}/users/{user}/addresses/{emergency-address-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "emergency-address-id"
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
                 },
                 "address-name": {
                       "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "A label for the address, shown when users pick one."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
+                      "description": "The caller name stored with the address."
                 },
                 "address-line-1": {
                       "type": "string",
-                      "description": "This is the address line 1 for the address"
+                      "description": "The house number and street. The house number is the text up to the first space."
                 },
                 "address-line-2": {
                       "type": "string",
-                      "description": "This is the address line 2 for the address"
+                      "description": "The suite, unit, or floor."
                 },
                 "address-city": {
                       "type": "string",
-                      "description": "This is the city for the address"
+                      "description": "The city."
                 },
                 "address-state-province-abbreviation": {
                       "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
+                      "description": "The state or province code, such as `CA`."
                 },
                 "address-postal-code": {
                       "type": "string",
-                      "description": "This is the postal code for the address"
+                      "description": "The postal code. Send it as a string to keep leading zeros."
                 },
                 "address-country-abbreviation": {
                       "type": "string",
-                      "description": "This is the country appreviation for the address"
+                      "description": "The country code, such as `US` or `CA`."
                 },
                 "address-location-description": {
                       "type": "string",
-                      "description": "This is an optional location description for the address"
+                      "description": "Where in the building, such as a room or desk."
                 },
                 "ip-address-public": {
                       "type": "string",
-                      "description": "This is the public IP of the client window creating the address."
+                      "description": "A public IP address stored with the address, as sent. The API does not detect it."
                 },
                 "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address"
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier, as returned by validate. `address-formatted-pidflo` is used only with one of these values. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
                 }
           },
           "required": [
                 "domain",
                 "user",
                 "emergency-address-id",
-                "address-name",
-                "caller-name",
-                "address-line-1",
-                "address-city",
-                "address-state-province-abbreviation",
-                "address-postal-code",
-                "address-country-abbreviation",
-                "address-formatted-pidflo"
+                "address-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/addresses/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'emergency-address-id'];
@@ -546,74 +614,86 @@ export const update_address_for_user: ToolDefinition = {
 export const update_address_endpoint: ToolDefinition = {
   schema: {
     name: 'update_address_endpoint',
-    description: 'Update Address Endpoint — [PUT /domains/{domain}/addresses/endpoints/{endpoint}]',
+    description: 'Update address endpoint — Changes an endpoint, addressed by its callback number: its caller name, its address, or both. The change is sent to the carrier.  Requires Reseller scope for the domains in your territory, or Super User scope. Other scopes get `403`.  `caller-name` and `carrier` are required. `carrier` must be the one the endpoint is registered with. To move the endpoint to another address, send the address the same way as on `POST /domains/{domain}/addresses/endpoints`. When the same number is an endpoint in several domains, the change applies to all of them.  The carrier is called before the response. A carrier error returns `400` with the carrier\\\'s reason. A `202` means the change is accepted and applied shortly after. — [PUT /domains/{domain}/addresses/endpoints/{endpoint}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "endpoint": {
                       "type": "string",
-                      "description": "The callback number of the address."
+                      "description": "The endpoint's callback number, as stored in its `emergency-address-id`. An 11-digit number that starts with `1` is stored without the `1`, except for the `voipinno` carrier. Leave out `+`."
                 },
-                "address-name": {
+                "address-callback-number": {
                       "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "The callback number to register. Required on a create; on a change, the path names it. Leave out `+`. An 11-digit number that starts with `1` is stored without the `1`, except for `voipinno`."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
-                },
-                "address-line-1": {
-                      "type": "string",
-                      "description": "This is the address line 1 for the address"
-                },
-                "address-line-2": {
-                      "type": "string",
-                      "description": "This is the address line 2 for the address"
-                },
-                "address-city": {
-                      "type": "string",
-                      "description": "This is the city for the address"
-                },
-                "address-state-province-abbreviation": {
-                      "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
-                },
-                "address-postal-code": {
-                      "type": "string",
-                      "description": "This is the postal code for the address"
-                },
-                "address-country-abbreviation": {
-                      "type": "string",
-                      "description": "This is the country appreviation for the address"
-                },
-                "address-location-description": {
-                      "type": "string",
-                      "description": "This is an optional location description for the address"
-                },
-                "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address. For create/update either location-id or address-formatted-pidflo is needed. If address-formatted-pidflo is used, fill in address-line-1, address-city, etc for address information"
+                      "description": "The caller name registered with the carrier."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier to register the number with. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
                 },
-                "location-id": {
+                "address-name": {
                       "type": "string",
-                      "description": "This is the address-id in cases for creation using an existing address. For create/update either location-id or address-formatted-pidflo is needed"
+                      "description": "A label for the endpoint."
+                },
+                "emergency-address-id": {
+                      "type": "string",
+                      "description": "An address the carrier already has. For `bandwidth`, a saved address ID; for `brightlink`, the location ID."
+                },
+                "address-formatted-pidflo": {
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
+                },
+                "address-line-1": {
+                      "type": "string",
+                      "description": "The house number and street. The house number is the text up to the first space."
+                },
+                "address-line-2": {
+                      "type": "string",
+                      "description": "The suite, unit, or floor."
+                },
+                "address-city": {
+                      "type": "string",
+                      "description": "The city."
+                },
+                "address-state-province-abbreviation": {
+                      "type": "string",
+                      "description": "The state or province code, such as `CA`."
+                },
+                "address-postal-code": {
+                      "type": "string",
+                      "description": "The postal code. Send it as a string to keep leading zeros."
+                },
+                "address-country-abbreviation": {
+                      "type": "string",
+                      "description": "The country code, such as `US` or `CA`."
                 }
           },
           "required": [
                 "domain",
                 "endpoint",
-                "address-name",
-                "caller-name"
+                "caller-name",
+                "carrier"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/addresses/endpoints/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'endpoint'];
@@ -621,7 +701,7 @@ export const update_address_endpoint: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'address-formatted-pidflo', 'carrier', 'location-id'];
+    const bodyParamNames = ['address-callback-number', 'caller-name', 'carrier', 'address-name', 'emergency-address-id', 'address-formatted-pidflo', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -645,21 +725,28 @@ export const update_address_endpoint: ToolDefinition = {
 export const delete_address_endpoint: ToolDefinition = {
   schema: {
     name: 'delete_address_endpoint',
-    description: 'Delete Address Endpoint — [DELETE /domains/{domain}/addresses/endpoints/{endpoint}]',
+    description: 'Delete address endpoint — Deletes an endpoint, addressed by its callback number.  Requires Reseller scope for the domains in your territory, or Super User scope. Other scopes get `403`.  `carrier` is required, in the body or the query string. It is the carrier the endpoint is registered with: `bandwidth`, `brightlink`, `inteliquent`, `voipinno`, or `voipinnovations`. The number is removed from the carrier only when no other domain still has it as an endpoint. Users whose `caller-id-number-emergency` is the number keep that value.  A carrier error returns `400` with the carrier\\\'s reason. A `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/addresses/endpoints/{endpoint}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "endpoint": {
                       "type": "string",
-                      "description": "The callback number of the address."
+                      "description": "The endpoint's callback number, as stored in its `emergency-address-id`. An 11-digit number that starts with `1` is stored without the `1`, except for the `voipinno` carrier. Leave out `+`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "carrier"
+                      "description": "The carrier the endpoint is registered with. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\", \"voipinnovations\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno",
+                            "voipinnovations"
+                      ]
                 }
           },
           "required": [
@@ -668,6 +755,12 @@ export const delete_address_endpoint: ToolDefinition = {
                 "carrier"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/addresses/endpoints/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'endpoint'];
@@ -699,30 +792,44 @@ export const delete_address_endpoint: ToolDefinition = {
 export const get_addresses_for_user: ToolDefinition = {
   schema: {
     name: 'get_addresses_for_user',
-    description: 'Get Addresses for User — [GET /domains/{domain}/users/{user}/addresses]',
+    description: 'List user addresses — Returns the emergency (E911) addresses a user can choose from: the user\\\'s personal addresses, then the addresses of the user\\\'s site, then the domain-level addresses. Site rows carry `shared: true` and `site_level: true`, and domain-level rows `shared: true` and `domain_level: true`. Add `show_only_personal=yes` for the personal addresses alone.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain. Super User Read Only scope can read.  The shared rows are left out when `address-name` or `caller-name` is set, and when the platform turns off shared addresses with the `PORTAL_SHOW_SHARED_ADDRESSES` setting. It is on by default.  Filter with `address-name` (contains) and `caller-name` (exact). Page with `start` and `limit`. `limit` defaults to `100`, and `0` returns every address.  To use an address, set its `emergency-address-id` on a device, a user, a site, or the domain. A device without one uses its user\\\'s address, a user without one uses its site\\\'s, and a site without one uses the domain\\\'s. User and device reads report where the address came from in `emergency-address-source`: `user_level`, `site_level`, or `domain_level`. — [GET /domains/{domain}/users/{user}/addresses]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "The most addresses to return. Defaults to `100`. `0` returns every address. Default: 100",
                       "default": 100
-                },
-                "show_all_personal": {
-                      "type": "string",
-                      "description": "Set to \"yes\" and do not set user in order to show all addresses in domain regardless of user identity. Requires Office Manager or above"
                 },
                 "show_only_personal": {
                       "type": "string",
-                      "description": "Set to \"yes\" to show only the personal addresses. Default to \"no\" which would also showing all the domain-level addreses"
+                      "description": "`yes` returns only the user's personal addresses, without the shared site and domain-level addresses. `no`, the default, includes them. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses whose name contains this text."
+                },
+                "caller-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses with exactly this caller name."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -731,13 +838,19 @@ export const get_addresses_for_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/addresses',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit', 'show_all_personal', 'show_only_personal'];
+    const queryParamNames = ['limit', 'show_only_personal', 'address-name', 'caller-name', 'start'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -761,85 +874,90 @@ export const get_addresses_for_user: ToolDefinition = {
 export const create_address_for_user: ToolDefinition = {
   schema: {
     name: 'create_address_for_user',
-    description: 'Create Address for User — [POST /domains/{domain}/users/{user}/addresses]',
+    description: 'Create user address — Creates a personal emergency (E911) address for the user in the path. Only that user sees it in `GET /domains/{domain}/users/{user}/addresses`, next to the shared site and domain-level addresses.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain.  `address-name` and `address-line-1` are required. `emergency-address-id` is optional: without it the API generates one, `a-` followed by 13 hexadecimal characters. An ID already used in any domain returns `409`. To add an address the carrier has checked, call `POST /domains/{domain}/addresses/validate` first, then send its `emergency-address-id`, `address-formatted-pidflo`, and `carrier` with the other fields. `address-formatted-pidflo` is used only together with a supported `carrier`: `bandwidth`, `brightlink`, `inteliquent`, or `voipinno`. Without one, the address is saved with an empty `address-formatted-pidflo`.  Returns `200` with the address as stored. The address is stored shortly after the response, so a read straight after may not show it yet. Creating the address does not assign it: set the user\\\'s `emergency-address-id` to use it. — [POST /domains/{domain}/users/{user}/addresses]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "`POST /domains/{domain}/addresses` only: leave it out for a domain-level address, or send a site name for a site address. On a user path, the path decides."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "This is an autogenerated ID for the Address."
+                      "description": "The address ID. IDs the API generates are `a-` followed by 13 hexadecimal characters. Paths accept only letters, digits, spaces, and `* . - _ '`. Optional: without it the API generates one. An ID used in any domain returns `409`."
                 },
                 "address-name": {
                       "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "A label for the address, shown when users pick one."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
+                      "description": "The caller name stored with the address."
                 },
                 "address-line-1": {
                       "type": "string",
-                      "description": "This is the address line 1 for the address"
+                      "description": "The house number and street. The house number is the text up to the first space."
                 },
                 "address-line-2": {
                       "type": "string",
-                      "description": "This is the address line 2 for the address"
+                      "description": "The suite, unit, or floor."
                 },
                 "address-city": {
                       "type": "string",
-                      "description": "This is the city for the address"
+                      "description": "The city."
                 },
                 "address-state-province-abbreviation": {
                       "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
+                      "description": "The state or province code, such as `CA`."
                 },
                 "address-postal-code": {
                       "type": "string",
-                      "description": "This is the postal code for the address"
+                      "description": "The postal code. Send it as a string to keep leading zeros."
                 },
                 "address-country-abbreviation": {
                       "type": "string",
-                      "description": "This is the country appreviation for the address"
+                      "description": "The country code, such as `US` or `CA`."
                 },
                 "address-location-description": {
                       "type": "string",
-                      "description": "This is an optional location description for the address"
+                      "description": "Where in the building, such as a room or desk."
                 },
                 "ip-address-public": {
                       "type": "string",
-                      "description": "This is the public IP of the client window creating the address."
+                      "description": "A public IP address stored with the address, as sent. The API does not detect it."
                 },
                 "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address"
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier, as returned by validate. `address-formatted-pidflo` is used only with one of these values. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "emergency-address-id",
                 "address-name",
-                "caller-name",
-                "address-line-1",
-                "address-city",
-                "address-state-province-abbreviation",
-                "address-postal-code",
-                "address-country-abbreviation",
-                "address-formatted-pidflo"
+                "address-line-1"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/addresses',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -847,7 +965,7 @@ export const create_address_for_user: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['emergency-address-id', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'ip-address-public', 'address-formatted-pidflo', 'carrier'];
+    const bodyParamNames = ['emergency-address-id', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'ip-address-public', 'address-formatted-pidflo', 'carrier', 'user'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -871,39 +989,45 @@ export const create_address_for_user: ToolDefinition = {
 export const delete_address_for_user: ToolDefinition = {
   schema: {
     name: 'delete_address_for_user',
-    description: 'Delete Address For User — [DELETE /domains/{domain}/users/{user}/addresses/{address_id}]',
+    description: 'Delete user address — Deletes one of a user\\\'s emergency (E911) addresses, addressed by its `emergency-address-id`.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain.  The address must belong to the user in the path. Any other ID returns `404`. Deleting an address also removes it from the carrier for `bandwidth` and `brightlink`, and clears `emergency-address-id` on every user, device, site, and domain that used it. Those then fall back to the site address, then the domain address.  A `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}/users/{user}/addresses/{emergency-address-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "address_id": {
+                "emergency-address-id": {
                       "type": "string",
-                      "description": "Address ID to delete"
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "address_id"
+                "emergency-address-id"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/addresses/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'address_id'];
+    const pathParamNames = ['domain', 'user', 'emergency-address-id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/addresses/{address_id}',
+      pathTemplate: '/domains/{domain}/users/{user}/addresses/{emergency-address-id}',
       pathParams,
     });
 
@@ -919,18 +1043,33 @@ export const delete_address_for_user: ToolDefinition = {
 export const get_address_endpoints_for_domain: ToolDefinition = {
   schema: {
     name: 'get_address_endpoints_for_domain',
-    description: 'Get Address Endpoints for a Domain — Emergency Address Endpoints are different than Emergency Addresses. Endpoints contain the Emergency Caller ID Number and the address associated with it should be the billing address. Emergency Addresses are what is passed in to the PIDFLO object. — [GET /domains/{domain}/addresses/endpoints]',
+    description: 'List address endpoints — Returns the endpoints of a domain: the callback numbers registered with the emergency calling carrier, each with the address it is registered against.  Requires Reseller scope for the domains in your territory, or Super User scope. Super User Read Only scope can read. Other scopes get `403`. A Reseller sees only the domains in its territory.  An endpoint is a callback number registered with the emergency calling carrier against an address. It is the number the 911 operator sees and calls back. A user uses it by setting `caller-id-number-emergency` to the number. Endpoints are stored with the addresses: `emergency-address-id` is the callback number and `user` is always `address_endpoint`.  `count-users-configured` is the number of users whose `caller-id-number-emergency` is the number, and `sub_count_total` is the number of users in the domain.  Filter with `carrier`. Page with `start` and `limit`. `limit` defaults to `100`. — [GET /domains/{domain}/addresses/endpoints]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
                       "default": 100
+                },
+                "carrier": {
+                      "type": "string",
+                      "description": "Returns only the endpoints registered with this carrier. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -938,13 +1077,19 @@ export const get_address_endpoints_for_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses/endpoints',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['limit', 'carrier', 'start'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -968,73 +1113,81 @@ export const get_address_endpoints_for_domain: ToolDefinition = {
 export const create_address_endpoint: ToolDefinition = {
   schema: {
     name: 'create_address_endpoint',
-    description: 'Create Address Endpoint — [POST /domains/{domain}/addresses/endpoints]',
+    description: 'Create address endpoint — Registers a callback number with the emergency calling carrier against an address, and stores it as an endpoint of the domain.  Requires Reseller scope for the domains in your territory, or Super User scope. Other scopes get `403`.  An endpoint is a callback number registered with the emergency calling carrier against an address. It is the number the 911 operator sees and calls back. A user uses it by setting `caller-id-number-emergency` to the number. Endpoints are stored with the addresses: `emergency-address-id` is the callback number and `user` is always `address_endpoint`.  `address-callback-number`, `caller-name`, and `carrier` are required. `carrier` is `bandwidth`, `brightlink`, `inteliquent`, or `voipinno`. What else is needed depends on `carrier`:  - `bandwidth`: an address the carrier already has, in `emergency-address-id`, or `address-formatted-pidflo` from validate. The stored address is the one the carrier returns - `brightlink`: a Brightlink location ID in `emergency-address-id`. Add `address-formatted-pidflo` to create that location first - `inteliquent`: `address-formatted-pidflo`, or `address-line-1`, `address-city`, `address-state-province-abbreviation`, and `address-postal-code` - `voipinno`: `address-line-1`, `address-line-2`, `address-city`, `address-state-province-abbreviation`, and `address-postal-code`  The carrier is called before the response, so it can take several seconds. A carrier error returns `400` with the carrier\\\'s reason. A `202` means the change is accepted and applied shortly after. — [POST /domains/{domain}/addresses/endpoints]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "address-callback-number": {
                       "type": "string",
-                      "description": "This will match the callback number"
-                },
-                "address-name": {
-                      "type": "string",
-                      "description": "This is the name label for the address"
+                      "description": "The callback number to register. Required on a create; on a change, the path names it. Leave out `+`. An 11-digit number that starts with `1` is stored without the `1`, except for `voipinno`."
                 },
                 "caller-name": {
                       "type": "string",
-                      "description": "This is the caller's name for the address"
-                },
-                "address-line-1": {
-                      "type": "string",
-                      "description": "This is the address line 1 for the address"
-                },
-                "address-line-2": {
-                      "type": "string",
-                      "description": "This is the address line 2 for the address"
-                },
-                "address-city": {
-                      "type": "string",
-                      "description": "This is the city for the address"
-                },
-                "address-state-province-abbreviation": {
-                      "type": "string",
-                      "description": "This is the state or province (Canadian) abbreviation for the address"
-                },
-                "address-postal-code": {
-                      "type": "string",
-                      "description": "This is the postal code for the address"
-                },
-                "address-country-abbreviation": {
-                      "type": "string",
-                      "description": "This is the country appreviation for the address"
-                },
-                "address-location-description": {
-                      "type": "string",
-                      "description": "This is an optional location description for the address"
-                },
-                "address-formatted-pidflo": {
-                      "type": "string",
-                      "description": "This is a return value of the formatted PIDFLO standardized value for the address. For create/update either location-id or address-formatted-pidflo is needed. If address-formatted-pidflo is used, fill in address-line-1, address-city, etc for address information"
+                      "description": "The caller name registered with the carrier."
                 },
                 "carrier": {
                       "type": "string",
-                      "description": "This is the carrier name for the address"
+                      "description": "The emergency calling carrier to register the number with. Allowed values: \"bandwidth\", \"brightlink\", \"inteliquent\", \"voipinno\"",
+                      "enum": [
+                            "bandwidth",
+                            "brightlink",
+                            "inteliquent",
+                            "voipinno"
+                      ]
                 },
-                "location-id": {
+                "address-name": {
                       "type": "string",
-                      "description": "This is the address-id in cases for creation using an existing address. For create/update either location-id or address-formatted-pidflo is needed"
+                      "description": "A label for the endpoint."
+                },
+                "emergency-address-id": {
+                      "type": "string",
+                      "description": "An address the carrier already has. For `bandwidth`, a saved address ID; for `brightlink`, the location ID."
+                },
+                "address-formatted-pidflo": {
+                      "type": "object",
+                      "description": "The standardized address from `POST /domains/{domain}/addresses/validate`, as an object. Send it back unchanged with `carrier`. Its keys depend on the carrier: `bandwidth` and `inteliquent` use `HouseNumber`, `StreetName`, `StreetSuffix`, `City`, `StateCode`, `Zip`, `PlusFour`, and `Country`; `brightlink` uses `houseNumber`, `streetName`, `streetSuffix`, `city`, `stateCode`, `zip`, `plusfour`, and `country`."
+                },
+                "address-line-1": {
+                      "type": "string",
+                      "description": "The house number and street. The house number is the text up to the first space."
+                },
+                "address-line-2": {
+                      "type": "string",
+                      "description": "The suite, unit, or floor."
+                },
+                "address-city": {
+                      "type": "string",
+                      "description": "The city."
+                },
+                "address-state-province-abbreviation": {
+                      "type": "string",
+                      "description": "The state or province code, such as `CA`."
+                },
+                "address-postal-code": {
+                      "type": "string",
+                      "description": "The postal code. Send it as a string to keep leading zeros."
+                },
+                "address-country-abbreviation": {
+                      "type": "string",
+                      "description": "The country code, such as `US` or `CA`."
                 }
           },
           "required": [
                 "domain",
-                "address-name",
-                "caller-name"
+                "caller-name",
+                "carrier"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/addresses/endpoints',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1042,7 +1195,7 @@ export const create_address_endpoint: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['address-callback-number', 'address-name', 'caller-name', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation', 'address-location-description', 'address-formatted-pidflo', 'carrier', 'location-id'];
+    const bodyParamNames = ['address-callback-number', 'caller-name', 'carrier', 'address-name', 'emergency-address-id', 'address-formatted-pidflo', 'address-line-1', 'address-line-2', 'address-city', 'address-state-province-abbreviation', 'address-postal-code', 'address-country-abbreviation'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1066,13 +1219,17 @@ export const create_address_endpoint: ToolDefinition = {
 export const get_addresses_count_for_domain: ToolDefinition = {
   schema: {
     name: 'get_addresses_count_for_domain',
-    description: 'Get Addresses Count for Domain — [GET /domains/{domain}/addresses/count]',
+    description: 'Count domain addresses — Returns the number of rows in a domain\\\'s address book: domain-level, site, and personal addresses, and endpoints. This is not the length of `GET /domains/{domain}/addresses`, which leaves out personal addresses and endpoints by default.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain. Super User Read Only scope can read.  `address-name` counts only the addresses with exactly that name. — [GET /domains/{domain}/addresses/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Counts only the addresses with exactly this name."
                 }
           },
           "required": [
@@ -1080,16 +1237,285 @@ export const get_addresses_count_for_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['address-name'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/addresses/count',
       pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_addresses: ToolDefinition = {
+  schema: {
+    name: 'list_domain_addresses',
+    description: 'List domain address summaries — Returns the same addresses as `GET /domains/{domain}/addresses`, with fewer fields. It uses the list privilege instead of the read privilege, so a scope that can list addresses but not read them can still pick one. Each row has only `emergency-address-id`, `address-name`, `domain`, `user`, `address-city`, and `address-state-province-abbreviation`. Append `/list` to a keyed path to read one address the same way.  It takes the same `show_all_personal`, `address-name`, `caller-name`, and `start` parameters. `limit` has no default here.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain. Super User Read Only scope can read. — [GET /domains/{domain}/addresses/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "show_all_personal": {
+                      "type": "string",
+                      "description": "`yes` returns every address in the domain: domain-level, site, and personal addresses, and the endpoint rows. By default only domain-level and site addresses are returned. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses whose name contains this text."
+                },
+                "caller-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses with exactly this caller name."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most addresses to return. There is no default: every address is returned. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['show_all_personal', 'address-name', 'caller-name', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/addresses/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_address_for_domain: ToolDefinition = {
+  schema: {
+    name: 'get_address_for_domain',
+    description: 'Read domain address — Returns one emergency (E911) address in a domain, addressed by its `emergency-address-id`, with `address-formatted-pretty` added. It can be a domain-level, site, or personal address.  Requires Office Manager or Site Manager scope for your own domain, Reseller scope for the domains in your territory, or Super User scope. Site Manager scope is not limited to its own site here: it reaches every address in the domain. Super User Read Only scope can read.  Returns `404` when the domain does not exist or has no address with this ID. To read the addresses that apply to one user, use `GET /domains/{domain}/users/{user}/addresses`. — [GET /domains/{domain}/addresses/{emergency-address-id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "emergency-address-id": {
+                      "type": "string",
+                      "description": "The address ID (`emergency-address-id`). IDs the API generates are `a-` followed by 13 hexadecimal characters."
+                }
+          },
+          "required": [
+                "domain",
+                "emergency-address-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'emergency-address-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/addresses/{emergency-address-id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_address_endpoint: ToolDefinition = {
+  schema: {
+    name: 'get_address_endpoint',
+    description: 'Read address endpoint — Returns one endpoint of a domain, addressed by its callback number, with the address it is registered against.  Requires Reseller scope for the domains in your territory, or Super User scope. Super User Read Only scope can read. Other scopes get `403`.  The response is an array with the one endpoint, in the same shape as `GET /domains/{domain}/addresses/endpoints`. `count-users-configured` is the number of users whose `caller-id-number-emergency` is this number. Returns `404` when the domain does not exist or has no endpoint with this number. — [GET /domains/{domain}/addresses/endpoints/{endpoint}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "endpoint": {
+                      "type": "string",
+                      "description": "The endpoint's callback number, as stored in its `emergency-address-id`. An 11-digit number that starts with `1` is stored without the `1`, except for the `voipinno` carrier. Leave out `+`."
+                }
+          },
+          "required": [
+                "domain",
+                "endpoint"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/addresses/endpoints/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'endpoint'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/addresses/endpoints/{endpoint}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_addresses: ToolDefinition = {
+  schema: {
+    name: 'list_user_addresses',
+    description: 'List user address summaries — Returns the same addresses as `GET /domains/{domain}/users/{user}/addresses`, with fewer fields. It uses the list privilege instead of the read privilege, so a scope that can list addresses but not read them can still pick one. Each row has only `emergency-address-id`, `address-name`, `domain`, `user`, `address-city`, and `address-state-province-abbreviation`. Append `/list` to a keyed path to read one address the same way. The rows do not say which addresses are shared.  It takes the same `show_only_personal`, `address-name`, `caller-name`, and `start` parameters. `limit` has no default here.  Basic User scope can call it for its own user, with `~` or its own extension. Office Manager and Site Manager scopes can call it for any user in their domain, Reseller scope for the domains in its territory, and Super User scope for any domain. Super User Read Only scope can read. — [GET /domains/{domain}/users/{user}/addresses/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "show_only_personal": {
+                      "type": "string",
+                      "description": "`yes` returns only the user's personal addresses, without the shared site and domain-level addresses. `no`, the default, includes them. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "address-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses whose name contains this text."
+                },
+                "caller-name": {
+                      "type": "string",
+                      "description": "Returns only the addresses with exactly this caller name."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most addresses to return. There is no default: every address is returned. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/addresses/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['show_only_personal', 'address-name', 'caller-name', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/addresses/list',
+      pathParams,
+      queryParams,
     });
 
     return {

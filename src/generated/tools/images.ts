@@ -5,35 +5,39 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_image: ToolDefinition = {
   schema: {
     name: 'read_image',
-    description: 'Read Image — Read an image file — [GET /images/{filename}]',
+    description: 'Read image — Returns the details of one stored image: who it applies to, its media type and size, and a link that downloads the file. The response is JSON. The image file itself is not in it; download it from `file-access-url`.  Requires Super User, Super User Read Only, or Reseller scope. A Super User and a Super User Read Only can read every image. A Reseller can read images stored for its own reseller or for a domain in it, and images that apply to every reseller. Other scopes get `403`.  An image is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly: an image stored for every domain is not found when you name one domain. Name the reseller, domain, and server in the query string to read a copy stored for them. — [GET /images/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "The name of the image file."
+                      "description": "Name the image is stored under, such as `logo.png`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller the image is stored for. Omit it, or send `*`, for an image that applies to every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
+                      "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\"",
-                      "default": "~"
+                      "description": "Domain the image is stored for, such as `example.com`. Omit it, or send `*`, for an image that applies to every domain. A Reseller token can name only a domain in its own reseller."
                 },
                 "server": {
                       "type": "string",
-                      "description": "server"
+                      "description": "Hostname of the server the image is stored for. Omit it, or send `*`, for an image that applies to every server. Default: \"*\"",
+                      "default": "*"
                 }
           },
           "required": [
-                "filename",
-                "reseller",
-                "domain",
-                "server"
+                "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /images/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -65,48 +69,54 @@ export const read_image: ToolDefinition = {
 export const create_image_base64: ToolDefinition = {
   schema: {
     name: 'create_image_base64',
-    description: 'Create Image from Upload (JSON + Base64 File) — Create an image file — [POST /images/{filename}]',
+    description: 'Create image — Stores a new image under the name in the path, for a reseller, a domain, a server, or all of them. Send the file as a multipart part, or as base64 in a JSON body.  Requires Super User or Reseller scope. A Reseller can manage images stored for its own reseller or for a domain in it. An image that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  An image is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly: an image stored for every domain is not found when you name one domain. If an image already exists under this name for the same reseller, domain, and server, the request returns `400`; replace it with `PUT /images/{filename}`.  The file must be a PNG, JPEG, GIF, WebP, or ICO image. Both the declared media type and the file\\\'s contents are checked, and the type detected from the contents is the one stored. SVG and other types return `400`. The request can be at most 64 MB.  Send `reseller` and `domain` in the body; query-string values for them are ignored. The request returns `202`: the image is accepted and stored shortly after. — [POST /images/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "The name of the image file."
+                      "description": "Name the image is stored under, such as `logo.png`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly."
+                },
+                "file-base64": {
+                      "type": "string",
+                      "description": "The image file as standard base64, without a `data:` prefix. A value that is not valid base64 returns `400`, and so does one that decodes to an empty file."
+                },
+                "file-mime-type": {
+                      "type": "string",
+                      "description": "Media type of the image: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, or `image/x-icon`. The decoded file's contents must also be one of those types. Any other value, or none, returns `400`. The type detected from the contents is the one stored."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the image file applies to. Default: \"*\"",
+                      "description": "Reseller the image applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the image file applies to. Default: \"*\"",
+                      "description": "Domain the image applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the image file applies to. Default: \"*\"",
+                      "description": "Hostname of the server the image applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
                       "default": "*"
                 },
                 "description": {
                       "type": "string",
-                      "description": "A description of the image file to indicate what it is used for"
-                },
-                "filetype": {
-                      "type": "string",
-                      "description": "Encoding (content type) of the image file"
-                },
-                "base64_file": {
-                      "type": "string",
-                      "description": "A base64 encoded string formatted without line breaks or spaces."
+                      "description": "What the image is used for. Optional; stored as sent."
                 }
           },
           "required": [
                 "filename",
-                "filetype",
-                "base64_file"
+                "file-base64",
+                "file-mime-type"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /images/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -114,7 +124,7 @@ export const create_image_base64: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['reseller', 'domain', 'server', 'description', 'filetype', 'base64_file'];
+    const bodyParamNames = ['file-base64', 'file-mime-type', 'reseller', 'domain', 'server', 'description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -138,40 +148,54 @@ export const create_image_base64: ToolDefinition = {
 export const update_image_file_upload: ToolDefinition = {
   schema: {
     name: 'update_image_file_upload',
-    description: 'Update Image from Upload (Multipart/Mixed Post) — Update an image file — [PUT /images/{filename}]',
+    description: 'Update image — Replaces the file of an image already stored under the name in the path. Send the new file as base64 in a JSON body, or as a multipart part.  Requires Super User or Reseller scope. A Reseller can manage images stored for its own reseller or for a domain in it. An image that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  An image is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly: an image stored for every domain is not found when you name one domain. Name the same reseller, domain, and server the image was created with. Every update must carry a file; `description` cannot be changed on its own. An email template stored under the same name cannot be replaced here.  The file must be a PNG, JPEG, GIF, WebP, or ICO image. Both the declared media type and the file\\\'s contents are checked, and the type detected from the contents is the one stored. SVG and other types return `400`.  Send `reseller` and `domain` in the body; query-string values for them are ignored. The request returns `202`: the change is accepted and applied shortly after. — [PUT /images/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "The name of the image file."
+                      "description": "Name the image is stored under, such as `logo.png`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly."
+                },
+                "file-base64": {
+                      "type": "string",
+                      "description": "The image file as standard base64, without a `data:` prefix. A value that is not valid base64 returns `400`, and so does one that decodes to an empty file."
+                },
+                "file-mime-type": {
+                      "type": "string",
+                      "description": "Media type of the image: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, or `image/x-icon`. The decoded file's contents must also be one of those types. Any other value, or none, returns `400`. The type detected from the contents is the one stored."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory this image file applies to. Defaults to \"*\""
+                      "description": "Reseller the image applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
+                      "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain this image file applies to. Defaults to \"*\""
+                      "description": "Domain the image applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
+                      "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The domain this image file applies to. Defaults to \"*\""
+                      "description": "Hostname of the server the image applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
+                      "default": "*"
                 },
                 "description": {
                       "type": "string",
-                      "description": "A description of the image file to indicate what it is used for."
-                },
-                "File": {
-                      "type": "string",
-                      "description": "A \"File\" type parameter that needs to include the image file in question using a file post method."
+                      "description": "What the image is used for. Optional; stored as sent."
                 }
           },
           "required": [
                 "filename",
-                "File"
+                "file-base64",
+                "file-mime-type"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /images/{}',
+    method: 'PUT',
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -179,7 +203,7 @@ export const update_image_file_upload: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['reseller', 'domain', 'server', 'description', 'File'];
+    const bodyParamNames = ['file-base64', 'file-mime-type', 'reseller', 'domain', 'server', 'description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -203,27 +227,27 @@ export const update_image_file_upload: ToolDefinition = {
 export const delete_image: ToolDefinition = {
   schema: {
     name: 'delete_image',
-    description: 'Delete an Image — Delete an image file — [DELETE /images/{filename}]',
+    description: 'Delete image — Deletes one stored image.  Requires Super User or Reseller scope. A Reseller can manage images stored for its own reseller or for a domain in it. An image that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  An image is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly: an image stored for every domain is not found when you name one domain. Name the reseller and domain in the request body; query-string values for them are ignored. With no body, the request targets the platform-wide image, which only a Super User can delete. An email template stored under the same name is not deleted here.  The request returns `202`: the image is removed shortly after. — [DELETE /images/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "The name of the image file."
+                      "description": "Name the image is stored under, such as `logo.png`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the image file applies to. Default: \"*\"",
+                      "description": "Reseller the image applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the image file applies to. Default: \"*\"",
+                      "description": "Domain the image applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the image file applies to. Default: \"*\"",
+                      "description": "Hostname of the server the image applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
                       "default": "*"
                 }
           },
@@ -231,6 +255,12 @@ export const delete_image: ToolDefinition = {
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /images/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -296,6 +326,12 @@ export const create_image_file_upload: ToolDefinition = {
                 "File"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /images/{}',
+    method: 'POST',
+    multipartOnly: true,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -369,6 +405,12 @@ export const update_image_base64: ToolDefinition = {
                 "base64_file"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /images/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];

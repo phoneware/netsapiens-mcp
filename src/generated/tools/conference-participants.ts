@@ -5,17 +5,40 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_conferences_by_conference_participants: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_conferences_by_conference_participants',
-    description: 'Get Participants from Conference — [GET /domains/{domain}/conferences/{conference}/participants]',
+    description: 'List conference participants — Lists the participants on a conference bridge, sorted by name: who is connected now, and anyone kept on the bridge\\\'s list.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager can act only on the conference they own.  A participant\\\'s `pin` is masked unless you send `include-secret=yes` as the conference owner or with an Office Manager, Reseller, or Super User token.  The response is an array, empty when nobody is on the bridge. For names and addresses only, use **List conference participants, reduced**. To read one participant, use **Read conference participant**. — [GET /domains/{domain}/conferences/{conference}/participants]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                },
+                "audioId": {
+                      "type": "string",
+                      "description": "Return only participants on this audio stream."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns each participant's `pin` whole, if you own the conference or use an Office Manager, Reseller, or Super User token. Any other scope gets it masked either way. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -24,16 +47,28 @@ export const get_domains_by_domain_conferences_by_conference_participants: ToolD
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/{}/participants',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['audioId', 'limit', 'start', 'include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/conferences/{conference}/participants',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,24 +83,102 @@ export const get_domains_by_domain_conferences_by_conference_participants: ToolD
 export const post_domains_by_domain_conferences_by_conference_participants: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_conferences_by_conference_participants',
-    description: 'Create Participant for Conference — [POST /domains/{domain}/conferences/{conference}/participants]',
+    description: 'Add conference participant — Adds a participant to a conference bridge and, unless `call` is `no`, has the bridge call them.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager can act only on the conference they own. Adding participants must be allowed for the domain; otherwise only a Super User can add one.  A `202` means the participant was accepted and is added shortly after. — [POST /domains/{domain}/conferences/{conference}/participants]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                },
+                "conference-participant-sip-uri": {
+                      "type": "string",
+                      "description": "Number or SIP address of the participant, such as `15555550100` or `sip:1001@example.com`. It is stored as `sip:<user>@conference-bridge`. The user part can be at most 11 characters unless the domain allows longer."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Display name of the participant."
+                },
+                "call": {
+                      "type": "string",
+                      "description": "`yes`, the default, has the bridge call the participant now. `no` only adds the participant to the bridge's list. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "conference-participant-role": {
+                      "type": "string",
+                      "description": "Role of the participant. Allowed values: \"participant\", \"leader\", \"speaker\". Default: \"participant\"",
+                      "enum": [
+                            "participant",
+                            "leader",
+                            "speaker"
+                      ],
+                      "default": "participant"
+                },
+                "auto-answer-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant's device is asked to answer automatically when the bridge calls it. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-participant-auto-connect-option": {
+                      "type": "string",
+                      "description": "Auto-connect option. Allowed values: \"no\", \"1\", \"2\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "1",
+                            "2"
+                      ],
+                      "default": "no"
+                },
+                "conference-participant-auto-disconnect-option": {
+                      "type": "string",
+                      "description": "Auto-disconnect option. Allowed values: \"no\", \"1\", \"2\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "1",
+                            "2"
+                      ],
+                      "default": "no"
+                },
+                "conference-participant-receive-only-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant only listens. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-participant-persistent-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant stays on the bridge's list after hanging up. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           },
           "required": [
                 "domain",
-                "conference"
+                "conference",
+                "conference-participant-sip-uri"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/conferences/{}/participants',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
@@ -73,10 +186,16 @@ export const post_domains_by_domain_conferences_by_conference_participants: Tool
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['conference-participant-sip-uri', 'name', 'call', 'conference-participant-role', 'auto-answer-enabled', 'conference-participant-auto-connect-option', 'conference-participant-auto-disconnect-option', 'conference-participant-receive-only-enabled', 'conference-participant-persistent-enabled'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/conferences/{conference}/participants',
       pathParams,
+      body,
     });
 
     return {
@@ -91,21 +210,76 @@ export const post_domains_by_domain_conferences_by_conference_participants: Tool
 export const put_domains_by_domain_conferences_by_conference_participants_by_participant: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_conferences_by_conference_participants_by_participant',
-    description: 'Update Participant for Conference — [PUT /domains/{domain}/conferences/{conference}/participants/{participant}]',
+    description: 'Update conference participant — Changes a participant on a conference bridge: their name, role, and call options. Send only the fields to change; the rest keep their values.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager can act only on the conference they own.  A `202` means the change was accepted and is applied shortly after. — [PUT /domains/{domain}/conferences/{conference}/participants/{participant}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
                 },
                 "participant": {
                       "type": "string",
-                      "description": "participant"
+                      "description": "Participant to update: a number, such as `15555550100`, a user, or a SIP address. It is matched on the user part, so `15555550100`, `sip:15555550100@conference-bridge`, and the participant's own SIP address all match. A leading `+` on a number is ignored. Every entry that matches is updated."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Display name of the participant."
+                },
+                "conference-participant-role": {
+                      "type": "string",
+                      "description": "Role of the participant. Allowed values: \"participant\", \"leader\", \"speaker\"",
+                      "enum": [
+                            "participant",
+                            "leader",
+                            "speaker"
+                      ]
+                },
+                "auto-answer-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant's device is asked to answer automatically when the bridge calls it. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-participant-auto-connect-option": {
+                      "type": "string",
+                      "description": "Auto-connect option. Allowed values: \"no\", \"1\", \"2\"",
+                      "enum": [
+                            "no",
+                            "1",
+                            "2"
+                      ]
+                },
+                "conference-participant-auto-disconnect-option": {
+                      "type": "string",
+                      "description": "Auto-disconnect option. Allowed values: \"no\", \"1\", \"2\"",
+                      "enum": [
+                            "no",
+                            "1",
+                            "2"
+                      ]
+                },
+                "conference-participant-receive-only-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant only listens. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-participant-persistent-enabled": {
+                      "type": "string",
+                      "description": "Whether the participant stays on the bridge's list after hanging up. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           },
           "required": [
@@ -115,16 +289,28 @@ export const put_domains_by_domain_conferences_by_conference_participants_by_par
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/conferences/{}/participants/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference', 'participant'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['name', 'conference-participant-role', 'auto-answer-enabled', 'conference-participant-auto-connect-option', 'conference-participant-auto-disconnect-option', 'conference-participant-receive-only-enabled', 'conference-participant-persistent-enabled'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'PUT',
       pathTemplate: '/domains/{domain}/conferences/{conference}/participants/{participant}',
       pathParams,
+      body,
     });
 
     return {
@@ -139,21 +325,21 @@ export const put_domains_by_domain_conferences_by_conference_participants_by_par
 export const delete_domains_by_domain_conferences_by_conference_participants_by_participant: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_conferences_by_conference_participants_by_participant',
-    description: 'Delete Participant from Conference — [DELETE /domains/{domain}/conferences/{conference}/participants/{participant}]',
+    description: 'Remove conference participant — Removes a participant from a conference bridge\\\'s list. Every entry that matches `{participant}` is removed.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager can act only on the conference they own.  A `202` means the removal was accepted and is applied shortly after. — [DELETE /domains/{domain}/conferences/{conference}/participants/{participant}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
-                      "type": "number",
-                      "description": "conference"
+                      "type": "string",
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
                 },
                 "participant": {
-                      "type": "number",
-                      "description": "participant"
+                      "type": "string",
+                      "description": "Participant to remove: a number, such as `15555550100`, a user, or a SIP address. It is matched on the user part, so `15555550100`, `sip:15555550100@conference-bridge`, and the participant's own SIP address all match. A leading `+` on a number is ignored. Every entry that matches is removed."
                 }
           },
           "required": [
@@ -162,6 +348,12 @@ export const delete_domains_by_domain_conferences_by_conference_participants_by_
                 "participant"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/conferences/{}/participants/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference', 'participant'];
@@ -173,6 +365,124 @@ export const delete_domains_by_domain_conferences_by_conference_participants_by_
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/conferences/{conference}/participants/{participant}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_conference_participants: ToolDefinition = {
+  schema: {
+    name: 'list_conference_participants',
+    description: 'List conference participants, reduced — Lists the participants on a conference bridge with only their address, name, and call state.  Requires the `list` privilege, which `/count` shares. A scope that cannot read full participant records can still list them here. A Basic User, Simple User, Call Center Agent, or Route Manager can list only the participants of the conference they own.  For the full records, use **List conference participants**. — [GET /domains/{domain}/conferences/{conference}/participants/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "conference": {
+                      "type": "string",
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                }
+          },
+          "required": [
+                "domain",
+                "conference"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/{}/participants/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'conference'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/conferences/{conference}/participants/list',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_conference_participant: ToolDefinition = {
+  schema: {
+    name: 'read_conference_participant',
+    description: 'Read conference participant — Returns one participant on a conference bridge: their address, role, call options, and call state.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager can act only on the conference they own.  A participant\\\'s `pin` is masked unless you send `include-secret=yes` as the conference owner or with an Office Manager, Reseller, or Super User token.  When several entries match `{participant}`, the first by name is returned. To see everyone on the bridge, use **List conference participants**. — [GET /domains/{domain}/conferences/{conference}/participants/{participant}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "conference": {
+                      "type": "string",
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                },
+                "participant": {
+                      "type": "string",
+                      "description": "Participant to read: a number, such as `15555550100`, a user, or a SIP address. It is matched on the user part, so `15555550100`, `sip:15555550100@conference-bridge`, and the participant's own SIP address all match. A leading `+` on a number is ignored."
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns each participant's `pin` whole, if you own the conference or use an Office Manager, Reseller, or Super User token. Any other scope gets it masked either way. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "conference",
+                "participant"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/{}/participants/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'conference', 'participant'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/conferences/{conference}/participants/{participant}',
+      pathParams,
+      queryParams,
     });
 
     return {

@@ -1,0 +1,5 @@
+export { SUPPORTED_CUTOVER_NAMESPACES, assertSupportedCutoverNamespace, checkMutationGuardInTransaction, claimUpstreamGrantInTransaction, getCutoverFenceDocRef, getCutoverFenceRecord, getCutoverOperationDocRef, getCutoverOperationsColRef, initializeCutoverFence, isLegacyMutationPermittedInTransaction, isSupportedCutoverNamespace, markIrreversibleInTransaction, markOperationAmbiguous, parseCutoverFenceRecord, readCutoverFenceInTransaction, reconcileUpstreamGrantInTransaction, releaseLegacyOperation, startMonotonicTimer, transitionCutoverFenceState, withLegacyOperation } from './canonical-core.mjs';
+export { CutoverFenceError, CutoverRefusedError, isCutoverFenceError, isCutoverRefusedError } from '../store/errors.js';
+export { deriveStoreKey } from '../store/codec.js';
+export { activateFirestoreMigration, adoptFirestoreLegacyTokens, assertValidMigrationContext, getFirestoreMigrationStatus, inspectFirestoreLegacyMigration, verifyActiveFirestoreMigration } from '../store/firestore-migration-engine.js';
+export { createProtectedFirestoreMigrationContext } from '../store/protected-migration-context.js';

@@ -1,0 +1,48 @@
+name: Cutover emulator proof
+
+# Runs the gated cutover suites: the protected runner against the Firestore emulator, the synthetic closed-scope
+# positive proofs, and the production open-scope refusal. The gate is set only on this disposable runner. Nothing
+# here touches a live system: NetSapiens is never called, and the runner reads and writes only the emulator and
+# the fake Admin.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/cutover-proof.yml'
+permissions:
+  contents: read
+
+jobs:
+  cutover-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Bundle is current
+        run: |
+          npm run bundle:cutover
+          git diff --exit-code -- src/store/cutover-protocol.mjs
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for _ in $(seq 1 60); do curl -sf http://localhost:8080 >/dev/null && exit 0; sleep 2; done
+          docker logs fs-emu; exit 1
+      - name: Permit the fixed factory mounts on this disposable runner
+        run: sudo chmod 0777 /opt /run
+      - name: Gated cutover suites (serial, emulator)
+        env:
+          NETSAPIENS_CUTOVER_CONTAINER: '1'
+          CI: 'true'
+          FIRESTORE_EMULATOR_HOST: localhost:8080
+          GOOGLE_CLOUD_PROJECT: firestore-test
+        run: npx vitest run --no-file-parallelism

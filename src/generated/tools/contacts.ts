@@ -5,21 +5,62 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_contacts: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_contacts',
-    description: 'Get Contacts for User — [GET /domains/{domain}/users/{user}/contacts]',
+    description: 'List user contacts — Lists the contacts a user sees: their personal contacts, the domain\\\'s shared contacts, and, on request, the users in the domain directory.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can read their own contacts only. Site Manager can read its own contacts and those of users at its own site. Office Manager can read the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. Super User Read Only and Office Manager Read-Only can read too, platform-wide and in their own domain. A request for any other address book returns `403`.  The list is built in this order:  - the user\\\'s personal contacts - the domain\\\'s shared contacts, marked `is-shared: true`, unless `PORTAL_SHOW_SHARED_CONTACTS` is `no` for the domain or its reseller - with `includeDomain=yes`, one on-net row per user in the domain directory, carrying `user`, `department`, `site`, and presence  A personal contact whose first and last name match a directory user is merged into that user\\\'s row instead of listed twice. Rows are then sorted (directory users by extension first, then by last name and first name, unless you send `sort`) and paged with `start` and `limit`, which defaults to `100` and is clamped to 1 to 1,000.  For your own contacts, call `GET /domains/~/users/~/contacts`. `GET /domains/{domain}/users/{user}/contacts/count` counts the same rows with the same filters. `GET /domains/{domain}/users/{user}/contacts/list` returns a reduced row for pickers. — [GET /domains/{domain}/users/{user}/contacts]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "includeDomain": {
-                      "type": "boolean",
-                      "description": "Whether to include onnet domain users, will also match the users to contact details. (values: \"yes\"/\"no\", default \"no\")"
+                      "type": "string",
+                      "description": "`yes` or `1` adds the users listed in the domain directory as on-net rows; any other value leaves them out. A personal contact with the same first and last name as a directory user is merged into that user's row. Has no effect in a residential domain. Allowed values: \"yes\", \"1\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "1",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this first name. Applies to personal, shared, and directory rows."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this last name. Applies to personal, shared, and directory rows."
+                },
+                "tags": {
+                      "type": "string",
+                      "description": "Returns only personal contacts whose stored tag list contains this text. A contact group is stored as `cg-<group>` and a favorite as `fav`, so `cg-Vendors` returns the group `Vendors`. Shared and directory rows are not filtered by it."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users in this department. `*` means every department. Personal and shared contacts are not filtered by it."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users at this site. Personal and shared contacts are not filtered by it."
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort keys, comma-separated, each a field optionally followed by `asc` or `desc` (any case; `asc` when left out). Fields: `name-first-name`, `name-last-name`, `name-middle-name`, `company`, `email`, `user`, `department`, `site`, `phonenumber-work`, `phonenumber-cell`, `phonenumber-home`, `phonenumber-fax`, `created-datetime`, `unique-id`. Rows with an empty sort field go last in ascending order and first in descending order. Any other value returns `400`. The first field named is the primary key. Defaults to `user asc,name-last-name asc,name-first-name asc`. Default: \"user asc,name-last-name asc,name-first-name asc\"",
+                      "default": "user asc,name-last-name asc,name-first-name asc"
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return, from 1 to 1,000, counted after personal, shared, and directory rows are merged. A value outside that range is clamped to it. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -28,13 +69,19 @@ export const get_domains_by_domain_users_by_user_contacts: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['includeDomain'];
+    const queryParamNames = ['includeDomain', 'name-first-name', 'name-last-name', 'tags', 'department', 'site', 'sort', 'limit', 'start'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -58,69 +105,84 @@ export const get_domains_by_domain_users_by_user_contacts: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_contacts: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_contacts',
-    description: 'Create Contact — [POST /domains/{domain}/users/{user}/contacts]',
+    description: 'Create user contact — Adds a contact to a user\\\'s personal address book.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can create their own contacts only. Site Manager can create its own contacts and those of users at its own site. Office Manager can create the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. A request for any other address book returns `403`.  `name-first-name` and `name-last-name` are required. The server assigns `unique-id` unless you send one. An ID you send must be 1 to 32 letters, digits, `-`, or `_`, not `groups`, `list`, or `count` in any case, and unused in every address book; an ID in use returns `409` and no contact is overwritten. `na`, `undefined`, or an empty value also gets a generated ID. `is-favorite` marks the contact as a favorite and `groups` files it in contact groups. `avatar` is ignored; set the picture with `POST /domains/{domain}/users/{user}/contacts/{contact_id}/avatar`. A contact that repeats an existing one in the same address book, with the same names and the same phone numbers, email, and fax that you send, returns `409`.  The contact is written asynchronously. The call waits up to 2 seconds for the write to apply and then returns the stored contact. If it has not applied by then, the response holds the fields you sent and the new `unique-id`, in the same shape; read the contact again shortly after.  When the user has video meetings, the contact is also added to their video contact list. — [POST /domains/{domain}/users/{user}/contacts]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "unique-id": {
+                      "type": "string",
+                      "description": "Optional ID for the new contact: 1 to 32 letters, digits, `-`, or `_`, unused in every address book, and not `groups`, `list`, or `count` in any case. An ID in use returns `409`; a malformed one returns `400`. Leave it out, or send `na` or `undefined`, to have one generated"
                 },
                 "name-first-name": {
                       "type": "string",
-                      "description": "name-first-name"
+                      "description": "The contact's first name"
                 },
                 "name-middle-name": {
                       "type": "string",
-                      "description": "name-middle-name"
+                      "description": "The contact's middle name"
                 },
                 "name-last-name": {
                       "type": "string",
-                      "description": "name-last-name"
-                },
-                "email": {
-                      "type": "string",
-                      "description": "email"
+                      "description": "The contact's last name"
                 },
                 "company": {
                       "type": "string",
-                      "description": "company"
+                      "description": "The company or organization the contact belongs to"
+                },
+                "email": {
+                      "type": "string",
+                      "description": "The contact's email address"
                 },
                 "phonenumber-work": {
                       "type": "string",
-                      "description": "phonenumber-work"
+                      "description": "Work phone number, stored as entered"
                 },
                 "phonenumber-cell": {
                       "type": "string",
-                      "description": "phonenumber-cell"
-                },
-                "phonenumber-fax": {
-                      "type": "string",
-                      "description": "phonenumber-fax"
+                      "description": "Mobile phone number, stored as entered"
                 },
                 "phonenumber-home": {
                       "type": "string",
-                      "description": "phonenumber-home"
+                      "description": "Home phone number, stored as entered"
+                },
+                "phonenumber-fax": {
+                      "type": "string",
+                      "description": "Fax number, stored as entered"
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Free-text notes about the contact, up to 256 characters. Longer returns `400`"
+                },
+                "is-favorite": {
+                      "type": "boolean",
+                      "description": "`true` marks the contact as a favorite; `false` clears the mark"
+                },
+                "groups": {
+                      "type": "array",
+                      "description": "Contact groups to file the contact in. On an update, these replace the stored groups; `[]` removes every group"
                 }
           },
           "required": [
                 "domain",
                 "user",
                 "name-first-name",
-                "name-middle-name",
-                "name-last-name",
-                "email",
-                "company",
-                "phonenumber-work",
-                "phonenumber-cell",
-                "phonenumber-fax",
-                "phonenumber-home"
+                "name-last-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/contacts',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -128,7 +190,7 @@ export const post_domains_by_domain_users_by_user_contacts: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['name-first-name', 'name-middle-name', 'name-last-name', 'email', 'company', 'phonenumber-work', 'phonenumber-cell', 'phonenumber-fax', 'phonenumber-home'];
+    const bodyParamNames = ['unique-id', 'name-first-name', 'name-middle-name', 'name-last-name', 'company', 'email', 'phonenumber-work', 'phonenumber-cell', 'phonenumber-home', 'phonenumber-fax', 'notes', 'is-favorite', 'groups'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -152,21 +214,21 @@ export const post_domains_by_domain_users_by_user_contacts: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_contacts_by_contact_id',
-    description: 'Get Specific Contact for User — [GET /domains/{domain}/users/{user}/contacts/{contact_id}]',
+    description: 'Read user contact — Returns one contact from a user\\\'s address book.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can read their own contacts only. Site Manager can read its own contacts and those of users at its own site. Office Manager can read the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. Super User Read Only and Office Manager Read-Only can read too, platform-wide and in their own domain. A request for any other address book returns `403`.  The ID must name a contact in the user\\\'s personal address book or one of the domain\\\'s shared contacts; any other ID returns `404`. The read returns the stored contact only, without directory data. Append `/list` to the path (`.../contacts/{contact_id}/list`) for the reduced row. — [GET /domains/{domain}/users/{user}/contacts/{contact_id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "contact_id": {
                       "type": "string",
-                      "description": "contact_id"
+                      "description": "The contact's `unique-id`, as returned when it was created or listed: up to 32 characters. `groups` is reserved: `../contacts/groups` lists contact groups instead of reading a contact."
                 }
           },
           "required": [
@@ -175,6 +237,12 @@ export const get_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDef
                 "contact_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'contact_id'];
@@ -200,79 +268,83 @@ export const get_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDef
 export const put_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_contacts_by_contact_id',
-    description: 'Update Contact — [PUT /domains/{domain}/users/{user}/contacts/{contact_id}]',
+    description: 'Update user contact — Changes a contact in a user\\\'s personal address book. Send only the fields to change; the others keep their values.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can update their own contacts only. Site Manager can update its own contacts and those of users at its own site. Office Manager can update the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. A request for any other address book returns `403`.  The ID must name a contact in the user\\\'s personal address book or one of the domain\\\'s shared contacts; any other ID returns `404`. Changing a shared contact this way needs the same rights as `PUT /domains/{domain}/contacts/{contact_id}`: domain tier or above, or `403`. `is-favorite` sets or clears the favorite mark. `groups` replaces the contact\\\'s groups with the ones you send; send `[]` to take it out of every group. `avatar` is ignored; change the picture with `PUT /domains/{domain}/users/{user}/contacts/{contact_id}/avatar`.  A `tags` value containing `shared` also sends the update to the domain\\\'s shared contacts, with the same rights check.  `202` means the change was accepted and is applied shortly after, so a read right away can still show the old values. — [PUT /domains/{domain}/users/{user}/contacts/{contact_id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "contact_id": {
                       "type": "string",
-                      "description": "contact_id"
+                      "description": "The contact's `unique-id`, as returned when it was created or listed: up to 32 characters. `groups` is reserved: `../contacts/groups` lists contact groups instead of reading a contact."
                 },
                 "name-first-name": {
                       "type": "string",
-                      "description": "name-first-name"
+                      "description": "The contact's first name"
                 },
                 "name-middle-name": {
                       "type": "string",
-                      "description": "name-middle-name"
+                      "description": "The contact's middle name"
                 },
                 "name-last-name": {
                       "type": "string",
-                      "description": "name-last-name"
-                },
-                "email": {
-                      "type": "string",
-                      "description": "email"
+                      "description": "The contact's last name"
                 },
                 "company": {
                       "type": "string",
-                      "description": "company"
+                      "description": "The company or organization the contact belongs to"
+                },
+                "email": {
+                      "type": "string",
+                      "description": "The contact's email address"
                 },
                 "phonenumber-work": {
                       "type": "string",
-                      "description": "phonenumber-work"
+                      "description": "Work phone number, stored as entered"
                 },
                 "phonenumber-cell": {
                       "type": "string",
-                      "description": "phonenumber-cell"
-                },
-                "phonenumber-fax": {
-                      "type": "string",
-                      "description": "phonenumber-fax"
+                      "description": "Mobile phone number, stored as entered"
                 },
                 "phonenumber-home": {
                       "type": "string",
-                      "description": "phonenumber-home"
+                      "description": "Home phone number, stored as entered"
                 },
-                "created-datetime": {
+                "phonenumber-fax": {
                       "type": "string",
-                      "description": "created-datetime"
+                      "description": "Fax number, stored as entered"
+                },
+                "notes": {
+                      "type": "string",
+                      "description": "Free-text notes about the contact, up to 256 characters. Longer returns `400`"
+                },
+                "is-favorite": {
+                      "type": "boolean",
+                      "description": "`true` marks the contact as a favorite; `false` clears the mark"
+                },
+                "groups": {
+                      "type": "array",
+                      "description": "Contact groups to file the contact in. On an update, these replace the stored groups; `[]` removes every group"
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "contact_id",
-                "name-first-name",
-                "name-middle-name",
-                "name-last-name",
-                "email",
-                "company",
-                "phonenumber-work",
-                "phonenumber-cell",
-                "phonenumber-fax",
-                "phonenumber-home",
-                "created-datetime"
+                "contact_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/contacts/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'contact_id'];
@@ -280,7 +352,7 @@ export const put_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDef
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['name-first-name', 'name-middle-name', 'name-last-name', 'email', 'company', 'phonenumber-work', 'phonenumber-cell', 'phonenumber-fax', 'phonenumber-home', 'created-datetime'];
+    const bodyParamNames = ['name-first-name', 'name-middle-name', 'name-last-name', 'company', 'email', 'phonenumber-work', 'phonenumber-cell', 'phonenumber-home', 'phonenumber-fax', 'notes', 'is-favorite', 'groups'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -304,21 +376,21 @@ export const put_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDef
 export const delete_domains_by_domain_users_by_user_contacts_by_contact_id: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_contacts_by_contact_id',
-    description: 'Delete Contact — [DELETE /domains/{domain}/users/{user}/contacts/{contact_id}]',
+    description: 'Delete user contact — Removes a contact from a user\\\'s address book, together with its avatar.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can delete their own contacts only. Site Manager can delete its own contacts and those of users at its own site. Office Manager can delete the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. A request for any other address book returns `403`.  The ID must name a contact in the user\\\'s personal address book or one of the domain\\\'s shared contacts; any other ID returns `404`. Deleting a shared contact this way needs the same rights as `DELETE /domains/{domain}/contacts/{contact_id}`: domain tier or above, or `403`. `202` means the delete was accepted and is applied shortly after. When the user has video meetings, the contact is also removed from their video contact list. — [DELETE /domains/{domain}/users/{user}/contacts/{contact_id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
                 },
                 "contact_id": {
                       "type": "string",
-                      "description": "contact_id"
+                      "description": "The contact's `unique-id`, as returned when it was created or listed: up to 32 characters. `groups` is reserved: `../contacts/groups` lists contact groups instead of reading a contact."
                 }
           },
           "required": [
@@ -327,6 +399,12 @@ export const delete_domains_by_domain_users_by_user_contacts_by_contact_id: Tool
                 "contact_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/contacts/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'contact_id'];
@@ -352,17 +430,47 @@ export const delete_domains_by_domain_users_by_user_contacts_by_contact_id: Tool
 export const get_domains_by_domain_users_by_user_contacts_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_contacts_count',
-    description: 'Count Contacts for User — [GET /domains/{domain}/users/{user}/contacts/count]',
+    description: 'Count user contacts — Counts the rows `GET /domains/{domain}/users/{user}/contacts` returns for the same filters, before paging: personal contacts, the domain\\\'s shared contacts, and, with `includeDomain=yes`, the directory users.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can count their own contacts only. Site Manager can count its own contacts and those of users at its own site. Office Manager can count the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. Super User Read Only and Office Manager Read-Only can read too, platform-wide and in their own domain. A request for any other address book returns `403`. `sort`, `start`, and `limit` are ignored here. — [GET /domains/{domain}/users/{user}/contacts/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "includeDomain": {
+                      "type": "string",
+                      "description": "`yes` or `1` adds the users listed in the domain directory as on-net rows; any other value leaves them out. A personal contact with the same first and last name as a directory user is merged into that user's row. Has no effect in a residential domain. Allowed values: \"yes\", \"1\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "1",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this first name. Applies to personal, shared, and directory rows."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this last name. Applies to personal, shared, and directory rows."
+                },
+                "tags": {
+                      "type": "string",
+                      "description": "Returns only personal contacts whose stored tag list contains this text. A contact group is stored as `cg-<group>` and a favorite as `fav`, so `cg-Vendors` returns the group `Vendors`. Shared and directory rows are not filtered by it."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users in this department. `*` means every department. Personal and shared contacts are not filtered by it."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users at this site. Personal and shared contacts are not filtered by it."
                 }
           },
           "required": [
@@ -371,16 +479,28 @@ export const get_domains_by_domain_users_by_user_contacts_count: ToolDefinition 
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['includeDomain', 'name-first-name', 'name-last-name', 'tags', 'department', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/contacts/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -401,10 +521,234 @@ export const get_domains_users_contacts: ToolDefinition = {
           "properties": {}
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/~/users/~/contacts',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_contacts: ToolDefinition = {
+  schema: {
+    name: 'list_user_contacts',
+    description: 'List user contacts (reduced) — Lists the same rows as `GET /domains/{domain}/users/{user}/contacts`, reduced to what identifies a contact: `unique-id`, name, `company`, `domain`, and, on a directory row, `user`. Phone numbers, email, notes, and timestamps are on the full read.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can list their own contacts only. Site Manager can list its own contacts and those of users at its own site. Office Manager can list the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. Super User Read Only and Office Manager Read-Only can read too, platform-wide and in their own domain. A request for any other address book returns `403`.  The query parameters of the full list apply here too. Append `/list` to a keyed path (`.../contacts/{contact_id}/list`) for one contact\\\'s reduced row. — [GET /domains/{domain}/users/{user}/contacts/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this first name. Applies to personal, shared, and directory rows."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Returns only contacts with exactly this last name. Applies to personal, shared, and directory rows."
+                },
+                "tags": {
+                      "type": "string",
+                      "description": "Returns only personal contacts whose stored tag list contains this text. A contact group is stored as `cg-<group>` and a favorite as `fav`, so `cg-Vendors` returns the group `Vendors`. Shared and directory rows are not filtered by it."
+                },
+                "includeDomain": {
+                      "type": "string",
+                      "description": "`yes` or `1` adds the users listed in the domain directory as on-net rows; any other value leaves them out. A personal contact with the same first and last name as a directory user is merged into that user's row. Has no effect in a residential domain. Allowed values: \"yes\", \"1\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "1",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "department": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users in this department. `*` means every department. Personal and shared contacts are not filtered by it."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "With `includeDomain=yes`, adds only directory users at this site. Personal and shared contacts are not filtered by it."
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort keys, comma-separated, each a field optionally followed by `asc` or `desc` (any case; `asc` when left out). Fields: `name-first-name`, `name-last-name`, `name-middle-name`, `company`, `email`, `user`, `department`, `site`, `phonenumber-work`, `phonenumber-cell`, `phonenumber-home`, `phonenumber-fax`, `created-datetime`, `unique-id`. Rows with an empty sort field go last in ascending order and first in descending order. Any other value returns `400`. The first field named is the primary key. Defaults to `user asc,name-last-name asc,name-first-name asc`. Default: \"user asc,name-last-name asc,name-first-name asc\"",
+                      "default": "user asc,name-last-name asc,name-first-name asc"
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return, from 1 to 1,000, counted after personal, shared, and directory rows are merged. A value outside that range is clamped to it. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['name-first-name', 'name-last-name', 'tags', 'includeDomain', 'department', 'site', 'sort', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/contacts/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_user_contacts_by_name: ToolDefinition = {
+  schema: {
+    name: 'delete_user_contacts_by_name',
+    description: 'Delete user contacts by name — Deletes every contact in a user\\\'s personal address book that matches a first and last name, and optionally a tag. To delete one contact, use `DELETE /domains/{domain}/users/{user}/contacts/{contact_id}` instead.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can delete from their own address book only. Site Manager can delete from its own and from those of users at its own site, Office Manager from any user\\\'s in its domain, Reseller from those of users in domains of its territory, and Super User from any. Any other address book returns `403`.  `name-first-name` and `name-last-name` are required and match exactly; `tags` narrows the match to contacts whose stored tags contain its text. Send them in the query string or the JSON body. Every contact that matches is deleted, so check the matches with the list first. When none match, nothing is deleted and the call still returns `202`. Only this address book is searched; the domain\\\'s shared contacts are never deleted this way. Unlike the delete by ID, this call leaves the contacts\\\' avatars and video contact copies in place.  `202` means the deletes were accepted and are applied shortly after. — [DELETE /domains/{domain}/users/{user}/contacts]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose personal address book you delete from, such as `1001`. `~` means you, and then also sets the domain to your own."
+                },
+                "name-first-name": {
+                      "type": "string",
+                      "description": "Deletes only contacts with exactly this first name. Required."
+                },
+                "name-last-name": {
+                      "type": "string",
+                      "description": "Deletes only contacts with exactly this last name. Required."
+                },
+                "tags": {
+                      "type": "string",
+                      "description": "Deletes only contacts whose stored tag list contains this text, such as `cg-Vendors` for the group `Vendors` or `fav` for favorites."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "name-first-name",
+                "name-last-name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/contacts',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['name-first-name', 'name-last-name', 'tags'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/users/{user}/contacts',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_list_contacts_groups_user: ToolDefinition = {
+  schema: {
+    name: 'get_list_contacts_groups_user',
+    description: 'List user contact groups — Lists the names of the contact groups in a user\\\'s personal address book.  Basic User, Advanced User, Simple User, Call Center Agent, and Call Center Supervisor can read their own contacts only. Site Manager can read its own contacts and those of users at its own site. Office Manager can read the contacts of any user in its domain, Reseller those of users in domains of its territory, and Super User any user\\\'s. Super User Read Only and Office Manager Read-Only can read too, platform-wide and in their own domain. A request for any other address book returns `403`.  A group exists while at least one of the user\\\'s personal contacts is in it. To create one, name it in a contact\\\'s `groups`. The answer is a JSON array of names, in the order they are first used; groups of shared contacts are not included. Filter the contact list to one group with `tags=cg-<group>`. — [GET /domains/{domain}/users/{user}/contacts/groups]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose personal address book you work with, such as `1001`. `~` means you, and then also sets the domain to your own, whatever the domain segment says."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/contacts/groups',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/contacts/groups',
+      pathParams,
     });
 
     return {

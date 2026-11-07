@@ -5,55 +5,152 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_accesslog: ToolDefinition = {
   schema: {
     name: 'get_accesslog',
-    description: 'Read Accesslog — [GET /accesslog]',
+    description: 'Read access log — Returns the compliance log: who signed in, who changed configuration, who read personal data or a credential, and what data left the platform, newest first. Requires Reseller, Super User, or Super User Read Only scope. A Reseller sees only entries about data in the domains of its territory.  **Choose the entries with `event-category`.** Without it you get sign-ins and sign-outs (`session`) from the last 7 days. Send `access`, `disclosure`, or `all` for data reads and disclosures. Sign-in and change entries carry fewer fields: the filters marked "access and disclosure entries only" do not apply to them.  **Two common questions.** "What did this account read" is `by-user` with a date range. "Who read this record" is `record-id` with `target-object`. Add `credential=yes` to see every read that returned a secret.  **Data subjects are listed, not filterable.** Each entry names the people whose data it disclosed in `data-subjects`. To find who accessed data about one person, contact support.  **What counts as a disclosure depends on the regime.** `actor-tier` records where the reader sat relative to the data, and `exclude` removes categories. A HIPAA accounting of disclosures is `exclude=own-organisation`. GDPR excludes nothing.  Access entries are read from at most the 6 most recent months of the date range. Every page you read is itself recorded in the log. `GET /accesslog/count` returns the number of matching entries as `{"total": N}`. — [GET /accesslog]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.   Supported formats include.  * 2023-11-27 13:00:00 * 2023-11-27T13:00:00Z * 2023-11-27T13:00:00-08:00 * 2023-11-27T13:00:00-08:00[US/Pacific] * 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "Entries at or after this time, as an RFC 3339 date-time such as `2026-09-01T00:00:00+00:00`. A trailing time zone name in brackets, such as `[America/New_York]`, and `YYYY-MM-DD HH:MM:SS` in UTC are also accepted. Without it, sign-in and change entries start 7 days ago, and access entries start at the beginning of the month of `datetime-end`."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "Entries at or before this time, in the same formats as `datetime-start`. Defaults to now. Access entries are read from at most the 6 most recent months of the range."
                 },
                 "by-ip": {
                       "type": "string",
-                      "description": "by-ip"
+                      "description": "Entries from this IP address. Exact match."
                 },
                 "action-type": {
                       "type": "string",
-                      "description": "action-type"
+                      "description": "Entries with this action, such as `read`, `list`, `search`, `play`, `download`, `export`, `login`, or `logout`. Exact match. `download` and `export` are the disclosure actions."
                 },
                 "target-domain": {
                       "type": "string",
-                      "description": "target-domain"
+                      "description": "Entries about data in this domain. Repeat the parameter to name several. Every domain named must be inside your scope, or the request returns `403`. A blank value or `*` means no filter."
                 },
                 "target-object": {
                       "type": "string",
-                      "description": "target-object"
+                      "description": "Entries about this kind of object. Takes the object name or the display label, so `user` and `Subscriber` match the same entries. Credential reads use the object name, such as `device`, `phoneconfiguration`, or `connection`."
                 },
                 "target-host": {
                       "type": "string",
-                      "description": "target-host"
+                      "description": "Entries recorded by this server. Exact match."
                 },
                 "target-user": {
                       "type": "string",
-                      "description": "target-user"
+                      "description": "Entries about this person, as a bare extension. Qualify it with `target-domain`."
                 },
                 "by-client": {
                       "type": "string",
-                      "description": "by-client"
+                      "description": "Entries from this application. Exact match."
                 },
                 "by-domain": {
                       "type": "string",
-                      "description": "by-domain"
+                      "description": "Entries where the reader belongs to this domain. It does not widen your scope: entries are still limited to data in domains you manage."
+                },
+                "event-category": {
+                      "type": "string",
+                      "description": "The kinds of entry to return, separated by commas: `session` (sign-ins and sign-outs), `change` (configuration changes), `access` (reads of personal data or a credential), `disclosure` (data that left the platform on its own, such as a served export file), or `all`. Defaults to `session`. An unrecognized value falls back to the default. Asking for `access` alone leaves out disclosures, and the other way around."
+                },
+                "exclude": {
+                      "type": "string",
+                      "description": "Leave out entries by the reader's relationship to the data, separated by commas: `own-user` (the reader is the person the data is about), `own-domain` (the reader is in the same domain), `own-organisation` (the same organization; `own-organization` also works), `reseller` (an intermediary), or `platform` (platform staff). Nothing is excluded by default, and an unrecognized value is ignored. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "record-id": {
+                      "type": "string",
+                      "description": "Entries about this one record, such as a CDR ID or a phone MAC address. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "actor-tier": {
+                      "type": "string",
+                      "description": "Entries where the reader was in this tier. To leave a tier out instead, use `exclude`. Access and disclosure entries only; ignored for sign-in and change entries. Allowed values: \"self\", \"reseller\", \"platform\"",
+                      "enum": [
+                            "self",
+                            "reseller",
+                            "platform"
+                      ]
+                },
+                "by-scope": {
+                      "type": "string",
+                      "description": "Entries where the reader held this scope, such as `Office Manager`. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "schema-version": {
+                      "type": "string",
+                      "description": "Entries written under this set of fields, such as `1.1`. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "part2-covered": {
+                      "type": "string",
+                      "description": "`yes` returns entries where the data was subject to 42 CFR Part 2 when read; `no` returns the rest. `part2` is also accepted as the name. `true`, `1`, and `on` also mean yes; any other value means no. Access and disclosure entries only; ignored for sign-in and change entries. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "hipaa-covered": {
+                      "type": "string",
+                      "description": "`yes` returns entries where the data was subject to HIPAA when read; `no` returns the rest. `hipaa` is also accepted as the name. `true`, `1`, and `on` also mean yes; any other value means no. Access and disclosure entries only; ignored for sign-in and change entries. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "gdpr-covered": {
+                      "type": "string",
+                      "description": "`yes` returns entries where the data was subject to GDPR when read; `no` returns the rest. `gdpr` is also accepted as the name. `true`, `1`, and `on` also mean yes; any other value means no. Access and disclosure entries only; ignored for sign-in and change entries. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "credential": {
+                      "type": "string",
+                      "description": "`yes` returns only entries whose response carried a secret, such as a SIP registration password, a provisioning password, a client secret, or a PIN. `no` returns the rest. `true`, `1`, and `on` also mean yes. Access and disclosure entries only; ignored for sign-in and change entries. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "recipient": {
+                      "type": "string",
+                      "description": "Entries where the data went to this destination rather than to the reader, such as a scheduled export's host. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "by-user": {
+                      "type": "string",
+                      "description": "Entries recorded against this reader, as a bare extension. Exact match."
+                },
+                "mask-chain": {
+                      "type": "string",
+                      "description": "Entries where this account started a masquerade. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "ticket-reference": {
+                      "type": "string",
+                      "description": "Entries recorded under this support ticket. Access and disclosure entries only; ignored for sign-in and change entries."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "The most entries to return. Defaults to 100. There is no upper limit. `0` or a negative number returns 1 entry. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "auditlog-details": {
+                      "type": "string",
+                      "description": "Sign-in and change entries only: entries whose details contain this text. Applied only when `datetime-start` is also sent."
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /accesslog',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['datetime-start', 'datetime-end', 'by-ip', 'action-type', 'target-domain', 'target-object', 'target-host', 'target-user', 'by-client', 'by-domain'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'by-ip', 'action-type', 'target-domain', 'target-object', 'target-host', 'target-user', 'by-client', 'by-domain', 'event-category', 'exclude', 'record-id', 'actor-tier', 'by-scope', 'schema-version', 'part2-covered', 'hipaa-covered', 'gdpr-covered', 'credential', 'recipient', 'by-user', 'mask-chain', 'ticket-reference', 'limit', 'start', 'auditlog-details'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];

@@ -5,26 +5,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_presence_list: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_presence_list',
-    description: 'List Presence in a Domain — [GET /domains/{domain}/presence/list]',
+    description: 'List domain presence — Lists the presence of every user in a domain, ordered by last name, then extension. Returns each row\\\'s presence, name, department, site, email, and status message. Hidden users, the domain\\\'s own record, department records, and system users are left out. Rows are not paged; every matching user is returned.  Send `last_update` to poll: only users whose record changed since then are returned.  Any scope that can read the domain can call it, Basic User included. Reads may be recorded in the access log.  Narrow the list with `site` or `group`. For one department you can also call `GET /domains/{domain}/departments/{department}/presence/list`. — [GET /domains/{domain}/presence/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "last_update": {
                       "type": "string",
-                      "description": "last_update"
+                      "description": "Return only users whose record changed after this time. Fewer than 6 characters is a number of seconds before now, such as `30`. Anything longer is a date and time, such as `2026-09-01 14:30:00`. Any change to the user, not only to presence, counts."
                 },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "order": {
+                "site": {
                       "type": "string",
-                      "description": "order"
+                      "description": "Return only users in this site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Return only users in this department. A department that does not exist returns `404`."
                 }
           },
           "required": [
@@ -32,13 +31,19 @@ export const get_domains_by_domain_presence_list: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/presence/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['last_update', 'limit', 'order'];
+    const queryParamNames = ['last_update', 'site', 'group'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -62,30 +67,25 @@ export const get_domains_by_domain_presence_list: ToolDefinition = {
 export const get_domains_by_domain_departments_by_department_presence_list: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_departments_by_department_presence_list',
-    description: 'List Presence in a Department — [GET /domains/{domain}/departments/{department}/presence/list]',
+    description: 'List department presence — Lists the presence of every user in one department of a domain, ordered by last name, then extension. Returns each row\\\'s presence, name, department, site, email, and status message. Hidden users, the domain\\\'s own record, department records, and system users are left out. Rows are not paged; every matching user is returned.  Send `last_update` to poll: only users whose record changed since then are returned.  Any scope that can read the domain can call it, Basic User included. Reads may be recorded in the access log.  A department with no users, or one that does not exist, returns an empty array. Narrow the list with `site`. — [GET /domains/{domain}/departments/{department}/presence/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "department": {
                       "type": "string",
-                      "description": "department"
+                      "description": "The department name. Matched exactly against each user's department."
                 },
                 "last_update": {
                       "type": "string",
-                      "description": "last_update"
+                      "description": "Return only users whose record changed after this time. Fewer than 6 characters is a number of seconds before now, such as `30`. Anything longer is a date and time, such as `2026-09-01 14:30:00`. Any change to the user, not only to presence, counts."
                 },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                },
-                "order": {
+                "site": {
                       "type": "string",
-                      "description": "order"
+                      "description": "Return only users in this site."
                 }
           },
           "required": [
@@ -94,13 +94,19 @@ export const get_domains_by_domain_departments_by_department_presence_list: Tool
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments/{}/presence/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'department'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['last_update', 'limit', 'order'];
+    const queryParamNames = ['last_update', 'site'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -108,6 +114,131 @@ export const get_domains_by_domain_departments_by_department_presence_list: Tool
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/departments/{department}/presence/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_department_presence: ToolDefinition = {
+  schema: {
+    name: 'read_department_presence',
+    description: 'Read department presence — Lists the presence of every user in one department of a domain, ordered by last name, then extension. Returns each row\\\'s presence, name, department, site, email, and status message. Hidden users, the domain\\\'s own record, department records, and system users are left out. Rows are not paged; every matching user is returned. It answers exactly as `GET /domains/{domain}/departments/{department}/presence/list`.  Send `last_update` to poll: only users whose record changed since then are returned.  Any scope that can read the domain can call it, Basic User included. Reads may be recorded in the access log.  A department with no users, or one that does not exist, returns an empty array. Narrow the list with `site`.  Presence is read-only: any method other than `GET` on this path returns `405`. — [GET /domains/{domain}/departments/{department}/presence]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "department": {
+                      "type": "string",
+                      "description": "The department name. Matched exactly against each user's department."
+                },
+                "last_update": {
+                      "type": "string",
+                      "description": "Return only users whose record changed after this time. Fewer than 6 characters is a number of seconds before now, such as `30`. Anything longer is a date and time, such as `2026-09-01 14:30:00`. Any change to the user, not only to presence, counts."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only users in this site."
+                }
+          },
+          "required": [
+                "domain",
+                "department"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/departments/{}/presence',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'department'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['last_update', 'site'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/departments/{department}/presence',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_domain_presence: ToolDefinition = {
+  schema: {
+    name: 'read_domain_presence',
+    description: 'Read domain presence — Lists the presence of every user in a domain, ordered by last name, then extension. Returns each row\\\'s presence, name, department, site, email, and status message. Hidden users, the domain\\\'s own record, department records, and system users are left out. Rows are not paged; every matching user is returned. It answers exactly as `GET /domains/{domain}/presence/list`.  Send `last_update` to poll: only users whose record changed since then are returned.  Any scope that can read the domain can call it, Basic User included. Reads may be recorded in the access log.  Narrow the list with `site` or `group`. For one department you can also call `GET /domains/{domain}/departments/{department}/presence/list`.  Presence is read-only: any method other than `GET` on this path returns `405`. — [GET /domains/{domain}/presence]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "last_update": {
+                      "type": "string",
+                      "description": "Return only users whose record changed after this time. Fewer than 6 characters is a number of seconds before now, such as `30`. Anything longer is a date and time, such as `2026-09-01 14:30:00`. Any change to the user, not only to presence, counts."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only users in this site."
+                },
+                "group": {
+                      "type": "string",
+                      "description": "Return only users in this department. A department that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/presence',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['last_update', 'site', 'group'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/presence',
       pathParams,
       queryParams,
     });

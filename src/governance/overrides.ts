@@ -3,7 +3,7 @@ import type { FieldClass } from './types.js';
 /**
  * Hand-reviewed field classification overrides for NetSapiens schemas.
  *
- * Every schema property in `spec/netsapiens-api-v2.json` defaults to `{ class: 'metadata' }`.
+ * Every schema property in `spec/v2/45.0.json` defaults to `{ class: 'metadata' }`.
  * Entries here override that default to designate content-bearing (text/audio/transcription),
  * secret (credentials, passwords, pins, private tokens), internal plumbing, or record_id fields.
  */

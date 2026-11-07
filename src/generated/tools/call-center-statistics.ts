@@ -5,37 +5,83 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_statistics_callqueues_by_callqueue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_callqueues_by_callqueue',
-    description: 'Get Callqueue Statistics for a Specific Queue — [GET /domains/{domain}/statistics/callqueues/{callqueue}]',
+    description: 'Read call queue statistics — Returns call center statistics for one call queue over a time window: call volume, answers, abandons, service level, and talk, hold, and wait times. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  Calls count when they entered the queue inside the window, from `datetime-start` up to but not including `datetime-end`. There is no limit on the window length, but long windows are slow. `fields` picks the statistics; it defaults to `VOL,CH,ATT,AC,AAS,SL`. Units follow each field\\\'s name except `calls-after-call-work-avg-duration-seconds`, which is in minutes without `interval`. `unit` changes the units.  Without `interval` the response is one object. With `interval`, the response is a map from bucket to rows. Bucket keys are RFC 3339 for `minute`, `hour`, and `day` (`2026-09-01T14:00:00+00:00`), `YYYY-Www` for `week` (`2026-W36`), and `YYYY-MM` for `month` (`2026-09`). Buckets are in UTC unless `datetime-start` names a bracketed time zone.  A queue that does not exist, or that has statistics turned off, answers `404`. For every queue at once, use `GET /domains/{domain}/statistics/callqueues/per-queue`. — [GET /domains/{domain}/statistics/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue."
+                      "description": "The call queue's extension, for example `2000`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted. To group `interval` buckets by local time, add the IANA time zone in brackets after the offset, for example `2026-09-01T00:00:00-07:00[America/Phoenix]`. The offset must match the zone."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\". Default value is VOL,CH,ATT,AC,AWT,SL"
+                      "description": "The statistics to return, as a comma-separated list of codes: `VOL`, `CH`, `CO`, `ACO`, `AC`, `AAC`, `AR`, `AAR`, `SL`, `DT`, `VM`, `FWD`, `AST`, `CB`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, and `SMS_AHT`. Each field's description names its code. Defaults to `VOL,CH,ATT,AC,AAS,SL`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results."
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
                 },
-                "queue_list": {
+                "interval": {
                       "type": "string",
-                      "description": "Allows for a filter of certain queues. List can be comma separated for example 5202,5201"
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "sla": {
+                      "type": "number",
+                      "description": "The service-level threshold in seconds for `SL`: a call answered within this wait counts as meeting the service level. Defaults to `60`. Default: 60",
+                      "default": 60
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns the `-minutes` fields (`ATT`, `TT`, `AHT`, and `ACW` without `interval`) in seconds. `minutes` returns the `-seconds` fields (`AH`, `AWT`, and `ACW` with `interval`) in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "dnis": {
+                      "type": "string",
+                      "description": "Counts only calls to this dialed number, for example `15555550100`."
+                },
+                "op_term_sub": {
+                      "type": "string",
+                      "description": "Counts only calls handled by this agent extension, for example `1001`."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -46,13 +92,19 @@ export const get_domains_by_domain_statistics_callqueues_by_callqueue: ToolDefin
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/callqueues/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'interval', 'remove_zeros_interval', 'sla', 'unit', 'dnis', 'op_term_sub', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -76,33 +128,83 @@ export const get_domains_by_domain_statistics_callqueues_by_callqueue: ToolDefin
 export const get_domains_by_domain_statistics_callqueues_aggregate: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_callqueues_aggregate',
-    description: 'Get Callqueue Statistics for all Queues Aggregated — [GET /domains/{domain}/statistics/callqueues/aggregate]',
+    description: 'Read call queue statistics for all queues — Returns call center statistics for every call queue in the domain added together, over a time window. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  Calls count when they entered the queue inside the window, from `datetime-start` up to but not including `datetime-end`. There is no limit on the window length, but long windows are slow. `fields` picks the statistics; it defaults to `VOL,CH,ATT,AC,AAS,SL`. `queue_list` limits which queues are added up. Units follow each field\\\'s name except `calls-after-call-work-avg-duration-seconds`, which is in minutes without `interval`. `unit` changes the units.  Without `interval` the response is one object. With `interval`, the response is a map from bucket to rows. Bucket keys are RFC 3339 for `minute`, `hour`, and `day` (`2026-09-01T14:00:00+00:00`), `YYYY-Www` for `week` (`2026-W36`), and `YYYY-MM` for `month` (`2026-09`). Buckets are in UTC unless `datetime-start` names a bracketed time zone. With `interval`, the rows inside each bucket are keyed `*`. — [GET /domains/{domain}/statistics/callqueues/aggregate]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted. To group `interval` buckets by local time, add the IANA time zone in brackets after the offset, for example `2026-09-01T00:00:00-07:00[America/Phoenix]`. The offset must match the zone."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\". Default value is VOL,CH,ATT,AC,AWT,SL"
+                      "description": "The statistics to return, as a comma-separated list of codes: `VOL`, `CH`, `CO`, `ACO`, `AC`, `AAC`, `AR`, `AAR`, `SL`, `DT`, `VM`, `FWD`, `AST`, `CB`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, and `SMS_AHT`. Each field's description names its code. Defaults to `VOL,CH,ATT,AC,AAS,SL`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
                 },
                 "queue_list": {
                       "type": "string",
-                      "description": "Allows for a filter of certain queues. List can be comma separated for example 5202,5201"
+                      "description": "A comma-separated list of call queue extensions. Adds up only these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "sla": {
+                      "type": "number",
+                      "description": "The service-level threshold in seconds for `SL`: a call answered within this wait counts as meeting the service level. Defaults to `60`. Default: 60",
+                      "default": 60
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns the `-minutes` fields (`ATT`, `TT`, `AHT`, and `ACW` without `interval`) in seconds. `minutes` returns the `-seconds` fields (`AH`, `AWT`, and `ACW` with `interval`) in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "dnis": {
+                      "type": "string",
+                      "description": "Counts only calls to this dialed number, for example `15555550100`."
+                },
+                "op_term_sub": {
+                      "type": "string",
+                      "description": "Counts only calls handled by this agent extension, for example `1001`."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -112,13 +214,19 @@ export const get_domains_by_domain_statistics_callqueues_aggregate: ToolDefiniti
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/callqueues/aggregate',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list', 'interval', 'remove_zeros_interval', 'sla', 'unit', 'dnis', 'op_term_sub', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -142,33 +250,83 @@ export const get_domains_by_domain_statistics_callqueues_aggregate: ToolDefiniti
 export const get_domains_by_domain_statistics_callqueues_per_queue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_callqueues_per_queue',
-    description: 'Get Callqueue Statistics for all Queues by Queue — [GET /domains/{domain}/statistics/callqueues/per-queue]',
+    description: 'List call queue statistics per queue — Returns call center statistics for each call queue in the domain, over a time window. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  The response is a map from call queue extension to that queue\\\'s statistics, with the queue\\\'s description in `name`. Only queues with statistics turned on (`callqueue-calculate-statistics` is `yes`) are included. `queue_list` limits the queues.  Calls count when they entered the queue inside the window, from `datetime-start` up to but not including `datetime-end`. There is no limit on the window length, but long windows are slow. `fields` picks the statistics; it defaults to `VOL,CH,ATT,AC,AAS,SL`. Units follow each field\\\'s name except `calls-after-call-work-avg-duration-seconds`, which is in minutes without `interval`. `unit` changes the units.  With `interval`, the response is a map from bucket to rows. Bucket keys are RFC 3339 for `minute`, `hour`, and `day` (`2026-09-01T14:00:00+00:00`), `YYYY-Www` for `week` (`2026-W36`), and `YYYY-MM` for `month` (`2026-09`). Buckets are in UTC unless `datetime-start` names a bracketed time zone. `all` and `all-queues` in place of `per-queue` return the same map. — [GET /domains/{domain}/statistics/callqueues/per-queue]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted. To group `interval` buckets by local time, add the IANA time zone in brackets after the offset, for example `2026-09-01T00:00:00-07:00[America/Phoenix]`. The offset must match the zone."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\".Default value is VOL,CH,ATT,AC,AWT,SL"
+                      "description": "The statistics to return, as a comma-separated list of codes: `VOL`, `CH`, `CO`, `ACO`, `AC`, `AAC`, `AR`, `AAR`, `SL`, `DT`, `VM`, `FWD`, `AST`, `CB`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, and `SMS_AHT`. Each field's description names its code. Defaults to `VOL,CH,ATT,AC,AAS,SL`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
                 },
                 "queue_list": {
                       "type": "string",
-                      "description": "Alows for a filter of certain queues. List can be comma separated for example 421,425"
+                      "description": "A comma-separated list of call queue extensions. Returns only these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "sla": {
+                      "type": "number",
+                      "description": "The service-level threshold in seconds for `SL`: a call answered within this wait counts as meeting the service level. Defaults to `60`. Default: 60",
+                      "default": 60
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns the `-minutes` fields (`ATT`, `TT`, `AHT`, and `ACW` without `interval`) in seconds. `minutes` returns the `-seconds` fields (`AH`, `AWT`, and `ACW` with `interval`) in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "dnis": {
+                      "type": "string",
+                      "description": "Counts only calls to this dialed number, for example `15555550100`."
+                },
+                "op_term_sub": {
+                      "type": "string",
+                      "description": "Counts only calls handled by this agent extension, for example `1001`."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -178,13 +336,19 @@ export const get_domains_by_domain_statistics_callqueues_per_queue: ToolDefiniti
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/callqueues/per-queue',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list', 'interval', 'remove_zeros_interval', 'sla', 'unit', 'dnis', 'op_term_sub', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -208,33 +372,86 @@ export const get_domains_by_domain_statistics_callqueues_per_queue: ToolDefiniti
 export const get_domains_by_domain_statistics_agent: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_agent',
-    description: 'Get Agent Statistics for all Queues by Agent — [GET /domains/{domain}/statistics/agent]',
+    description: 'List agent statistics — Returns call center statistics for each agent in the domain over a time window, across all call queues. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  The response is a map from agent extension to that agent\\\'s statistics. Agents who belong to no call queue are left out when all their figures are `0`. Filter the agents with `department`, `site_list`, `group_list`, or `agent_list`, and the queues counted with `queue_list`.  Calls count when they entered the queue and reached the agent inside the window. `fields` picks the statistics; it defaults to `NAME,CH,ATT,AH,AHT,TT`. Codes are case-sensitive here: send them in capitals. Units follow each field\\\'s name except these: `calls-queueing-avg-duration-seconds` and `calls-after-call-work-avg-duration-seconds` are in minutes, and the `outbound-*-minutes` and `inbound-*-minutes` durations are in seconds. `unit` changes the units.  With `interval`, the response is a map from bucket to a map from agent extension to statistics. Bucket keys are RFC 3339 for `minute`, `hour`, and `day`, `YYYY-Www` for `week`, and `YYYY-MM` for `month`. Agent buckets are grouped in UTC, so leave the bracketed time zone off `datetime-start` here.  Basic User and Call Center Agent read their own figures with `GET /domains/{domain}/statistics/agent/{agent}`. — [GET /domains/{domain}/statistics/agent]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\" Default value is NAME,CH,ATT,AH,AHT,TT"
+                      "description": "The statistics to return, as a comma-separated list of codes: `NAME`, `GROUP`, `CH`, `AC`, `AAC`, `CB`, `AST`, `MC`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, `SMS_AHT`, `OATT`, `OANS`, `OM`, `OAVG`, `IA`, `IANS`, `IM`, and `IAVG`, in capitals. Each field's description names its code. Defaults to `NAME,CH,ATT,AH,AHT,TT`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "department": {
                       "type": "string",
-                      "description": "This is the depertment that queue belongs to in the domain."
+                      "description": "Returns only agents in this department. This is the agent's department, not the queue's."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "site_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of sites. Returns only agents in these sites."
+                },
+                "group_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of departments. Returns only agents in these departments."
+                },
+                "agent_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of agent extensions, `1001` or `1001@example.com`. Returns only these agents."
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of call queue extensions. Counts only calls from these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns every duration field except `AH` in seconds. `minutes` returns `AH` in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -244,13 +461,19 @@ export const get_domains_by_domain_statistics_agent: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/agent',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'department', 'remove_zeros'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'department', 'remove_zeros', 'site_list', 'group_list', 'agent_list', 'queue_list', 'interval', 'remove_zeros_interval', 'unit', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -274,37 +497,86 @@ export const get_domains_by_domain_statistics_agent: ToolDefinition = {
 export const get_domains_by_domain_statistics_agent_callqueues_by_callqueue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_agent_callqueues_by_callqueue',
-    description: 'Get Agent Statistics for Single Queues by Agent — [GET /domains/{domain}/statistics/agent/callqueues/{callqueue}]',
+    description: 'List agent statistics for a call queue — Returns call center statistics for each agent in one call queue, over a time window. Only that queue\\\'s calls count. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  The response is a map from agent extension to that agent\\\'s statistics. Filter the agents with `department`, `site_list`, `group_list`, or `agent_list`.  `fields` picks the statistics; it defaults to `NAME,CH,ATT,AH,AHT,TT`. Codes are case-sensitive here: send them in capitals. Units follow each field\\\'s name except these: `calls-queueing-avg-duration-seconds` and `calls-after-call-work-avg-duration-seconds` are in minutes, and the `outbound-*-minutes` and `inbound-*-minutes` durations are in seconds. `unit` changes the units.  With `interval`, the response is a map from bucket to a map from agent extension to statistics. Bucket keys are RFC 3339 for `minute`, `hour`, and `day`, `YYYY-Www` for `week`, and `YYYY-MM` for `month`. Agent buckets are grouped in UTC, so leave the bracketed time zone off `datetime-start` here. — [GET /domains/{domain}/statistics/agent/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue"
+                      "description": "The call queue's extension, for example `2000`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\" Default value is NAME,CH,ATT,AH,AHT,TT"
+                      "description": "The statistics to return, as a comma-separated list of codes: `NAME`, `GROUP`, `CH`, `AC`, `AAC`, `CB`, `AST`, `MC`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, `SMS_AHT`, `OATT`, `OANS`, `OM`, `OAVG`, `IA`, `IANS`, `IM`, and `IAVG`, in capitals. Each field's description names its code. Defaults to `NAME,CH,ATT,AH,AHT,TT`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
                 },
                 "department": {
                       "type": "string",
-                      "description": "This is the depertment that user belongs to in the domain. Can be any string to group users, a department is not require to be setup before in order to set it for a user."
+                      "description": "Returns only agents in this department. This is the agent's department, not the queue's."
+                },
+                "site_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of sites. Returns only agents in these sites."
+                },
+                "group_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of departments. Returns only agents in these departments."
+                },
+                "agent_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of agent extensions, `1001` or `1001@example.com`. Returns only these agents."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns every duration field except `AH` in seconds. `minutes` returns `AH` in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -315,13 +587,19 @@ export const get_domains_by_domain_statistics_agent_callqueues_by_callqueue: Too
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/agent/callqueues/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'department'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'department', 'site_list', 'group_list', 'agent_list', 'interval', 'remove_zeros_interval', 'unit', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -345,33 +623,74 @@ export const get_domains_by_domain_statistics_agent_callqueues_by_callqueue: Too
 export const get_domains_by_domain_statistics_agent_by_agent: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_agent_by_agent',
-    description: 'Get Agent Statistics for Single Agent — [GET /domains/{domain}/statistics/agent/{agent}]',
+    description: 'Read agent statistics — Returns call center statistics for one agent over a time window, across all call queues. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope for any agent in the domain. A Basic User or Call Center Agent can read only their own extension.  `fields` picks the statistics; it defaults to `NAME,CH,ATT,AH,AHT,TT`. Codes are case-sensitive here: send them in capitals. Add the outbound and inbound codes (`OATT`, `OANS`, `OM`, `IA`, `IANS`, `IM`) for the agent\\\'s calls outside the queues. Units follow each field\\\'s name except these: `calls-queueing-avg-duration-seconds` and `calls-after-call-work-avg-duration-seconds` are in minutes, and the `outbound-*-minutes` and `inbound-*-minutes` durations are in seconds. `unit` changes the units.  Without `interval` the response is one object. With `interval`, the response is a map from bucket to a map from agent extension to statistics. Bucket keys are RFC 3339 for `minute`, `hour`, and `day`, `YYYY-Www` for `week`, and `YYYY-MM` for `month`. Agent buckets are grouped in UTC, so leave the bracketed time zone off `datetime-start` here. A user who is not in the domain answers `404`. — [GET /domains/{domain}/statistics/agent/{agent}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "agent": {
                       "type": "string",
-                      "description": "When used in path the agent value will link to a extension id for a call center agent."
+                      "description": "The agent's extension, for example `1001`. Send the bare extension, not `user@domain`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\" Default value is NAME,CH,ATT,AH,AHT,TT"
+                      "description": "The statistics to return, as a comma-separated list of codes: `NAME`, `GROUP`, `CH`, `AC`, `AAC`, `CB`, `AST`, `MC`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, `ACW`, `SMS_VOL`, `SMS_AHT`, `OATT`, `OANS`, `OM`, `OAVG`, `IA`, `IANS`, `IM`, and `IAVG`, in capitals. Each field's description names its code. Defaults to `NAME,CH,ATT,AH,AHT,TT`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of call queue extensions. Counts only calls from these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`seconds` returns every duration field except `AH` in seconds. `minutes` returns `AH` in minutes. Left out, each field is in the unit the field description gives. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -382,13 +701,19 @@ export const get_domains_by_domain_statistics_agent_by_agent: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/agent/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'agent'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list', 'interval', 'remove_zeros_interval', 'unit', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -412,29 +737,75 @@ export const get_domains_by_domain_statistics_agent_by_agent: ToolDefinition = {
 export const get_domains_by_domain_statistics_dnis: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_dnis',
-    description: 'Get DNIS Statistics for all Queues — [GET /domains/{domain}/statistics/DNIS]',
+    description: 'List dialed number statistics — Returns call center statistics for each dialed number (DNIS) that reached a call queue in the domain, over a time window. Use it to compare the numbers callers dial. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  The response is a map from dialed number to that number\\\'s statistics. `queue_list` limits the queues counted.  Calls count when they entered the queue inside the window, from `datetime-start` up to but not including `datetime-end`. There is no limit on the window length, but long windows are slow. `fields` picks the statistics; it defaults to `VOL,CH,ATT,AH`. Every duration on this endpoint is in **seconds**, including the fields whose names end in `-minutes`. `unit=minutes` turns `AH` and `AWT` into minutes.  With `interval`, the response is a map from bucket to rows. Bucket keys are RFC 3339 for `minute`, `hour`, and `day` (`2026-09-01T14:00:00+00:00`), `YYYY-Www` for `week` (`2026-W36`), and `YYYY-MM` for `month` (`2026-09`). Buckets are in UTC unless `datetime-start` names a bracketed time zone. — [GET /domains/{domain}/statistics/DNIS]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted. To group `interval` buckets by local time, add the IANA time zone in brackets after the offset, for example `2026-09-01T00:00:00-07:00[America/Phoenix]`. The offset must match the zone."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\". Default value is NAME,VOL,CH,ATT,AH"
+                      "description": "The statistics to return, as a comma-separated list of codes: `VOL`, `CH`, `CO`, `ACO`, `AC`, `AAC`, `AR`, `AAR`, `SL`, `DT`, `VM`, `FWD`, `AST`, `CB`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, and `ACW`. Each field's description names its code. Defaults to `VOL,CH,ATT,AH`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of call queue extensions. Counts only calls to these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "sla": {
+                      "type": "number",
+                      "description": "The service-level threshold in seconds for `SL`: a call answered within this wait counts as meeting the service level. Defaults to `60`. Default: 60",
+                      "default": 60
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`minutes` returns `AH`, `AWT`, and (with `interval`) `ACW` in minutes. `seconds` changes nothing: every duration on this endpoint is already in seconds. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -444,13 +815,19 @@ export const get_domains_by_domain_statistics_dnis: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/DNIS',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'queue_list', 'interval', 'remove_zeros_interval', 'sla', 'unit', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -474,33 +851,75 @@ export const get_domains_by_domain_statistics_dnis: ToolDefinition = {
 export const get_domains_by_domain_statistics_dnis_callqueues_by_callqueue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_dnis_callqueues_by_callqueue',
-    description: 'Get DNIS Statistics for Single Queue — [GET /domains/{domain}/statistics/DNIS/callqueues/{callqueue}]',
+    description: 'List dialed number statistics for a call queue — Returns call center statistics for each dialed number (DNIS) that reached one call queue, over a time window. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  The response is a map from dialed number to that number\\\'s statistics. A number that reached other queues but not this one can be listed with every figure `0`; use `remove_zeros=true` to leave it out.  Calls count when they entered the queue inside the window, from `datetime-start` up to but not including `datetime-end`. There is no limit on the window length, but long windows are slow. `fields` picks the statistics; it defaults to `VOL,CH,ATT,AH`. Every duration on this endpoint is in **seconds**, including the fields whose names end in `-minutes`. `unit=minutes` turns `AH` and `AWT` into minutes.  With `interval`, the response is a map from bucket to rows. Bucket keys are RFC 3339 for `minute`, `hour`, and `day` (`2026-09-01T14:00:00+00:00`), `YYYY-Www` for `week` (`2026-W36`), and `YYYY-MM` for `month` (`2026-09`). Buckets are in UTC unless `datetime-start` names a bracketed time zone. — [GET /domains/{domain}/statistics/DNIS/callqueues/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue"
+                      "description": "The call queue's extension, for example `2000`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted. To group `interval` buckets by local time, add the IANA time zone in brackets after the offset, for example `2026-09-01T00:00:00-07:00[America/Phoenix]`. The offset must match the zone."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\". Default value is NAME,VOL,CH,ATT,AH"
+                      "description": "The statistics to return, as a comma-separated list of codes: `VOL`, `CH`, `CO`, `ACO`, `AC`, `AAC`, `AR`, `AAR`, `SL`, `DT`, `VM`, `FWD`, `AST`, `CB`, `ATT`, `TT`, `AHT`, `AH`, `AWT`, and `ACW`. Each field's description names its code. Defaults to `VOL,CH,ATT,AH`. An unknown code is skipped. v2 field names are not accepted here."
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results"
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets of this size and returns the statistics per bucket. The response then becomes a map of bucket to rows (see the response). Buckets with no calls are filled with `0`, except `minute` buckets over a window longer than 24 hours. Leave it out for one total over the whole window. Allowed values: \"minute\", \"hour\", \"day\", \"week\", \"month\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day",
+                            "week",
+                            "month"
+                      ]
+                },
+                "remove_zeros_interval": {
+                      "type": "string",
+                      "description": "With `interval`, `true` leaves out every bucket whose statistics are all `0`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
+                },
+                "sla": {
+                      "type": "number",
+                      "description": "The service-level threshold in seconds for `SL`: a call answered within this wait counts as meeting the service level. Defaults to `60`. Default: 60",
+                      "default": 60
+                },
+                "unit": {
+                      "type": "string",
+                      "description": "`minutes` returns `AH`, `AWT`, and (with `interval`) `ACW` in minutes. `seconds` changes nothing: every duration on this endpoint is already in seconds. Allowed values: \"seconds\", \"minutes\"",
+                      "enum": [
+                            "seconds",
+                            "minutes"
+                      ]
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -511,13 +930,19 @@ export const get_domains_by_domain_statistics_dnis_callqueues_by_callqueue: Tool
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/DNIS/callqueues/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'interval', 'remove_zeros_interval', 'sla', 'unit', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -541,33 +966,62 @@ export const get_domains_by_domain_statistics_dnis_callqueues_by_callqueue: Tool
 export const get_domains_by_domain_statistics_agent_log: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_statistics_agent_log',
-    description: 'Get Agent Log — [GET /domains/{domain}/statistics/agentLog]',
+    description: 'List agent status times — Returns how many minutes agents spent in each call center status: available, unavailable, lunch, break, and your custom statuses. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory. A Site Manager sees only agents in its own site, whatever `agent_list`, `group_list` or `site_list` names.  A status period counts toward the window for the part of it that falls inside the window, so an hour inside a lunch reads as 60 minutes of lunch. A status the agent is still in counts up to now. A status\\\'s minutes are never more than the window length.  Without `interval`, the response is a map from agent extension to minutes per status over the whole window.  With `interval=15m` or `interval=hour`, the window is split into buckets aligned in UTC, and each bucket gives the minutes summed over all the selected agents, which `agents` lists. The minutes of a bucket divided by its length in minutes is the average number of agents in that status. A bucket that has not ended yet is left out, and at most 2000 buckets can be returned. `MC` adds each bucket\\\'s missed calls. For one agent\\\'s individual status changes, use `GET /domains/{domain}/statistics/agent/{agent}/timeline`.  Filter the agents with `site_list`, `group_list`, or `agent_list`. `fields` picks the statuses. It defaults to `AM,UM,L,B`. — [GET /domains/{domain}/statistics/agentLog]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
                 },
                 "fields": {
                       "type": "string",
-                      "description": "Fields in order to fill and get particular statistics for. Separate multiple fields with \",\".Default value is AM,UM,L,B. For custom status use CUST1 to CUST8."
+                      "description": "The statuses to return, as a comma-separated list of codes: `LI` (logged in), `AM` (available), `UM` (unavailable), `L` (lunch), `B` (break), `M` (meeting), `O` (other), `W` (web), and `CUST1` to `CUST8` (your custom statuses). Not case-sensitive. Defaults to `AM,UM,L,B`. With `interval`, `MC` is also accepted: the agents' missed calls per bucket, as `calls-unanswered-count`. With `interval`, any other code returns `400`."
+                },
+                "interval": {
+                      "type": "string",
+                      "description": "Splits the window into buckets: `15m` (quarter hours) or `hour`. Buckets are aligned in UTC (:00, :15, :30, :45 or the top of the hour). The first and last are clipped to the window. A bucket that has not ended yet is left out. At most 2000 buckets per request. With `interval` the response is the bucketed shape (see the 200 response). Without it the response is the per-agent map. `minute`, `day`, `week` and `month` are accepted and ignored: the ungrouped per-agent map is answered. Any other value is `400`. Not case-sensitive. Allowed values: \"15m\", \"hour\"",
+                      "enum": [
+                            "15m",
+                            "hour"
+                      ]
                 },
                 "remove_zeros": {
                       "type": "string",
-                      "description": "Remove zeros from the results."
+                      "description": "`true` leaves out every row whose statistics are all `0`. Any other value keeps them. Ignored with `interval`. Allowed values: \"true\", \"false\". Default: \"false\"",
+                      "enum": [
+                            "true",
+                            "false"
+                      ],
+                      "default": "false"
                 },
                 "department": {
                       "type": "string",
-                      "description": "This is the depertment that user belongs to in the domain. Can be any string to group users, a department is not require to be setup before in order to set it for a user."
+                      "description": "Returns only agents in this department. This is the agent's department, not the queue's."
+                },
+                "site_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of sites. Returns only agents in these sites."
+                },
+                "group_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of departments. Returns only agents in these departments."
+                },
+                "agent_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of agent extensions, `1001` or `1001@example.com`. Returns only these agents."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -577,13 +1031,19 @@ export const get_domains_by_domain_statistics_agent_log: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/agentLog',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'remove_zeros', 'department'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'fields', 'interval', 'remove_zeros', 'department', 'site_list', 'group_list', 'agent_list', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -607,21 +1067,29 @@ export const get_domains_by_domain_statistics_agent_log: ToolDefinition = {
 export const get_domains_by_domain_callqueuereport_abandoned: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_callqueuereport_abandoned',
-    description: 'Get Abandoned Calls for all Queues — [GET /domains/{domain}/callqueuereport/abandoned]',
+    description: 'List abandoned calls — Returns one row per abandoned call queue call in the domain over a time window, with the caller, the queue, and the timings. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  A call counts as abandoned when the caller hung up in the queue, or the call left the queue unanswered by a transfer, a retrieve, or no answer. Calls that went to voicemail are not counted. Calls count when they entered the queue between `datetime-start` and `datetime-end`, both included. Rows are ordered by the hour the call entered the queue. `queue_list` limits the queues.  The response is not paged and every row is returned, so keep the window short. — [GET /domains/{domain}/callqueuereport/abandoned]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "A comma-separated list of call queue extensions. Returns only calls to these queues. Left out, every queue your user may view in the domain is used."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -631,13 +1099,19 @@ export const get_domains_by_domain_callqueuereport_abandoned: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueuereport/abandoned',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['datetime-start', 'datetime-end'];
+    const queryParamNames = ['datetime-start', 'datetime-end', 'queue_list', 'range_interval'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -661,25 +1135,29 @@ export const get_domains_by_domain_callqueuereport_abandoned: ToolDefinition = {
 export const get_domains_by_domain_callqueuereport_abandoned_by_callqueue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_callqueuereport_abandoned_by_callqueue',
-    description: 'Get Abandoned Calls for a Specific Queue — [GET /domains/{domain}/callqueuereport/abandoned/{callqueue}]',
+    description: 'List abandoned calls for a call queue — Returns one row per abandoned call in one call queue over a time window, with the caller and the timings. Requires Office Manager, Call Center Supervisor, Site Manager, Reseller, or Super User scope. A Reseller reads the domains in its territory.  A call counts as abandoned when the caller hung up in the queue, or the call left the queue unanswered by a transfer, a retrieve, or no answer. Calls that went to voicemail are not counted. Calls count when they entered the queue between `datetime-start` and `datetime-end`, both included. Rows are ordered by the hour the call entered the queue.  The response is not paged and every row is returned, so keep the window short. — [GET /domains/{domain}/callqueuereport/abandoned/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "datetime-start": {
                       "type": "string",
-                      "description": "This is the start of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format.  Supported formats include.  2023-11-27 13:00:00 2023-11-27T13:00:00Z 2023-11-27T13:00:00-08:00 2023-11-27T13:00:00-08:00[US/Pacific] 2023-11-27T13:00:00Z[America/Phoenix]"
+                      "description": "The start of the time window, RFC 3339 with an offset, for example `2026-09-01T00:00:00-07:00`. The window includes this moment. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
                 },
                 "datetime-end": {
                       "type": "string",
-                      "description": "This is the end of the time window for a given query. The format is based on RFC3339 but also will support additonal params for use in providing a timezone which will allow the API to give the correct range for a given set of data and will be formated in respone using the same format. Allowed values same as datetime-start."
+                      "description": "The end of the time window, RFC 3339 with an offset, for example `2026-09-02T00:00:00-07:00`. It must be later than `datetime-start`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted."
+                },
+                "range_interval": {
+                      "type": "string",
+                      "description": "Shifts both ends of the window by a relative amount, for example `-5 hour`. Kept for older integrations: give the offset in `datetime-start` and `datetime-end` instead."
                 }
           },
           "required": [
@@ -690,8 +1168,79 @@ export const get_domains_by_domain_callqueuereport_abandoned_by_callqueue: ToolD
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueuereport/abandoned/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['datetime-start', 'datetime-end', 'range_interval'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/callqueuereport/abandoned/{callqueue}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_agent_status_timeline: ToolDefinition = {
+  schema: {
+    name: 'read_agent_status_timeline',
+    description: 'Read an agent\\\'s status timeline — Returns each status period of one agent that overlaps the window, clipped to it, oldest first, and the seconds spent in each status. All times in the response are UTC.  The last period runs to `datetime-end`. While the window has not ended yet, it runs to now instead and is marked `open`, with `end-datetime: null`.  A window may cover at most 31 days. Status history is kept indefinitely, so any past window can be read.  **Who can read it.** Office Manager, Call Center Supervisor, Reseller and Super User read any agent in the domain. A Site Manager reads only agents in its own site; any other agent is `403`. Basic User, Simple User, Advanced User and Call Center Agent read only their own timeline, in their own domain; any other agent or domain is `403`.  Where compliance access logging is on for the domain, each read of another person\\\'s timeline is recorded in the access log as a read of that agent\\\'s activity record. — [GET /domains/{domain}/statistics/agent/{agent}/timeline]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "agent": {
+                      "type": "string",
+                      "description": "The agent's extension (user) in the domain. Letters, digits, `-` and `_` only; give the bare extension, not `user@domain`. A user that does not exist in the domain is `404`."
+                },
+                "datetime-start": {
+                      "type": "string",
+                      "description": "The start of the window, RFC 3339 with an offset, for example `2026-10-17T00:00:00-07:00`. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (start of that day, UTC) are also accepted."
+                },
+                "datetime-end": {
+                      "type": "string",
+                      "description": "The end of the window, RFC 3339 with an offset. Must be later than `datetime-start` and at most 31 days after it. `YYYY-MM-DD HH:MM:SS` (read as UTC) and `YYYY-MM-DD` (end of that day, UTC) are also accepted. An end time on second `:59` is read as the start of the next second, so `2026-10-17 23:59:59` closes the window at midnight."
+                }
+          },
+          "required": [
+                "domain",
+                "agent",
+                "datetime-start",
+                "datetime-end"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/agent/{}/timeline',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'agent'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
@@ -703,7 +1252,146 @@ export const get_domains_by_domain_callqueuereport_abandoned_by_callqueue: ToolD
     }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/domains/{domain}/callqueuereport/abandoned/{callqueue}',
+      pathTemplate: '/domains/{domain}/statistics/agent/{agent}/timeline',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_callqueue_history: ToolDefinition = {
+  schema: {
+    name: 'read_callqueue_history',
+    description: 'Read 15-minute, hourly or daily call queue history — One point per bucket over the range, oldest first. Each point gives every covered queue\\\'s statistics for that bucket and a domain-wide `*`. A queue absent from a point has no history for that bucket.  The queues covered are the ones the caller may see in the other call center statistics, narrowed by `queue_list`. A Site Manager sees only the queues of its own site. Agent-level scopes (Basic User, Call Center Agent and the like) may read only their own agent statistics and get `403` here.  Available when the platform has call center reports enabled; `404` otherwise. — [GET /domains/{domain}/statistics/callqueues/history]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "period": {
+                      "type": "string",
+                      "description": "Bucket size, not case-sensitive. Omitted or blank is `hour`. `15m` gives quarter hours aligned to :00, :15, :30 and :45 UTC, and reaches back only as far as the server keeps its raw queue samples (about two days by default; `oldest-available` says where it starts). Allowed values: \"hour\", \"day\", \"15m\". Default: \"hour\"",
+                      "enum": [
+                            "hour",
+                            "day",
+                            "15m"
+                      ],
+                      "default": "hour"
+                },
+                "range": {
+                      "type": "string",
+                      "description": "How far back to go; the allowed values depend on `period`. For `hour`: `24h` (default), `7d` or `14d`. For `day`: `30d` (default), `7d` or `90d`. For `15m`: `24h` (default) or `48h`. Omitted or blank is the period's default. Allowed values: \"24h\", \"48h\", \"7d\", \"14d\", \"30d\", \"90d\"",
+                      "enum": [
+                            "24h",
+                            "48h",
+                            "7d",
+                            "14d",
+                            "30d",
+                            "90d"
+                      ]
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "Comma-separated queue extensions. Narrows the queues covered; a queue the caller may not see is left out, not refused."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/callqueues/history',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['period', 'range', 'queue_list'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/statistics/callqueues/history',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_callqueue_live_history: ToolDefinition = {
+  schema: {
+    name: 'read_callqueue_live_history',
+    description: 'Read per-minute call queue gauges for the last hour or two — One point per minute, from `range` ago up to the current (partial) minute, oldest first. Each point gives every covered queue\\\'s values for that minute (the highest it reached during the minute) and a domain-wide `*`.  The queues covered are the ones the caller may see in the other call center statistics, narrowed by `queue_list`. A Site Manager sees only the queues of its own site. Agent-level scopes (Basic User, Call Center Agent and the like) may read only their own agent statistics and get `403` here.  Each core server keeps its own samples, so the read asks every core and, per queue, takes the larger of the cores\\\' values. A core that does not answer is left out and named in the `X-NS-Fanout-Missing` response header; the values then cover the other cores only, and the response is still `200`.  Available when the platform has call center reports enabled; `404` otherwise. — [GET /domains/{domain}/statistics/callqueues/live-history]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "range": {
+                      "type": "string",
+                      "description": "How far back to go. Omitted or blank is `1h`. Allowed values: \"1h\", \"2h\". Default: \"1h\"",
+                      "enum": [
+                            "1h",
+                            "2h"
+                      ],
+                      "default": "1h"
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "Comma-separated queue extensions. Narrows the queues covered; a queue the caller may not see is left out, not refused."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/statistics/callqueues/live-history',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['range', 'queue_list'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/statistics/callqueues/live-history',
       pathParams,
       queryParams,
     });

@@ -5,13 +5,48 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_conferences: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_conferences',
-    description: 'Get Conferences in Domain — [GET /domains/{domain}/conferences]',
+    description: 'List conferences in domain — Lists the conference bridges in a domain, sorted by SIP address.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager sees only the conference they own, and a Site Manager only conferences owned by users in their site.  PINs and the SIP password of the bridge\\\'s device are masked, such as `ab********yz`. A value of 8 characters or fewer is all asterisks. To get them whole, send `include-secret=yes` as the conference owner or with an Office Manager, Reseller, or Super User token.  The response is an array, empty when nothing matches. A `conference-sip-uri`, `conference-owner-user-id`, or `conference-owner-domain` that names another domain returns `403`. To list only names and addresses, use **List domain conferences, reduced**. To count conferences, use **Count conferences in domain**. — [GET /domains/{domain}/conferences]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "conference-owner-user": {
+                      "type": "string",
+                      "description": "Return only the conference owned by this extension."
+                },
+                "conference-sip-uri": {
+                      "type": "string",
+                      "description": "Return only the conference with this SIP address. An address in another domain returns `403`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Return only conferences owned by users in this site."
+                },
+                "filter_bridges": {
+                      "type": "string",
+                      "description": "Comma-separated filters: `video` leaves out video bridges, and `num_participants` leaves out bridges with no participants and adds `earliest` and `duration` to each row. Send both as `video,num_participants`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns PINs and the bridge's SIP password whole, if you are the conference owner or use an Office Manager, Reseller, or Super User token. Any other scope gets them masked either way. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -19,16 +54,28 @@ export const get_domains_by_domain_conferences: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['conference-owner-user', 'conference-sip-uri', 'site', 'filter_bridges', 'limit', 'start', 'include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/conferences',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,19 +90,117 @@ export const get_domains_by_domain_conferences: ToolDefinition = {
 export const post_domains_by_domain_conferences: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_conferences',
-    description: 'Create Conference for Domain — [POST /domains/{domain}/conferences]',
+    description: 'Create conference — Creates a conference bridge in a domain, with the SIP device and dial rule that route calls to it.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. A Basic User, Simple User, Call Center Agent, or Route Manager can create only an owned conference for their own extension.  There are two kinds of conference:  - **owned**, the default: a personal bridge for an existing user. `conference-direct-dial-number` is required, and a dial rule sends that number to the bridge. The conference\\\'s key becomes `conference-owner-user` - **dedicated**: a bridge with its own extension, `conference`. When the extension has no user yet, a system user with an answering rule and a dial rule is created for it  Setting `conference-leader-pin` also requires `conference-participants-pin`, and `conference-require-leader-to-start` requires a leader PIN. Send PINs and the SIP password themselves: a masked value returns `400`.  A `202` means the conference was accepted and is applied shortly after. A conference that already exists, an extension already taken by a user, or a direct-dial number already in use returns `409`. A `conference-sip-uri` or `conference-owner-user-id` in another domain returns `403`. — [POST /domains/{domain}/conferences]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "conference": {
+                      "type": "string",
+                      "description": "Extension of a dedicated conference. For an owned conference it is replaced by `conference-owner-user`."
+                },
+                "conference-type": {
+                      "type": "string",
+                      "description": "`owned` gives an existing user a personal bridge, reached through `conference-direct-dial-number`. `dedicated` creates a bridge with its own extension, and creates the system user for that extension when it does not exist. Allowed values: \"owned\", \"dedicated\". Default: \"owned\"",
+                      "enum": [
+                            "owned",
+                            "dedicated"
+                      ],
+                      "default": "owned"
+                },
+                "conference-name": {
+                      "type": "string",
+                      "description": "Display name of the conference. Keep it to 40 characters, the most an update accepts."
+                },
+                "conference-owner-user": {
+                      "type": "string",
+                      "description": "Extension that owns the conference. For a dedicated conference, send the same value as `conference`."
+                },
+                "conference-direct-dial-number": {
+                      "type": "string",
+                      "description": "Required for an owned conference. Number that dials straight into the bridge. It must not be an existing user's extension."
+                },
+                "conference-leader-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as leader, up to 6 digits. Requires `conference-participants-pin`. Send it as a string to keep a leading zero."
+                },
+                "conference-participants-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as a participant, up to 6 digits. Send it as a string to keep a leading zero."
+                },
+                "conference-speaker-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as speaker. Send it as a string to keep a leading zero."
+                },
+                "conference-sip-auth-key": {
+                      "type": "string",
+                      "description": "SIP password of the bridge's device. Omit it to have a random one generated."
+                },
+                "limits-max-participants": {
+                      "type": "number",
+                      "description": "Maximum participants. A number below 1 is stored as 1 and above 99 as 99. `-` or `unlimited` means no limit."
+                },
+                "conference-quorum-minimum-participants": {
+                      "type": "number",
+                      "description": "Participants needed before the conference starts. `0` means no minimum. Any other value is stored as `2`. Allowed values: 0, 2, 3, 4, 5",
+                      "enum": [
+                            0,
+                            2,
+                            3,
+                            4,
+                            5
+                      ]
+                },
+                "conference-require-leader-to-start": {
+                      "type": "string",
+                      "description": "`yes` or `to-start` starts the conference only once a leader joins, and then `conference-leader-pin` is required. Stored as `to-start` or `no`. Allowed values: \"yes\", \"no\", \"to-start\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "to-start"
+                      ]
+                },
+                "conference-announce-participants-enabled": {
+                      "type": "string",
+                      "description": "Whether joins and departures are announced. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-request-name-enabled": {
+                      "type": "string",
+                      "description": "Whether callers are asked to record their name when they join. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-save-participants-enabled": {
+                      "type": "string",
+                      "description": "Whether participants are kept on the bridge after they leave. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           },
           "required": [
-                "domain"
+                "domain",
+                "conference",
+                "conference-name",
+                "conference-owner-user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/conferences',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -63,10 +208,16 @@ export const post_domains_by_domain_conferences: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['conference', 'conference-type', 'conference-name', 'conference-owner-user', 'conference-direct-dial-number', 'conference-leader-pin', 'conference-participants-pin', 'conference-speaker-pin', 'conference-sip-auth-key', 'limits-max-participants', 'conference-quorum-minimum-participants', 'conference-require-leader-to-start', 'conference-announce-participants-enabled', 'conference-request-name-enabled', 'conference-save-participants-enabled'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/conferences',
       pathParams,
+      body,
     });
 
     return {
@@ -81,17 +232,26 @@ export const post_domains_by_domain_conferences: ToolDefinition = {
 export const get_domains_by_domain_conferences_by_conference: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_conferences_by_conference',
-    description: 'Get Conference in Domain — [GET /domains/{domain}/conferences/{conference}]',
+    description: 'Read conference — Returns one conference bridge, with its settings, PINs, and current participant count.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager sees only the conference they own, and a Site Manager only conferences owned by users in their site.  PINs and the SIP password of the bridge\\\'s device are masked, such as `ab********yz`. A value of 8 characters or fewer is all asterisks. To get them whole, send `include-secret=yes` as the conference owner or with an Office Manager, Reseller, or Super User token.  To see who is on the bridge, use **List conference participants**. — [GET /domains/{domain}/conferences/{conference}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                },
+                "include-secret": {
+                      "type": "string",
+                      "description": "`yes` returns PINs and the bridge's SIP password whole, if you are the conference owner or use an Office Manager, Reseller, or Super User token. Any other scope gets them masked either way. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -100,16 +260,28 @@ export const get_domains_by_domain_conferences_by_conference: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-secret'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/conferences/{conference}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -124,17 +296,89 @@ export const get_domains_by_domain_conferences_by_conference: ToolDefinition = {
 export const put_domains_by_domain_conferences_by_conference: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_conferences_by_conference',
-    description: 'Update Conference in Domain — [PUT /domains/{domain}/conferences/{conference}]',
+    description: 'Update conference — Changes the settings of a conference bridge. Send only the fields to change.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. Basic User, Simple User, Call Center Agent, and Route Manager scopes cannot change conferences.  Changing `conference-direct-dial-number` replaces the bridge\\\'s direct-dial rule. Changing `conference-name` also renames the bridge\\\'s system user. Setting `conference-leader-pin` also requires `conference-participants-pin`. A masked PIN or SIP password, as a read returns it, leaves the stored value unchanged, so you can send a read back with your changes.  The request acts on the conference in the path. A `conference-sip-uri` that names another conference, or a `conference-owner-user-id` or `conference-owner-domain` in another domain, returns `403`.  A `202` means the change was accepted and is applied shortly after. — [PUT /domains/{domain}/conferences/{conference}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
+                },
+                "conference-name": {
+                      "type": "string",
+                      "description": "Display name of the conference."
+                },
+                "conference-direct-dial-number": {
+                      "type": "string",
+                      "description": "New number that dials straight into the bridge. The old direct-dial rule is replaced. It must not be an existing user's extension."
+                },
+                "conference-leader-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as leader, up to 6 digits. Requires `conference-participants-pin`, sent or already set. An empty string clears it. A masked value leaves it unchanged."
+                },
+                "conference-participants-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as a participant, up to 6 digits. An empty string clears it. A masked value leaves it unchanged."
+                },
+                "conference-speaker-pin": {
+                      "type": "string",
+                      "description": "PIN a caller enters to join as speaker. A masked value leaves it unchanged."
+                },
+                "conference-sip-auth-key": {
+                      "type": "string",
+                      "description": "New SIP password of the bridge's device. A masked value leaves it unchanged."
+                },
+                "limits-max-participants": {
+                      "type": "number",
+                      "description": "Maximum participants. A number below 1 is stored as 1 and above 99 as 99. `-` or `unlimited` means no limit."
+                },
+                "conference-quorum-minimum-participants": {
+                      "type": "number",
+                      "description": "Participants needed before the conference starts. `0` means no minimum. Any other value is stored as `2`. Allowed values: 0, 2, 3, 4, 5",
+                      "enum": [
+                            0,
+                            2,
+                            3,
+                            4,
+                            5
+                      ]
+                },
+                "conference-require-leader-to-start": {
+                      "type": "string",
+                      "description": "`yes` or `to-start` starts the conference only once a leader joins, and then `conference-leader-pin` must be in the same request. A masked leader PIN counts. Stored as `to-start` or `no`. Allowed values: \"yes\", \"no\", \"to-start\"",
+                      "enum": [
+                            "yes",
+                            "no",
+                            "to-start"
+                      ]
+                },
+                "conference-announce-participants-enabled": {
+                      "type": "string",
+                      "description": "Whether joins and departures are announced. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-request-name-enabled": {
+                      "type": "string",
+                      "description": "Whether callers are asked to record their name when they join. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "conference-save-participants-enabled": {
+                      "type": "string",
+                      "description": "Whether participants are kept on the bridge after they leave. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           },
           "required": [
@@ -143,16 +387,28 @@ export const put_domains_by_domain_conferences_by_conference: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/conferences/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['conference-name', 'conference-direct-dial-number', 'conference-leader-pin', 'conference-participants-pin', 'conference-speaker-pin', 'conference-sip-auth-key', 'limits-max-participants', 'conference-quorum-minimum-participants', 'conference-require-leader-to-start', 'conference-announce-participants-enabled', 'conference-request-name-enabled', 'conference-save-participants-enabled'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'PUT',
       pathTemplate: '/domains/{domain}/conferences/{conference}',
       pathParams,
+      body,
     });
 
     return {
@@ -167,17 +423,17 @@ export const put_domains_by_domain_conferences_by_conference: ToolDefinition = {
 export const delete_domains_by_domain_conferences_by_conference: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_conferences_by_conference',
-    description: 'Delete Conference in Domain — [DELETE /domains/{domain}/conferences/{conference}]',
+    description: 'Delete conference — Deletes a conference bridge, its SIP device, and the dial rule that routes calls to it. For a dedicated conference, the bridge\\\'s system user is deleted too.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. Basic User, Simple User, Call Center Agent, and Route Manager scopes cannot change conferences.  The request acts on the conference in the path. A `conference-sip-uri` that names another conference, or a `conference-owner-user-id` or `conference-owner-domain` in another domain, returns `403`.  A `202` means the deletion was accepted and is applied shortly after. — [DELETE /domains/{domain}/conferences/{conference}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
                 }
           },
           "required": [
@@ -185,6 +441,12 @@ export const delete_domains_by_domain_conferences_by_conference: ToolDefinition 
                 "conference"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/conferences/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
@@ -210,13 +472,25 @@ export const delete_domains_by_domain_conferences_by_conference: ToolDefinition 
 export const get_domains_by_domain_conferences_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_conferences_count',
-    description: 'Count Conferences in Domain — [GET /domains/{domain}/conferences/count]',
+    description: 'Count conferences in domain — Counts the conference bridges in a domain. It takes the same filters as **List conferences in domain**, so the count matches the list.  Requires Basic User scope or higher. A Basic User, Simple User, Call Center Agent, or Route Manager counts only the conference they own, and a Site Manager only conferences owned by users in their site.  A `conference-sip-uri`, `conference-owner-user-id`, or `conference-owner-domain` that names another domain returns `403`. — [GET /domains/{domain}/conferences/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "conference-owner-user": {
+                      "type": "string",
+                      "description": "Count only the conference owned by this extension."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Count only conferences owned by users in this site."
+                },
+                "filter_bridges": {
+                      "type": "string",
+                      "description": "Comma-separated filters: `video` leaves out video bridges, and `num_participants` leaves out bridges with no participants. Send both as `video,num_participants`."
                 }
           },
           "required": [
@@ -224,16 +498,28 @@ export const get_domains_by_domain_conferences_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['conference-owner-user', 'site', 'filter_bridges'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/conferences/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -248,29 +534,34 @@ export const get_domains_by_domain_conferences_count: ToolDefinition = {
 export const get_domains_by_domain_conferences_by_conference_cdr: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_conferences_by_conference_cdr',
-    description: 'Get Conference CDR from Domain — [GET /domains/{domain}/conferences/{conference}/cdr]',
+    description: 'List conference session summaries — Lists the past sessions of a conference bridge, newest first, with when each started and ended and how many people took part. With `include-participants=yes`, each session also lists who joined and when.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. Basic User, Simple User, Call Center Agent, and Route Manager scopes are refused.  Without `from` and `to`, sessions that started in the last 21 days are returned. This path answers `GET` only: `POST`, `PUT`, and `DELETE` return `405`. — [GET /domains/{domain}/conferences/{conference}/cdr]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "conference": {
                       "type": "string",
-                      "description": "conference"
+                      "description": "Extension of the conference, such as `3000`. It is also the conference's `conference-owner-user`, and the bridge's SIP address is `sip:<conference>.<domain>@conference-bridge`."
                 },
                 "from": {
                       "type": "string",
-                      "description": "from"
+                      "description": "Earliest session start to include, as `YYYY-MM-DD HH:MM:SS` in UTC. Defaults to 21 days ago."
                 },
                 "to": {
                       "type": "string",
-                      "description": "to"
+                      "description": "Latest session start to include, as `YYYY-MM-DD HH:MM:SS` in UTC. Defaults to now."
                 },
                 "include_participants": {
                       "type": "string",
-                      "description": "include_participants"
+                      "description": "`yes` adds `conference-session-participants` to each session. Also accepted as `include-participants`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -278,6 +569,12 @@ export const get_domains_by_domain_conferences_by_conference_cdr: ToolDefinition
                 "conference"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/{}/cdr',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'conference'];
@@ -295,6 +592,50 @@ export const get_domains_by_domain_conferences_by_conference_cdr: ToolDefinition
       pathTemplate: '/domains/{domain}/conferences/{conference}/cdr',
       pathParams,
       queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_conferences: ToolDefinition = {
+  schema: {
+    name: 'list_domain_conferences',
+    description: 'List domain conferences, reduced — Lists the conference bridges in a domain with only their SIP address and name, enough to identify and pick one.  Requires the `list` privilege, which `/count` shares. A scope that cannot read full conferences can still list them here. A Basic User, Simple User, Call Center Agent, or Route Manager sees only the conference they own, and a Site Manager only conferences owned by users in their site.  Append `/list` to a conference\\\'s own path to get the same reduced shape for one conference. For PINs, participant counts, and settings, use **List conferences in domain**. — [GET /domains/{domain}/conferences/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/conferences/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/conferences/list',
+      pathParams,
     });
 
     return {

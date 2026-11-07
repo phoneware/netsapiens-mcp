@@ -5,34 +5,40 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_queuedcall_by_queue: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_queuedcall_by_queue',
-    description: 'Read Queued Calls — [GET /domains/{domain}/queuedcall/{queue}]',
+    description: 'List queued calls — Lists the calls waiting in a call queue right now, longest-waiting first, with the caller, the number they dialed, and whether the call has been prioritized.  Office Manager, Call Center Supervisor, Office Manager Read-Only, Route Manager, and Call Center Agent can read any queue in their domain, Site Manager queues at its own site, Reseller queues in its territory, and Super User and Super User Read Only any queue. Basic User, Advanced User, and Simple User get `403`.  The answer is always an array: empty when nobody is waiting. Move a call to the front with `PUT /domains/{domain}/queuedcall/{callqueue}`. — [GET /domains/{domain}/queuedcall/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "Domain containing Callqueue. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
-                "queue": {
+                "callqueue": {
                       "type": "string",
-                      "description": "Callqueue from which to read queued calls"
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 }
           },
           "required": [
                 "domain",
-                "queue"
+                "callqueue"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/queuedcall/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'queue'];
+    const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/domains/{domain}/queuedcall/{queue}',
+      pathTemplate: '/domains/{domain}/queuedcall/{callqueue}',
       pathParams,
     });
 
@@ -48,21 +54,21 @@ export const get_domains_by_domain_queuedcall_by_queue: ToolDefinition = {
 export const post_domains_by_domain_queuedcall_by_callqueue: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_queuedcall_by_callqueue',
-    description: 'Add a Queued Call — Used to create a queue call between desginated Queue and destination. — [POST /domains/{domain}/queuedcall/{callqueue}]',
+    description: 'Add callback to call queue — Asks a call queue to call a number back: the request is handed to the platform as a queue callback for `destination`, which then waits in the queue like a caller.  Reseller and Super User can call it. Other scopes get `403`.  `destination` is required: an extension or phone number, which is dialed in the queue\\\'s domain, or a full SIP address with `@`. `202` means the request was published over the service bus (SBUS), not yet applied. A queue that does not exist returns `404`. — [POST /domains/{domain}/queuedcall/{callqueue}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "destination": {
                       "type": "string",
-                      "description": "Call back destination"
+                      "description": "Who to call back: an extension or phone number, dialed in the queue's domain, or a full SIP address with `@`. `PLUS` is read as `+`"
                 }
           },
           "required": [
@@ -71,6 +77,12 @@ export const post_domains_by_domain_queuedcall_by_callqueue: ToolDefinition = {
                 "destination"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/queuedcall/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
@@ -85,6 +97,75 @@ export const post_domains_by_domain_queuedcall_by_callqueue: ToolDefinition = {
     }
     const response = await client.request({
       method: 'POST',
+      pathTemplate: '/domains/{domain}/queuedcall/{callqueue}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const prioritize_queued_call: ToolDefinition = {
+  schema: {
+    name: 'prioritize_queued_call',
+    description: 'Prioritize queued call — Moves one waiting call to the front of a call queue, or back, by setting `prioritized` on it.  Office Manager, Call Center Supervisor, Route Manager, and Call Center Agent can prioritize calls in any queue of their domain, Site Manager in queues at its own site, Reseller in its territory, and Super User in any queue. Basic User, Advanced User, Simple User, Office Manager Read-Only, and Super User Read Only get `403`.  Take `session_key` from `GET /domains/{domain}/queuedcall/{callqueue}`. `202` means the change was published over the service bus (SBUS), not yet applied. A `session_key` that is not waiting in this queue returns `404`. — [PUT /domains/{domain}/queuedcall/{callqueue}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callqueue": {
+                      "type": "string",
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
+                },
+                "session_key": {
+                      "type": "string",
+                      "description": "Key of the waiting call, from `GET /domains/{domain}/queuedcall/{callqueue}`"
+                },
+                "prioritized": {
+                      "type": "string",
+                      "description": "`yes` moves the call to the front of the queue; `no` puts it back in order. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "callqueue",
+                "session_key",
+                "prioritized"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/queuedcall/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callqueue'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['session_key', 'prioritized'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
       pathTemplate: '/domains/{domain}/queuedcall/{callqueue}',
       pathParams,
       body,

@@ -5,46 +5,51 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_transcriptions: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_transcriptions',
-    description: 'Read Transcription for Specific Call — [GET /domains/{domain}/transcriptions]',
+    description: 'Read call transcription — Returns the transcript, sentiment, topics, and AI summary of one call recording. Requires Office Manager, Site Manager, Reseller, Super User, or Super User Read Only scope. A Site Manager reads only calls whose leg in the domain belongs to its own site.  Name the transcription with `id`, the `call-intelligence-job-id` from the CDR, and the month of the call with `date`. A transcription finished in the month after the call is found as well. Also send a call ID that belongs to the domain, and to the call the transcription is for: `orig_callid`, `term_callid`, or `by_callid` when you know which side it is, or `callid` to check both originating and terminating sides.  Processing is asynchronous. Until `call-intelligence-processing-status` is `finished`, some fields are empty.  For the whole call as one document, with every leg, recording, and transcript, use `GET /domains/{domain}/vcon/{cdr_id}`. — [GET /domains/{domain}/transcriptions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "id": {
                       "type": "number",
-                      "description": "The Job Id of the recording transcription. Required to be given on request. ID can be found in CDR read when available using field \"call-intelligence-job-id\""
+                      "description": "The transcription job ID: `call-intelligence-job-id` on the CDR. `call-intelligence-job-id` is also accepted as the parameter name. A number."
                 },
                 "date": {
                       "type": "string",
-                      "description": "The date will help identify the year and month of the call to limit the search down. The format will be YYYYMM"
+                      "description": "The month of the call, as 6 digits `YYYYMM`, such as `202609`. Anything else returns `400`."
                 },
                 "callid": {
                       "type": "string",
-                      "description": "One callid_id needs to be provided that can be linked to the domain of the call> you can use any of the fields orig_callid, term_callid, by_callid or if you dont know which one you have just callid though callid might have additional DB lookups."
+                      "description": "A call ID of the call, checked against both the originating and terminating sides. Send at least one of `callid`, `orig_callid`, `term_callid`, and `by_callid`; one of them must belong to a call of the domain in that month."
                 },
                 "orig_callid": {
                       "type": "string",
-                      "description": "One callid_id needs to be provided that can be linked to the domain of the call> you can use any of the fields orig_callid, term_callid, by_callid or if you dont know which one you have just callid though callid might have additional DB lookups."
+                      "description": "The originating call ID of the call. Send at least one of `callid`, `orig_callid`, `term_callid`, and `by_callid`; one of them must belong to a call of the domain in that month."
                 },
                 "term_callid": {
                       "type": "string",
-                      "description": "One callid_id needs to be provided that can be linked to the domain of the call> you can use any of the fields orig_callid, term_callid, by_callid or if you dont know which one you have just callid though callid might have additional DB lookups."
+                      "description": "The terminating call ID of the call. Send at least one of `callid`, `orig_callid`, `term_callid`, and `by_callid`; one of them must belong to a call of the domain in that month."
                 },
                 "by_callid": {
                       "type": "string",
-                      "description": "One callid_id needs to be provided that can be linked to the domain of the call> you can use any of the fields orig_callid, term_callid, by_callid or if you dont know which one you have just callid though callid might have additional DB lookups."
+                      "description": "The call ID of the leg the call was transferred or forwarded by. Send at least one of `callid`, `orig_callid`, `term_callid`, and `by_callid`; one of them must belong to a call of the domain in that month."
                 }
           },
           "required": [
                 "domain",
                 "id",
-                "date",
-                "callid"
+                "date"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/transcriptions',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];

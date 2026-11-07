@@ -5,40 +5,69 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_connections: ToolDefinition = {
   schema: {
     name: 'get_connections',
-    description: 'Get All Connections — [GET /connections]',
+    description: 'List connections — Returns connections across domains. Requires Super User, Super User Read Only, or Reseller scope. A Reseller sees its own territory\\\'s domains; Super User and Super User Read Only see every domain. Office Manager, Route Manager, Call Center Supervisor, and Office Manager Read-Only can call it with `domain` set to their own domain, or use `GET /domains/{domain}/connections`.  Narrow the list with `domain`, `reseller`, `connection-usage-role`, or `connection-connectivity-type`. `connection-orig-match-pattern` and `connection-term-match-pattern` are exact lookups that return at most one row, and a Reseller\\\'s lookup stays inside its territory. Without `routechain`, route profiles are left out; read them with `GET /routeprofiles`. Page with `start` and `limit`, 100 rows by default. Use `GET /connections/count` for a total, and `GET /connections/list` for the identity fields only.  A `domain` or `reseller` outside your scope returns `403`. — [GET /connections]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "device-sip-registration-uri": {
-                      "type": "string",
-                      "description": "device-sip-registration-uri"
-                },
-                "termination-match": {
-                      "type": "string",
-                      "description": "termination-match"
-                },
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\"",
-                      "default": "~"
+                      "description": "Only this domain's connections. Omit it, or send `*`, for every domain you can see."
+                },
+                "routechain": {
+                      "type": "string",
+                      "description": "`yes` returns only route profiles, whose address is a route name in angle brackets. `no` leaves them out. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Only the connections of this territory's domains. A Reseller's own territory applies by default, and another territory returns `403`."
                 },
-                "route-chain": {
+                "connection-orig-match-pattern": {
                       "type": "string",
-                      "description": "route-chain"
+                      "description": "Exact `connection-orig-match-pattern`. Returns at most one row."
                 },
-                "user-scope": {
+                "connection-term-match-pattern": {
                       "type": "string",
-                      "description": "user-scope"
+                      "description": "Exact `connection-term-match-pattern`. Returns at most one row. Below the Super User tier, the lookup stays inside your territory or domain, and a token with neither gets `403`."
+                },
+                "connection-usage-role": {
+                      "type": "string",
+                      "description": "Only connections with this role, such as `vendor`."
+                },
+                "connection-connectivity-type": {
+                      "type": "string",
+                      "description": "Only connections of this connectivity type. Allowed values: \"header_ip_match\", \"inbound_registration\", \"outbound_registration\", \"route_profile\"",
+                      "enum": [
+                            "header_ip_match",
+                            "inbound_registration",
+                            "outbound_registration",
+                            "route_profile"
+                      ]
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /connections',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['device-sip-registration-uri', 'termination-match', 'domain', 'reseller', 'route-chain', 'user-scope'];
+    const queryParamNames = ['domain', 'routechain', 'start', 'limit', 'reseller', 'connection-orig-match-pattern', 'connection-term-match-pattern', 'connection-usage-role', 'connection-connectivity-type'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -61,328 +90,22 @@ export const get_connections: ToolDefinition = {
 export const create_connection: ToolDefinition = {
   schema: {
     name: 'create_connection',
-    description: 'Create a Connection — [POST /connections]',
+    description: 'Create connection — Creates a connection in the domain that the body\\\'s `domain` names. Requires Office Manager, Route Manager, or Call Center Supervisor scope in that domain, Reseller scope in its territory, or Super User scope. The API publishes the connection on the service bus (SBUS) `connection_events` channel, and each server writes it when the event arrives, so `202` means published, not applied.  `connection-orig-match-pattern` and `domain` are required. `connection-orig-match-pattern` is the connection\\\'s key and must be unique across the platform, not only the domain: a value any connection already uses returns `409`. `connection-term-match-pattern` defaults to it, and `connection-translation-request-host` and `connection-translation-destination-host` default to `connection-address`, as the API formats it for the connectivity type. `connection-source-ip-checking-enabled` and `connection-include-server-header-enabled` default to `no`. `connection-connectivity-type` defaults to `header_ip_match` and sets `connection-sip-authenticate-as-client-enabled`: `yes` for `outbound_registration`, `no` for every other type. A value you send that contradicts the type is overridden, and the response carries a `Warning` header and a `warnings` list. `connection-sip-registration-password` defaults to a random 8-character value.  Create route profiles with `POST /domains/{domain}/routeprofiles`. Sending `call-routing` here returns `404`.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the connection to be written. You then get `200` with the connection. If it is not written in time, you get the usual `202`.  If a connection with the same `connection-orig-match-pattern` was deleted in the last 15 minutes, and the platform is set to block re-created connections, some servers can refuse the new one after the `202`. Read it back, and repeat the create if it is missing.  `POST /domains/{domain}/connections` does the same with the domain in the path. — [POST /connections]',
     inputSchema: {
           "type": "object",
-          "properties": {
-                "connection-orig-match-pattern": {
-                      "type": "string",
-                      "description": "This is the connection's origination match pattern"
-                },
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
-                },
-                "description": {
-                      "type": "string",
-                      "description": "This is the connection's description"
-                },
-                "connection-term-match-pattern": {
-                      "type": "string",
-                      "description": "Defaulted to connection-orig-match-pattern"
-                },
-                "connection-audio-relay-enabled": {
-                      "type": "string",
-                      "description": "Available options are \"yes\", \"optional\", \"no\". \"Yes\" will set the connection audio realy to \"automatic\". \"Optional\" will set it to \"none\". \"No\" will set it to \"never\". Default will be \"yes\"."
-                },
-                "connection-address": {
-                      "type": "string",
-                      "description": "This is the connection's address"
-                },
-                "dial-plan": {
-                      "type": "string",
-                      "description": "This is the connection's dial plan"
-                },
-                "dial-policy": {
-                      "type": "string",
-                      "description": "This is the connection's dial policy"
-                },
-                "limits-max-active-calls-orig": {
-                      "type": "number",
-                      "description": "This is the connection's limit of maximum originating calls"
-                },
-                "limits-max-active-calls-term": {
-                      "type": "number",
-                      "description": "This is the connection's limit of maximum terminating calls"
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the connection's limit of maximum total calls"
-                },
-                "connection-linked-billing-user": {
-                      "type": "string",
-                      "description": "This is the connection's linked billing user"
-                },
-                "connection-sip-registration-username": {
-                      "type": "string",
-                      "description": "This is the connection's authorized username"
-                },
-                "connection-sip-registration-password": {
-                      "type": "string",
-                      "description": "This is the connection's password"
-                },
-                "connection-sip-registration-realm": {
-                      "type": "string",
-                      "description": "This is the connection's authentication realm"
-                },
-                "connection-orig-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "connection-term-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "connection-translation-request-host": {
-                      "type": "string",
-                      "description": "This is the connection's translation request host."
-                },
-                "connection-translation-destination-host": {
-                      "type": "string",
-                      "description": "This is the connection's translation destination host. This typically comes from the connection-orig-match-pattern. Defaults to ''. Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-request-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation request user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-destination-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation destination user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-source-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation source user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-source-ip-checking-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-include-server-header-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-relay-comfort-noise-enabled": {
-                      "type": "string",
-                      "description": "This will set whether there is an RTP Relay comfort noise. Can be set to yes or no. If not set, will be set to system-default. Default: \"system-default\"",
-                      "default": "system-default"
-                },
-                "connection-pcmu-only-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-enforce-minimum-duration-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-bind-to-alternate-interface-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-block-video-in-sdp-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-sip-get-new-dialog-destination-from": {
-                      "type": "string",
-                      "description": "This will set the new dialog destination. Values available are contact-header or via-header. Default would be default-ip. Default: \"default-ip\"",
-                      "default": "default-ip"
-                },
-                "connection-sip-get-response-destination-from": {
-                      "type": "string",
-                      "description": "This will set the response desination. Values available will be contact-header or via-header. Default will be default-ip. Default: \"default-ip\"",
-                      "default": "default-ip"
-                },
-                "connection-require-encrypted-audio-enabled": {
-                      "type": "string",
-                      "description": "This will set whether audio encryption is required. Options availabe are \"optional\" and \"yes\". Defaults to no. Default: \"no\"",
-                      "default": "no"
-                },
-                "connection-sip-transport-protocol": {
-                      "type": "string",
-                      "description": "This will set the SIP transport protocol. Options are \"TCP and \"TLS\". Default will be UDP. Default: \"UDP\"",
-                      "default": "UDP"
-                },
-                "connection-check-orig-matching-sip-header": {
-                      "type": "string",
-                      "description": "This will set whether to check whether the origination matches the SIP header. Options are \"to\", \"request\", or \"contact\". Default will default to \"from\". Default: \"from\"",
-                      "default": "from"
-                },
-                "connection-sip-session-timer-enabled": {
-                      "type": "string",
-                      "description": "This will set the SIP session timer. Options are setting to \"no\" or not setting at all, which will default to the system-default. Default: \"system-default\"",
-                      "default": "system-default"
-                },
-                "connection-prevent-rtp-port-change-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-hide-post-dial-delay-with-ringback-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-remote-ringback-handling": {
-                      "type": "string",
-                      "description": "This will set the remote ringback handling. Options are \"no-ringback\" and \"local-only\". Default will be set to \"allowed\". Default: \"allowed\"",
-                      "default": "allowed"
-                },
-                "connection-block-media-in-sip-180-ringing": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-allow-mid-call-uri-updates-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-record-all-calls-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-custom-p-asserted-id-format": {
-                      "type": "string",
-                      "description": "This will set the PAId of the connection. Example input \"sample\" will translate to \"PAId=sample\" in call rules"
-                },
-                "connection-require-sip-authentication-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-translation-source-host": {
-                      "type": "string",
-                      "description": "connection-translation-source-host"
-                },
-                "utc-offset": {
-                      "type": "string",
-                      "description": "This is the utc offset of the connection. Example \"-7\" for US/Pacific"
-                },
-                "time-zone": {
-                      "type": "string",
-                      "description": "This is the timezone of the connection"
-                },
-                "minimum-call-duration-seconds": {
-                      "type": "number",
-                      "description": "Default: 0",
-                      "default": 0
-                },
-                "connection-sip-registration-expires-datetime": {
-                      "type": "string",
-                      "description": "connection-sip-registration-expires-datetime"
-                },
-                "connection-sip-authenticate-as-client-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-is-carrier-trunk": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "call-routing": {
-                      "type": "string",
-                      "description": "Currently not supported in V2 API."
-                },
-                "connection-sip-registration-datetime": {
-                      "type": "string",
-                      "description": "connection-sip-registration-datetime"
-                }
-          },
-          "required": [
-                "connection-orig-match-pattern",
-                "domain"
-          ]
+          "properties": {}
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /connections',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['connection-orig-match-pattern', 'domain', 'description', 'connection-term-match-pattern', 'connection-audio-relay-enabled', 'connection-address', 'dial-plan', 'dial-policy', 'limits-max-active-calls-orig', 'limits-max-active-calls-term', 'limits-max-active-calls-total', 'connection-linked-billing-user', 'connection-sip-registration-username', 'connection-sip-registration-password', 'connection-sip-registration-realm', 'connection-orig-enabled', 'connection-term-enabled', 'connection-translation-request-host', 'connection-translation-destination-host', 'connection-translation-request-user', 'connection-translation-destination-user', 'connection-translation-source-user', 'connection-source-ip-checking-enabled', 'connection-include-server-header-enabled', 'connection-relay-comfort-noise-enabled', 'connection-pcmu-only-enabled', 'connection-enforce-minimum-duration-enabled', 'connection-bind-to-alternate-interface-enabled', 'connection-block-video-in-sdp-enabled', 'connection-sip-get-new-dialog-destination-from', 'connection-sip-get-response-destination-from', 'connection-require-encrypted-audio-enabled', 'connection-sip-transport-protocol', 'connection-check-orig-matching-sip-header', 'connection-sip-session-timer-enabled', 'connection-prevent-rtp-port-change-enabled', 'connection-hide-post-dial-delay-with-ringback-enabled', 'connection-remote-ringback-handling', 'connection-block-media-in-sip-180-ringing', 'connection-allow-mid-call-uri-updates-enabled', 'connection-record-all-calls-enabled', 'connection-custom-p-asserted-id-format', 'connection-require-sip-authentication-enabled', 'connection-translation-source-host', 'utc-offset', 'time-zone', 'minimum-call-duration-seconds', 'connection-sip-registration-expires-datetime', 'connection-sip-authenticate-as-client-enabled', 'connection-is-carrier-trunk', 'call-routing', 'connection-sip-registration-datetime'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/connections',
-      body,
     });
 
     return {
@@ -397,40 +120,59 @@ export const create_connection: ToolDefinition = {
 export const count_all_connections: ToolDefinition = {
   schema: {
     name: 'count_all_connections',
-    description: 'Count All Conections — [GET /connections/count]',
+    description: 'Count connections — Returns the number of connections. Requires the scope `GET /connections` requires, and a Reseller is confined to its territory the same way.  It takes the filters of `GET /connections`: `domain`, `reseller`, `connection-orig-match-pattern`, `connection-term-match-pattern`, `connection-usage-role`, `connection-connectivity-type`, and `routechain`. Without `routechain`, route profiles are left out of the count. `GET /domains/{domain}/connections/count` counts one domain. — [GET /connections/count]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "device-sip-registration-uri": {
-                      "type": "string",
-                      "description": "device-sip-registration-uri"
-                },
-                "termination-match": {
-                      "type": "string",
-                      "description": "termination-match"
-                },
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\"",
-                      "default": "~"
+                      "description": "Only this domain's connections. Omit it, or send `*`, for every domain you can see."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Only the connections of this territory's domains. A Reseller's own territory applies by default, and another territory returns `403`."
                 },
-                "route-chain": {
+                "connection-orig-match-pattern": {
                       "type": "string",
-                      "description": "route-chain"
+                      "description": "Exact `connection-orig-match-pattern`. Returns at most one row."
                 },
-                "user-scope": {
+                "connection-term-match-pattern": {
                       "type": "string",
-                      "description": "user-scope"
+                      "description": "Exact `connection-term-match-pattern`. Returns at most one row. Below the Super User tier, the lookup stays inside your territory or domain, and a token with neither gets `403`."
+                },
+                "connection-usage-role": {
+                      "type": "string",
+                      "description": "Only connections with this role, such as `vendor`."
+                },
+                "connection-connectivity-type": {
+                      "type": "string",
+                      "description": "Only connections of this connectivity type. Allowed values: \"header_ip_match\", \"inbound_registration\", \"outbound_registration\", \"route_profile\"",
+                      "enum": [
+                            "header_ip_match",
+                            "inbound_registration",
+                            "outbound_registration",
+                            "route_profile"
+                      ]
+                },
+                "routechain": {
+                      "type": "string",
+                      "description": "`yes` returns only route profiles, whose address is a route name in angle brackets. `no` leaves them out. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /connections/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['device-sip-registration-uri', 'termination-match', 'domain', 'reseller', 'route-chain', 'user-scope'];
+    const queryParamNames = ['domain', 'reseller', 'connection-orig-match-pattern', 'connection-term-match-pattern', 'connection-usage-role', 'connection-connectivity-type', 'routechain'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -453,33 +195,53 @@ export const count_all_connections: ToolDefinition = {
 export const get_domains_by_domain_connections: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_connections',
-    description: 'Get All Connections for a Domain — [GET /domains/{domain}/connections]',
+    description: 'List domain connections — Returns the connections of one domain. Requires Office Manager, Route Manager, Call Center Supervisor, or Office Manager Read-Only scope in the connection\\\'s domain, Reseller scope in its territory, or Super User or Super User Read Only scope.  Route profiles are left out unless you send `routechain=yes`; read them with `GET /domains/{domain}/routeprofiles`. Filter with `connection-usage-role` or `connection-connectivity-type`. `connection-orig-match-pattern` and `connection-term-match-pattern` are exact lookups in this domain that return at most one row. Page with `start` and `limit`, 100 rows by default. Use `/domains/{domain}/connections/count` for a total, and `/domains/{domain}/connections/list` for the identity fields only.  `active-calls-max-this-month` and `active-calls-max-last-month` are left out when `limit` is above 500. A domain that does not exist returns `404`. — [GET /domains/{domain}/connections]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
-                "device-sip-registration-uri": {
+                "connection-orig-match-pattern": {
                       "type": "string",
-                      "description": "device-sip-registration-uri"
+                      "description": "Exact `connection-orig-match-pattern`. Returns at most one row."
                 },
-                "termination-match": {
+                "connection-term-match-pattern": {
                       "type": "string",
-                      "description": "termination-match"
+                      "description": "Exact `connection-term-match-pattern`. Returns at most one row."
                 },
-                "reseller": {
+                "connection-usage-role": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Only connections with this role, such as `vendor`."
                 },
-                "route-chain": {
+                "connection-connectivity-type": {
                       "type": "string",
-                      "description": "route-chain"
+                      "description": "Only connections of this connectivity type. Allowed values: \"header_ip_match\", \"inbound_registration\", \"outbound_registration\", \"route_profile\"",
+                      "enum": [
+                            "header_ip_match",
+                            "inbound_registration",
+                            "outbound_registration",
+                            "route_profile"
+                      ]
                 },
-                "user-scope": {
+                "routechain": {
                       "type": "string",
-                      "description": "user-scope"
+                      "description": "`yes` returns only route profiles, whose address is a route name in angle brackets. `no` leaves them out. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -487,13 +249,19 @@ export const get_domains_by_domain_connections: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/connections',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['device-sip-registration-uri', 'termination-match', 'reseller', 'route-chain', 'user-scope'];
+    const queryParamNames = ['connection-orig-match-pattern', 'connection-term-match-pattern', 'connection-usage-role', 'connection-connectivity-type', 'routechain', 'start', 'limit'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -517,17 +285,17 @@ export const get_domains_by_domain_connections: ToolDefinition = {
 export const get_domains_by_domain_connections_by_connection_id: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_connections_by_connection_id',
-    description: 'Get Specific Connection for a Domain — [GET /domains/{domain}/connections/{connection-id}]',
+    description: 'Read domain connection — Returns one connection of the domain. Requires Office Manager, Route Manager, Call Center Supervisor, or Office Manager Read-Only scope in the connection\\\'s domain, Reseller scope in its territory, or Super User or Super User Read Only scope.  An id that names no connection in this domain returns `404`, and so does a route profile\\\'s id; read those with `GET /domains/{domain}/routeprofiles/{connection-id}`. An id from another domain returns `404`, or `403` when your scope does not cover that domain. — [GET /domains/{domain}/connections/{connection-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "connection-id": {
                       "type": "string",
-                      "description": "This is the connection-id for a specific connection. It is a base64 of connection-orig-match-pattern if you need to do that. Pre v46 code will use just connection-orig-match-pattern, will fail of : is in the path."
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
                 }
           },
           "required": [
@@ -535,6 +303,12 @@ export const get_domains_by_domain_connections_by_connection_id: ToolDefinition 
                 "connection-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/connections/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'connection-id'];
@@ -557,20 +331,20 @@ export const get_domains_by_domain_connections_by_connection_id: ToolDefinition 
   },
 };
 
-export const delete_domains_by_domain_connections_by_connection_id: ToolDefinition = {
+export const update_connection: ToolDefinition = {
   schema: {
-    name: 'delete_domains_by_domain_connections_by_connection_id',
-    description: 'Delete a Specific Connection for a Domain — [DELETE /domains/{domain}/connections/{connection-id}]',
+    name: 'update_connection',
+    description: 'Update domain connection — Changes a connection of the domain. Requires Office Manager, Route Manager, or Call Center Supervisor scope in the domain, Reseller scope in its territory, or Super User scope. The API publishes the change on the service bus (SBUS) `connection_events` channel, and each server applies it when the event arrives, so `202` means published, not applied.  The path identifies the connection. A `connection-orig-match-pattern` in the body or query string is ignored, so the key cannot be renamed. An id that names no connection in this domain returns `404`. A route profile\\\'s id keeps its route-name address and its `route_profile` type: a different `connection-connectivity-type` returns `400`, and a different `connection-address` is ignored with a `Warning` header. Send only what changes. Omitted fields keep their stored values, the call-processing fields such as `connection-sip-transport-protocol` included. Changing `connection-connectivity-type` also sets `connection-sip-authenticate-as-client-enabled` and reformats `connection-address` to suit the type. An invalid `connection-connectivity-type`, `connection-require-encrypted-audio-enabled`, or `connection-sip-session-timer-enabled` returns `400`. Sending `call-routing` returns `404`: change a route profile\\\'s route through the route-profile endpoints. `synchronous` is ignored. — [PUT /domains/{domain}/connections/{connection-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "connection-id": {
                       "type": "string",
-                      "description": "This is the connection-id for a specific connection. It is a base64 of connection-orig-match-pattern if you need to do that. Pre v46 code will use just connection-orig-match-pattern, will fail of : is in the path."
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
                 }
           },
           "required": [
@@ -578,6 +352,61 @@ export const delete_domains_by_domain_connections_by_connection_id: ToolDefiniti
                 "connection-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/connections/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'connection-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/connections/{connection-id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_domains_by_domain_connections_by_connection_id: ToolDefinition = {
+  schema: {
+    name: 'delete_domains_by_domain_connections_by_connection_id',
+    description: 'Delete domain connection — Deletes a connection of the domain. Requires Office Manager, Route Manager, or Call Center Supervisor scope in the domain, Reseller scope in its territory, or Super User scope. The API publishes the delete on the service bus (SBUS) `connection_events` channel, and each server removes the row when the event arrives, so `202` means published, not deleted.  An id that names no connection in this domain returns `404`. A route profile\\\'s id deletes the profile with its route and route connections, as `DELETE /domains/{domain}/routeprofiles/{connection-id}` does.  Read the connection back to confirm it is gone. A connection that another platform service keeps registering, most often an `outbound_registration` one, can be written back about 30 to 60 seconds after the delete. If it keeps coming back, contact support. — [DELETE /domains/{domain}/connections/{connection-id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "connection-id": {
+                      "type": "string",
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
+                }
+          },
+          "required": [
+                "domain",
+                "connection-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/connections/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'connection-id'];
@@ -600,365 +429,257 @@ export const delete_domains_by_domain_connections_by_connection_id: ToolDefiniti
   },
 };
 
-export const update_connection: ToolDefinition = {
+export const read_connection: ToolDefinition = {
   schema: {
-    name: 'update_connection',
-    description: 'Update a Connection — [PUT /domains/{domain}/connections/{connection-orig-match-pattern}]',
+    name: 'read_connection',
+    description: 'Read connection — Returns one connection by `connection-id`, without naming its domain. Requires Office Manager, Route Manager, Call Center Supervisor, or Office Manager Read-Only scope in the connection\\\'s domain, Reseller scope in its territory, or Super User or Super User Read Only scope.  An id that names no connection returns `404`, and so does a route profile\\\'s id; read those with `GET /routeprofiles/{connection-id}`. One in a domain your scope does not cover returns `403`. — [GET /connections/{connection-id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "connection-id": {
+                      "type": "string",
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
+                }
+          },
+          "required": [
+                "connection-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /connections/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['connection-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/connections/{connection-id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_connection_2: ToolDefinition = {
+  schema: {
+    name: 'update_connection_2',
+    description: 'Update connection — Changes a connection by `connection-id`, without naming its domain. Requires Super User or Reseller scope. A Reseller can change only a connection in its own territory; other scopes use `PUT /domains/{domain}/connections/{connection-id}`. The API publishes the change on the service bus (SBUS) `connection_events` channel, and each server applies it when the event arrives, so `202` means published, not applied.  The path identifies the connection. A `domain` or `connection-orig-match-pattern` in the body is ignored, so the key cannot be renamed. An id that names no connection, or one outside your territory, returns `404`. A route profile\\\'s id keeps its route-name address and its `route_profile` type: a different `connection-connectivity-type` returns `400`, and a different `connection-address` is ignored with a `Warning` header. Send only what changes. Omitted fields keep their stored values, the call-processing fields such as `connection-sip-transport-protocol` included. Changing `connection-connectivity-type` also sets `connection-sip-authenticate-as-client-enabled` and reformats `connection-address` to suit the type. An invalid `connection-connectivity-type`, `connection-require-encrypted-audio-enabled`, or `connection-sip-session-timer-enabled` returns `400`. Sending `call-routing` returns `404`: change a route profile\\\'s route through the route-profile endpoints. `synchronous` is ignored. — [PUT /connections/{connection-id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "connection-id": {
+                      "type": "string",
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
+                }
+          },
+          "required": [
+                "connection-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /connections/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['connection-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/connections/{connection-id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_connection: ToolDefinition = {
+  schema: {
+    name: 'delete_connection',
+    description: 'Delete connection — Deletes a connection by `connection-id`, without naming its domain. Requires Office Manager, Route Manager, or Call Center Supervisor scope in the connection\\\'s domain, Reseller scope in its territory, or Super User scope. The API publishes the delete on the service bus (SBUS) `connection_events` channel, and each server removes the row when the event arrives, so `202` means published, not deleted.  An id that names no connection returns `404`. One in a domain your scope does not cover returns `403`. A route profile\\\'s id deletes the profile with its route and route connections.  Read the connection back to confirm it is gone. A connection that another platform service keeps registering, most often an `outbound_registration` one, can be written back about 30 to 60 seconds after the delete. If it keeps coming back, contact support. — [DELETE /connections/{connection-id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "connection-id": {
+                      "type": "string",
+                      "description": "The connection's `connection-id`, as a list returns it: base64url, without padding, of `connection-orig-match-pattern`. The raw `connection-orig-match-pattern` is also accepted."
+                }
+          },
+          "required": [
+                "connection-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /connections/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['connection-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/connections/{connection-id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_connections: ToolDefinition = {
+  schema: {
+    name: 'list_domain_connections',
+    description: 'List domain connections, reduced — Returns the identity fields of a domain\\\'s connections: `connection-id`, `connection-orig-match-pattern`, `domain`, `connection-connectivity-type`, and `connection-usage-role`. Requires Office Manager, Route Manager, Call Center Supervisor, or Office Manager Read-Only scope in the connection\\\'s domain, Reseller scope in its territory, or Super User or Super User Read Only scope. It is authorized by the `list` privilege, which `/count` shares.  It takes the filters of `GET /domains/{domain}/connections` and, like it, leaves route profiles out unless you send `routechain=yes`. It has no default page size: without `limit`, it returns every matching connection. Append `/list` to `/connections`, or to a keyed path such as `/domains/{domain}/connections/{connection-id}`, for the same fields. A domain that does not exist returns `404`. — [GET /domains/{domain}/connections/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "connection-orig-match-pattern": {
                       "type": "string",
-                      "description": "connection-orig-match-pattern"
+                      "description": "Exact `connection-orig-match-pattern`. Returns at most one row."
                 },
-                "description": {
+                "connection-usage-role": {
                       "type": "string",
-                      "description": "This is the connection's description"
+                      "description": "Only connections with this role, such as `vendor`."
                 },
-                "connection-term-match-pattern": {
+                "connection-connectivity-type": {
                       "type": "string",
-                      "description": "Defaulted to connection-orig-match-pattern"
+                      "description": "Only connections of this connectivity type. Allowed values: \"header_ip_match\", \"inbound_registration\", \"outbound_registration\", \"route_profile\"",
+                      "enum": [
+                            "header_ip_match",
+                            "inbound_registration",
+                            "outbound_registration",
+                            "route_profile"
+                      ]
                 },
-                "connection-audio-relay-enabled": {
+                "routechain": {
                       "type": "string",
-                      "description": "Available options are \"yes\", \"optional\", \"no\". \"Yes\" will set the connection audio realy to \"automatic\". \"Optional\" will set it to \"none\". \"No\" will set it to \"never\". Default will be \"yes\"."
+                      "description": "`yes` returns only route profiles, whose address is a route name in angle brackets. `no` leaves them out. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
-                "connection-address": {
-                      "type": "string",
-                      "description": "This is the connection's address"
-                },
-                "dial-plan": {
-                      "type": "string",
-                      "description": "This is the connection's dial plan"
-                },
-                "dial-policy": {
-                      "type": "string",
-                      "description": "This is the connection's dial policy"
-                },
-                "limits-max-active-calls-orig": {
+                "start": {
                       "type": "number",
-                      "description": "This is the connection's limit of maximum originating calls"
-                },
-                "limits-max-active-calls-term": {
-                      "type": "number",
-                      "description": "This is the connection's limit of maximum terminating calls"
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the connection's limit of maximum total calls"
-                },
-                "connection-linked-billing-user": {
-                      "type": "string",
-                      "description": "This is the connection's linked billing user"
-                },
-                "connection-sip-registration-username": {
-                      "type": "string",
-                      "description": "This is the connection's authorized username"
-                },
-                "connection-sip-registration-password": {
-                      "type": "string",
-                      "description": "This is the connection's password"
-                },
-                "connection-sip-registration-realm": {
-                      "type": "string",
-                      "description": "This is the connection's authentication realm"
-                },
-                "connection-orig-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "connection-term-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "connection-translation-request-host": {
-                      "type": "string",
-                      "description": "This is the connection's translation request host."
-                },
-                "connection-translation-destination-host": {
-                      "type": "string",
-                      "description": "This is the connection's translation destination host. This typically comes from the connection-orig-match-pattern. Defaults to ''. Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-request-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation request user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-destination-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation destination user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-translation-source-user": {
-                      "type": "string",
-                      "description": "This is the connection's translation source user. This is typically set to [*]. Defaults to \"\". Default: \"''\"",
-                      "default": "''"
-                },
-                "connection-source-ip-checking-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-include-server-header-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-relay-comfort-noise-enabled": {
-                      "type": "string",
-                      "description": "This will set whether there is an RTP Relay comfort noise. Can be set to yes or no. If not set, will be set to system-default. Default: \"system-default\"",
-                      "default": "system-default"
-                },
-                "connection-pcmu-only-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-enforce-minimum-duration-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-bind-to-alternate-interface-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-block-video-in-sdp-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-sip-get-new-dialog-destination-from": {
-                      "type": "string",
-                      "description": "This will set the new dialog destination. Values available are contact-header or via-header. Default would be default-ip. Default: \"default-ip\"",
-                      "default": "default-ip"
-                },
-                "connection-sip-get-response-destination-from": {
-                      "type": "string",
-                      "description": "This will set the response desination. Values available will be contact-header or via-header. Default will be default-ip. Default: \"default-ip\"",
-                      "default": "default-ip"
-                },
-                "connection-require-encrypted-audio-enabled": {
-                      "type": "string",
-                      "description": "This will set whether audio encryption is required. Options availabe are \"optional\" and \"yes\". Defaults to no. Default: \"no\"",
-                      "default": "no"
-                },
-                "connection-sip-transport-protocol": {
-                      "type": "string",
-                      "description": "This will set the SIP transport protocol. Options are \"TCP and \"TLS\". Default will be UDP. Default: \"UDP\"",
-                      "default": "UDP"
-                },
-                "connection-check-orig-matching-sip-header": {
-                      "type": "string",
-                      "description": "This will set whether to check whether the origination matches the SIP header. Options are \"to\", \"request\", or \"contact\". Default will default to \"from\". Default: \"from\"",
-                      "default": "from"
-                },
-                "connection-sip-session-timer-enabled": {
-                      "type": "string",
-                      "description": "This will set the SIP session timer. Options are setting to \"no\" or not setting at all, which will default to the system-default. Default: \"system-default\"",
-                      "default": "system-default"
-                },
-                "connection-prevent-rtp-port-change-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-hide-post-dial-delay-with-ringback-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-remote-ringback-handling": {
-                      "type": "string",
-                      "description": "This will set the remote ringback handling. Options are \"no-ringback\" and \"local-only\". Default will be set to \"allowed\". Default: \"allowed\"",
-                      "default": "allowed"
-                },
-                "connection-block-media-in-sip-180-ringing": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-allow-mid-call-uri-updates-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-record-all-calls-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-custom-p-asserted-id-format": {
-                      "type": "string",
-                      "description": "This will set the PAId of the connection. Example input \"sample\" will translate to \"PAId=sample\" in call rules"
-                },
-                "connection-require-sip-authentication-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-translation-source-host": {
-                      "type": "string",
-                      "description": "connection-translation-source-host"
-                },
-                "utc-offset": {
-                      "type": "string",
-                      "description": "This is the utc offset of the connection. Example \"-7\" for US/Pacific"
-                },
-                "time-zone": {
-                      "type": "string",
-                      "description": "This is the timezone of the connection"
-                },
-                "minimum-call-duration-seconds": {
-                      "type": "number",
-                      "description": "Default: 0",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
                       "default": 0
                 },
-                "connection-sip-registration-expires-datetime": {
-                      "type": "string",
-                      "description": "connection-sip-registration-expires-datetime"
-                },
-                "connection-sip-authenticate-as-client-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "connection-is-carrier-trunk": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "call-routing": {
-                      "type": "string",
-                      "description": "Currently not supported in V2 API."
-                },
-                "active-calls-max-last-month": {
+                "limit": {
                       "type": "number",
-                      "description": "active-calls-max-last-month"
-                },
-                "active-calls-max-this-month": {
-                      "type": "number",
-                      "description": "active-calls-max-this-month"
-                },
-                "active-calls-orig-current": {
-                      "type": "number",
-                      "description": "active-calls-orig-current"
-                },
-                "active-calls-orig-since-startup": {
-                      "type": "number",
-                      "description": "active-calls-orig-since-startup"
-                },
-                "active-calls-term-current": {
-                      "type": "number",
-                      "description": "active-calls-term-current"
-                },
-                "active-calls-term-since-startup": {
-                      "type": "number",
-                      "description": "active-calls-term-since-startup"
-                },
-                "connection-sip-registration-datetime": {
-                      "type": "string",
-                      "description": "connection-sip-registration-datetime"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "last-modified-datetime"
+                      "description": "Most rows to return. Omit it for every matching connection. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
-                "domain",
-                "connection-orig-match-pattern"
+                "domain"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/connections/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'connection-orig-match-pattern'];
+    const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'connection-term-match-pattern', 'connection-audio-relay-enabled', 'connection-address', 'dial-plan', 'dial-policy', 'limits-max-active-calls-orig', 'limits-max-active-calls-term', 'limits-max-active-calls-total', 'connection-linked-billing-user', 'connection-sip-registration-username', 'connection-sip-registration-password', 'connection-sip-registration-realm', 'connection-orig-enabled', 'connection-term-enabled', 'connection-translation-request-host', 'connection-translation-destination-host', 'connection-translation-request-user', 'connection-translation-destination-user', 'connection-translation-source-user', 'connection-source-ip-checking-enabled', 'connection-include-server-header-enabled', 'connection-relay-comfort-noise-enabled', 'connection-pcmu-only-enabled', 'connection-enforce-minimum-duration-enabled', 'connection-bind-to-alternate-interface-enabled', 'connection-block-video-in-sdp-enabled', 'connection-sip-get-new-dialog-destination-from', 'connection-sip-get-response-destination-from', 'connection-require-encrypted-audio-enabled', 'connection-sip-transport-protocol', 'connection-check-orig-matching-sip-header', 'connection-sip-session-timer-enabled', 'connection-prevent-rtp-port-change-enabled', 'connection-hide-post-dial-delay-with-ringback-enabled', 'connection-remote-ringback-handling', 'connection-block-media-in-sip-180-ringing', 'connection-allow-mid-call-uri-updates-enabled', 'connection-record-all-calls-enabled', 'connection-custom-p-asserted-id-format', 'connection-require-sip-authentication-enabled', 'connection-translation-source-host', 'utc-offset', 'time-zone', 'minimum-call-duration-seconds', 'connection-sip-registration-expires-datetime', 'connection-sip-authenticate-as-client-enabled', 'connection-is-carrier-trunk', 'call-routing', 'active-calls-max-last-month', 'active-calls-max-this-month', 'active-calls-orig-current', 'active-calls-orig-since-startup', 'active-calls-term-current', 'active-calls-term-since-startup', 'connection-sip-registration-datetime', 'last-modified-datetime'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
+    const queryParamNames = ['connection-orig-match-pattern', 'connection-usage-role', 'connection-connectivity-type', 'routechain', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
     }
     const response = await client.request({
-      method: 'PUT',
-      pathTemplate: '/domains/{domain}/connections/{connection-orig-match-pattern}',
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/connections/list',
       pathParams,
-      body,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_domain_connection: ToolDefinition = {
+  schema: {
+    name: 'create_domain_connection',
+    description: 'Create domain connection — Creates a connection in the domain. Requires Office Manager, Route Manager, or Call Center Supervisor scope in the domain, Reseller scope in its territory, or Super User scope. The API publishes the connection on the service bus (SBUS) `connection_events` channel, and each server writes it when the event arrives, so `202` means published, not applied.  `connection-orig-match-pattern` is required. The domain comes from the path, and a `domain` in the body is ignored. `connection-orig-match-pattern` is the connection\\\'s key and must be unique across the platform, not only the domain: a value any connection already uses returns `409`. `connection-term-match-pattern` defaults to it, and `connection-translation-request-host` and `connection-translation-destination-host` default to `connection-address`, as the API formats it for the connectivity type. `connection-source-ip-checking-enabled` and `connection-include-server-header-enabled` default to `no`. `connection-connectivity-type` defaults to `header_ip_match` and sets `connection-sip-authenticate-as-client-enabled`: `yes` for `outbound_registration`, `no` for every other type. A value you send that contradicts the type is overridden, and the response carries a `Warning` header and a `warnings` list. `connection-sip-registration-password` defaults to a random 8-character value.  Create route profiles with `POST /domains/{domain}/routeprofiles`. Sending `call-routing` here returns `404`.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the connection to be written. You then get `200` with the connection. If it is not written in time, you get the usual `202`.  If a connection with the same `connection-orig-match-pattern` was deleted in the last 15 minutes, and the platform is set to block re-created connections, some servers can refuse the new one after the `202`. Read it back, and repeat the create if it is missing.  A domain that does not exist returns `404`. — [POST /domains/{domain}/connections]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/connections',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/connections',
+      pathParams,
     });
 
     return {

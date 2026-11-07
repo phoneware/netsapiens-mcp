@@ -2,6 +2,320 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+export const post_domains_by_domain_timeframes_5: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_timeframes_5',
+    description: 'Create Custom Timeframe — When creating a Custom timeframe it is not necessary to supply a ```timeframe-id``` for the timeframe or for the entries within that timeframe. These ```timeframe-id```s will be generated automatically. — [POST /domains/{domain}/timeframes]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "timeframe-name": {
+                      "type": "string",
+                      "description": "timeframe-name"
+                },
+                "timeframe-type": {
+                      "type": "string",
+                      "description": "```days-of-week```: Days of Week ```specific-dates```: Specific Dates ```holiday```: Holidays ```custom```: Custom ```always```: Always"
+                },
+                "timeframe-specific-dates-array": {
+                      "type": "array",
+                      "description": "timeframe-specific-dates-array"
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "timeframe-holiday-array"
+                },
+                "timeframe-days-of-week-array": {
+                      "type": "array",
+                      "description": "timeframe-days-of-week-array"
+                }
+          },
+          "required": [
+                "domain",
+                "synchronous"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['synchronous', 'timeframe-name', 'timeframe-type', 'timeframe-specific-dates-array', 'timeframe-holiday-array', 'timeframe-days-of-week-array'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/timeframes',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const post_domains_by_domain_timeframes_1: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_timeframes_1',
+    description: 'Create domain time frame — Creates a time frame owned by the domain, shared by every user in it, of the type `timeframe-type` names. Answer rules use it by `timeframe-name`.  Requires Site Manager, Office Manager, Reseller, or Super User. A Basic User can read shared time frames but gets `403` on a write.  The write is published over the service bus (SBUS) and applied a moment later, so the call answers `202` by default. Send `synchronous=yes` to wait up to 10 seconds and get `200` with the time frame instead. The time frame ID is generated from the name and owner, so you do not send one; it is `timeframe-id` in the response.  **Always.** Matches at every moment and has no entries. The call waits about 2 seconds and always answers `200` with the time frame.  **Days of week.** One weekly schedule in `timeframe-days-of-week-array`, with up to 2 periods per day as `hhmm` times. The array is required and holds at most 1 entry. `timeframe-recurrence-type` is `weekly`, or `custom` with the custom interval fields.  **Specific dates.** Date ranges in `timeframe-specific-dates-array`, each with begin and end dates as `YYYYMMDD` and times as `hhmm`. With more than 1 range, all must share one recurrence type, `annual-month-day` or `doesNotRecur`.  **Holiday.** Holidays in `timeframe-holiday-array`, copied from `GET /holidays/{country}/{year}` or `GET /holidays/{country}/{region}/{year}`. Every holiday needs `timeframe-holiday-begin-date` and a `timeframe-recurrence-type`, `never` or `yearlyOnHoliday`, and all must share it. A holiday may appear once. A holiday whose date has already passed answers `422` and nothing is created.  **Custom.** Any mix of the three arrays, without the single-entry and shared-recurrence rules.  Every entry is checked before anything is published, so a `400` or `422` creates nothing. A name the owner already uses returns `400`, and a user that does not exist returns `400` with `Invalid user/domain.` Add entries later with `POST` on the time frame, and change or convert it with `PUT`. — [POST /domains/{domain}/timeframes]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/timeframes',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const post_domains_by_domain_timeframes_by_id_1: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_timeframes_by_id_1',
+    description: 'Add entries to domain time frame — Adds entries to an existing time frame: date ranges, holidays, or, for a custom time frame, any of the three. Requires Site Manager, Office Manager, Reseller, or Super User. A Basic User can read shared time frames but gets `403` on a write.  The write is published over the service bus (SBUS) and applied a moment later, so the call answers `202` by default. Send `synchronous=yes` to wait up to 10 seconds and get `200` with the time frame instead. Entry IDs are generated; do not send `timeframe-id`.  **Specific dates.** New ranges must use the recurrence type the time frame already uses, `annual-month-day` or `doesNotRecur`.  **Holiday.** New holidays must use the time frame\\\'s recurrence type and must not repeat one already there. A holiday whose date has passed answers `422` and nothing is added.  **Days of week.** A days of week time frame holds 1 entry; once it has one, this returns `400`. Change it with `PUT`.  **Custom.** Any of the three arrays.  Every entry is checked before anything is published. An ID that does not exist, or that belongs to another owner than the path, returns `404` with `Provided \\\'id\\\' does not exist.` — [POST /domains/{domain}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Time frame to act on, in one of two forms: - a time frame ID, 32 lowercase hexadecimal characters, such as `94d4b86a0e8bedd0bb61feaa0aa0a4db`. Take it from `timeframe-id` - a time frame name, such as `Business Hours`. Anything that is not 32 lowercase hexadecimal characters is read as a name Use the ID. A name reaches the legacy write path, which this endpoint does not document: it refuses anything but legacy time ranges and can delete them."
+                },
+                "timeframe-specific-dates-array": {
+                      "type": "array",
+                      "description": "Date ranges to add. In a specific dates time frame, each must use the recurrence type the existing ranges use, `annual-month-day` or `doesNotRecur`."
+                },
+                "timeframe-days-of-week-array": {
+                      "type": "array",
+                      "description": "Days of week entries to add."
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "Holidays to add. In a holiday time frame, each must use the existing recurrence type and must not repeat a holiday already there."
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['timeframe-specific-dates-array', 'timeframe-days-of-week-array', 'timeframe-holiday-array', 'synchronous'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/timeframes/{id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const put_domains_by_domain_timeframes_by_id_1: ToolDefinition = {
+  schema: {
+    name: 'put_domains_by_domain_timeframes_by_id_1',
+    description: 'Update domain time frame — Changes a time frame: converts its type, updates some entries, or replaces them all. Requires Site Manager, Office Manager, Reseller, or Super User. A Basic User can read shared time frames but gets `403` on a write.  The call waits up to 10 seconds for the change and answers `200` with the time frame, except a type conversion, which answers `202` as soon as it is published.  **Convert type.** Send `timeframe-type` with a type other than the current one. Converting to `custom` keeps every entry; converting an `always` time frame to `custom` removes its all-day range, so it starts empty. Converting to any other type deletes every entry; send the new type\\\'s array in the same request to fill it. A `custom` time frame cannot be converted, and the request is treated as an update.  **Update entries.** Send `update-only=yes` with the entries to change, each with its `timeframe-id`. An entry without an ID is created. Nothing is deleted. For a holiday, only its hours, observance options, workweek, and recurrence change; delete it and add the new one to change the holiday itself.  **Replace entries.** Without `update-only`, every entry you do not list by `timeframe-id` is deleted, including every entry of a kind whose array you leave out. Listed entries are updated, and entries without an ID are created.  **Days of week.** A days of week time frame holds 1 entry: send exactly 1. More than 1 returns `400`.  The name cannot be changed. An always time frame has nothing to update; sending `timeframe-type=always` to one does nothing and answers `202`.  Every entry is checked before anything is published, so a `400` changes nothing. An ID that does not exist, or that belongs to another owner than the path, returns `404`. A holiday date that has already passed returns `400`. — [PUT /domains/{domain}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Time frame to act on, in one of two forms: - a time frame ID, 32 lowercase hexadecimal characters, such as `94d4b86a0e8bedd0bb61feaa0aa0a4db`. Take it from `timeframe-id` - a time frame name, such as `Business Hours`. Anything that is not 32 lowercase hexadecimal characters is read as a name Use the ID. A name reaches the legacy write path, which this endpoint does not document: it refuses anything but legacy time ranges and can delete them."
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/timeframes/{id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_domains_by_domain_timeframes_by_id_1: ToolDefinition = {
+  schema: {
+    name: 'delete_domains_by_domain_timeframes_by_id_1',
+    description: 'Delete domain time frame — Deletes a time frame and every entry in it, or one entry when you send `child_id`. Requires Site Manager, Office Manager, Reseller, or Super User. A Basic User can read shared time frames but gets `403` on a write.  The delete is published over the service bus (SBUS) and applied a moment later, so the call answers `202`.  **Whole time frame.** Send no body. Answer rules that use the time frame are not changed or deleted, and they keep naming a time frame that no longer exists. Move those rules to another time frame first, with the answer rule endpoints.  **One entry.** Send `child_id`, the `timeframe-id` of the date range, days of week entry, or holiday. The time frame stays. A `child_id` that is not in the time frame returns `404` with `Timeframe entry not found.`  An ID that does not exist, or that belongs to another owner than the path, returns `404` with `Timeframe not found.` — [DELETE /domains/{domain}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Time frame to act on, in one of two forms: - a time frame ID, 32 lowercase hexadecimal characters, such as `94d4b86a0e8bedd0bb61feaa0aa0a4db`. Take it from `timeframe-id` - a time frame name, such as `Business Hours`. Anything that is not 32 lowercase hexadecimal characters is read as a name An ID deletes the time frame, or one entry with `child_id`. A name deletes a legacy time frame and its time ranges; `child_id` does not apply to it."
+                },
+                "child_id": {
+                      "type": "string",
+                      "description": "`timeframe-id` of one entry to delete: a date range, days of week entry, or holiday. Leave it out to delete the whole time frame."
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['child_id'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const bodyParamNames = ['child_id'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/timeframes/{id}',
+      pathParams,
+      queryParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const post_domains_by_domain_timeframes_by_id_3: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_timeframes_by_id_3',
@@ -35,6 +349,12 @@ export const post_domains_by_domain_timeframes_by_id_3: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -90,6 +410,12 @@ export const delete_domains_by_domain_timeframes_by_id_3: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
@@ -103,141 +429,6 @@ export const delete_domains_by_domain_timeframes_by_id_3: ToolDefinition = {
     }
     const response = await client.request({
       method: 'DELETE',
-      pathTemplate: '/domains/{domain}/timeframes/{id}',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const post_domains_by_domain_timeframes_5: ToolDefinition = {
-  schema: {
-    name: 'post_domains_by_domain_timeframes_5',
-    description: 'Create Custom Timeframe — When creating a Custom timeframe it is not necessary to supply a ```timeframe-id``` for the timeframe or for the entries within that timeframe. These ```timeframe-id```s will be generated automatically. — [POST /domains/{domain}/timeframes]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "timeframe-name": {
-                      "type": "string",
-                      "description": "timeframe-name"
-                },
-                "timeframe-type": {
-                      "type": "string",
-                      "description": "```days-of-week```: Days of Week ```specific-dates```: Specific Dates ```holiday```: Holidays ```custom```: Custom ```always```: Always"
-                },
-                "timeframe-specific-dates-array": {
-                      "type": "array",
-                      "description": "timeframe-specific-dates-array"
-                },
-                "timeframe-holiday-array": {
-                      "type": "array",
-                      "description": "timeframe-holiday-array"
-                },
-                "timeframe-days-of-week-array": {
-                      "type": "array",
-                      "description": "timeframe-days-of-week-array"
-                }
-          },
-          "required": [
-                "domain",
-                "synchronous"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['synchronous', 'timeframe-name', 'timeframe-type', 'timeframe-specific-dates-array', 'timeframe-holiday-array', 'timeframe-days-of-week-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/timeframes',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const put_domains_by_domain_timeframes_by_id_6: ToolDefinition = {
-  schema: {
-    name: 'put_domains_by_domain_timeframes_by_id_6',
-    description: 'Replace All Entries in Custom Timeframe — If a new array of entries is supplied in the update request for a Custom timeframe, it will replace all existing entries in the timeframe, meaning that any existing entries in that timeframe will be removed. To update individual entries within a Custom timeframe, refer to "Update Entries within Custom Timeframe." It is not necessary to supply a ```timeframe-id``` for the new holidays. These ```timeframe-id```s will be generated automatically. — [PUT /domains/{domain}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to modify"
-                },
-                "timeframe-specific-dates-array": {
-                      "type": "array",
-                      "description": "timeframe-specific-dates-array"
-                },
-                "timeframe-holiday-array": {
-                      "type": "array",
-                      "description": "timeframe-holiday-array"
-                },
-                "timeframe-days-of-week-array": {
-                      "type": "array",
-                      "description": "timeframe-days-of-week-array"
-                }
-          },
-          "required": [
-                "domain",
-                "id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['timeframe-specific-dates-array', 'timeframe-holiday-array', 'timeframe-days-of-week-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PUT',
       pathTemplate: '/domains/{domain}/timeframes/{id}',
       pathParams,
       body,
@@ -291,6 +482,12 @@ export const put_domains_by_domain_timeframes_by_id_7: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
@@ -298,6 +495,73 @@ export const put_domains_by_domain_timeframes_by_id_7: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const bodyParamNames = ['update-only', 'timeframe-specific-dates-array', 'timeframe-holiday-array', 'timeframe-days-of-week-array'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/timeframes/{id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const put_domains_by_domain_timeframes_by_id_6: ToolDefinition = {
+  schema: {
+    name: 'put_domains_by_domain_timeframes_by_id_6',
+    description: 'Replace All Entries in Custom Timeframe — If a new array of entries is supplied in the update request for a Custom timeframe, it will replace all existing entries in the timeframe, meaning that any existing entries in that timeframe will be removed. To update individual entries within a Custom timeframe, refer to "Update Entries within Custom Timeframe." It is not necessary to supply a ```timeframe-id``` for the new holidays. These ```timeframe-id```s will be generated automatically. — [PUT /domains/{domain}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                },
+                "id": {
+                      "type": "string",
+                      "description": "```timeframe-id``` of the timeframe to modify"
+                },
+                "timeframe-specific-dates-array": {
+                      "type": "array",
+                      "description": "timeframe-specific-dates-array"
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "timeframe-holiday-array"
+                },
+                "timeframe-days-of-week-array": {
+                      "type": "array",
+                      "description": "timeframe-days-of-week-array"
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['timeframe-specific-dates-array', 'timeframe-holiday-array', 'timeframe-days-of-week-array'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];

@@ -5,13 +5,40 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_calls: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_calls',
-    description: 'Read Active Calls In Domain — [GET /domains/{domain}/calls]',
+    description: 'List active calls in domain — Lists the calls in progress in which the domain is a party: the caller, the receiver, or a user the call passes through, such as a call queue.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. A Basic User token can read the list and count when `user` names its own user.  Calls are returned oldest first, 100 at a time by default. Page with `start` and `limit`, and narrow the list with `type`, `user`, or `site`. Calls routed between servers of the platform itself are left out. To count calls without reading them, use **Count active calls in domain**. — [GET /domains/{domain}/calls]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to match. `orig` matches calls the domain or user placed, `term` calls it receives or that pass through it, and `ringing` calls to it that are not answered yet. Omit it to match a call on any leg. Allowed values: \"orig\", \"term\", \"ringing\"",
+                      "enum": [
+                            "orig",
+                            "term",
+                            "ringing"
+                      ]
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only calls in which this user, such as `1001`, is a party. A Basic User token can read this path when `user` is its own user."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls in which a user of this site is a party. Ignored with `type=orig`, and when `user` is also sent, except with `type=ringing`, where both apply."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of calls to skip before the first one returned. Use it with `limit` to page through the list. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -19,16 +46,28 @@ export const get_domains_by_domain_calls: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/calls',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['type', 'user', 'site', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/calls',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,13 +82,49 @@ export const get_domains_by_domain_calls: ToolDefinition = {
 export const get_domains_by_domain_calls_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_calls_count',
-    description: 'Count Active Calls In Domain — [GET /domains/{domain}/calls/count]',
+    description: 'Count active calls in domain — Counts the calls in progress in which the domain is a party.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. A Basic User token can read the list and count when `user` names its own user.  Takes the same `type`, `user`, and `site` filters as **List active calls in domain**. Send `groupby` to count per user, domain, or other field. — [GET /domains/{domain}/calls/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to match. `orig` matches calls the domain or user placed, `term` calls it receives or that pass through it, and `ringing` calls to it that are not answered yet. Omit it to match a call on any leg. Allowed values: \"orig\", \"term\", \"ringing\"",
+                      "enum": [
+                            "orig",
+                            "term",
+                            "ringing"
+                      ]
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only calls in which this user, such as `1001`, is a party. A Basic User token can read this path when `user` is its own user."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Only calls in which a user of this site is a party. Ignored with `type=orig`, and when `user` is also sent, except with `type=ringing`, where both apply."
+                },
+                "groupby": {
+                      "type": "string",
+                      "description": "Count per value of this field instead of one total, such as `term_user` for a count per receiving user. The response is then a list of groups, largest first, each with `count` and the grouped value under its response name, such as `call-term-user`. Groups with an empty value are left out. Any other value returns `400`. Allowed values: \"orig_domain\", \"term_domain\", \"by_domain\", \"orig_user\", \"term_user\", \"by_user\", \"orig_sub\", \"term_sub\", \"by_sub\", \"by_action\", \"time_start\", \"time_answer\", \"orig_to_user\"",
+                      "enum": [
+                            "orig_domain",
+                            "term_domain",
+                            "by_domain",
+                            "orig_user",
+                            "term_user",
+                            "by_user",
+                            "orig_sub",
+                            "term_sub",
+                            "by_sub",
+                            "by_action",
+                            "time_start",
+                            "time_answer",
+                            "orig_to_user"
+                      ]
                 }
           },
           "required": [
@@ -57,16 +132,28 @@ export const get_domains_by_domain_calls_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/calls/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['type', 'user', 'site', 'groupby'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/calls/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -81,17 +168,36 @@ export const get_domains_by_domain_calls_count: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_calls: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_calls',
-    description: 'Read Active Calls for User — [GET /domains/{domain}/users/{user}/calls]',
+    description: 'List user active calls — Lists the calls in progress in which the user is a party: the caller, the receiver, or the user a call passes through.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, or Reseller or Super User scope.  Only this user\\\'s calls are returned. Calls are returned oldest first, 100 at a time by default. Page with `start` and `limit`, and use `type` to see only calls the user placed, received, or has ringing. — [GET /domains/{domain}/users/{user}/calls]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to match. `orig` matches calls the domain or user placed, `term` calls it receives or that pass through it, and `ringing` calls to it that are not answered yet. Omit it to match a call on any leg. Allowed values: \"orig\", \"term\", \"ringing\"",
+                      "enum": [
+                            "orig",
+                            "term",
+                            "ringing"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of calls to skip before the first one returned. Use it with `limit` to page through the list. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -100,16 +206,28 @@ export const get_domains_by_domain_users_by_user_calls: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/calls',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['type', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/calls',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -124,71 +242,30 @@ export const get_domains_by_domain_users_by_user_calls: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_calls: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_calls',
-    description: 'Make a new Call — [POST /domains/{domain}/users/{user}/calls]',
+    description: 'Create call — Starts a call on behalf of the user in the path. The body takes one of two shapes, selected by `dial-rule-application`:  **Dial a number** (omit `dial-rule-application`, or send `call`). The platform rings the first party in `call-orig-user`, by default the user in the path, and dials `call-term-user` once it answers. Send `synchronous=yes` to wait up to 10 seconds for the call to appear: the response is then `200` with the call. Otherwise, or if the call has not appeared by then, the response is `202`.  **Record an audio file** (`dial-rule-application` is `record`). The platform rings `call-term-user` so its user can record the greeting, music on hold file, or message named by `call-record-type` and `call-record-index`. The response is always `202`.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, or Reseller or Super User scope.  Basic User, Advanced User, Simple User, and Call Center Agent tokens can start the first leg only from their own user or one of their own devices. An outside number or a SIP address outside the domain is allowed as the first leg.  Keep the `call-id` you send: it is the `{callid}` that reads, transfers, holds, and ends the call. — [POST /domains/{domain}/users/{user}/calls]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "call-id": {
-                      "type": "string",
-                      "description": "This will be the callid for the requested call. This should be a random string generated by your application and stored if you want to read back the call later or end it."
-                },
-                "dial-rule-application": {
-                      "type": "string",
-                      "description": "The application can be used to help with next destination selection. Default: \"call\"",
-                      "default": "call"
-                },
-                "call-term-user": {
-                      "type": "string",
-                      "description": "This will be the destination or termination number for the call request. This will be used once the call is connected to the orgination number."
-                },
-                "call-orig-user": {
-                      "type": "string",
-                      "description": "This field will allow you to select the device, user or number the first leg of the call request will connect to. If left blank the origination will be the user@domain of the user making the request. Default: \"user@domain\"",
-                      "default": "user@domain"
-                },
-                "auto-answer-enabled": {
-                      "type": "string",
-                      "description": "If enabled it will request auto answer headers for the first leg (origination) of the call. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "caller-id-number": {
-                      "type": "string",
-                      "description": "This setting will allow for the callerid of the termination leg to be set, by default it will be the preconfigured callerid of the user making the request."
-                },
-                "callback-caller-id-number": {
-                      "type": "string",
-                      "description": "This is the callerid that will be used when calling the first leg(callback) of the call request. If left empty it will default to the user's caller id."
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "synchronous",
-                "call-id",
-                "call-term-user"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/calls',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -196,16 +273,10 @@ export const post_domains_by_domain_users_by_user_calls: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'call-id', 'dial-rule-application', 'call-term-user', 'call-orig-user', 'auto-answer-enabled', 'caller-id-number', 'callback-caller-id-number'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/calls',
       pathParams,
-      body,
     });
 
     return {
@@ -220,21 +291,21 @@ export const post_domains_by_domain_users_by_user_calls: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_calls_by_callid: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_calls_by_callid',
-    description: 'Read Specific Active Call — [GET /domains/{domain}/users/{user}/calls/{callid}]',
+    description: 'Read user active call — Returns one of the user\\\'s calls in progress, found by the call ID of any of its legs.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, or Reseller or Super User scope.  A call in which the user is not a party, or that has ended, returns `404`. — [GET /domains/{domain}/users/{user}/calls/{callid}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "callid": {
                       "type": "string",
-                      "description": "callid"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 }
           },
           "required": [
@@ -243,6 +314,12 @@ export const get_domains_by_domain_users_by_user_calls_by_callid: ToolDefinition
                 "callid"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/calls/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'callid'];
@@ -268,106 +345,46 @@ export const get_domains_by_domain_users_by_user_calls_by_callid: ToolDefinition
 export const delete_domains_by_domain_users_by_user_calls_by_call_id: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_calls_by_call_id',
-    description: 'Disconnect Call — [DELETE /domains/{domain}/users/{user}/calls/{call_id}]',
+    description: 'Disconnect call — Ends a call in progress. Every leg of the call is hung up. Only the user and the call ID are sent with the command; a request body is ignored.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  To turn away a call that is still ringing without ending other legs, use **Reject call**.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [DELETE /domains/{domain}/users/{user}/calls/{callid}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/calls/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}',
       pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_peer: ToolDefinition = {
-  schema: {
-    name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_peer',
-    description: 'Transfer Peer Call — [PATCH /domains/{domain}/users/{user}/calls/{call_id}/transferPeer]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "call_id": {
-                      "type": "string",
-                      "description": "This will be the callid for the requested call. This should be a random string generated by your application per call session."
-                },
-                "destination": {
-                      "type": "string",
-                      "description": "Destination for blind transfer. SIP account of the extension to transfer to"
-                },
-                "valid": {
-                      "type": "string",
-                      "description": "Comma seperated array of Call Park extensions for Dynamic Park case"
-                },
-                "prefix": {
-                      "type": "string",
-                      "description": "System wide prefix to prepend to each Call park extensions when using valid"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "call_id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['destination', 'valid', 'prefix'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PATCH',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/transferPeer',
-      pathParams,
-      body,
     });
 
     return {
@@ -382,44 +399,50 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_pee
 export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer: ToolDefinition = {
   schema: {
     name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_transfer',
-    description: 'Transfer Call — [PATCH /domains/{domain}/users/{user}/calls/{call_id}/transfer]',
+    description: 'Transfer call — Transfers a call in progress, blind or attended.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  For a blind transfer, send the destination in `call-term-user`. For an attended transfer, send the `hostname` and `call-destination-session-id` of the call to merge in, taken from its `core-server` and `call-session-id`.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [PATCH /domains/{domain}/users/{user}/calls/{callid}/transfer]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 },
                 "call-term-user": {
                       "type": "string",
-                      "description": "This is the new forward location for the call to be transfered to. Do NOT set when using for attended transfer process."
+                      "description": "For a blind transfer, the destination: an extension, a number, or a SIP URI. For answer, the device that answers, such as `sip:1001wp@example.com`. Leave it out for an attended transfer."
                 },
                 "hostname": {
                       "type": "string",
-                      "description": "Required only for supervised/assisted transfers, this is the hostname where the call currently resides."
+                      "description": "For an attended transfer, the core server that holds the call to merge in, from that call's `core-server`. Send it with `call-destination-session-id`."
                 },
                 "call-destination-session-id": {
                       "type": "string",
-                      "description": "Required only for supervised/assisted transfers, this is the session identifier that is required to help the switch merge in the correct call."
+                      "description": "For an attended transfer, the `call-session-id` of the call to merge in. Send it with `hostname`."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/calls/{}/transfer',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
@@ -431,7 +454,7 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer: To
     }
     const response = await client.request({
       method: 'PATCH',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/transfer',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/transfer',
       pathParams,
       body,
     });
@@ -448,44 +471,50 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer: To
 export const patch_domains_by_domain_users_by_user_calls_by_call_id_answer: ToolDefinition = {
   schema: {
     name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_answer',
-    description: 'Answer Call — [PATCH /domains/{domain}/users/{user}/calls/{call_id}/answer]',
+    description: 'Answer call — Answers a ringing call on one of the user\\\'s devices.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  Send the device that answers in `call-term-user`.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [PATCH /domains/{domain}/users/{user}/calls/{callid}/answer]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 },
                 "call-term-user": {
                       "type": "string",
-                      "description": "This is the new forward location for the call to be transfered to. Do NOT set when using for attended transfer process."
+                      "description": "For a blind transfer, the destination: an extension, a number, or a SIP URI. For answer, the device that answers, such as `sip:1001wp@example.com`. Leave it out for an attended transfer."
                 },
                 "hostname": {
                       "type": "string",
-                      "description": "Required only for supervised/assisted transfers, this is the hostname where the call currently resides."
+                      "description": "For an attended transfer, the core server that holds the call to merge in, from that call's `core-server`. Send it with `call-destination-session-id`."
                 },
                 "call-destination-session-id": {
                       "type": "string",
-                      "description": "Required only for supervised/assisted transfers, this is the session identifier that is required to help the switch merge in the correct call."
+                      "description": "For an attended transfer, the `call-session-id` of the call to merge in. Send it with `hostname`."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/calls/{}/answer',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
@@ -497,7 +526,7 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_answer: Tool
     }
     const response = await client.request({
       method: 'PATCH',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/answer',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/answer',
       pathParams,
       body,
     });
@@ -514,39 +543,45 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_answer: Tool
 export const patch_domains_by_domain_users_by_user_calls_by_call_id_hold: ToolDefinition = {
   schema: {
     name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_hold',
-    description: 'Hold Active Call — [PATCH /domains/{domain}/users/{user}/calls/{call_id}/hold]',
+    description: 'Hold call — Puts the other party on the user\\\'s call on hold.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  The leg to hold is chosen from the call: when the user placed the call, the receiver is held, and when the user received it, the caller is held. To resume, use **Resume held call**.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [PATCH /domains/{domain}/users/{user}/calls/{callid}/hold]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/calls/{}/hold',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'PATCH',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/hold',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/hold',
       pathParams,
     });
 
@@ -562,39 +597,45 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_hold: ToolDe
 export const patch_domains_by_domain_users_by_user_calls_by_call_id_unhold: ToolDefinition = {
   schema: {
     name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_unhold',
-    description: 'Un-Hold Active Call — [PATCH /domains/{domain}/users/{user}/calls/{call_id}/unhold]',
+    description: 'Resume held call — Takes the user\\\'s call off hold.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [PATCH /domains/{domain}/users/{user}/calls/{callid}/unhold]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/calls/{}/unhold',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'PATCH',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/unhold',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/unhold',
       pathParams,
     });
 
@@ -610,40 +651,118 @@ export const patch_domains_by_domain_users_by_user_calls_by_call_id_unhold: Tool
 export const delete_domains_by_domain_users_by_user_calls_by_call_id_reject: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_calls_by_call_id_reject',
-    description: 'Reject Call — Reject a call with orig call ID. This would cancel a "ringing" call prior to any answer event. If you\\\'re looking to disconnect an active call then, reference DELETE on /domains/{domain}/users/{user}/calls/{call_id} — [DELETE /domains/{domain}/users/{user}/calls/{call_id}/reject]',
+    description: 'Reject call — Turns away a call that is ringing the user, before it is answered. `POST` and `PATCH` on the same path do the same.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  To end a call that is already answered, use **Disconnect call**.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [DELETE /domains/{domain}/users/{user}/calls/{callid}/reject]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "call_id": {
+                "callid": {
                       "type": "string",
-                      "description": "call_id"
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "call_id"
+                "callid"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/calls/{}/reject',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'call_id'];
+    const pathParamNames = ['domain', 'user', 'callid'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
       method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/calls/{call_id}/reject',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/reject',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_peer: ToolDefinition = {
+  schema: {
+    name: 'patch_domains_by_domain_users_by_user_calls_by_call_id_transfer_peer',
+    description: 'Transfer call peer — Transfers the other party on the user\\\'s call, the peer, to a new destination or to a free call park.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  Send `destination` for a blind transfer. Send `valid` instead to park the peer: the first call park in the list that is a call park of the domain and holds no call is used, and the response is `200` with the call park the peer was sent to.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [PATCH /domains/{domain}/users/{user}/calls/{callid}/transferPeer]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
+                },
+                "destination": {
+                      "type": "string",
+                      "description": "Transfer destination: an extension, a number, or a SIP URI, such as `sip:1002@example.com`. `PLUS` in the value is sent as `+`."
+                },
+                "valid": {
+                      "type": "string",
+                      "description": "Comma-separated list of call park names to choose from, such as `701,702`. Used when `destination` is not sent."
+                },
+                "prefix": {
+                      "type": "string",
+                      "description": "Text put before the chosen park name to form the transfer destination. Used only with `valid`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/users/{}/calls/{}/transferPeer',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['destination', 'valid', 'prefix'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PATCH',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/transferPeer',
+      pathParams,
+      body,
     });
 
     return {
@@ -658,16 +777,403 @@ export const delete_domains_by_domain_users_by_user_calls_by_call_id_reject: Too
 export const post_calls_report: ToolDefinition = {
   schema: {
     name: 'post_calls_report',
-    description: 'Report Active Calls — [POST /calls/report]',
+    description: 'Report concurrent calls — Returns the number of calls in progress over a time window, in buckets of one minute to one day, broken down by `group_by`.  Requires Super User, Super User Read Only, or Reseller scope. A Super User sees the whole platform. A Reseller sees only its own territory: its domains, sites, groups, and connections, and only a `domain` in its territory. `group_by=hostname` is for Super User scopes only.  Only `POST` is accepted; `GET` returns `405`.  Minute buckets cover only the last 3.5 hours and hourly buckets the last 15 days. A window outside that returns `400`; use a larger `report_by`. For a simple series for one domain or reseller, use **List active call history for domain** or **List active call history**. — [POST /calls/report]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "start_date": {
+                      "type": "string",
+                      "description": "Start of the report window, such as `2026-09-01 00:00:00`. Any date and time PHP can parse is accepted. Must be before `end_date`."
+                },
+                "end_date": {
+                      "type": "string",
+                      "description": "End of the report window, in the same form as `start_date`."
+                },
+                "group_by": {
+                      "type": "string",
+                      "description": "What to break the report down by. `huntgroup` and `callswaiting` report the call queues of `domain` and need it. `hostname` breaks it down by core server and is for Super User scopes only. Any other value returns `400`. Allowed values: \"domain\", \"reseller\", \"hostname\", \"group\", \"site\", \"connection\", \"huntgroup\", \"callswaiting\"",
+                      "enum": [
+                            "domain",
+                            "reseller",
+                            "hostname",
+                            "group",
+                            "site",
+                            "connection",
+                            "huntgroup",
+                            "callswaiting"
+                      ]
+                },
+                "report_by": {
+                      "type": "string",
+                      "description": "Bucket size: one minute, ten minutes, one hour, or one day. Minute data is kept for about 3.5 hours and hourly data for 15 days. Any other value returns `400`. Allowed values: \"min\", \"tens\", \"hour\", \"day\". Default: \"day\"",
+                      "enum": [
+                            "min",
+                            "tens",
+                            "hour",
+                            "day"
+                      ],
+                      "default": "day"
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to count: calls between users on the platform, calls to or from outside it, or both. Any other value returns `400`. Allowed values: \"onnet\", \"offnet\", \"all\". Default: \"onnet\"",
+                      "enum": [
+                            "onnet",
+                            "offnet",
+                            "all"
+                      ],
+                      "default": "onnet"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain to report on. Required with `group_by` `huntgroup` or `callswaiting`. A domain that does not exist, or for a Reseller one outside its territory, returns `403`."
+                },
+                "value_offset": {
+                      "type": "string",
+                      "description": "For `huntgroup` and `callswaiting`, hours to subtract from each bucket time, such as `5 HOUR`. Ignored with `report_by=day`."
+                }
+          },
+          "required": [
+                "start_date",
+                "end_date",
+                "group_by"
+          ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /calls/report',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['start_date', 'end_date', 'group_by', 'report_by', 'type', 'domain', 'value_offset'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/calls/report',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_calls_active_history: ToolDefinition = {
+  schema: {
+    name: 'list_calls_active_history',
+    description: 'List active call history — Returns how many calls were in progress over a recent window, for your territory or the whole platform, as a series of buckets ending now.  Requires Reseller, Super User, or Super User Read Only scope. A Reseller always gets its own territory, and `reseller` and `domain` are ignored. A Super User gets the whole platform, or one reseller with `reseller`, or one domain with `domain`.  The platform-wide series counts all calls and ignores `type`. Only `GET` is accepted. — [GET /calls/active-history]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "range": {
+                      "type": "string",
+                      "description": "Window to cover, ending now. Defaults to `24h`. Allowed values: \"1h\", \"3h\", \"6h\", \"12h\", \"24h\", \"2d\", \"7d\", \"28d\". Default: \"24h\"",
+                      "enum": [
+                            "1h",
+                            "3h",
+                            "6h",
+                            "12h",
+                            "24h",
+                            "2d",
+                            "7d",
+                            "28d"
+                      ],
+                      "default": "24h"
+                },
+                "period": {
+                      "type": "string",
+                      "description": "Bucket size. Defaults to `minute` for `1h` and `3h`, `hour` up to `7d`, and `day` for `28d`. Minute buckets are kept for about 3.5 hours and hourly buckets for 15 days: a size that does not cover `range` returns `400`. Allowed values: \"minute\", \"hour\", \"day\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day"
+                      ]
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to count: calls between users on the platform (`onnet`), calls to or from outside it (`offnet`), or both. Defaults to `all`. Ignored for the platform-wide series. Allowed values: \"onnet\", \"offnet\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "onnet",
+                            "offnet",
+                            "all"
+                      ],
+                      "default": "all"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Super User only. Reseller to report on, such as `example-reseller`. Ignored for a Reseller token."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Super User only. Domain to report on, such as `example.com`. Takes precedence over `reseller`. Ignored for a Reseller token."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /calls/active-history',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['range', 'period', 'type', 'reseller', 'domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/calls/active-history',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_specific_active_call_domain: ToolDefinition = {
+  schema: {
+    name: 'read_specific_active_call_domain',
+    description: 'Read active call in domain — Returns one call in progress in the domain, found by the call ID of any of its legs.  Requires Office Manager scope for your own domain, or Reseller or Super User scope.  Only calls in which the domain is a party are found: a call ID of another domain\\\'s call returns `404`. A call that has ended is no longer active and also returns `404`. To read ended calls, use the CDR endpoints. — [GET /domains/{domain}/calls/{callid}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
+                }
+          },
+          "required": [
+                "domain",
+                "callid"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/calls/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callid'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/calls/{callid}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_calls_active_history_domain: ToolDefinition = {
+  schema: {
+    name: 'list_calls_active_history_domain',
+    description: 'List active call history for domain — Returns how many calls the domain had in progress over a recent window, as a series of buckets ending now.  Requires Office Manager scope for your own domain, or Reseller or Super User scope. Read-only scopes, such as Super User Read Only, can read it too.  Each bucket holds the most calls in progress at once during it. The bucket size follows `range` unless you set `period`. Only `GET` is accepted. — [GET /domains/{domain}/calls/active-history]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "range": {
+                      "type": "string",
+                      "description": "Window to cover, ending now. Defaults to `24h`. Allowed values: \"1h\", \"3h\", \"6h\", \"12h\", \"24h\", \"2d\", \"7d\", \"28d\". Default: \"24h\"",
+                      "enum": [
+                            "1h",
+                            "3h",
+                            "6h",
+                            "12h",
+                            "24h",
+                            "2d",
+                            "7d",
+                            "28d"
+                      ],
+                      "default": "24h"
+                },
+                "period": {
+                      "type": "string",
+                      "description": "Bucket size. Defaults to `minute` for `1h` and `3h`, `hour` up to `7d`, and `day` for `28d`. Minute buckets are kept for about 3.5 hours and hourly buckets for 15 days: a size that does not cover `range` returns `400`. Allowed values: \"minute\", \"hour\", \"day\"",
+                      "enum": [
+                            "minute",
+                            "hour",
+                            "day"
+                      ]
+                },
+                "type": {
+                      "type": "string",
+                      "description": "Which calls to count: calls between users on the platform (`onnet`), calls to or from outside it (`offnet`), or both. Defaults to `all`. Allowed values: \"onnet\", \"offnet\", \"all\". Default: \"all\"",
+                      "enum": [
+                            "onnet",
+                            "offnet",
+                            "all"
+                      ],
+                      "default": "all"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/calls/active-history',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['range', 'period', 'type'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/calls/active-history',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const perform_call_action_for_user: ToolDefinition = {
+  schema: {
+    name: 'perform_call_action_for_user',
+    description: 'Run call action — Runs a call control action, named in the path, on one of the user\\\'s calls in progress. `PATCH` on the same path does the same.  Requires Basic User scope for your own user, Office Manager scope for a user in your own domain, Site Manager scope for a user in your own site, or Reseller or Super User scope.  The actions:  - `answer`: answer a ringing call on the device in `call-term-user` - `hold` and `unhold`: hold or resume the other party - `transfer` (or `xfer`): blind transfer to `call-term-user`, or attended with `hostname` and `call-destination-session-id` - `transferPeer`: transfer the other party to `call-term-user`, or park it with `valid` - `recording`: set call recording to `state` - `reject` and `disconnect`: turn away a ringing call, or end the call  Each action also has its own page with its fields. Any other action returns `400`. `GET` on this path returns `405`, and `DELETE` is accepted only for `reject` and `disconnect`.  The user in the path must be a party on the call, on any leg; otherwise the request returns `404`. The call is looked up for about a second before `404` is returned, so a control sent right after the call starts still finds it. A call that has not reached the platform by then also returns `404`. — [POST /domains/{domain}/users/{user}/calls/{callid}/{action}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "callid": {
+                      "type": "string",
+                      "description": "Call ID of any leg of the call: the value of `call-orig-call-id`, `call-term-call-id`, or `call-through-call-id` on an active call, or the `call-id` you sent when you started it."
+                },
+                "action": {
+                      "type": "string",
+                      "description": "Call control action to run. Allowed values: \"answer\", \"hold\", \"unhold\", \"transfer\", \"xfer\", \"transferPeer\", \"recording\", \"reject\", \"disconnect\"",
+                      "enum": [
+                            "answer",
+                            "hold",
+                            "unhold",
+                            "transfer",
+                            "xfer",
+                            "transferPeer",
+                            "recording",
+                            "reject",
+                            "disconnect"
+                      ]
+                },
+                "call-term-user": {
+                      "type": "string",
+                      "description": "For `answer`, the device that answers, such as `sip:1001wp@example.com`. For `transfer`, `xfer`, and `transferPeer`, the transfer destination. Required for `answer`."
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "For an attended `transfer`, the core server that holds the call to merge in, from its `core-server`. Send it with `call-destination-session-id`."
+                },
+                "call-destination-session-id": {
+                      "type": "string",
+                      "description": "For an attended `transfer`, the `call-session-id` of the call to merge in. Send it with `hostname`."
+                },
+                "state": {
+                      "type": "string",
+                      "description": "For `recording`, the recording state to set. Required for `recording`. Allowed values: \"on\", \"off\", \"pause\", \"resume\"",
+                      "enum": [
+                            "on",
+                            "off",
+                            "pause",
+                            "resume"
+                      ]
+                },
+                "valid": {
+                      "type": "string",
+                      "description": "For `park` and `transferPeer`, a comma-separated list of call park names to choose from. The first free one is used."
+                },
+                "prefix": {
+                      "type": "string",
+                      "description": "For `park` and `transferPeer` with `valid`, text put before the chosen park name to form the destination."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "callid",
+                "action"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/calls/{}/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'callid', 'action'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['call-term-user', 'hostname', 'call-destination-session-id', 'state', 'valid', 'prefix'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/calls/{callid}/{action}',
+      pathParams,
+      body,
     });
 
     return {

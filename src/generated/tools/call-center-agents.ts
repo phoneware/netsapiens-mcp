@@ -5,17 +5,41 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_agents: ToolDefinition = {
   schema: {
     name: 'read_agents',
-    description: 'Read Agents in Call Queue — [GET /domains/{domain}/callqueues/{callqueue}/agents]',
+    description: 'List agents in call queue — Lists a call queue\\\'s agents with their queue settings, live state, and the name, department, and site of the user behind each one.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User read every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only read the same. Site Manager reads agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User see only their own agent entries: their user and each of their devices. Rows you may not see are left out, so a scope limited to its own entries gets only those.  Rows are sorted by `callqueue-agent-id` and paged with `start` and `limit`, which defaults to `100`. A queue that does not exist returns `404`. For names only, call `GET /domains/{domain}/callqueues/{callqueue}/agents/list`; for a total, `.../agents/count`. — [GET /domains/{domain}/callqueues/{callqueue}/agents]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
+                },
+                "callqueue-agent-availability-for-dispatch": {
+                      "type": "string",
+                      "description": "Returns only agents in this dispatch state, such as `available`."
+                },
+                "callqueue-agent-availability-type": {
+                      "type": "string",
+                      "description": "Returns only agents with this availability setting. Allowed values: \"automatic\", \"manual\", \"disabled\", \"offnet-automatic\"",
+                      "enum": [
+                            "automatic",
+                            "manual",
+                            "disabled",
+                            "offnet-automatic"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most agents to return. Defaults to `100`. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -24,16 +48,28 @@ export const read_agents: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/{}/agents',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['callqueue-agent-availability-for-dispatch', 'callqueue-agent-availability-type', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,34 +84,25 @@ export const read_agents: ToolDefinition = {
 export const create_agent: ToolDefinition = {
   schema: {
     name: 'create_agent',
-    description: 'Add Agent to Call Queue — [POST /domains/{domain}/callqueues/{callqueue}/agents]',
+    description: 'Add agent to call queue — Adds a user or a device to a call queue as an agent.  Requires Call Center Supervisor, Office Manager, Route Manager, Reseller, or Super User. Site Manager can add users of its own site to queues at its own site. Call Center Agent, Basic User, Advanced User, Simple User, Office Manager Read-Only, and Super User Read Only get `403`.  `callqueue-agent-id` is required: `1001@example.com` adds the user, so every device of the user rings; `sip:1001wp@example.com` adds one device. A bare `1001` is stored as `1001@<domain>`. The id must belong to the path\\\'s domain and fit `user@domain` or `sip:device@domain` in 127 characters. The agent starts logged in (`automatic`) unless you send `callqueue-agent-availability-type`. `202` means the change was published over the service bus (SBUS), not yet applied; send `synchronous=yes` to wait up to 2 seconds and get the entry back with `200`. The agent is notified that they were added. An agent already on the queue returns `409`. — [POST /domains/{domain}/callqueues/{callqueue}/agents]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "This is the callqueue id for which the agent is in. The agent may be in multiple callqueus, but this value is a single entry."
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the main identifier for a \"agent\" in a queue. There are two format supported here, either a user based option which will look like user@domain or a device based method like sip:device@domain."
+                      "description": "The agent: `user@domain` to add a user, so every device of the user rings, or `sip:` and a device address to add one device. A bare user such as `1001` is stored as `1001@<domain>`. The domain must be the path's. At most 127 characters"
                 },
                 "callqueue-agent-availability-type": {
                       "type": "string",
-                      "description": "This is the main toggle for the agents status in the queue.  \"automatic\" is logged in, which manual is logged out with the option for one call. From a angent perspective and the actions of logging in and out the recomention would be to use the specific \"agent actions\" api instead of the basic agent update request. Allowed values: \"automatic\", \"manual\", \"disabled\", \"offnet-automatic\"",
+                      "description": "`automatic` logs the agent in, `manual` takes it offline, `disabled` stops dispatch without logging out, and `offnet-automatic` logs in an offnet agent. Defaults to `automatic`. Allowed values: \"automatic\", \"manual\", \"disabled\", \"offnet-automatic\"",
                       "enum": [
                             "automatic",
                             "manual",
@@ -85,109 +112,48 @@ export const create_agent: ToolDefinition = {
                 },
                 "callqueue-agent-wrap-up-allowance-seconds": {
                       "type": "number",
-                      "description": "This is the number of seconds that the system will hold the agent offline before logging them back in automatically. This time allows the agent to comolete needed notes and conclusions to previous calls and prepare for next call. Default: 0",
-                      "default": 0
+                      "description": "Seconds the agent stays unavailable after a call. Defaults to `0`"
                 },
                 "auto-answer-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` answers dispatched calls automatically on devices that support it. Defaults to `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "callqueue-agent-dispatch-order-ordinal": {
                       "type": "number",
-                      "description": "For use in callqueues that have a linear order, this value would be to the order of the agent in that list, the lower the number the higher agent in the order."
+                      "description": "Position in the ring order for `Linear Hunt` and `Linear Cascade` queues. Lower rings first"
                 },
                 "callqueue-agent-dispatch-queue-priority-ordinal": {
                       "type": "number",
-                      "description": "This setting is a priority value for this agent's entry with respect to the other callqueues they are in. Lower number is higher priority. This means that when the agent comes back available after a call the priority would be used to determine which queue its attempted first."
+                      "description": "Priority of this queue among the agent's queues. Lower is offered first"
                 },
                 "limits-max-active-calls-total": {
                       "type": "number",
-                      "description": "This is the maximum number of calls an agent will be given at at time. Default and ideal is 1, but if needed it can be higher"
+                      "description": "Most calls offered to the agent at once. Defaults to `1`"
                 },
                 "callqueue-agent-answer-confirmation-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` makes the agent press a key to accept a dispatched call. Defaults to `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "callqueue-agent-max-concurrent-sms-conversations": {
+                      "type": "number",
+                      "description": "Most SMS conversations offered to the agent at once. Defaults to `0`, which offers none"
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "no"
-                },
-                "callqueue-agent-has-registered-devices": {
-                      "type": "string",
-                      "description": "This read only status will show the agents registration infor and if the system believes the device is registered. Allowed values: \"yes\", \"no\", \"push-enabled\", \"offnet\"",
-                      "enum": [
-                            "yes",
-                            "no",
-                            "push-enabled",
-                            "offnet"
-                      ]
-                },
-                "callqueue-agent-availability-for-dispatch": {
-                      "type": "string",
-                      "description": "This is the status for the agent generated by the system using all available informaion."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the total number of calls on the agent's account across all their queues"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This timestamp is the datetime of the last change to the agent's configuration and status"
-                },
-                "callqueue-agent-max-concurrent-sms-conversations": {
-                      "type": "number",
-                      "description": "This is the maximum number of SMS queue sessions the agent will be requested to handle before queing up future requests."
-                },
-                "last-callqueue-dispatch-datetime": {
-                      "type": "string",
-                      "description": "This timestamp is the datetime of the last dispatch to the agent."
-                },
-                "callqueue-agent-entry-type": {
-                      "type": "string",
-                      "description": "This is a read only field that will tell you the type of agent config that is setup, this might include device or user based agents or \"offnet\". Allowed values: \"device\", \"user\", \"offnet\"",
-                      "enum": [
-                            "device",
-                            "user",
-                            "offnet"
-                      ]
-                },
-                "login-username": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's login if needed."
-                },
-                "name-full-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's full name."
-                },
-                "agent-name-first-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's first name."
-                },
-                "agent-name-last-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's last name."
-                },
-                "agent-department": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's depeartment."
-                },
-                "agent-site": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's site"
-                },
-                "agent-user-scope": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's scope."
-                },
-                "agent-status-message": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's status message."
                 }
           },
           "required": [
@@ -197,13 +163,19 @@ export const create_agent: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/callqueues/{}/agents',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['synchronous', 'callqueue-agent-id', 'callqueue', 'domain', 'callqueue-agent-availability-type', 'callqueue-agent-wrap-up-allowance-seconds', 'auto-answer-enabled', 'callqueue-agent-dispatch-order-ordinal', 'callqueue-agent-dispatch-queue-priority-ordinal', 'limits-max-active-calls-total', 'callqueue-agent-answer-confirmation-enabled', 'callqueue-agent-has-registered-devices', 'callqueue-agent-availability-for-dispatch', 'active-calls-total-current', 'last-modified-datetime', 'callqueue-agent-max-concurrent-sms-conversations', 'last-callqueue-dispatch-datetime', 'callqueue-agent-entry-type', 'login-username', 'name-full-name', 'agent-name-first-name', 'agent-name-last-name', 'agent-department', 'agent-site', 'agent-user-scope', 'agent-status-message'];
+    const bodyParamNames = ['callqueue-agent-id', 'callqueue-agent-availability-type', 'callqueue-agent-wrap-up-allowance-seconds', 'auto-answer-enabled', 'callqueue-agent-dispatch-order-ordinal', 'callqueue-agent-dispatch-queue-priority-ordinal', 'limits-max-active-calls-total', 'callqueue-agent-answer-confirmation-enabled', 'callqueue-agent-max-concurrent-sms-conversations', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -224,59 +196,50 @@ export const create_agent: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_callqueues_by_callqueue_agents_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_callqueues_by_callqueue_agents_count',
-    description: 'Count Agents in Call Queue — [GET /domains/{domain}/callqueues/{callqueue}/agents/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "callqueue": {
-                      "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
-                }
-          },
-          "required": [
-                "domain",
-                "callqueue"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'callqueue'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/count',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const read_agents_domain: ToolDefinition = {
   schema: {
     name: 'read_agents_domain',
-    description: 'Read Agents in Domain — [GET /domains/{domain}/agents]',
+    description: 'List agents in domain — Lists every call queue agent in the domain, one row per agent, with the queues they are on in `queue_list` and each queue\\\'s availability setting in `queue_list_status`.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User read every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only read the same. Site Manager reads agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User see only their own agent entries: their user and each of their devices. Rows you may not see are left out.  The per-queue fields (`callqueue`, wrap-up, priority) come from the first queue in `queue_list`. Name one agent with `extension-number` or `agent` to get one row per queue that agent is on instead, each with that queue\\\'s own settings and dispatch state, sorted by priority. Rows are sorted by `callqueue-agent-id` and paged with `start` and `limit`, which defaults to `100`. Filter by the user\\\'s `site` or `agent-department`, or by queue with `queue_list`. — [GET /domains/{domain}/agents]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "site": {
+                      "type": "string",
+                      "description": "Returns only agents whose user is at this site. Offnet agents are left out."
+                },
+                "agent-department": {
+                      "type": "string",
+                      "description": "Returns only agents whose user is in this department."
+                },
+                "extension-number": {
+                      "type": "string",
+                      "description": "Returns only this agent, one row per queue they are on. Give the agent as `callqueue-agent-id` shows it. If you also send `agent`, this one is used."
+                },
+                "agent": {
+                      "type": "string",
+                      "description": "The same filter as `extension-number`. Returns only this agent, one row per queue they are on. Give the agent as `callqueue-agent-id` shows it."
+                },
+                "queue_list": {
+                      "type": "string",
+                      "description": "Comma-separated queue extensions. Returns only agents on these queues."
+                },
+                "callqueue-agent-availability-for-dispatch": {
+                      "type": "string",
+                      "description": "Returns only agent entries in this dispatch state, such as `available`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most agents to return. Defaults to `100`. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -284,16 +247,28 @@ export const read_agents_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/agents',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['site', 'agent-department', 'extension-number', 'agent', 'queue_list', 'callqueue-agent-availability-for-dispatch', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/agents',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -308,21 +283,21 @@ export const read_agents_domain: ToolDefinition = {
 export const read_agent: ToolDefinition = {
   schema: {
     name: 'read_agent',
-    description: 'Read Specific Agent in Call Queue — [GET /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
+    description: 'Read agent in call queue — Returns one agent\\\'s entry on a call queue: its queue settings, live state, and the user behind it.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User read every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only read the same. Site Manager reads agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User see only their own agent entries: their user and each of their devices. Use `~` as the agent for your own entry. Reading an agent you may not see returns `403`.  An agent that is not on this queue returns `404`, and so does a queue that does not exist. The agent must belong to the path\\\'s domain. — [GET /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 }
           },
           "required": [
@@ -331,6 +306,12 @@ export const read_agent: ToolDefinition = {
                 "callqueue-agent-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/{}/agents/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
@@ -356,25 +337,25 @@ export const read_agent: ToolDefinition = {
 export const update_agent: ToolDefinition = {
   schema: {
     name: 'update_agent',
-    description: 'Update Agent in Call Queue — [PUT /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
+    description: 'Update agent in call queue — Changes an agent\\\'s settings on one call queue: availability, wrap-up time, dispatch order and priority, call and SMS limits, auto answer, and answer confirmation. Send only the fields you change.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User can change any agent in the domain. Site Manager can change agents who are users at its own site, on queues at its own site. Call Center Agent, Basic User, Advanced User, and Simple User get `403`: they change only their own status, with the actions in Agent Actions. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the change was published over the service bus (SBUS), not yet applied. To log an agent in or out, use the actions in Agent Actions, which also record the change in the agent log. An agent that is not on this queue returns `404`, as does an agent id from another domain. — [PUT /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 },
                 "callqueue-agent-availability-type": {
                       "type": "string",
-                      "description": "This is the main toggle for the agents status in the queue.  \"automatic\" is logged in, which manual is logged out with the option for one call. From a angent perspective and the actions of logging in and out the recomention would be to use the specific \"agent actions\" api instead of the basic agent update request. Allowed values: \"automatic\", \"manual\", \"disabled\", \"offnet-automatic\"",
+                      "description": "`automatic` logs the agent in, `manual` takes it offline, `disabled` stops dispatch without logging out, and `offnet-automatic` logs in an offnet agent. Allowed values: \"automatic\", \"manual\", \"disabled\", \"offnet-automatic\"",
                       "enum": [
                             "automatic",
                             "manual",
@@ -384,109 +365,39 @@ export const update_agent: ToolDefinition = {
                 },
                 "callqueue-agent-wrap-up-allowance-seconds": {
                       "type": "number",
-                      "description": "This is the number of seconds that the system will hold the agent offline before logging them back in automatically. This time allows the agent to comolete needed notes and conclusions to previous calls and prepare for next call. Default: 0",
-                      "default": 0
+                      "description": "Seconds the agent stays unavailable after a call."
                 },
                 "auto-answer-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` answers dispatched calls automatically on devices that support it. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "callqueue-agent-dispatch-order-ordinal": {
                       "type": "number",
-                      "description": "For use in callqueues that have a linear order, this value would be to the order of the agent in that list, the lower the number the higher agent in the order."
+                      "description": "Position in the ring order for `Linear Hunt` and `Linear Cascade` queues. Lower rings first"
                 },
                 "callqueue-agent-dispatch-queue-priority-ordinal": {
                       "type": "number",
-                      "description": "This setting is a priority value for this agent's entry with respect to the other callqueues they are in. Lower number is higher priority. This means that when the agent comes back available after a call the priority would be used to determine which queue its attempted first."
+                      "description": "Priority of this queue among the agent's queues. Lower is offered first"
                 },
                 "limits-max-active-calls-total": {
                       "type": "number",
-                      "description": "This is the maximum number of calls an agent will be given at at time. Default and ideal is 1, but if needed it can be higher"
+                      "description": "Most calls offered to the agent at once."
                 },
                 "callqueue-agent-answer-confirmation-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` makes the agent press a key to accept a dispatched call. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
-                },
-                "callqueue-agent-has-registered-devices": {
-                      "type": "string",
-                      "description": "This read only status will show the agents registration infor and if the system believes the device is registered. Allowed values: \"yes\", \"no\", \"push-enabled\", \"offnet\"",
-                      "enum": [
-                            "yes",
-                            "no",
-                            "push-enabled",
-                            "offnet"
                       ]
-                },
-                "callqueue-agent-availability-for-dispatch": {
-                      "type": "string",
-                      "description": "This is the status for the agent generated by the system using all available informaion."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the total number of calls on the agent's account across all their queues"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "This timestamp is the datetime of the last change to the agent's configuration and status"
                 },
                 "callqueue-agent-max-concurrent-sms-conversations": {
                       "type": "number",
-                      "description": "This is the maximum number of SMS queue sessions the agent will be requested to handle before queing up future requests."
-                },
-                "last-callqueue-dispatch-datetime": {
-                      "type": "string",
-                      "description": "This timestamp is the datetime of the last dispatch to the agent."
-                },
-                "callqueue-agent-entry-type": {
-                      "type": "string",
-                      "description": "This is a read only field that will tell you the type of agent config that is setup, this might include device or user based agents or \"offnet\". Allowed values: \"device\", \"user\", \"offnet\"",
-                      "enum": [
-                            "device",
-                            "user",
-                            "offnet"
-                      ]
-                },
-                "login-username": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's login if needed."
-                },
-                "name-full-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's full name."
-                },
-                "agent-name-first-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's first name."
-                },
-                "agent-name-last-name": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's last name."
-                },
-                "agent-department": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's depeartment."
-                },
-                "agent-site": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's site"
-                },
-                "agent-user-scope": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's scope."
-                },
-                "agent-status-message": {
-                      "type": "string",
-                      "description": "This value read only from the user that is linked to this agent. Its the user's status message."
+                      "description": "Most SMS conversations offered to the agent at once."
                 }
           },
           "required": [
@@ -496,13 +407,19 @@ export const update_agent: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/callqueues/{}/agents/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['callqueue-agent-availability-type', 'callqueue-agent-wrap-up-allowance-seconds', 'auto-answer-enabled', 'callqueue-agent-dispatch-order-ordinal', 'callqueue-agent-dispatch-queue-priority-ordinal', 'limits-max-active-calls-total', 'callqueue-agent-answer-confirmation-enabled', 'callqueue-agent-has-registered-devices', 'callqueue-agent-availability-for-dispatch', 'active-calls-total-current', 'last-modified-datetime', 'callqueue-agent-max-concurrent-sms-conversations', 'last-callqueue-dispatch-datetime', 'callqueue-agent-entry-type', 'login-username', 'name-full-name', 'agent-name-first-name', 'agent-name-last-name', 'agent-department', 'agent-site', 'agent-user-scope', 'agent-status-message'];
+    const bodyParamNames = ['callqueue-agent-availability-type', 'callqueue-agent-wrap-up-allowance-seconds', 'auto-answer-enabled', 'callqueue-agent-dispatch-order-ordinal', 'callqueue-agent-dispatch-queue-priority-ordinal', 'limits-max-active-calls-total', 'callqueue-agent-answer-confirmation-enabled', 'callqueue-agent-max-concurrent-sms-conversations'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -526,21 +443,21 @@ export const update_agent: ToolDefinition = {
 export const delete_agent: ToolDefinition = {
   schema: {
     name: 'delete_agent',
-    description: 'Remove Agent from Call Queue — [DELETE /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
+    description: 'Remove agent from call queue — Removes an agent from one call queue. The user or device is not changed, and stays on its other queues.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User can remove any agent in the domain. Site Manager can remove agents who are users at its own site, on queues at its own site. Call Center Agent, Basic User, Advanced User, and Simple User get `403`. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the removal was published over the service bus (SBUS), not yet applied. The agent is notified that they were removed. An agent that is not on this queue returns `404`. — [DELETE /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 }
           },
           "required": [
@@ -549,6 +466,12 @@ export const delete_agent: ToolDefinition = {
                 "callqueue-agent-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/callqueues/{}/agents/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
@@ -560,6 +483,256 @@ export const delete_agent: ToolDefinition = {
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domains_by_domain_callqueues_by_callqueue_agents_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_callqueues_by_callqueue_agents_count',
+    description: 'Count agents in call queue — Counts the agents on a call queue.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User count every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only count the same. Site Manager counts agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User count only their own agent entries: their user and each of their devices. The count agrees with the list.  Send `extension-number` to count one user\\\'s or device\\\'s entries. The count does not check that the queue exists: an unknown queue answers `0`. — [GET /domains/{domain}/callqueues/{callqueue}/agents/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callqueue": {
+                      "type": "string",
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
+                },
+                "extension-number": {
+                      "type": "string",
+                      "description": "Counts only entries for this agent, as `callqueue-agent-id` shows it."
+                }
+          },
+          "required": [
+                "domain",
+                "callqueue"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/{}/agents/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callqueue'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['extension-number'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_domain_agents: ToolDefinition = {
+  schema: {
+    name: 'count_domain_agents',
+    description: 'Count agents in domain — Counts the call queue agents in a domain, as `GET /domains/{domain}/agents` lists them: one per agent however many queues they are on, or, when you name one agent, one per queue that agent is on.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User count every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only count the same. Site Manager counts agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User count only their own agent entries: their user and each of their devices.  Send `extension-number` or `agent` to name one agent. The total is then the number of queues that agent is on. Entries the platform has not loaded are not counted, as the list skips them. — [GET /domains/{domain}/agents/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "extension-number": {
+                      "type": "string",
+                      "description": "Counts only this agent's queues, one per queue they are on. Give the agent as `callqueue-agent-id` shows it. If you also send `agent`, this one is used."
+                },
+                "agent": {
+                      "type": "string",
+                      "description": "The same filter as `extension-number`. Counts only this agent's queues, one per queue they are on. Give the agent as `callqueue-agent-id` shows it."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/agents/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['extension-number', 'agent'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/agents/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_agents: ToolDefinition = {
+  schema: {
+    name: 'list_domain_agents',
+    description: 'List agent summaries in domain — Lists every call queue agent entry in the domain in a reduced form: who the agent is, the first queue they are on, their priority there, their dispatch state, and the user\\\'s name, site, and department. One row per agent, or one row per queue when you name one agent with `extension-number` or `agent`.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User list every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only list the same. Site Manager lists agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User see only their own agent entries: their user and each of their devices. Rows you may not see are left out.  Wrap-up, dispatch tuning, and live call counts are on `GET /domains/{domain}/agents`. `start` and `limit` page the rows; `limit` defaults to `100`. — [GET /domains/{domain}/agents/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "extension-number": {
+                      "type": "string",
+                      "description": "Returns only this agent, one row per queue they are on. Give the agent as `callqueue-agent-id` shows it. If you also send `agent`, this one is used."
+                },
+                "agent": {
+                      "type": "string",
+                      "description": "The same filter as `extension-number`. Returns only this agent, one row per queue they are on. Give the agent as `callqueue-agent-id` shows it."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/agents/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start', 'limit', 'extension-number', 'agent'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/agents/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_callqueue_agents: ToolDefinition = {
+  schema: {
+    name: 'list_callqueue_agents',
+    description: 'List agent summaries in call queue — Lists a call queue\\\'s agents in a reduced form: who each agent is, their priority on this queue, their dispatch state, and the user\\\'s name, site, and department.  Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User list every agent in the domain (Reseller within its territory), and Office Manager Read-Only and Super User Read Only list the same. Site Manager lists agents who are users at its own site. Call Center Agent, Basic User, Advanced User, and Simple User see only their own agent entries: their user and each of their devices. Rows you may not see are left out.  Appending `/list` to an agent\\\'s path, `GET /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/list`, returns the same shape for that one agent. A queue that does not exist returns `404`. — [GET /domains/{domain}/callqueues/{callqueue}/agents/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callqueue": {
+                      "type": "string",
+                      "description": "Extension of the call queue, such as `4000`: the `callqueue` value returned by `GET /domains/{domain}/callqueues`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain",
+                "callqueue"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/callqueues/{}/agents/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callqueue'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/list',
+      pathParams,
+      queryParams,
     });
 
     return {

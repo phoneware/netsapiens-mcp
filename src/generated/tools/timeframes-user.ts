@@ -5,17 +5,54 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_timeframes: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_timeframes',
-    description: 'Read All Timeframes for User — [GET /domains/{domain}/users/{user}/timeframes]',
+    description: 'List user time frames — Returns the time frames a user owns, with their entries.  Requires Basic User for your own time frames. An Office Manager can reach any user in its domain, and a Site Manager any user in its own site. A Reseller can reach the domains in its territory, and a Super User any domain. A user outside your reach returns `403` with `Issue with timeframe access`.  Send `include_domain_timeframes` to add the domain\\\'s shared time frames. Page with `limit` and `start`; `limit` defaults to `100`. Time frames created before IDs existed are converted on the fly and added after the page. A user with no time frames returns `[]`.  `GET /domains/{domain}/users/{user}/timeframes/list` returns only names and state. — [GET /domains/{domain}/users/{user}/timeframes]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User who owns the time frames, such as `1001`. `~` means the user your token belongs to. A user that does not exist returns `404` on a read and `400` on a create."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most time frames to return, a whole number. Defaults to `100`. Anything but digits returns `400`. Legacy time frames that have no ID yet are added after the page, whatever the limit. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Time frames to skip before the first one returned, a whole number. Defaults to `0`. Anything but digits returns `400`. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Order of the result. `name asc|desc` orders by `timeframe-name`. `ends_on asc|desc` orders by `end_on`, time frames that never end last in ascending order, and also orders each time frame's entries by recurrence end date. The `user`, `user_name`, and `owner` values order the per-user rows of `users=all`. Any other value returns `400`. Allowed values: \"name asc\", \"name desc\", \"ends_on asc\", \"ends_on desc\", \"user asc\", \"user desc\", \"user_name asc\", \"user_name desc\", \"owner asc\", \"owner desc\"",
+                      "enum": [
+                            "name asc",
+                            "name desc",
+                            "ends_on asc",
+                            "ends_on desc",
+                            "user asc",
+                            "user desc",
+                            "user_name asc",
+                            "user_name desc",
+                            "owner asc",
+                            "owner desc"
+                      ]
+                },
+                "include_domain_timeframes": {
+                      "type": "string",
+                      "description": "Any value also returns the domain (shared) time frames, which answer rules of this user can use. Leave it out for the user's own time frames only. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
+                },
+                "order": {
+                      "type": "string",
+                      "description": "Storage order of the time frames before paging: comma-separated `id`, `domain`, `user`, `name`, or `type`, each optionally followed by `asc` or `desc`. Any other value returns `400`. Use `sort` to order the result."
                 }
           },
           "required": [
@@ -24,64 +61,28 @@ export const get_domains_by_domain_users_by_user_timeframes: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/timeframes',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'start', 'sort', 'include_domain_timeframes', 'order'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/timeframes',
       pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const get_domains_by_domain_users_by_user_timeframes_by_id: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_users_by_user_timeframes_by_id',
-    description: 'Read Specific Timeframe for User — [GET /domains/{domain}/users/{user}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to read"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
-      pathParams,
+      queryParams,
     });
 
     return {
@@ -120,6 +121,12 @@ export const delete_domains_by_domain_users_by_user_timeframes_by_id_4: ToolDefi
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];
     const pathParams: Record<string, string> = {};
@@ -141,19 +148,49 @@ export const delete_domains_by_domain_users_by_user_timeframes_by_id_4: ToolDefi
   },
 };
 
-export const op_delete: ToolDefinition = {
+export const get_domains_by_domain_users_by_user_timeframes_by_id: ToolDefinition = {
   schema: {
-    name: 'delete',
-    description: 'Delete All Timeframes for User — [DELETE /]',
+    name: 'get_domains_by_domain_users_by_user_timeframes_by_id',
+    description: 'Read user time frame — Returns one time frame a user owns, by ID or by name.  Requires Basic User for your own time frames. An Office Manager can reach any user in its domain, and a Site Manager any user in its own site. A Reseller can reach the domains in its territory, and a Super User any domain. A user outside your reach returns `403` with `Issue with timeframe access`.  By ID you get the time frame with its entries. By name you get the legacy view: the time ranges generated for it, the shape answer rules were first built on. Prefer the ID. An unknown ID or name returns `404`. — [GET /domains/{domain}/users/{user}/timeframes/{id}]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User who owns the time frames, such as `1001`. `~` means the user your token belongs to. A user that does not exist returns `404` on a read and `400` on a create."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Time frame to act on, in one of two forms: - a time frame ID, 32 lowercase hexadecimal characters, such as `7ae64ba3e46676fc728618a616e92424`. Take it from `timeframe-id` - a time frame name, such as `Business Hours`. Anything that is not 32 lowercase hexadecimal characters is read as a name An ID returns the time frame with its entries (`RecurringTimeframe`). A name returns the legacy view of the same time frame: its generated time ranges, in the `Timeframe` shape. A time frame whose name is itself 32 lowercase hexadecimal characters can be reached only by ID."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "id"
+          ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/timeframes/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
     const response = await client.request({
-      method: 'DELETE',
-      pathTemplate: '/',
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
+      pathParams,
     });
 
     return {
@@ -197,6 +234,12 @@ export const put_domains_by_domain_users_by_user_timeframes_by_id_8: ToolDefinit
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];
     const pathParams: Record<string, string> = {};
@@ -213,6 +256,85 @@ export const put_domains_by_domain_users_by_user_timeframes_by_id_8: ToolDefinit
       pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const op_delete: ToolDefinition = {
+  schema: {
+    name: 'delete',
+    description: 'Delete All Timeframes for User — [DELETE /]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_user_timeframes: ToolDefinition = {
+  schema: {
+    name: 'list_user_timeframes',
+    description: 'List user time frame names — Returns the name and state of each time frame the user owns: whether an answer rule of the user uses it (`selected`) and whether every range in it is in the past (`expired`). It does not include the domain\\\'s shared time frames; list those with `GET /domains/{domain}/timeframes/list`. Requires the `list` privilege on time frames, which Basic User, Site Manager, and Office Manager hold in their domain, and Reseller and Super User more widely. The owner must be one you can reach, or the call returns `403`.  `/list` is a suffix on the collection path. It returns names and state only, and it is authorised by the `list` privilege, the one `/count` uses. On a keyed path, `/timeframes/{id}/list`, it returns only that time frame, by ID or by name. **Changed in v46**: rows used to be name strings with the state appended; they are now objects with `selected` and `expired` fields. — [GET /domains/{domain}/users/{user}/timeframes/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User who owns the time frames, such as `1001`. `~` means the user your token belongs to. A user that does not exist returns `404` on a read and `400` on a create."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/timeframes/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/timeframes/list',
+      pathParams,
     });
 
     return {

@@ -5,34 +5,30 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const send_email: ToolDefinition = {
   schema: {
     name: 'send_email',
-    description: 'Send Email using Template — This API will send a email to a specific user usign their email address configured on the account and obtained from the domain and user provided. A example email would be a welcome email with links to setup the new account. — [POST /domains/{domain}/users/{user}/email]',
+    description: 'Send email to user — Sends a templated email to a user, at the address stored on their account. `template` picks the email:  - **Call center report.** A call center statistics report for a time window, `call_center_* (PHP)`. - **Account email.** Welcome, password reset, or forgotten login name. - **Custom template.** A `custom_*` template uploaded for the domain. - **Lost authenticator.** A recovery link for a user who lost their authenticator app. - **Email verification.** A verification link for one of the user\\\'s addresses.  A Basic User can send to themselves. Office Manager can send to users in their domain, Reseller to users in their territory, and Super User to anyone. Below Office Manager, every `cclist` address must also be one of the user\\\'s own addresses, or the answer is `403`.  The response is `200` when the request was understood, with `sent` saying whether the email went out: `sent: false` means it could not be built, for example because the user has no email address. A body that matches no email is a `400`. — [POST /domains/{domain}/users/{user}/email]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "template": {
-                      "type": "string",
-                      "description": "template"
-                },
-                "subject": {
-                      "type": "string",
-                      "description": "subject"
+                      "description": "The user's extension. The email goes to the address on this user's account. Use `~` for the user of your token."
                 }
           },
           "required": [
                 "domain",
-                "user",
-                "template",
-                "subject"
+                "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/email',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -40,15 +36,173 @@ export const send_email: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['template', 'subject'];
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/email',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const check_email_verified: ToolDefinition = {
+  schema: {
+    name: 'check_email_verified',
+    description: 'Check email address verification — Says whether one of a user\\\'s email addresses is verified. No token is needed. Name the address by its hash: the first 8 hexadecimal characters of the SHA-256 of the address, trimmed and in lowercase. An unknown user or address answers `verified: false`, not an error. — [GET /domains/{domain}/users/{user}/email/checkVerified/{email-hash}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "email-hash": {
+                      "type": "string",
+                      "description": "The first 8 characters of the SHA-256 of the lowercase address, in lowercase hex."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "email-hash"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/email/checkVerified/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'email-hash'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/email/checkVerified/{email-hash}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const send_platform_email: ToolDefinition = {
+  schema: {
+    name: 'send_platform_email',
+    description: 'Send email — Sends a templated email, like `POST /domains/{domain}/users/{user}/email`, with the user named in the body by `domain` and `user`. Requires Reseller or Super User scope. Prefer the per-user endpoint. — [POST /email]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /email',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/email',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const validate_smtpcreds_send_test_email: ToolDefinition = {
+  schema: {
+    name: 'validate_smtpcreds_send_test_email',
+    description: 'Test SMTP settings — Connects to an SMTP server, logs in, optionally sends a test message, and reports each step. Nothing is stored, so you can check settings before you save them on a reseller or domain. Requires Reseller or Super User scope.  The response is `200` whenever the test ran, with `success` saying whether it worked and `details.stage` saying where it stopped. A login failure is never retried without encryption. A request that cannot be tested is a `400`. Each connection attempt has 10 seconds by default. — [POST /email/validate]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "smtp-host": {
+                      "type": "string",
+                      "description": "The SMTP server's host name or IP address. A `tls://`, `ssl://`, or `smtps://` prefix is accepted and sets the encryption when `smtp-encryption` is `auto`."
+                },
+                "smtp-port": {
+                      "type": "number",
+                      "description": "The SMTP port. Defaults to `587`. Default: 587",
+                      "default": 587
+                },
+                "smtp-encryption": {
+                      "type": "string",
+                      "description": "`auto`, the default, uses implicit TLS on ports 465 and 2465 and STARTTLS elsewhere, and retries without encryption only when the server refuses STARTTLS. `tls` is implicit TLS, `starttls` upgrades the connection, and `none` stays unencrypted. Allowed values: \"auto\", \"starttls\", \"tls\", \"none\". Default: \"auto\"",
+                      "enum": [
+                            "auto",
+                            "starttls",
+                            "tls",
+                            "none"
+                      ],
+                      "default": "auto"
+                },
+                "smtp-username": {
+                      "type": "string",
+                      "description": "The login for SMTP authentication. Omit it or send it empty to test a relay that needs no login."
+                },
+                "smtp-password": {
+                      "type": "string",
+                      "description": "The password for SMTP authentication. Never returned."
+                },
+                "test-email": {
+                      "type": "string",
+                      "description": "`true` also sends a test message to `destination-email`. You can also send the destination address itself here. Defaults to `false`."
+                },
+                "destination-email": {
+                      "type": "string",
+                      "description": "Where to send the test message. Required when `test-email` is `true`."
+                },
+                "source-email": {
+                      "type": "string",
+                      "description": "The From address of the test message. Defaults to your own email address. Most servers refuse a From address that is not the login's own."
+                }
+          },
+          "required": [
+                "smtp-host"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /email/validate',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['smtp-host', 'smtp-port', 'smtp-encryption', 'smtp-username', 'smtp-password', 'test-email', 'destination-email', 'source-email'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
     }
     const response = await client.request({
       method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/email',
-      pathParams,
+      pathTemplate: '/email/validate',
       body,
     });
 

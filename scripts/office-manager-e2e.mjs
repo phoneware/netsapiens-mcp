@@ -8,11 +8,16 @@
  */
 
 import http from 'node:http';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
+const args = process.argv.slice(2);
+const readArg = (name) => {
+ const i = args.indexOf(name);
+ return i < 0 ? undefined : args[i + 1];
+};
+const cliApiUrl = readArg('--api-url');
+const cliCredentials = readArg('--credentials');
 const USER_CDRS = [{ 'call-id': 'u1' }, { 'call-id': 'u2' }];
 const DOMAIN_CDR_COUNT = 1500;
 
@@ -27,6 +32,9 @@ const ns = http.createServer((req, res) => {
   res.end(JSON.stringify(body));
  };
  // Who am I: NS reports this login as an Office Manager.
+ if (url.pathname === '/ns-api/v2/tokens' || url.pathname === '/ns-api/oauth2/token' || url.pathname === '/ns-api/v2/jwt') {
+  return json({ access_token: 'ns-upstream-token', refresh_token: 'rt', expires_in: 3600 });
+ }
  if (url.pathname === '/ns-api/v2/domains/~/users/~') {
   return json({ 'user-scope': 'Office Manager', user: '1001', domain: 'ExampleClinic' });
  }
@@ -40,29 +48,7 @@ const ns = http.createServer((req, res) => {
  json({});
 });
 await new Promise((r) => ns.listen(0, '127.0.0.1', r));
-const nsUrl = `http://127.0.0.1:${ns.address().port}`;
-
-// --- seed an Office Manager session ---------------------------------------
-const dir = mkdtempSync(join(tmpdir(), 'ns-mcp-e2e-'));
-const storePath = join(dir, 'tokens.json');
-const BEARER = 'office-manager-test-token';
-writeFileSync(
- storePath,
- JSON.stringify({
-  tokens: {
-   [BEARER]: {
-    accessToken: BEARER,
-    refreshToken: 'rt',
-    clientId: 'test-client',
-    expiresAt: Date.now() + 3600_000,
-    nsAccessToken: 'ns-upstream-token',
-    nsExpiresAt: Date.now() + 3600_000,
-    nsUsername: '1001@ExampleClinic',
-    nsUserRole: 'domain_admin',
-   },
-  },
- }),
-);
+const nsUrl = cliApiUrl || `http://127.0.0.1:${ns.address().port}`;
 
 // --- run the real MCP server ----------------------------------------------
 const port = 39000 + Math.floor(Math.random() * 2000);
@@ -76,11 +62,68 @@ const server = spawn('npx', ['tsx', 'bin/server.ts'], {
   NETSAPIENS_API_URL: nsUrl,
   NETSAPIENS_OAUTH_CLIENT_ID: 'cid',
   NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
-  MCP_TOKEN_STORE_PATH: storePath,
+  MCP_PERSISTENCE: 'memory',
+  MCP_SESSION_SECRET: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   LOG_LEVEL: 'warn',
  },
  stdio: ['ignore', 'pipe', 'pipe'],
 });
+server.stderr.on('data', (b) => process.stderr.write(b));
+
+for (let i = 0; i < 100; i++) {
+ try {
+  await fetch(`http://127.0.0.1:${port}/health`);
+  break;
+ } catch {
+  await new Promise((r) => setTimeout(r, 100));
+ }
+}
+
+// --- seed an Office Manager session via OAuth login -------------------------
+const regRes = await fetch(`http://127.0.0.1:${port}/register`, {
+ method: 'POST',
+ headers: { 'Content-Type': 'application/json' },
+ body: JSON.stringify({ redirect_uris: ['http://localhost/callback'], client_name: 'e2e' }),
+});
+const { client_id, client_secret } = await regRes.json();
+
+const verifier = randomBytes(32).toString('base64url');
+const challenge = createHash('sha256').update(verifier).digest('base64url');
+
+const authRes = await fetch(
+ `http://127.0.0.1:${port}/authorize?response_type=code&client_id=${client_id}&redirect_uri=http://localhost/callback&code_challenge=${challenge}&code_challenge_method=S256&state=xyz`
+);
+const authHtml = await authRes.text();
+const match = authHtml.match(/name="auth_state"\s+value="([^"]+)"/);
+const authState = match ? match[1] : '';
+
+const loginRes = await fetch(`http://127.0.0.1:${port}/login`, {
+ method: 'POST',
+ headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+ body: new URLSearchParams({
+  username: '1001@ExampleClinic',
+  password: 'password',
+  auth_state: authState,
+ }),
+ redirect: 'manual',
+});
+const location = loginRes.headers.get('location') || '';
+const code = new URL(location).searchParams.get('code') || '';
+
+const tokenRes = await fetch(`http://127.0.0.1:${port}/token`, {
+ method: 'POST',
+ headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+ body: new URLSearchParams({
+  grant_type: 'authorization_code',
+  code,
+  code_verifier: verifier,
+  client_id,
+  client_secret,
+  redirect_uri: 'http://localhost/callback',
+ }),
+});
+const tokenData = await tokenRes.json();
+const BEARER = tokenData.access_token;
 server.stderr.on('data', (b) => process.stderr.write(b));
 
 for (let i = 0; i < 100; i++) {

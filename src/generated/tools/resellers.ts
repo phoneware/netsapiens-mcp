@@ -5,16 +5,57 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_resellers: ToolDefinition = {
   schema: {
     name: 'get_resellers',
-    description: 'Get Resellers — [GET /resellers]',
+    description: 'List territories — Returns territories with their SMTP settings and live totals: domains, users, and active calls. A territory is the configuration record that a Reseller\\\'s domains belong to, and `reseller` is its name.  Super User and Super User Read Only see every territory. A Reseller sees only its own, as a one-item array. A Reseller that filters on another territory gets `403`, and so does every other scope.  Filter with `reseller`. Page with `start` and `limit`, 100 territories by default, and sort by `reseller` or `description`. Use `GET /resellers/count` for a total, and `GET /resellers/list` for names and descriptions only.  The totals are counted on every read. `users-total` leaves out system users. `email-send-smtp-password` is masked. Super User can send `include-secrets=yes` for the plain text. SMTP settings that are not set are left out. — [GET /resellers]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Only the territory with this name. Send `~` for your own. A Reseller naming another territory gets `403`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: `reseller` or `description`, each optionally followed by `asc` or `desc`, comma-separated. Defaults to `reseller asc`. Any other field returns `400`. The totals cannot be sorted on. Default: \"reseller asc\"",
+                      "default": "reseller asc"
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Send `yes` to get `email-send-smtp-password` in plain text instead of masked. Only Super User can send it, and each use is recorded in the audit log. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['reseller', 'limit', 'start', 'sort', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/resellers',
+      queryParams,
     });
 
     return {
@@ -29,49 +70,53 @@ export const get_resellers: ToolDefinition = {
 export const create_reseller: ToolDefinition = {
   schema: {
     name: 'create_reseller',
-    description: 'Create Reseller — [POST /resellers]',
+    description: 'Create territory — Creates a territory, the configuration record that a Reseller\\\'s domains belong to. Send its name in `reseller`, and optionally a `description` and SMTP settings for the email its domains send.  Requires Super User. Every other scope, Reseller and Super User Read Only included, gets `403`.  The name is 1 to 64 letters, digits, spaces, `.`, `-`, and `_`. It cannot start or end with a space or be only dots. Any other name returns `400`, and a name that already exists returns `409`.  A `202` means the territory was published over the service bus (SBUS), not yet created. Each core server writes it when the event arrives, so a read straight after the `202` can still return `404`. Assign a domain to the territory with the domain\\\'s `reseller` field. — [POST /resellers]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "The name of the Reseller. This is the main ID for the group which will be used to link domains for ownership."
+                      "description": "Territory name, unique on the platform. It is the key in `/resellers/{reseller}` and the `reseller` value on the territory's domains. 1 to 64 letters, digits, spaces, `.`, `-`, and `_`, with no leading or trailing space, and not only dots. Set on create and never changed."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This description can be used to give a more complete description and notes for this reseller."
+                      "description": "Free-text description of the territory"
                 },
                 "domains-total": {
                       "type": "number",
-                      "description": "This is the total number of domains in this Reseller's account."
+                      "description": "Number of domains in the territory"
                 },
                 "users-total": {
                       "type": "number",
-                      "description": "This is the total number of users in all domains owned by this reseller."
+                      "description": "Number of users in the territory's domains, not counting system users"
                 },
                 "email-send-smtp-hostname": {
                       "type": "string",
-                      "description": "This is the SMTP server hostname"
+                      "description": "SMTP server that email from the territory's domains is sent through. It applies to domains that have no SMTP server of their own. Without it, the system SMTP settings apply."
                 },
                 "email-send-smtp-port": {
-                      "type": "string",
-                      "description": "This is the SMTP port for sending emails."
+                      "type": "number",
+                      "description": "Port on the SMTP server. The territory's SMTP settings are used only when this and `email-send-smtp-hostname` are both set."
                 },
                 "email-send-smtp-username": {
                       "type": "string",
-                      "description": "This is the username used in connecting to SMTP  server for sending email."
+                      "description": "Username for the SMTP server. Always a string, even when it is all digits."
                 },
                 "email-send-smtp-password": {
                       "type": "string",
-                      "description": "This is the password used in connecting to SMTP  server for sending email."
+                      "description": "Password for the SMTP server. Reads return it masked unless a Super User sends `include-secrets=yes`. On update, sending the mask back keeps the stored password. Always a string."
                 },
                 "active-calls-against-license-count": {
                       "type": "number",
-                      "description": "This is the current active calls counting against the license including on net calls."
+                      "description": "Active calls in the territory's domains that count against the platform license, on-net calls included"
                 },
                 "active-calls-offnet-current": {
                       "type": "number",
-                      "description": "This is the current active calls across all domains that are calls coming from or going to offnet numbers."
+                      "description": "Active calls in the territory's domains to or from off-net destinations"
+                },
+                "iotum-video-hostname-suffix": {
+                      "type": "string",
+                      "description": "Premium video hostname configured for the territory. Present only when the platform has a premium video integration configured."
                 }
           },
           "required": [
@@ -79,8 +124,14 @@ export const create_reseller: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /resellers',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['reseller', 'description', 'domains-total', 'users-total', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'active-calls-against-license-count', 'active-calls-offnet-current'];
+    const bodyParamNames = ['reseller', 'description', 'domains-total', 'users-total', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'active-calls-against-license-count', 'active-calls-offnet-current', 'iotum-video-hostname-suffix'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -100,40 +151,25 @@ export const create_reseller: ToolDefinition = {
   },
 };
 
-export const get_resellers_count: ToolDefinition = {
-  schema: {
-    name: 'get_resellers_count',
-    description: 'Count Resellers — [GET /resellers/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {}
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/resellers/count',
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_reseller: ToolDefinition = {
   schema: {
     name: 'get_reseller',
-    description: 'Get Specific Reseller — [GET /resellers/{reseller}]',
+    description: 'Read territory — Returns one territory with its SMTP settings and live totals: domains, users, and active calls. A territory is the configuration record that a Reseller\\\'s domains belong to. Send `~` for your own.  Super User and Super User Read Only can read any territory, and a Reseller only its own. A Reseller naming another territory gets `403`, and so does every other scope. A territory that does not exist returns `404`.  `email-send-smtp-password` is masked. Super User can send `include-secrets=yes` for the plain text. SMTP settings that are not set are left out. — [GET /resellers/{reseller}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Territory name. Send `~` for your own territory. A name that does not exist returns `404`."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "Send `yes` to get `email-send-smtp-password` in plain text instead of masked. Only Super User can send it, and each use is recorded in the audit log. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -141,16 +177,28 @@ export const get_reseller: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/resellers/{reseller}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -165,49 +213,33 @@ export const get_reseller: ToolDefinition = {
 export const update_reseller: ToolDefinition = {
   schema: {
     name: 'update_reseller',
-    description: 'Update Reseller — [PUT /resellers/{reseller}]',
+    description: 'Update territory — Changes a territory\\\'s description or SMTP settings. Fields you leave out keep their values. The path is the key, so the name cannot be changed: a `reseller` in the body is ignored.  Super User can update any territory, and a Reseller only its own. A Reseller naming another territory gets `403`, and so do Super User Read Only and every other scope.  Reads mask `email-send-smtp-password`. Sending that mask back unchanged keeps the stored password, so you can return a read\\\'s body as it is. Any other masked-looking password returns `400`.  A `202` means the change was published over the service bus (SBUS), not yet applied. Each core server applies it when the event arrives. A territory that does not exist returns `404`. `PUT /resellers` without a name returns `405`. — [PUT /resellers/{reseller}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Territory name. Send `~` for your own territory. A name that does not exist returns `404`."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This description can be used to give a more complete description and notes for this reseller."
-                },
-                "domains-total": {
-                      "type": "number",
-                      "description": "This is the total number of domains in this Reseller's account."
-                },
-                "users-total": {
-                      "type": "number",
-                      "description": "This is the total number of users in all domains owned by this reseller."
+                      "description": "Free-text description of the territory"
                 },
                 "email-send-smtp-hostname": {
                       "type": "string",
-                      "description": "This is the SMTP server hostname"
+                      "description": "SMTP server that email from the territory's domains is sent through. It applies to domains that have no SMTP server of their own."
                 },
                 "email-send-smtp-port": {
-                      "type": "string",
-                      "description": "This is the SMTP port for sending emails."
+                      "type": "number",
+                      "description": "Port on the SMTP server"
                 },
                 "email-send-smtp-username": {
                       "type": "string",
-                      "description": "This is the username used in connecting to SMTP  server for sending email."
+                      "description": "Username for the SMTP server. Empty sends without authentication."
                 },
                 "email-send-smtp-password": {
                       "type": "string",
-                      "description": "This is the password used in connecting to SMTP  server for sending email."
-                },
-                "active-calls-against-license-count": {
-                      "type": "number",
-                      "description": "This is the current active calls counting against the license including on net calls."
-                },
-                "active-calls-offnet-current": {
-                      "type": "number",
-                      "description": "This is the current active calls across all domains that are calls coming from or going to offnet numbers."
+                      "description": "Password for the SMTP server. Send the masked value a read returned to keep the stored password."
                 }
           },
           "required": [
@@ -215,13 +247,19 @@ export const update_reseller: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /resellers/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'domains-total', 'users-total', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'active-calls-against-license-count', 'active-calls-offnet-current'];
+    const bodyParamNames = ['description', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -245,19 +283,25 @@ export const update_reseller: ToolDefinition = {
 export const delete_reseller: ToolDefinition = {
   schema: {
     name: 'delete_reseller',
-    description: 'Delete Reseller — [DELETE /resellers/{reseller}]',
+    description: 'Delete territory — Deletes an empty territory. Only the territory record is deleted: nothing filed under it is moved or removed.  Requires Super User. Every other scope, Reseller and Super User Read Only included, gets `403`.  A territory that still has domains returns `409`. Move or delete its domains first, and their users go with them. Brands, reseller settings, CDR schedules, and other records filed under the territory\\\'s name stay, and tokens and API keys issued for the territory keep working. Remove them separately.  A `202` means the delete was published over the service bus (SBUS), not yet applied. A territory that does not exist returns `404`. `DELETE /resellers` without a name returns `405`. — [DELETE /resellers/{reseller}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Territory name. Send `~` for your own territory. A name that does not exist returns `404`."
                 }
           },
           "required": [
                 "reseller"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /resellers/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
@@ -269,6 +313,47 @@ export const delete_reseller: ToolDefinition = {
       method: 'DELETE',
       pathTemplate: '/resellers/{reseller}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_resellers_count: ToolDefinition = {
+  schema: {
+    name: 'get_resellers_count',
+    description: 'Count territories — Returns the number of territories you can see, as `total`. Super User and Super User Read Only count every territory. A Reseller counts only its own, so its `total` is `0` or `1`. Every other scope gets `403`.  Filter with `reseller` to check whether one territory exists. Use `GET /resellers` for the territories themselves. — [GET /resellers/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Count only the territory with this name. Send `~` for your own. A Reseller naming another territory gets `403`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['reseller'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/count',
+      queryParams,
     });
 
     return {

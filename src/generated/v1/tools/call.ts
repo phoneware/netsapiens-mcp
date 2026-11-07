@@ -28,8 +28,13 @@ export const v1_call_answer: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=answer",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "answer", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "answer", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -87,8 +92,13 @@ export const v1_call_calltorecord: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=call_to_record",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "call_to_record", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "call_to_record", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -118,8 +128,13 @@ export const v1_call_count: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=count",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "count", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "count", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -146,8 +161,13 @@ export const v1_call_disconnect: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=disconnect",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "disconnect", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "disconnect", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -174,8 +194,13 @@ export const v1_call_holdorig: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=hold_orig",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "hold_orig", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "hold_orig", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -202,8 +227,13 @@ export const v1_call_holdterm: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=hold_term",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "hold_term", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "hold_term", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -255,8 +285,13 @@ export const v1_call_make: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=call",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "call", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "call", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -288,8 +323,13 @@ export const v1_call_park: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=park",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "park", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "park", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -328,8 +368,13 @@ export const v1_call_park_2: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=xfer_peer",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "xfer_peer", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "xfer_peer", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -387,8 +432,13 @@ export const v1_call_playback: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=call_to_playback",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "call_to_playback", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "call_to_playback", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -419,8 +469,13 @@ export const v1_call_read: ToolDefinition = {
       }
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=read",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "read", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "read", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -451,8 +506,13 @@ export const v1_call_recordstart: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=record_on",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "record_on", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "record_on", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -479,8 +539,13 @@ export const v1_call_recordstop: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=record_off",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "record_off", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "record_off", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -507,8 +572,13 @@ export const v1_call_recordstop_2: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=record_unpause",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "record_unpause", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "record_unpause", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -539,8 +609,13 @@ export const v1_call_reject: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=reject",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "reject", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "reject", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -610,8 +685,13 @@ export const v1_call_report: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=report",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "report", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "report", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -651,8 +731,13 @@ export const v1_call_transfer: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=xfer",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "xfer", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "xfer", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -679,8 +764,13 @@ export const v1_call_unhold: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=unhold",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "unhold", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "unhold", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };
@@ -711,8 +801,13 @@ export const v1_call_record_pause: ToolDefinition = {
       ]
 },
   },
+  operation: {
+    family: 'v1',
+    key: "POST ?object=call&action=record_pause",
+    method: "POST",
+  },
   handler: async (args, client) => {
-    const response = await (client as any).v1Call("call", "record_pause", args);
+    const response = await (client as unknown as { v1Call: (obj: string, act: string, a: unknown) => Promise<unknown> }).v1Call("call", "record_pause", args);
     return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
   },
 };

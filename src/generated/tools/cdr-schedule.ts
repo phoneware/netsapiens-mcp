@@ -5,13 +5,17 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_schedule_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_schedule_count',
-    description: 'Count CDR Schedules for Domain — [GET /domains/{domain}/schedule/count]',
+    description: 'Count domain CDR schedules — Returns how many CDR export schedules are filed under one domain, counted the same way `GET /domains/{domain}/schedule` selects them. The same scopes can call it: Office Manager, Reseller, Super User, and Super User Read Only count the whole domain, and every other scope counts only its own schedules.  Narrow the count with `schedule-name` or `user`. — [GET /domains/{domain}/schedule/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
                 }
           },
           "required": [
@@ -19,16 +23,28 @@ export const get_domains_by_domain_schedule_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['user'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/schedule/count',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,19 +59,25 @@ export const get_domains_by_domain_schedule_count: ToolDefinition = {
 export const get_resellers_by_reseller_schedule_count: ToolDefinition = {
   schema: {
     name: 'get_resellers_by_reseller_schedule_count',
-    description: 'Count CDR Schedules for Reseller — [GET /resellers/{reseller}/schedule/count]',
+    description: 'Count reseller CDR schedules — Returns how many CDR export schedules belong to one territory, counted the same way the reseller list selects them. Requires Reseller scope for your own territory, Super User, or Super User Read Only.  A reseller read returns schedules whose `reseller` is this territory, plus older schedules stored with `reseller` `*` whose domain the territory owns. A platform-wide schedule, with both `reseller` and `domain` set to `*`, is never included. — [GET /resellers/{reseller}/schedule/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "reseller": {
                       "type": "string",
-                      "description": "reseller"
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
                 }
           },
           "required": [
                 "reseller"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['reseller'];
@@ -81,17 +103,17 @@ export const get_resellers_by_reseller_schedule_count: ToolDefinition = {
 export const get_domains_by_domain_schedule_by_schedule_name_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_schedule_by_schedule_name_count',
-    description: 'Count CDR Schedules by Name — [GET /domains/{domain}/schedule/{schedule_name}/count]',
+    description: 'Count domain CDR schedules by name — Returns `1` when the domain has a schedule with this name that you can see, and `0` when it does not. Use it to test for a schedule without reading its fields. Office Manager, Reseller, Super User, and Super User Read Only see every schedule in the domain. Every other scope sees only its own. — [GET /domains/{domain}/schedule/{schedule_name}/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "schedule_name": {
                       "type": "string",
-                      "description": "schedule_name"
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
                 }
           },
           "required": [
@@ -99,6 +121,12 @@ export const get_domains_by_domain_schedule_by_schedule_name_count: ToolDefiniti
                 "schedule_name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/{}/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'schedule_name'];
@@ -110,6 +138,2641 @@ export const get_domains_by_domain_schedule_by_schedule_name_count: ToolDefiniti
       method: 'GET',
       pathTemplate: '/domains/{domain}/schedule/{schedule_name}/count',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedules_list: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedules_list',
+    description: 'List domain CDR schedule names — Returns only the name and owner fields of a domain\\\'s CDR schedules: `schedule-name`, `domain`, `user`, `schedule-user-export-scope`, and `reseller`. Office Manager, Reseller, Super User, and Super User Read Only see every schedule in the domain. Site Manager and every other scope see only their own schedules.  There is no default page size: without `limit`, every matching schedule is returned. Read a full schedule with `GET /domains/{domain}/schedule/{schedule_name}`. — [GET /domains/{domain}/schedule/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most schedules to return. With no `limit`, `/list` returns every matching schedule. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'sort', 'user'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedules: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedules',
+    description: 'List domain CDR schedules — Returns the CDR export schedules filed under one domain, with every stored field. Office Manager, Reseller, Super User, and Super User Read Only see every schedule in the domain, and a Reseller only in its own territory. Every other scope, including Basic User, Call Center Agent, and Site Manager, sees only its own schedules, and only through its own domain: another domain, a reseller path, or `/schedule` returns `403`.  Filter with `schedule-name` or `user`. Page with `start` and `limit`, 100 schedules by default. Use `GET /domains/{domain}/schedule/count` for a total and `GET /domains/{domain}/schedule/list` for the names and owners only.  `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. — [GET /domains/{domain}/schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Only the schedule with this name. `schedule-name` is accepted too."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['schedule_name', 'limit', 'start', 'sort', 'user', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_cdrschedule: ToolDefinition = {
+  schema: {
+    name: 'create_cdrschedule',
+    description: 'Create domain CDR schedule — Creates a CDR export schedule for one domain. At each `schedule-next-run-datetime`, the CDR export service collects the calls that ended between `schedule-last-run-datetime` and `schedule-next-run-datetime`, keeps the directions the `export-*-calls-enabled` flags select, writes a CSV, and delivers it by `export-method`. It then moves both times forward by `schedule-repeat-interval`. Requires Office Manager, Reseller, or Super User scope. Basic User, Call Center Agent, and Site Manager can create one for themselves only: the schedule is stamped with their own extension, and a `user` naming someone else returns `403`.  `schedule-preset` is required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Weekly` needs `schedule-weekly-day-of-week` and `schedule-start-time`, `Monthly` needs `schedule-monthly-day-of-month`, and `Custom` needs `time-zone` and `data-lookup-window`. Send `schedule-next-run-datetime` in RFC 3339 (`2026-09-02T09:00:00-04:00`) or as `YYYY-MM-DD HH:MM:SS` in `time-zone`. It is stored in UTC, and leaving it out means now. With `Daily`, `Weekly`, or `Monthly`, only its date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`. The owning reseller is filled in from the domain when you leave `reseller` out. A `reseller` that does not own the domain returns `400`. `schedule-user-export-scope` is set from your scope and cannot be sent.  The schedule was published over the service bus (SBUS) and is created when each server applies it. The body is `{"code": 202}`. Read the schedule back to confirm it.  A name already used anywhere on the platform returns `409`. A missing or invalid field returns `400` naming it, including an unknown `time-zone`, an unparseable date, a bad `schedule-start-time`, a name that breaks the pattern, `export-method` `scp copy`, and a masked-looking `export-password`. — [POST /domains/{domain}/schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain whose calls are exported. `*`, or leaving it out on `POST /schedule` or `POST /resellers/{reseller}/schedule`, covers every domain of `reseller`. Ignored on the domain paths, where the path sets it."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Schedule name. Must be unique across the whole platform: a name already in use returns `409`. Letters, digits, spaces, `.`, `-`, `_`, and `'` only, 127 characters at most, or the create returns `400`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory that owns the schedule. Leave it out: the API fills in the territory that owns `domain`, or the path territory on the reseller paths. A territory that does not own `domain` returns `400`. `*` with `domain` `*` is a platform-wide schedule."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. Leave it out to export every user in `domain`. A scope limited to its own schedules always gets its own extension, and naming another returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "Length of the export window. Required unless `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it to `1 day`, `1 week`, or `1 month`. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "First run, in RFC 3339 (`2026-09-02T09:00:00-04:00` or `..Z`) or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. With `Daily`, `Weekly`, or `Monthly` and a `time-zone`, only the date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`. Leave it out to start now. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400` on create."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "domain",
+                "schedule-name",
+                "schedule-preset",
+                "export-method"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/schedule',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/schedule',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule',
+    description: 'Read domain CDR schedule — Returns one CDR export schedule in a domain, with every stored field. Office Manager, Reseller, Super User, and Super User Read Only can read any schedule in the domain. Every other scope can read only a schedule scoped to its own extension in its own domain. `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. A name that exists in another domain returns `404`. — [GET /domains/{domain}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_cdrschedule: ToolDefinition = {
+  schema: {
+    name: 'update_cdrschedule',
+    description: 'Update domain CDR schedule — Changes fields of one CDR export schedule in a domain. Send only the fields to change. Requires Office Manager, Reseller, or Super User scope. Basic User, Call Center Agent, Site Manager, and other scopes limited to their own schedules can update only a schedule scoped to their own extension: any other returns `404`.  The name and domain come from the path and cannot be changed. When you send `schedule-next-run-datetime`, `schedule-last-run-datetime` is recalculated as one `data-lookup-window` earlier. Send it in RFC 3339, or as `YYYY-MM-DD HH:MM:SS` with `time-zone`. It is stored in UTC. With `export-method` set to `email`, `export-notify-email-enabled` is always stored as `yes`.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. Read the schedule back to confirm it. `schedule-user-export-scope` is read-only and never changes on update. Echoing the masked `export-password` from a read keeps the stored password. A schedule that is not in this domain returns `404`. — [PUT /domains/{domain}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Leave it out. On `PUT /schedule/{schedule_name}` and the reseller form it must equal the schedule's domain, or the update returns `404`. On the domain form the path sets it."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Ignored: the path names the schedule, and a schedule cannot be renamed."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Leave it out. On the reseller form it must equal the path territory. An older schedule stored with `*` is given its domain's territory on update."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. A scope limited to its own schedules cannot name another extension: that returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Send one: a schedule without a preset is never run. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "New window length. Ignored when `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "New next run, in RFC 3339 or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. `schedule-last-run-datetime` is reset to one `data-lookup-window` earlier. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400`, except the exact mask a read returned for this schedule, which keeps the stored password."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/schedule/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_cdrschedule: ToolDefinition = {
+  schema: {
+    name: 'delete_cdrschedule',
+    description: 'Delete domain CDR schedule — Deletes one CDR export schedule in a domain, and the export history records it left. Files already delivered are not touched. Requires Office Manager, Reseller, or Super User scope. Other scopes can delete only a schedule scoped to their own extension.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. A read of the schedule returns `404` once it is applied. A schedule that is not in this domain returns `404`. — [DELETE /domains/{domain}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/schedule/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedule_exports: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedule_exports',
+    description: 'List CDR schedule exports — Lists the files a CDR schedule has produced, newest first. Each run of the schedule makes one export, covering one export window.  Every export carries `file-access-url`, a signed link that downloads the file with no token for 60 minutes. Each read returns fresh links. To download with your token instead, call the export\\\'s `download` path.  Returns 100 exports unless you set `limit`; `limit=0` returns every export in the retention window. Page with `start`. Exports whose window ended more than 100 days ago are not listed. A schedule that has not run yet returns an empty array. Times are in UTC (`+00:00`).  Office Manager, Office Manager Read-Only, Call Center Supervisor, Route Manager, Reseller, Super User, and Super User Read Only can reach the exports of any schedule in the domain. Every other scope can reach only the exports of a schedule it owns in its own domain. A schedule you cannot see, or one that belongs to another domain, returns `404`. — [GET /domains/{domain}/schedule/{schedule_name}/exports]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most exports to return. Defaults to `100`. `0` returns every export in the retention window. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/{}/exports',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}/exports',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule_export: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule_export',
+    description: 'Read CDR schedule export — Returns one export of a CDR schedule, with a fresh signed `file-access-url`. Use it to get a new link when an earlier one has expired. Unlike the list, this answers for an export of any age, as long as its record still exists. Times are in UTC (`+00:00`).  Office Manager, Office Manager Read-Only, Call Center Supervisor, Route Manager, Reseller, Super User, and Super User Read Only can reach the exports of any schedule in the domain. Every other scope can reach only the exports of a schedule it owns in its own domain. A schedule you cannot see, or one that belongs to another domain, returns `404`. — [GET /domains/{domain}/schedule/{schedule_name}/exports/{export_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/{}/exports/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}/exports/{export_id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const download_cdrschedule_export: ToolDefinition = {
+  schema: {
+    name: 'download_cdrschedule_export',
+    description: 'Download CDR schedule export — Downloads the CSV file (`text/csv`) of one export of a CDR schedule.  Call it one of two ways:  - **With a token.** Send a bearer token. Office Manager, Office Manager Read-Only, Call Center Supervisor, Route Manager, Reseller, Super User, and Super User Read Only can reach the exports of any schedule in the domain. Every other scope can reach only the exports of a schedule it owns in its own domain. A schedule you cannot see, or one that belongs to another domain, returns `404`. - **With a signed link.** Every list or read of an export returns `file-access-url`, which is the system-wide form of this path with `expires` and `signature` added. Anyone holding the link can download that one file, with no token, until it expires (60 minutes by default). Treat the link like the file itself.  The file is kept on the server that ran the export. When you call a different server, it answers `302` with a short-lived signed link to the server that holds the file; follow the redirect.  Every download is recorded in the access log. The response is never cached by a shared cache. — [GET /domains/{domain}/schedule/{schedule_name}/exports/{export_id}/download]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                },
+                "expires": {
+                      "type": "string",
+                      "description": "The expiry of a signed link, in Unix seconds. Copy it from `file-access-url`; never set it yourself. Leave it out when you call with a token."
+                },
+                "signature": {
+                      "type": "string",
+                      "description": "The signature of a signed link, from `file-access-url`. With it the call needs no token, and it downloads only the export the path names until `expires`. An expired link answers `403` with `Link has expired`; a changed path or expiry answers `403` with `Invalid signature`. Leave it out when you call with a token."
+                }
+          },
+          "required": [
+                "domain",
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/schedule/{}/exports/{}/download',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['expires', 'signature'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/schedule/{schedule_name}/exports/{export_id}/download',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedules_reseller_list: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedules_reseller_list',
+    description: 'List reseller CDR schedule names — Returns only the name and owner fields of one territory\\\'s CDR schedules: `schedule-name`, `domain`, `user`, `schedule-user-export-scope`, and `reseller`. Requires Reseller scope for your own territory, or Super User. Super User Read Only can read.  A reseller read returns schedules whose `reseller` is this territory, plus older schedules stored with `reseller` `*` whose domain the territory owns. A platform-wide schedule, with both `reseller` and `domain` set to `*`, is never included. There is no default page size: without `limit`, every schedule is returned. — [GET /resellers/{reseller}/schedule/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most schedules to return. With no `limit`, `/list` returns every matching schedule. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                }
+          },
+          "required": [
+                "reseller"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'sort', 'user'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedules_reseller: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedules_reseller',
+    description: 'List reseller CDR schedules — Returns the CDR export schedules of one territory: its domains\\\' schedules and its reseller-wide ones, with every stored field. Requires Reseller scope for your own territory, or Super User. Super User Read Only can read. Office Manager and lower scopes get `403`.  A reseller read returns schedules whose `reseller` is this territory, plus older schedules stored with `reseller` `*` whose domain the territory owns. A platform-wide schedule, with both `reseller` and `domain` set to `*`, is never included. Filter with `domain` or `user`. Page with `start` and `limit`, 100 schedules by default. Use `GET /resellers/{reseller}/schedule/count` for a total.  `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. A territory that does not exist returns an empty array. — [GET /resellers/{reseller}/schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain's schedules. The domain must be in the territory."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "reseller"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start', 'sort', 'domain', 'user', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_cdrschedule_reseller: ToolDefinition = {
+  schema: {
+    name: 'create_cdrschedule_reseller',
+    description: 'Create reseller CDR schedule — Creates a CDR export schedule owned by a territory. Leave out `domain` for a reseller-wide schedule that covers every domain in the territory, or send a `domain` in the territory to cover that domain only. At each `schedule-next-run-datetime`, the CDR export service collects the calls that ended between `schedule-last-run-datetime` and `schedule-next-run-datetime`, keeps the directions the `export-*-calls-enabled` flags select, writes a CSV, and delivers it by `export-method`. It then moves both times forward by `schedule-repeat-interval`. Requires Reseller scope for your own territory, or Super User.  `schedule-preset` is required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Weekly` needs `schedule-weekly-day-of-week` and `schedule-start-time`, `Monthly` needs `schedule-monthly-day-of-month`, and `Custom` needs `time-zone` and `data-lookup-window`. Send `schedule-next-run-datetime` in RFC 3339 (`2026-09-02T09:00:00-04:00`) or as `YYYY-MM-DD HH:MM:SS` in `time-zone`. It is stored in UTC, and leaving it out means now. With `Daily`, `Weekly`, or `Monthly`, only its date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`.  The schedule was published over the service bus (SBUS) and is created when each server applies it. The body is `{"code": 202}`. Read the schedule back to confirm it.  A name already used anywhere on the platform returns `409`. A missing or invalid field returns `400` naming it, including an unknown `time-zone`, an unparseable date, a bad `schedule-start-time`, a name that breaks the pattern, `export-method` `scp copy`, and a masked-looking `export-password`. — [POST /resellers/{reseller}/schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory that owns the schedule. Leave it out: the API fills in the territory that owns `domain`, or the path territory on the reseller paths. A territory that does not own `domain` returns `400`. `*` with `domain` `*` is a platform-wide schedule."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Schedule name. Must be unique across the whole platform: a name already in use returns `409`. Letters, digits, spaces, `.`, `-`, `_`, and `'` only, 127 characters at most, or the create returns `400`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain whose calls are exported. `*`, or leaving it out on `POST /schedule` or `POST /resellers/{reseller}/schedule`, covers every domain of `reseller`. Ignored on the domain paths, where the path sets it."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. Leave it out to export every user in `domain`. A scope limited to its own schedules always gets its own extension, and naming another returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "Length of the export window. Required unless `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it to `1 day`, `1 week`, or `1 month`. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "First run, in RFC 3339 (`2026-09-02T09:00:00-04:00` or `..Z`) or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. With `Daily`, `Weekly`, or `Monthly` and a `time-zone`, only the date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`. Leave it out to start now. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400` on create."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule-name",
+                "schedule-preset",
+                "export-method"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /resellers/{}/schedule',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/resellers/{reseller}/schedule',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule_reseller: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule_reseller',
+    description: 'Read reseller CDR schedule — Returns one CDR export schedule of a territory, with every stored field. Requires Reseller scope for your own territory, or Super User. Super User Read Only can read.  A reseller read returns schedules whose `reseller` is this territory, plus older schedules stored with `reseller` `*` whose domain the territory owns. A platform-wide schedule, with both `reseller` and `domain` set to `*`, is never included. A schedule outside the territory returns `404`. `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. — [GET /resellers/{reseller}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_cdrschedule_reseller: ToolDefinition = {
+  schema: {
+    name: 'update_cdrschedule_reseller',
+    description: 'Update reseller CDR schedule — Changes fields of one CDR export schedule of a territory. Send only the fields to change. Requires Reseller scope for your own territory, or Super User.  The schedule must belong to the territory in the path, or be an older schedule stored with `reseller` `*` whose domain the territory owns. Send `domain` in the body only to confirm the schedule\\\'s domain: a different domain returns `404`. The time rules of `PUT /domains/{domain}/schedule/{schedule_name}` apply.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. Read the schedule back to confirm it. `schedule-user-export-scope` is read-only and never changes on update. Echoing the masked `export-password` from a read keeps the stored password. — [PUT /resellers/{reseller}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Leave it out. On the reseller form it must equal the path territory. An older schedule stored with `*` is given its domain's territory on update."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Ignored: the path names the schedule, and a schedule cannot be renamed."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Leave it out. On `PUT /schedule/{schedule_name}` and the reseller form it must equal the schedule's domain, or the update returns `404`. On the domain form the path sets it."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. A scope limited to its own schedules cannot name another extension: that returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Send one: a schedule without a preset is never run. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "New window length. Ignored when `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "New next run, in RFC 3339 or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. `schedule-last-run-datetime` is reset to one `data-lookup-window` earlier. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400`, except the exact mask a read returned for this schedule, which keeps the stored password."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /resellers/{}/schedule/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_cdrschedule_reseller: ToolDefinition = {
+  schema: {
+    name: 'delete_cdrschedule_reseller',
+    description: 'Delete reseller CDR schedule — Deletes one CDR export schedule of a territory, and the export history records it left. Requires Reseller scope for your own territory, or Super User. A schedule outside the territory returns `404`.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. A read of the schedule returns `404` once it is applied. — [DELETE /resellers/{reseller}/schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /resellers/{}/schedule/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedule_exports_reseller: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedule_exports_reseller',
+    description: 'List CDR schedule exports (reseller) — Lists the files a CDR schedule has produced, newest first. Each run of the schedule makes one export, covering one export window.  Every export carries `file-access-url`, a signed link that downloads the file with no token for 60 minutes. Each read returns fresh links. To download with your token instead, call the export\\\'s `download` path.  Returns 100 exports unless you set `limit`; `limit=0` returns every export in the retention window. Page with `start`. Exports whose window ended more than 100 days ago are not listed. A schedule that has not run yet returns an empty array. Times are in UTC (`+00:00`).  Reseller can reach the exports of any schedule in its own territory, and Super User and Super User Read Only in every territory. Office Manager cannot use the reseller paths: use `/domains/{domain}/schedule`. A schedule outside the territory the path names returns `404`. — [GET /resellers/{reseller}/schedule/{schedule_name}/exports]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most exports to return. Defaults to `100`. `0` returns every export in the retention window. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/{}/exports',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}/exports',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule_export_reseller: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule_export_reseller',
+    description: 'Read CDR schedule export (reseller) — Returns one export of a CDR schedule, with a fresh signed `file-access-url`. Use it to get a new link when an earlier one has expired. Unlike the list, this answers for an export of any age, as long as its record still exists. Times are in UTC (`+00:00`).  Reseller can reach the exports of any schedule in its own territory, and Super User and Super User Read Only in every territory. Office Manager cannot use the reseller paths: use `/domains/{domain}/schedule`. A schedule outside the territory the path names returns `404`. — [GET /resellers/{reseller}/schedule/{schedule_name}/exports/{export_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/{}/exports/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}/exports/{export_id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const download_cdrschedule_export_reseller: ToolDefinition = {
+  schema: {
+    name: 'download_cdrschedule_export_reseller',
+    description: 'Download CDR schedule export (reseller) — Downloads the CSV file (`text/csv`) of one export of a CDR schedule.  Call it one of two ways:  - **With a token.** Send a bearer token. Reseller can reach the exports of any schedule in its own territory, and Super User and Super User Read Only in every territory. Office Manager cannot use the reseller paths: use `/domains/{domain}/schedule`. A schedule outside the territory the path names returns `404`. - **With a signed link.** Every list or read of an export returns `file-access-url`, which is the system-wide form of this path with `expires` and `signature` added. Anyone holding the link can download that one file, with no token, until it expires (60 minutes by default). Treat the link like the file itself.  The file is kept on the server that ran the export. When you call a different server, it answers `302` with a short-lived signed link to the server that holds the file; follow the redirect.  Every download is recorded in the access log. The response is never cached by a shared cache. — [GET /resellers/{reseller}/schedule/{schedule_name}/exports/{export_id}/download]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Reseller (territory) name, such as `example-reseller`. `~` means your own territory."
+                },
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                },
+                "expires": {
+                      "type": "string",
+                      "description": "The expiry of a signed link, in Unix seconds. Copy it from `file-access-url`; never set it yourself. Leave it out when you call with a token."
+                },
+                "signature": {
+                      "type": "string",
+                      "description": "The signature of a signed link, from `file-access-url`. With it the call needs no token, and it downloads only the export the path names until `expires`. An expired link answers `403` with `Link has expired`; a changed path or expiry answers `403` with `Invalid signature`. Leave it out when you call with a token."
+                }
+          },
+          "required": [
+                "reseller",
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /resellers/{}/schedule/{}/exports/{}/download',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['reseller', 'schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['expires', 'signature'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/resellers/{reseller}/schedule/{schedule_name}/exports/{export_id}/download',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_cdrschedules_systemwide: ToolDefinition = {
+  schema: {
+    name: 'count_cdrschedules_systemwide',
+    description: 'Count CDR schedules — Returns how many CDR export schedules match, counted the same way `GET /schedule` selects them. Super User counts the whole platform, and a Reseller gets its own territory\\\'s count. Super User Read Only must send `reseller` or `domain`. Office Manager and lower scopes get `403`: use `GET /domains/{domain}/schedule/count`. — [GET /schedule/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Only this territory's schedules. `territory` is accepted too. A territory that does not exist returns `404`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain's schedules. The domain must exist."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['reseller', 'domain'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_all_cdrschedules_list: ToolDefinition = {
+  schema: {
+    name: 'list_all_cdrschedules_list',
+    description: 'List CDR schedule names — Returns only the name and owner fields of CDR export schedules across the platform: `schedule-name`, `domain`, `user`, `schedule-user-export-scope`, and `reseller`. Requires Super User scope for the whole platform. A Reseller can call it too, and is confined to its own territory as if it had called the `/resellers/{reseller}/schedule` form. Office Manager gets `403`: use the `/domains/{domain}/schedule` form.  There is no default page size: without `limit`, every matching schedule is returned. — [GET /schedule/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Most schedules to return. With no `limit`, `/list` returns every matching schedule. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only this territory's schedules. `territory` is accepted too. Empty and `*` mean every territory, which only Super User can ask for."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'start', 'sort', 'reseller', 'user'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/list',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_all_cdrschedules: ToolDefinition = {
+  schema: {
+    name: 'list_all_cdrschedules',
+    description: 'List CDR schedules — Returns CDR export schedules across the platform, with every stored field. Requires Super User scope for the whole platform. A Reseller can call it too, and is confined to its own territory as if it had called the `/resellers/{reseller}/schedule` form. Super User Read Only must send `reseller` or `domain`, or it gets `400`. Office Manager and lower scopes get `403`: use the `/domains/{domain}/schedule` form.  Filter with `reseller`, `domain`, `schedule-name`, or `user`. Page with `start` and `limit`, 100 schedules by default. Use `GET /schedule/count` for a total and `GET /schedule/list` for names and owners only.  `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. — [GET /schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: one or more comma-separated field names, each optionally followed by `ASC` or `DESC`. Takes the v2 name (`schedule-next-run-datetime`) or the column name (`next_run_time`). Defaults to `schedule-name` ascending. An unknown field, or `export-password`, returns `400`. Default: \"schedule_name ASC\"",
+                      "default": "schedule_name ASC"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only this territory's schedules, selected as the reseller list selects them. `territory` is accepted too. Empty and `*` mean every territory."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Only this domain's schedules. `*` means every domain."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Only the schedule with this name."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only schedules scoped to this extension. For a scope limited to its own schedules, your own extension always applies."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'start', 'sort', 'reseller', 'domain', 'schedule-name', 'user', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_cdrschedule_systemwide: ToolDefinition = {
+  schema: {
+    name: 'create_cdrschedule_systemwide',
+    description: 'Create CDR schedule — Creates a CDR export schedule. Leave out `domain` and `reseller` for a platform-wide schedule that covers every domain, or send either one to narrow it. At each `schedule-next-run-datetime`, the CDR export service collects the calls that ended between `schedule-last-run-datetime` and `schedule-next-run-datetime`, keeps the directions the `export-*-calls-enabled` flags select, writes a CSV, and delivers it by `export-method`. It then moves both times forward by `schedule-repeat-interval`. Requires Super User scope for a platform-wide schedule. A Reseller\\\'s schedule is filed under its own territory, and an Office Manager must send its own `domain`. A `reseller` that does not own `domain`, or a `domain` that does not exist, returns `400`.  `schedule-preset` is required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Weekly` needs `schedule-weekly-day-of-week` and `schedule-start-time`, `Monthly` needs `schedule-monthly-day-of-month`, and `Custom` needs `time-zone` and `data-lookup-window`. Send `schedule-next-run-datetime` in RFC 3339 (`2026-09-02T09:00:00-04:00`) or as `YYYY-MM-DD HH:MM:SS` in `time-zone`. It is stored in UTC, and leaving it out means now. With `Daily`, `Weekly`, or `Monthly`, only its date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`.  The schedule was published over the service bus (SBUS) and is created when each server applies it. The body is `{"code": 202}`. Read the schedule back to confirm it.  A name already used anywhere on the platform returns `409`. A missing or invalid field returns `400` naming it, including an unknown `time-zone`, an unparseable date, a bad `schedule-start-time`, a name that breaks the pattern, `export-method` `scp copy`, and a masked-looking `export-password`. — [POST /schedule]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Schedule name. Must be unique across the whole platform: a name already in use returns `409`. Letters, digits, spaces, `.`, `-`, `_`, and `'` only, 127 characters at most, or the create returns `400`."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain whose calls are exported. `*`, or leaving it out on `POST /schedule` or `POST /resellers/{reseller}/schedule`, covers every domain of `reseller`. Ignored on the domain paths, where the path sets it."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory that owns the schedule. Leave it out: the API fills in the territory that owns `domain`, or the path territory on the reseller paths. A territory that does not own `domain` returns `400`. `*` with `domain` `*` is a platform-wide schedule."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. Leave it out to export every user in `domain`. A scope limited to its own schedules always gets its own extension, and naming another returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Required. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "Length of the export window. Required unless `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it to `1 day`, `1 week`, or `1 month`. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "First run, in RFC 3339 (`2026-09-02T09:00:00-04:00` or `..Z`) or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. With `Daily`, `Weekly`, or `Monthly` and a `time-zone`, only the date is used: the time comes from `schedule-start-time`, or is midnight for `Monthly`. Leave it out to start now. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400` on create."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "schedule-name",
+                "schedule-preset",
+                "export-method"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /schedule',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/schedule',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule_systemwide: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule_systemwide',
+    description: 'Read CDR schedule — Returns one CDR export schedule by name, wherever it is filed, with every stored field. Requires Super User scope for the whole platform. A Reseller can call it too, and is confined to its own territory as if it had called the `/resellers/{reseller}/schedule` form. Office Manager gets `403`: use the `/domains/{domain}/schedule` form.  `export-password` is masked. Super User can send `include-secrets=yes` for the plain text. — [GET /schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `export-password` in plain text instead of masked. Super User only, and every use is audit-logged. Any other scope gets `403`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/{schedule_name}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_cdrschedule_systemwide: ToolDefinition = {
+  schema: {
+    name: 'update_cdrschedule_systemwide',
+    description: 'Update CDR schedule — Changes fields of one CDR export schedule by name. Send only the fields to change. Requires Super User scope for the whole platform. A Reseller can call it too, and is confined to its own territory as if it had called the `/resellers/{reseller}/schedule` form. Office Manager gets `403`: use the `/domains/{domain}/schedule` form. Send `domain` in the body to confirm the schedule\\\'s domain: a different domain returns `404`. The time rules of `PUT /domains/{domain}/schedule/{schedule_name}` apply.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. Read the schedule back to confirm it. `schedule-user-export-scope` is read-only and never changes on update. Echoing the masked `export-password` from a read keeps the stored password. — [PUT /schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "schedule-name": {
+                      "type": "string",
+                      "description": "Ignored: the path names the schedule, and a schedule cannot be renamed."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Leave it out. On `PUT /schedule/{schedule_name}` and the reseller form it must equal the schedule's domain, or the update returns `404`. On the domain form the path sets it."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Leave it out. On the reseller form it must equal the path territory. An older schedule stored with `*` is given its domain's territory on update."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension to limit the export to. A scope limited to its own schedules cannot name another extension: that returns `403`."
+                },
+                "schedule-preset": {
+                      "type": "string",
+                      "description": "Recurrence preset. Send one: a schedule without a preset is never run. `Daily`, `Weekly`, and `Monthly` set `data-lookup-window` and `schedule-repeat-interval` for you. `Custom` needs `time-zone`, `data-lookup-window`, and `schedule-repeat-interval`. Allowed values: \"Monthly\", \"Weekly\", \"Daily\", \"Custom\"",
+                      "enum": [
+                            "Monthly",
+                            "Weekly",
+                            "Daily",
+                            "Custom"
+                      ]
+                },
+                "data-lookup-window": {
+                      "type": "string",
+                      "description": "New window length. Ignored when `schedule-preset` is `Daily`, `Weekly`, or `Monthly`, which set it. Allowed values: \"1 minute\", \"5 minute\", \"15 minute\", \"30 minute\", \"1 hours\", \"4 hours\", \"6 hours\", \"8 hours\", \"12 hours\", \"1 day\", \"2 days\", \"1 week\", \"2 weeks\", \"1 month\", \"3 months\", \"6 months\"",
+                      "enum": [
+                            "1 minute",
+                            "5 minute",
+                            "15 minute",
+                            "30 minute",
+                            "1 hours",
+                            "4 hours",
+                            "6 hours",
+                            "8 hours",
+                            "12 hours",
+                            "1 day",
+                            "2 days",
+                            "1 week",
+                            "2 weeks",
+                            "1 month",
+                            "3 months",
+                            "6 months"
+                      ]
+                },
+                "schedule-next-run-datetime": {
+                      "type": "string",
+                      "description": "New next run, in RFC 3339 or as `YYYY-MM-DD HH:MM:SS` read in `time-zone` (UTC when there is none). Stored in UTC. `schedule-last-run-datetime` is reset to one `data-lookup-window` earlier. An unparseable value returns `400`."
+                },
+                "time-zone": {
+                      "type": "string",
+                      "description": "IANA time zone name, such as `America/New_York`. Required for `Custom`. An unknown name returns `400`."
+                },
+                "schedule-start-time": {
+                      "type": "string",
+                      "description": "Time of day as `HH:MM` in `time-zone`. Required for `Weekly`, and used by `Daily` when `time-zone` is set. A value that is not a time returns `400`."
+                },
+                "schedule-monthly-day-of-month": {
+                      "type": "string",
+                      "description": "Day of the month, `1` to `31`. Required for `Monthly`. The API stores it without checking the range."
+                },
+                "schedule-weekly-day-of-week": {
+                      "type": "string",
+                      "description": "Day of the week, such as `Monday`. Required for `Weekly`."
+                },
+                "schedule-repeat-interval": {
+                      "type": "string",
+                      "description": "Time between runs, such as `1 hour`, `1 Day`, or `1 Month`. `No Repeat` runs once. Set by the `Daily`, `Weekly`, and `Monthly` presets. Defaults to `1 day`."
+                },
+                "export-method": {
+                      "type": "string",
+                      "description": "How the file is delivered. `email` attaches it (9 MB or smaller; larger files get a download link), `ftp upload` and `sftp` upload it, `backup locally` keeps it on the server that ran it, and `do nothing` delivers nothing. `scp copy` returns `400`. Allowed values: \"email\", \"scp copy\", \"ftp upload\", \"sftp\", \"backup locally\", \"do nothing\"",
+                      "enum": [
+                            "email",
+                            "scp copy",
+                            "ftp upload",
+                            "sftp",
+                            "backup locally",
+                            "do nothing"
+                      ]
+                },
+                "email": {
+                      "type": "string",
+                      "description": "Where the export or its notification is emailed. Required in practice when `export-method` is `email`."
+                },
+                "export-notify-email-enabled": {
+                      "type": "string",
+                      "description": "Send `yes` to have `email` notified after an upload. Defaults to `no`, and is always `yes` when `export-method` is `email`."
+                },
+                "export-offnet-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether off-net calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-inbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether inbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-outbound-calls-enabled": {
+                      "type": "string",
+                      "description": "Whether outbound calls are exported. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-include-headers-enabled": {
+                      "type": "string",
+                      "description": "Whether the CSV starts with a header row. Defaults to `No`. Stored as sent. Send lowercase `yes` or `no`: the export service compares against lowercase `yes`."
+                },
+                "export-cdr-format": {
+                      "type": "string",
+                      "description": "CSV layout. Defaults to `Advanced`, the short layout of 13 columns. `Standard` is the full layout. Allowed values: \"Standard\", \"Advanced\"",
+                      "enum": [
+                            "Standard",
+                            "Advanced"
+                      ]
+                },
+                "export-hostname": {
+                      "type": "string",
+                      "description": "Host for `ftp upload` or `sftp`, with an optional `:port`. Required for those methods."
+                },
+                "export-username": {
+                      "type": "string",
+                      "description": "Login for `ftp upload` or `sftp`. Required for those methods."
+                },
+                "export-password": {
+                      "type": "string",
+                      "description": "Password for `ftp upload` or `sftp`. Stored in plain text and masked on read. A value that looks masked returns `400`, except the exact mask a read returned for this schedule, which keeps the stored password."
+                },
+                "export-remote-path": {
+                      "type": "string",
+                      "description": "Directory on the remote host. Defaults to empty."
+                },
+                "export-last-sequence-number": {
+                      "type": "number",
+                      "description": "Stored for older clients. The export service does not use it."
+                },
+                "post-export-script-enabled": {
+                      "type": "string",
+                      "description": "Stored for older clients. The export service does not run a script. Defaults to `No`."
+                },
+                "post-export-script-path": {
+                      "type": "string",
+                      "description": "Stored for older clients. Defaults to `n/a`."
+                },
+                "schedule-user-export-scope": {
+                      "type": "string",
+                      "description": "Read-only. Ignored if sent: the API records your scope on create and never changes it on update."
+                },
+                "schedule-status": {
+                      "type": "string",
+                      "description": "Leave it out. Defaults to `waiting`, and the export service manages it after that."
+                },
+                "schedule-run-immediately": {
+                      "type": "number",
+                      "description": "Send `yes` to run the schedule now, over the window that ends now, without moving its regular times. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "language-token": {
+                      "type": "string",
+                      "description": "Language of the notification email, such as `en_us`. Defaults to `en_us` when empty."
+                }
+          },
+          "required": [
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /schedule/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['schedule-name', 'domain', 'reseller', 'user', 'schedule-preset', 'data-lookup-window', 'schedule-next-run-datetime', 'time-zone', 'schedule-start-time', 'schedule-monthly-day-of-month', 'schedule-weekly-day-of-week', 'schedule-repeat-interval', 'export-method', 'email', 'export-notify-email-enabled', 'export-offnet-calls-enabled', 'export-inbound-calls-enabled', 'export-outbound-calls-enabled', 'export-include-headers-enabled', 'export-cdr-format', 'export-hostname', 'export-username', 'export-password', 'export-remote-path', 'export-last-sequence-number', 'post-export-script-enabled', 'post-export-script-path', 'schedule-user-export-scope', 'schedule-status', 'schedule-run-immediately', 'language-token'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/schedule/{schedule_name}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_cdrschedule_systemwide: ToolDefinition = {
+  schema: {
+    name: 'delete_cdrschedule_systemwide',
+    description: 'Delete CDR schedule — Deletes one CDR export schedule by name, and the export history records it left. Requires Super User scope for the whole platform. A Reseller can call it too, and is confined to its own territory as if it had called the `/resellers/{reseller}/schedule` form. Office Manager gets `403`: use the `/domains/{domain}/schedule` form.  The change was published over the service bus (SBUS) and is applied when each server receives it. The body is `{"code": 202}` with no schedule. A read of the schedule returns `404` once it is applied. — [DELETE /schedule/{schedule_name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                }
+          },
+          "required": [
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /schedule/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/schedule/{schedule_name}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_cdrschedule_exports_systemwide: ToolDefinition = {
+  schema: {
+    name: 'list_cdrschedule_exports_systemwide',
+    description: 'List CDR schedule exports (system-wide) — Lists the files a CDR schedule has produced, newest first. Each run of the schedule makes one export, covering one export window.  Every export carries `file-access-url`, a signed link that downloads the file with no token for 60 minutes. Each read returns fresh links. To download with your token instead, call the export\\\'s `download` path.  Returns 100 exports unless you set `limit`; `limit=0` returns every export in the retention window. Page with `start`. Exports whose window ended more than 100 days ago are not listed. A schedule that has not run yet returns an empty array. Times are in UTC (`+00:00`).  Requires Super User scope. Every other scope, Super User Read Only included, gets `403`; use the domain or reseller path instead. — [GET /schedule/{schedule_name}/exports]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most exports to return. Defaults to `100`. `0` returns every export in the retention window. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "schedule_name"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/{}/exports',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/{schedule_name}/exports',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_cdrschedule_export_systemwide: ToolDefinition = {
+  schema: {
+    name: 'read_cdrschedule_export_systemwide',
+    description: 'Read CDR schedule export (system-wide) — Returns one export of a CDR schedule, with a fresh signed `file-access-url`. Use it to get a new link when an earlier one has expired. Unlike the list, this answers for an export of any age, as long as its record still exists. Times are in UTC (`+00:00`).  Requires Super User scope. Every other scope, Super User Read Only included, gets `403`; use the domain or reseller path instead. — [GET /schedule/{schedule_name}/exports/{export_id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                }
+          },
+          "required": [
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/{}/exports/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/{schedule_name}/exports/{export_id}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const download_cdrschedule_export_systemwide: ToolDefinition = {
+  schema: {
+    name: 'download_cdrschedule_export_systemwide',
+    description: 'Download CDR schedule export (system-wide) — Downloads the CSV file (`text/csv`) of one export of a CDR schedule.  Call it one of two ways:  - **With a token.** Send a bearer token. Requires Super User scope. Every other scope, Super User Read Only included, gets `403`; use the domain or reseller path instead. - **With a signed link.** Every list or read of an export returns `file-access-url`, which is the system-wide form of this path with `expires` and `signature` added. Anyone holding the link can download that one file, with no token, until it expires (60 minutes by default). Treat the link like the file itself.  The file is kept on the server that ran the export. When you call a different server, it answers `302` with a short-lived signed link to the server that holds the file; follow the redirect.  Every download is recorded in the access log. The response is never cached by a shared cache. — [GET /schedule/{schedule_name}/exports/{export_id}/download]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "schedule_name": {
+                      "type": "string",
+                      "description": "Schedule name. Names are unique across the whole platform, not per domain."
+                },
+                "export_id": {
+                      "type": "string",
+                      "description": "The export's `export-id` from the list: the start of the export window in UTC, as `YYYYMMDDTHHMMSSZ`."
+                },
+                "expires": {
+                      "type": "string",
+                      "description": "The expiry of a signed link, in Unix seconds. Copy it from `file-access-url`; never set it yourself. Leave it out when you call with a token."
+                },
+                "signature": {
+                      "type": "string",
+                      "description": "The signature of a signed link, from `file-access-url`. With it the call needs no token, and it downloads only the export the path names until `expires`. An expired link answers `403` with `Link has expired`; a changed path or expiry answers `403` with `Invalid signature`. Leave it out when you call with a token."
+                }
+          },
+          "required": [
+                "schedule_name",
+                "export_id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /schedule/{}/exports/{}/download',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['schedule_name', 'export_id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['expires', 'signature'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/schedule/{schedule_name}/exports/{export_id}/download',
+      pathParams,
+      queryParams,
     });
 
     return {

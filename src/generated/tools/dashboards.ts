@@ -5,21 +5,21 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_dashboards_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_dashboards_count',
-    description: 'Count Dashboards for a User — [GET /domains/{domain}/users/{user}/dashboards/count]',
+    description: 'Count user dashboards — Counts the dashboards a user sees in the domain, the same set that `GET /domains/{domain}/users/{user}/dashboards/list` returns.  You can always reach your own user. Another user\\\'s dashboards need Office Manager or Office Manager Read-Only scope in that user\\\'s domain, Reseller scope with the domain in your territory, or Super User or Super User Read Only scope. Office Manager and Reseller reach only users with a lower scope than their own. A user you cannot reach, or one that does not exist, returns `404`.  The set is what the user sees: dashboards the user owns, dashboards shared with the domain, stock dashboards offered to the user\\\'s scope, and dashboards shared with the user by name, scope, or department. Share rules are matched against the user\\\'s own scope and department. Dashboards the user has hidden are left out.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/users/{user}/dashboards/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "owner_id": {
-                      "type": "number",
-                      "description": "owner_id"
+                      "type": "string",
+                      "description": "Counts only dashboards owned by this extension, such as `1001`. Exact match."
                 }
           },
           "required": [
@@ -27,6 +27,12 @@ export const get_domains_by_domain_users_by_user_dashboards_count: ToolDefinitio
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/dashboards/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -58,21 +64,21 @@ export const get_domains_by_domain_users_by_user_dashboards_count: ToolDefinitio
 export const get_domains_by_domain_users_by_user_dashboards_list: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_dashboards_list',
-    description: 'Get Dashboard List for a User — [GET /domains/{domain}/users/{user}/dashboards/list]',
+    description: 'List user dashboards — Lists the dashboards a user sees in the domain, with each one\\\'s name, owner, and whether the user marked it a favorite. Use `GET /domains/{domain}/users/{user}/dashboards` for the layout and sharing details of your own.  You can always reach your own user. Another user\\\'s dashboards need Office Manager or Office Manager Read-Only scope in that user\\\'s domain, Reseller scope with the domain in your territory, or Super User or Super User Read Only scope. Office Manager and Reseller reach only users with a lower scope than their own. A user you cannot reach, or one that does not exist, returns `404`.  The set is what the user sees: dashboards the user owns, dashboards shared with the domain, stock dashboards offered to the user\\\'s scope, and dashboards shared with the user by name, scope, or department. Share rules are matched against the user\\\'s own scope and department. Dashboards the user has hidden are left out. Stock dashboards offered across the platform have `domain` set to `*`.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/users/{user}/dashboards/list]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "owner_id": {
-                      "type": "number",
-                      "description": "owner_id"
+                      "type": "string",
+                      "description": "Lists only dashboards owned by this extension, such as `1001`. Exact match."
                 }
           },
           "required": [
@@ -80,6 +86,12 @@ export const get_domains_by_domain_users_by_user_dashboards_list: ToolDefinition
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/dashboards/list',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -95,6 +107,358 @@ export const get_domains_by_domain_users_by_user_dashboards_list: ToolDefinition
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/users/{user}/dashboards/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_dashboards: ToolDefinition = {
+  schema: {
+    name: 'read_dashboards',
+    description: 'Read dashboards — Returns the dashboards your token sees in the domain, with their layouts and sharing settings, and whether you marked each one a favorite or hid it.  Requires a token that can read dashboards for the user in the path: the user itself, or Office Manager scope or higher for the domain.  The user in the path is not used to choose the dashboards: the result is always what your own token sees, including dashboards you hid. Filter by `id` for one dashboard: an ID that is not in this domain returns `404`, and one you cannot see returns `403`. For another user\\\'s dashboards, use `GET /domains/{domain}/users/{user}/dashboards/list`.  Send only the filters listed here. A query-builder key such as `OR` or `joins`, or a filter name that is not a plain field name, returns `400`. — [GET /domains/{domain}/users/{user}/dashboards]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension of a user in the domain, such as `1001`. `~` means your own user. It decides which scope check applies; the dashboards themselves are chosen by your token."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "Returns only this dashboard."
+                },
+                "owner_id": {
+                      "type": "string",
+                      "description": "Only dashboards owned by this extension, such as `1001`. Exact match."
+                },
+                "share_type": {
+                      "type": "string",
+                      "description": "Only dashboards with this sharing type. Allowed values: \"select\", \"domain\", \"stock\"",
+                      "enum": [
+                            "select",
+                            "domain",
+                            "stock"
+                      ]
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum dashboards to read before the visibility check. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/dashboards',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['id', 'owner_id', 'share_type', 'limit', 'start'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/dashboards',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_dashboard: ToolDefinition = {
+  schema: {
+    name: 'create_dashboard',
+    description: 'Create dashboard — Creates a dashboard in the domain in the path, owned by the user in the path unless you name another owner.  Requires a token that can create dashboards for the user in the path: the user itself, or Office Manager scope or higher for the domain. Naming another owner in `owner_id` needs the right to change that user\\\'s dashboards, and an `owner_type` other than `1` needs Office Manager scope or higher. Otherwise the request returns `403`.  Leave out `id` to have one assigned. The response does not return it, so send your own `id` when you need to know it; an ID already in use returns `409`. Find the dashboard with `GET /domains/{domain}/users/{user}/dashboards/list`, then add charts with `POST /domains/{domain}/charts/{dashboard_id}`. — [POST /domains/{domain}/users/{user}/dashboards]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension of a user in the domain, such as `1001`. `~` means your own user. The dashboard is owned by this user unless `owner_id` names another."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the dashboard. On create, leave it out to have one assigned; an ID already in use returns `409`. On update, the dashboard to change."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Name of the dashboard."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Description of the dashboard. No practical length limit."
+                },
+                "owner_type": {
+                      "type": "number",
+                      "description": "Kind of owner. Send `1`, a user: without it the dashboard has no owner, and only an Office Manager, Reseller, or Super User can change it. Any other value needs Office Manager scope or higher for the domain."
+                },
+                "owner_id": {
+                      "type": "string",
+                      "description": "Extension of the user who owns the dashboard, such as `1001`. On create, defaults to the user in the path. Naming another user needs the right to change that user's dashboards."
+                },
+                "public_id": {
+                      "type": "string",
+                      "description": "ID of the dashboard's public link. Anyone holding it can open the dashboard."
+                },
+                "properties": {
+                      "type": "string",
+                      "description": "Display settings, as a JSON string the app defines. No practical length limit."
+                },
+                "layouts": {
+                      "type": "string",
+                      "description": "Chart positions, as a JSON string the app defines. No practical length limit."
+                },
+                "share_type": {
+                      "type": "string",
+                      "description": "Who else sees the dashboard: `select` for the rules in `share_details`, `domain` for every user in the domain, `stock` for users whose scope matches a `scope` rule in `share_details`. Allowed values: \"select\", \"domain\", \"stock\". Default: \"select\"",
+                      "enum": [
+                            "select",
+                            "domain",
+                            "stock"
+                      ],
+                      "default": "select"
+                },
+                "share_details": {
+                      "type": "string",
+                      "description": "Sharing rules, as a JSON string holding an array of `{\"type\": .., \"value\": ..}` objects. `type` is `scope` (a scope name), `subscriber` (a user as `user@domain`), or `department` (a department name)."
+                },
+                "status": {
+                      "type": "number",
+                      "description": "Status value the app defines."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/dashboards',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['id', 'name', 'description', 'owner_type', 'owner_id', 'public_id', 'properties', 'layouts', 'share_type', 'share_details', 'status'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/dashboards',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_dashboard: ToolDefinition = {
+  schema: {
+    name: 'update_dashboard',
+    description: 'Update dashboard — Changes a dashboard, named by `id` in the body. Only the fields you send change, and the dashboard stays in its own domain.  You can change a dashboard you own. An Office Manager in its domain, a Reseller whose territory holds the domain, and a Super User can change dashboards owned by users with a lower scope than their own. Read-only scopes cannot. A stock dashboard, offered across the platform, can be changed only by a Super User. Sharing a dashboard with someone never lets them change it. Giving the dashboard to another owner needs the same right over that user, and changing `owner_type` needs Office Manager scope or higher.  A dashboard that is not in the domain in the path returns `404`; one you may not change returns `403`. — [PUT /domains/{domain}/users/{user}/dashboards]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension of a user in the domain, such as `1001`. `~` means your own user. It decides which scope check applies; the dashboards themselves are chosen by your token."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the dashboard. On create, leave it out to have one assigned; an ID already in use returns `409`. On update, the dashboard to change."
+                },
+                "name": {
+                      "type": "string",
+                      "description": "Name of the dashboard."
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Description of the dashboard. No practical length limit."
+                },
+                "owner_type": {
+                      "type": "number",
+                      "description": "Kind of owner. Send `1`, a user: without it the dashboard has no owner, and only an Office Manager, Reseller, or Super User can change it. Any other value needs Office Manager scope or higher for the domain."
+                },
+                "owner_id": {
+                      "type": "string",
+                      "description": "Extension of the user who owns the dashboard, such as `1001`. On create, defaults to the user in the path. Naming another user needs the right to change that user's dashboards."
+                },
+                "public_id": {
+                      "type": "string",
+                      "description": "ID of the dashboard's public link. Anyone holding it can open the dashboard."
+                },
+                "properties": {
+                      "type": "string",
+                      "description": "Display settings, as a JSON string the app defines. No practical length limit."
+                },
+                "layouts": {
+                      "type": "string",
+                      "description": "Chart positions, as a JSON string the app defines. No practical length limit."
+                },
+                "share_type": {
+                      "type": "string",
+                      "description": "Who else sees the dashboard: `select` for the rules in `share_details`, `domain` for every user in the domain, `stock` for users whose scope matches a `scope` rule in `share_details`. Allowed values: \"select\", \"domain\", \"stock\". Default: \"select\"",
+                      "enum": [
+                            "select",
+                            "domain",
+                            "stock"
+                      ],
+                      "default": "select"
+                },
+                "share_details": {
+                      "type": "string",
+                      "description": "Sharing rules, as a JSON string holding an array of `{\"type\": .., \"value\": ..}` objects. `type` is `scope` (a scope name), `subscriber` (a user as `user@domain`), or `department` (a department name)."
+                },
+                "status": {
+                      "type": "number",
+                      "description": "Status value the app defines."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/dashboards',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['id', 'name', 'description', 'owner_type', 'owner_id', 'public_id', 'properties', 'layouts', 'share_type', 'share_details', 'status'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/dashboards',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_dashboard: ToolDefinition = {
+  schema: {
+    name: 'delete_dashboard',
+    description: 'Delete dashboard — Deletes a dashboard, named by `id`, and every chart on it.  You can change a dashboard you own. An Office Manager in its domain, a Reseller whose territory holds the domain, and a Super User can change dashboards owned by users with a lower scope than their own. Read-only scopes cannot. A stock dashboard, offered across the platform, can be changed only by a Super User. Sharing a dashboard with someone never lets them change it.  A dashboard that is not in the domain in the path returns `404`; one you may not delete returns `403`. — [DELETE /domains/{domain}/users/{user}/dashboards]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Extension of a user in the domain, such as `1001`. `~` means your own user. It decides which scope check applies; the dashboards themselves are chosen by your token."
+                },
+                "id": {
+                      "type": "number",
+                      "description": "ID of the dashboard to delete."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/dashboards',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['id'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/users/{user}/dashboards',
       pathParams,
       queryParams,
     });

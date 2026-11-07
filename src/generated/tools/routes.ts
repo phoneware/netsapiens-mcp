@@ -5,31 +5,47 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_routes: ToolDefinition = {
   schema: {
     name: 'get_routes',
-    description: 'Read Routes — [GET /routes]',
+    description: 'List routes — Returns the platform\\\'s call routes from `route_config`, each with the `route-id` you use to read, update, or delete it and to manage its route connections. Routes apply to the whole platform, not to one domain or territory. Requires Super User, Reseller, or Super User Read Only scope.  Without `route-destination-match-pattern`, the list holds only routes whose destination pattern starts with `sip` and contains `@`, such as `sip:1800*@*`. That leaves out the routes behind route profiles, which you read with `GET /domains/{domain}/routeprofiles`. Every filter is an exact match, and filters combine. Rows are sorted by `route-destination-match-pattern` and paged with `start` and `limit`, 100 rows by default.  `GET /routes/count` takes the same filters and counts the same rows. `GET /routes/{route-id}` returns one route. — [GET /routes]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-destination-match-pattern": {
                       "type": "string",
-                      "description": "route-destination-match-pattern"
+                      "description": "Exact destination pattern. Omit it to list every route whose pattern starts with `sip` and contains `@`."
                 },
                 "route-source-match-pattern": {
                       "type": "string",
-                      "description": "route-source-match-pattern"
+                      "description": "Exact source pattern. `*` matches the routes that apply to every caller."
                 },
                 "route-class": {
                       "type": "string",
-                      "description": "route-class"
+                      "description": "Exact route class. `*` matches the routes that apply to every class."
                 },
                 "route-match-server-hostname": {
                       "type": "string",
-                      "description": "route-match-server-hostname"
+                      "description": "Exact core server hostname. `*` matches the routes that apply on every core server."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /routes',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname'];
+    const queryParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'start', 'limit'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -52,14 +68,104 @@ export const get_routes: ToolDefinition = {
 export const post_routes: ToolDefinition = {
   schema: {
     name: 'post_routes',
-    description: 'Create a Route — [POST /routes]',
+    description: 'Create route — Adds a call route to `route_config`. Routes apply to the whole platform. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  Only `route-destination-match-pattern` is required. `route-source-match-pattern`, `route-class`, and `route-match-server-hostname` default to `*`, `route-is-enabled` to `yes`, and `route-method` to `fixed`. Those 4 match fields identify the route, and `route-id` encodes them. The API does not check for an existing route with the same 4 values.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the change to be applied. You then get `200` with the route and its `route-id`. If it is not applied in time, you get the usual `202` and the write still completes.  Add the route\\\'s next hops with `POST /routes/{route-id}/routecon`. — [POST /routes]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-id": {
                       "type": "string",
-                      "description": "This is an id that will be needed to edit, delete the route as well as manage its route connection rules."
+                      "description": "Read only. Key for `PUT` and `DELETE /routes/{route-id}` and the route's connections: base64url, without padding, of `route-destination-match-pattern` when the other 3 match fields are `*`, otherwise of all 4 joined by `||`."
                 },
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Destination pattern a call must match, such as `sip:1800*@*`. Required on create. Part of the route's identity."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Source pattern a call must match. `*`, the default, matches every caller. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Call class the route applies to. `*`, the default, matches every class. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Core server hostname the route is limited to, such as `core1.example.com`. `*`, the default, applies it on every core server. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-is-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Free-text description of what the route is for."
+                },
+                "route-method": {
+                      "type": "string",
+                      "description": "How the route picks a connection: `fixed` tries them in `route-connection-ordinal-index` order, `cost` picks the lowest `route-connection-integer-cost`, and `percentage` splits calls by `route-connection-integer-percentage`. Defaults to `fixed`. Allowed values: \"fixed\", \"cost\", \"percentage\"",
+                      "enum": [
+                            "fixed",
+                            "cost",
+                            "percentage"
+                      ]
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "route-destination-match-pattern"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /routes',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['route-id', 'route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-is-enabled', 'description', 'route-method', 'synchronous'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/routes',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const put_routes: ToolDefinition = {
+  schema: {
+    name: 'put_routes',
+    description: 'Update A Specific Route — [PUT /routes]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
                 "route-destination-match-pattern": {
                       "type": "string",
                       "description": "This is the main route match for the destination."
@@ -103,21 +209,26 @@ export const post_routes: ToolDefinition = {
                 }
           },
           "required": [
-                "route-id",
                 "route-destination-match-pattern",
                 "description",
                 "route-method"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /routes',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['route-id', 'route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-is-enabled', 'description', 'route-method'];
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-is-enabled', 'description', 'route-method'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
     }
     const response = await client.request({
-      method: 'POST',
+      method: 'PUT',
       pathTemplate: '/routes',
       body,
     });
@@ -131,33 +242,57 @@ export const post_routes: ToolDefinition = {
   },
 };
 
-export const count_routes: ToolDefinition = {
+export const list_routecons: ToolDefinition = {
   schema: {
-    name: 'count_routes',
-    description: 'Count All Routes — [GET /routes/count]',
+    name: 'list_routecons',
+    description: 'List route connections — Returns route connections across every route, from `route_con_config`, sorted by `route-destination-match-pattern` and then `route-connection-ordinal-index`. Each row is one next hop: its route\\\'s 4 match fields, its ordinal index, host, destination user translation, percentage, and cost. Requires Super User, Reseller, or Super User Read Only scope.  Narrow it with `route-destination-match-pattern`, `route-source-match-pattern`, `route-class`, and `route-match-server-hostname`, all exact matches. Without a filter it lists every route connection on the platform, including those of route-profile routes. Page with `start` and `limit`, 100 rows by default. `GET /routecon/count` counts the same rows. To read one route\\\'s connections, use `GET /routes/{route-id}/routecon`.  The path is read-only, so any other method returns `405`. Write a route connection through `/routes/{route-id}/routecon`. — [GET /routecon]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "forward_request_matchrule": {
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "route-destination-match-pattern": {
                       "type": "string",
-                      "description": "forward_request_matchrule"
+                      "description": "Exact destination pattern of the parent route."
                 },
                 "route-source-match-pattern": {
                       "type": "string",
-                      "description": "route-source-match-pattern"
+                      "description": "Exact source pattern of the parent route."
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Exact class of the parent route."
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Exact core server hostname of the parent route."
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /routecon',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['forward_request_matchrule', 'route-source-match-pattern'];
+    const queryParamNames = ['limit', 'start', 'route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
     }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/routes/count',
+      pathTemplate: '/routecon',
       queryParams,
     });
 
@@ -170,54 +305,36 @@ export const count_routes: ToolDefinition = {
   },
 };
 
-export const get_routes_by_route_id_routecon: ToolDefinition = {
+export const post_routecon: ToolDefinition = {
   schema: {
-    name: 'get_routes_by_route_id_routecon',
-    description: 'Read Route Connections for Route — [GET /routes/{route-id}/routecon]',
+    name: 'post_routecon',
+    description: 'Create a Route Connection — [POST /routecon]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "route-id": {
+                "route-destination-match-pattern": {
                       "type": "string",
-                      "description": "route-id"
-                }
-          },
-          "required": [
-                "route-id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['route-id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/routes/{route-id}/routecon',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const post_routes_by_route_id_routecon: ToolDefinition = {
-  schema: {
-    name: 'post_routes_by_route_id_routecon',
-    description: 'Create a Route Connection — [POST /routes/{route-id}/routecon]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "route-id": {
+                      "description": "route-destination-match-pattern"
+                },
+                "route-source-match-pattern": {
                       "type": "string",
-                      "description": "route-id"
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-connection-ordinal-index": {
+                      "type": "number",
+                      "description": "Default: 1",
+                      "default": 1
                 },
                 "route-connection-translation-destination-user": {
                       "type": "string",
@@ -240,11 +357,459 @@ export const post_routes_by_route_id_routecon: ToolDefinition = {
                 }
           },
           "required": [
-                "route-id",
+                "route-destination-match-pattern",
+                "route-source-match-pattern",
+                "route-class",
+                "route-match-server-hostname",
+                "route-connection-ordinal-index",
                 "route-connection-translation-destination-user",
                 "route-connection-translation-destination-host"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /routecon',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-connection-ordinal-index', 'route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/routecon',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_route_2: ToolDefinition = {
+  schema: {
+    name: 'delete_route_2',
+    description: 'Delete A Specific Route — [DELETE /routes/frm/{forward_request_match}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "forward_request_match": {
+                      "type": "string",
+                      "description": "forward_request_match"
+                },
+                "match_from": {
+                      "type": "string",
+                      "description": "match_from"
+                },
+                "hostname": {
+                      "type": "string",
+                      "description": "hostname"
+                },
+                "class": {
+                      "type": "string",
+                      "description": "class"
+                }
+          },
+          "required": [
+                "forward_request_match"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /routes/frm/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['forward_request_match'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['match_from', 'hostname', 'class'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/routes/frm/{forward_request_match}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_routes: ToolDefinition = {
+  schema: {
+    name: 'count_routes',
+    description: 'Count routes — Returns the number of routes. Requires Super User, Reseller, or Super User Read Only scope.  It takes the same filters as `GET /routes`, all exact matches, and counts the rows that list would return. Without `route-destination-match-pattern`, it counts every route whose destination pattern starts with `sip` and contains `@`. — [GET /routes/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Exact source pattern. `*` matches the routes that apply to every caller."
+                },
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Exact destination pattern. Omit it to count every route whose pattern starts with `sip` and contains `@`."
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Exact route class. `*` matches the routes that apply to every class."
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Exact core server hostname. `*` matches the routes that apply on every core server."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /routes/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['route-source-match-pattern', 'route-destination-match-pattern', 'route-class', 'route-match-server-hostname'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/routes/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_routecon_count: ToolDefinition = {
+  schema: {
+    name: 'get_routecon_count',
+    description: 'Count route connections — Returns the number of route connections across every route. Requires Super User, Reseller, or Super User Read Only scope.  Narrow it with `route-destination-match-pattern`, `route-source-match-pattern`, `route-class`, and `route-match-server-hostname`, all exact matches. Without a filter it counts every route connection on the platform. To count one route\\\'s connections, use `/routes/{route-id}/routecon/count`. `GET /routecon` lists the same rows. The path is read-only, so any other method returns `405`. — [GET /routecon/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Exact destination pattern of the parent route."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Exact source pattern of the parent route."
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Exact class of the parent route."
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Exact core server hostname of the parent route."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /routecon/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/routecon/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const put_routecon: ToolDefinition = {
+  schema: {
+    name: 'put_routecon',
+    description: 'Update A Specific Route Connection — [PUT /routecon]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "route-destination-match-pattern"
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-connection-ordinal-index": {
+                      "type": "number",
+                      "description": "Default: 1",
+                      "default": 1
+                },
+                "route-connection-translation-destination-user": {
+                      "type": "string",
+                      "description": "Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "route-connection-translation-destination-host": {
+                      "type": "string",
+                      "description": "route-connection-translation-destination-host"
+                },
+                "route-connection-integer-percentage": {
+                      "type": "number",
+                      "description": "Default: 50",
+                      "default": 50
+                },
+                "route-connection-integer-cost": {
+                      "type": "number",
+                      "description": "Default: 0",
+                      "default": 0
+                }
+          },
+          "required": [
+                "route-destination-match-pattern",
+                "route-source-match-pattern",
+                "route-class",
+                "route-match-server-hostname",
+                "route-connection-ordinal-index",
+                "route-connection-translation-destination-user",
+                "route-connection-translation-destination-host"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /routecon',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-connection-ordinal-index', 'route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/routecon',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_route_3: ToolDefinition = {
+  schema: {
+    name: 'delete_route_3',
+    description: 'Delete A Specific Route — [DELETE /routes]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "This is the main route match for the destination."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "This is the source route, in most cases this should default to * and not be set otherwise. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "This for jurisdictional routing of class. Leave as * for most cases. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "This field will limit the route to only be effective on a matching hostname. This allow for localized routing to a closest carrier's POP or other special cases. Default: \"*\"",
+                      "default": "*"
+                }
+          },
+          "required": [
+                "route-destination-match-pattern"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /routes',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/routes',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_route_con_2: ToolDefinition = {
+  schema: {
+    name: 'delete_route_con_2',
+    description: 'Delete A Specific Route connection — [DELETE /routecon]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "route-destination-match-pattern"
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Default: \"*\"",
+                      "default": "*"
+                },
+                "route-connection-ordinal-index": {
+                      "type": "number",
+                      "description": "Default: 1",
+                      "default": 1
+                }
+          },
+          "required": [
+                "route-destination-match-pattern",
+                "route-source-match-pattern",
+                "route-class",
+                "route-match-server-hostname",
+                "route-connection-ordinal-index"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /routecon',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-connection-ordinal-index'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/routecon',
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_routes_by_route_id_routecon: ToolDefinition = {
+  schema: {
+    name: 'get_routes_by_route_id_routecon',
+    description: 'List route connections — Returns the route connections of one route, from `route_con_config`, in `route-connection-ordinal-index` order. Each row is one next hop: its ordinal index, host, destination user translation, percentage, and cost, plus the route\\\'s 4 match fields. Requires Super User, Reseller, or Super User Read Only scope.  A route with no connections, or a `route-id` that names no route, returns `[]`. Page with `start` and `limit`, 100 rows by default. `/routes/{route-id}/routecon/count` counts this route\\\'s connections only. To read connections across every route, use `GET /routecon`. — [GET /routes/{route-id}/routecon]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-id": {
+                      "type": "string",
+                      "description": "The route's `route-id`, as `GET /routes` returns it. It is base64url, without padding, of the route's `route-destination-match-pattern` when the source, class, and hostname are all `*`. Otherwise it encodes all 4 values joined by `||`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "route-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /routes/{}/routecon',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['route-id'];
@@ -252,7 +817,110 @@ export const post_routes_by_route_id_routecon: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost'];
+    const queryParamNames = ['start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/routes/{route-id}/routecon',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const post_routes_by_route_id_routecon: ToolDefinition = {
+  schema: {
+    name: 'post_routes_by_route_id_routecon',
+    description: 'Create route connection — Adds a route connection, one next hop, to the route that `route-id` names. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  `route-connection-translation-destination-host` is required and cannot be blank. `route-connection-ordinal-index` defaults to one more than the route\\\'s highest index, so the first connection gets `1`. `route-connection-translation-destination-user` defaults to `[*]`. The 4 match fields come from `route-id`, and any in the body are ignored. The API does not check that the route exists or that the index is free.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the change to be applied. You then get `200` with every connection of the route. If it is not applied in time, you get the usual `202` and the write still completes. — [POST /routes/{route-id}/routecon]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "route-id": {
+                      "type": "string",
+                      "description": "The route's `route-id`, as `GET /routes` returns it. It is base64url, without padding, of the route's `route-destination-match-pattern` when the source, class, and hostname are all `*`. Otherwise it encodes all 4 values joined by `||`."
+                },
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Read only. The parent route's destination pattern."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Read only. The parent route's source pattern. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Read only. The parent route's class. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Read only. The parent route's core server hostname. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-connection-ordinal-index": {
+                      "type": "number",
+                      "description": "Position of this connection in the route, from `1`. With `route-method` `fixed`, connections are tried in this order. On `POST /routes/{route-id}/routecon` it defaults to one more than the highest index. Default: 1",
+                      "default": 1
+                },
+                "route-connection-translation-destination-user": {
+                      "type": "string",
+                      "description": "Translation applied to the destination user when the call goes to this connection. Defaults to `[*]`. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "route-connection-translation-destination-host": {
+                      "type": "string",
+                      "description": "Host the call is sent to, such as `carrier1.example.com`. Required and not blank on create. On update, an omitted host keeps the stored one."
+                },
+                "route-connection-integer-percentage": {
+                      "type": "number",
+                      "description": "Share of calls, in percent, for this connection when `route-method` is `percentage`. Default: 50",
+                      "default": 50
+                },
+                "route-connection-integer-cost": {
+                      "type": "number",
+                      "description": "Cost of this connection, used when `route-method` is `cost`. Default: 0",
+                      "default": 0
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          },
+          "required": [
+                "route-id",
+                "route-connection-translation-destination-host"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /routes/{}/routecon',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['route-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-connection-ordinal-index', 'route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -273,55 +941,39 @@ export const post_routes_by_route_id_routecon: ToolDefinition = {
   },
 };
 
-export const get_routecon_count: ToolDefinition = {
-  schema: {
-    name: 'get_routecon_count',
-    description: 'Count All Route Connections — [GET /routecon/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "route-destination-match-pattern": {
-                      "type": "string",
-                      "description": "route-destination-match-pattern"
-                }
-          }
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['route-destination-match-pattern'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/routecon/count',
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const put_routes_by_route_id: ToolDefinition = {
   schema: {
     name: 'put_routes_by_route_id',
-    description: 'Update A Specific Route — [PUT /routes/{route-id}]',
+    description: 'Update route — Changes a route\\\'s `description`, `route-method`, or `route-is-enabled`. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  `route-id` identifies the route. Its 4 match fields come from the path, and any in the body are ignored, so this cannot move a route to another pattern. To do that, create the new route and its connections, then delete the old one. A `route-id` that names no route returns `404`.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the change to be applied. You then get `200` with the route. If it is not applied in time, you get the usual `202` and the write still completes. — [PUT /routes/{route-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-id": {
                       "type": "string",
-                      "description": "route-id"
+                      "description": "Read only. Key for `PUT` and `DELETE /routes/{route-id}` and the route's connections: base64url, without padding, of `route-destination-match-pattern` when the other 3 match fields are `*`, otherwise of all 4 joined by `||`."
+                },
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Destination pattern a call must match, such as `sip:1800*@*`. Required on create. Part of the route's identity."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Source pattern a call must match. `*`, the default, matches every caller. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Call class the route applies to. `*`, the default, matches every class. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Core server hostname the route is limited to, such as `core1.example.com`. `*`, the default, applies it on every core server. Part of the route's identity. Default: \"*\"",
+                      "default": "*"
                 },
                 "route-is-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -330,24 +982,38 @@ export const put_routes_by_route_id: ToolDefinition = {
                 },
                 "description": {
                       "type": "string",
-                      "description": "This is the route description, use to to give a plain english explanation as to what the route is intended to do."
+                      "description": "Free-text description of what the route is for."
                 },
                 "route-method": {
                       "type": "string",
-                      "description": "This is the type of route to select the distribution method for the next hop/connection setting. Allowed values: \"fixed\", \"cost\", \"percentage\"",
+                      "description": "How the route picks a connection: `fixed` tries them in `route-connection-ordinal-index` order, `cost` picks the lowest `route-connection-integer-cost`, and `percentage` splits calls by `route-connection-integer-percentage`. Defaults to `fixed`. Allowed values: \"fixed\", \"cost\", \"percentage\"",
                       "enum": [
                             "fixed",
                             "cost",
                             "percentage"
                       ]
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "route-id",
-                "description",
-                "route-method"
+                "route-destination-match-pattern"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /routes/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['route-id'];
@@ -355,7 +1021,7 @@ export const put_routes_by_route_id: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['route-is-enabled', 'description', 'route-method'];
+    const bodyParamNames = ['route-id', 'route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-is-enabled', 'description', 'route-method', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -379,13 +1045,22 @@ export const put_routes_by_route_id: ToolDefinition = {
 export const delete_route: ToolDefinition = {
   schema: {
     name: 'delete_route',
-    description: 'Delete A Specific Route — [DELETE /routes/{route-id}]',
+    description: 'Delete route — Removes the route that `route-id` names. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  The API does not check that the route exists, so an unknown `route-id` also returns `202`. This request does not delete the route\\\'s connections. Remove them with `DELETE /routes/{route-id}/routecon/{index}`.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the route to be gone. You then get `200`. If it is not gone in time, you get the usual `202`. — [DELETE /routes/{route-id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-id": {
                       "type": "string",
-                      "description": "route-id"
+                      "description": "The route's `route-id`, as `GET /routes` returns it. It is base64url, without padding, of the route's `route-destination-match-pattern` when the source, class, and hostname are all `*`. Otherwise it encodes all 4 values joined by `||`."
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -393,16 +1068,28 @@ export const delete_route: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /routes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['route-id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['synchronous'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'DELETE',
       pathTemplate: '/routes/{route-id}',
       pathParams,
+      body,
     });
 
     return {
@@ -417,45 +1104,83 @@ export const delete_route: ToolDefinition = {
 export const put_routes_by_route_id_routecon_by_index: ToolDefinition = {
   schema: {
     name: 'put_routes_by_route_id_routecon_by_index',
-    description: 'Update A Specific Route Connection — [PUT /routes/{route-id}/routecon/{index}]',
+    description: 'Update route connection — Changes one route connection: its host, destination user translation, percentage, or cost. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  `route-id` and `index` identify the connection, and the match fields and index in the body are ignored. Send only what changes: an omitted host keeps the stored one. A connection that does not exist returns `404`.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the change to be applied. You then get `200` with every connection of the route. If it is not applied in time, you get the usual `202` and the write still completes. — [PUT /routes/{route-id}/routecon/{index}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-id": {
                       "type": "string",
-                      "description": "route-id"
+                      "description": "The route's `route-id`, as `GET /routes` returns it. It is base64url, without padding, of the route's `route-destination-match-pattern` when the source, class, and hostname are all `*`. Otherwise it encodes all 4 values joined by `||`."
                 },
                 "index": {
                       "type": "string",
-                      "description": "index"
+                      "description": "The connection's `route-connection-ordinal-index`. Digits only."
+                },
+                "route-destination-match-pattern": {
+                      "type": "string",
+                      "description": "Read only. The parent route's destination pattern."
+                },
+                "route-source-match-pattern": {
+                      "type": "string",
+                      "description": "Read only. The parent route's source pattern. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-class": {
+                      "type": "string",
+                      "description": "Read only. The parent route's class. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-match-server-hostname": {
+                      "type": "string",
+                      "description": "Read only. The parent route's core server hostname. Default: \"*\"",
+                      "default": "*"
+                },
+                "route-connection-ordinal-index": {
+                      "type": "number",
+                      "description": "Position of this connection in the route, from `1`. With `route-method` `fixed`, connections are tried in this order. On `POST /routes/{route-id}/routecon` it defaults to one more than the highest index. Default: 1",
+                      "default": 1
                 },
                 "route-connection-translation-destination-user": {
                       "type": "string",
-                      "description": "Default: \"[*]\"",
+                      "description": "Translation applied to the destination user when the call goes to this connection. Defaults to `[*]`. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "route-connection-translation-destination-host": {
                       "type": "string",
-                      "description": "route-connection-translation-destination-host"
+                      "description": "Host the call is sent to, such as `carrier1.example.com`. Required and not blank on create. On update, an omitted host keeps the stored one."
                 },
                 "route-connection-integer-percentage": {
                       "type": "number",
-                      "description": "Default: 50",
+                      "description": "Share of calls, in percent, for this connection when `route-method` is `percentage`. Default: 50",
                       "default": 50
                 },
                 "route-connection-integer-cost": {
                       "type": "number",
-                      "description": "Default: 0",
+                      "description": "Cost of this connection, used when `route-method` is `cost`. Default: 0",
                       "default": 0
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
                 "route-id",
                 "index",
-                "route-connection-translation-destination-user",
                 "route-connection-translation-destination-host"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /routes/{}/routecon/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['route-id', 'index'];
@@ -463,7 +1188,7 @@ export const put_routes_by_route_id_routecon_by_index: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost'];
+    const bodyParamNames = ['route-destination-match-pattern', 'route-source-match-pattern', 'route-class', 'route-match-server-hostname', 'route-connection-ordinal-index', 'route-connection-translation-destination-user', 'route-connection-translation-destination-host', 'route-connection-integer-percentage', 'route-connection-integer-cost', 'synchronous'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -487,17 +1212,26 @@ export const put_routes_by_route_id_routecon_by_index: ToolDefinition = {
 export const delete_route_con: ToolDefinition = {
   schema: {
     name: 'delete_route_con',
-    description: 'Delete A Specific Route connection — [DELETE /routes/{route-id}/routecon/{index}]',
+    description: 'Delete route connection — Removes one connection from a route. Requires Super User scope. Other scopes, Reseller included, get `403`. The API publishes the change on the service bus (SBUS) `NmsRoute` channel, and core applies it when the event arrives, so `202` means published, not applied.  The API does not check that the connection exists, so an unknown one also returns `202`. The route\\\'s other connections keep their indexes.  Send `synchronous=yes`, in the body or the query string, to wait up to 2 seconds for the connection to be gone. You then get `200`. If it is not gone in time, you get the usual `202`. — [DELETE /routes/{route-id}/routecon/{index}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "route-id": {
                       "type": "string",
-                      "description": "route-id"
+                      "description": "The route's `route-id`, as `GET /routes` returns it. It is base64url, without padding, of the route's `route-destination-match-pattern` when the source, class, and hostname are all `*`. Otherwise it encodes all 4 values joined by `||`."
                 },
                 "index": {
                       "type": "string",
-                      "description": "index"
+                      "description": "The connection's `route-connection-ordinal-index`. Digits only."
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -506,16 +1240,28 @@ export const delete_route_con: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /routes/{}/routecon/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['route-id', 'index'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const bodyParamNames = ['synchronous'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
     const response = await client.request({
       method: 'DELETE',
       pathTemplate: '/routes/{route-id}/routecon/{index}',
       pathParams,
+      body,
     });
 
     return {

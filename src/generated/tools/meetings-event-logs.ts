@@ -5,45 +5,92 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log',
-    description: 'Read Meeting Events — [GET /domains/{domain}/users/{user}/meetings/{id}/instance/{instance}/log]',
+    description: 'Read meeting events — Returns the event log of one instance of a meeting, newest first: starts, joins, locks, and recording changes.  Only the meeting\\\'s hosts and attendees, its owner, and Office Manager or higher for its domain can use its event log. An attendee puts its own user in the path.  All matching events are returned unless you pass `limit`. With `group_by_instance=yes` the response changes shape: an array holding the instance as one object, with the meeting, its attendees, its registered guests, its events, and `record_url` when a recording was saved. That view holds `null` instead when the user in the path did not join the instance. — [GET /domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}/log]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "id": {
+                "meeting": {
                       "type": "string",
-                      "description": "id"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 },
                 "instance": {
                       "type": "string",
-                      "description": "instance"
+                      "description": "Instance ID of one occurrence of the meeting: 13 characters, such as `66e6f0a1b2c3d`. Each time a meeting starts it gets a new instance ID, returned as `meeting-instance-id`."
+                },
+                "event": {
+                      "type": "string",
+                      "description": "Only events of this kind, such as `part_join`."
+                },
+                "target": {
+                      "type": "string",
+                      "description": "Only events about this target, such as the user who joined."
+                },
+                "time_start": {
+                      "type": "string",
+                      "description": "Only events at or after this time, in the stored form (`YYYY-MM-DD HH:MM:SS`)."
+                },
+                "get_start": {
+                      "type": "string",
+                      "description": "`true` returns only the `meeting_start` event. Allowed values: \"true\"",
+                      "enum": [
+                            "true"
+                      ]
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most events to return. Without it, every matching event is returned. Default: 100",
+                      "default": 100
+                },
+                "offset": {
+                      "type": "number",
+                      "description": "Events to skip before the first one returned, for paging."
+                },
+                "group_by_instance": {
+                      "type": "string",
+                      "description": "`yes` returns the instance summary described above instead of the event list. Allowed values: \"yes\"",
+                      "enum": [
+                            "yes"
+                      ]
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "id",
+                "meeting",
                 "instance"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/meetings/{}/instance/{}/log',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id', 'instance'];
+    const pathParamNames = ['domain', 'user', 'meeting', 'instance'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['event', 'target', 'time_start', 'get_start', 'limit', 'offset', 'group_by_instance'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/meetings/{id}/instance/{instance}/log',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}/log',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -58,50 +105,56 @@ export const get_domains_by_domain_users_by_user_meetings_by_id_instance_by_inst
 export const post_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_meetings_by_id_instance_by_instance_log',
-    description: 'Create a Meeting Log Event — [POST /domains/{domain}/users/{user}/meetings/{id}/instance/{instance}/log]',
+    description: 'Log meeting event — Adds an event to the log of one instance of a meeting, recorded as written by the user in the path with `file-source` `apiv2`.  Only the meeting\\\'s hosts and attendees, its owner, and Office Manager or higher for its domain can use its event log. An attendee puts its own user in the path.  Only `event`, `target`, and `details` are taken from the body. `202` means the event is accepted and applied shortly after. — [POST /domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}/log]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "Extension of the user, such as `1001`. `~` means your own user. Recorded as the event's `source_id`."
                 },
-                "id": {
+                "meeting": {
                       "type": "string",
-                      "description": "Meeting Id"
+                      "description": "Meeting ID: 9 digits, such as `482913570`."
                 },
                 "instance": {
                       "type": "string",
-                      "description": "Meeting Instance Id"
+                      "description": "Instance ID of one occurrence of the meeting: 13 characters, such as `66e6f0a1b2c3d`. Each time a meeting starts it gets a new instance ID, returned as `meeting-instance-id`."
                 },
                 "event": {
                       "type": "string",
-                      "description": "meeting event to log"
+                      "description": "What happened, such as `part_join` or `meeting_locked`. Not checked against a list."
                 },
                 "target": {
                       "type": "string",
-                      "description": "the user the log entry pertains to"
+                      "description": "Who or what the event is about, such as the user who joined."
                 },
                 "details": {
                       "type": "object",
-                      "description": "meeting event details object"
+                      "description": "Extra detail, stored with the event. An object is stored as a JSON string."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "id",
+                "meeting",
                 "instance",
                 "event"
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/meetings/{}/instance/{}/log',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id', 'instance'];
+    const pathParamNames = ['domain', 'user', 'meeting', 'instance'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
@@ -113,7 +166,7 @@ export const post_domains_by_domain_users_by_user_meetings_by_id_instance_by_ins
     }
     const response = await client.request({
       method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/meetings/{id}/instance/{instance}/log',
+      pathTemplate: '/domains/{domain}/users/{user}/meetings/{meeting}/instance/{instance}/log',
       pathParams,
       body,
     });

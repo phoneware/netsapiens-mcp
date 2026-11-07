@@ -5,13 +5,35 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_phonetemplates: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phonetemplates',
-    description: 'Read Phone Templates available to a Domain — [GET /domains/{domain}/phonetemplates]',
+    description: 'List phone templates — Returns the phone templates a domain can use in the phone template builder. A phone template is a reusable button layout for one phone brand and model. Each row is a summary: read one template for its buttons, directory, sidecars, and extra settings.  Results also include the platform-wide templates that every domain shares. Their `phoneconfiguration-domain` is `*`. You can read them but not change them.  Filter with `phoneconfiguration-brand`, `phoneconfiguration-model`, and `phoneconfiguration-description`. Each is an exact match. Page with `start` and `limit`: `limit` defaults to `100`. `GET /domains/{domain}/phonetemplates/count` returns how many there are.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. Office Manager Read-Only can read. Below Reseller scope, the domain of your token is read, whatever domain the path names. — [GET /domains/{domain}/phonetemplates]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "phoneconfiguration-brand": {
+                      "type": "string",
+                      "description": "Returns only this brand. Exact match."
+                },
+                "phoneconfiguration-model": {
+                      "type": "string",
+                      "description": "Returns only this model. Exact match."
+                },
+                "phoneconfiguration-description": {
+                      "type": "string",
+                      "description": "Returns only templates with this description. Exact match."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -19,16 +41,28 @@ export const get_domains_by_domain_phonetemplates: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonetemplates',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phonetemplates',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,54 +77,58 @@ export const get_domains_by_domain_phonetemplates: ToolDefinition = {
 export const post_domains_by_domain_phonetemplates: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_phonetemplates',
-    description: 'Create Phone Template  in domain — [POST /domains/{domain}/phonetemplates]',
+    description: 'Create phone template — Creates a phone template in the domain: a named button layout for one phone brand and model that the phone template builder can apply to phones.  `phoneconfiguration-name` is required and must be unique in the domain. Use only letters, digits, spaces, and `* . - _ \\\'` in it, because the paths that read, change, and delete a template accept nothing else. Leave out `phoneconfiguration-mac-address`: a configuration with a MAC address is a phone configuration, created with `POST /domains/{domain}/phoneconfiguration`.  Every button you send is saved, and the buttons belong to this configuration in this domain only. The button types and features a model supports come from `GET /deviceprofiles/{brand}/{model}`, in `devicemodel`.  Two button features also write a dial rule. It goes in the dial plan of the user on the first `line` button, or in the domain\\\'s dial plan when there is no `line` button. A `queue_status` button toggles the user\\\'s call queue availability: its target is ignored, and reads return it empty. A `timeframe_status` button toggles a time frame: its target is the time frame name, and `Default` means the default time frame. Add `targetUser` to the button\\\'s `phoneconfiguration-extra` to toggle another user\\\'s time frame. The dial rules appear with the dial plan\\\'s other dial rules.  `phoneconfiguration-domain` in the body is ignored: the domain comes from the path. A template with the same name returns `409`. A `202` means the change is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [POST /domains/{domain}/phonetemplates]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "phoneconfiguration-name": {
                       "type": "string",
-                      "description": "This is the main name for the phone configuration when used as a template"
+                      "description": "The template name, unique in its domain. 1 to 32 characters: letters, digits, spaces, and `* . - _ '`."
                 },
                 "phoneconfiguration-description": {
                       "type": "string",
-                      "description": "This is a plain description of the configuration"
+                      "description": "A description of the layout. Up to 255 characters."
                 },
                 "phoneconfiguration-brand": {
                       "type": "string",
-                      "description": "The brand for which this phone configuration will be build for."
+                      "description": "The phone brand, as `device-models-brand` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-model": {
                       "type": "string",
-                      "description": "The model specific to brand  for which this phone configuration will be build for."
+                      "description": "The phone model, as `device-models-model` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-sidecars": {
-                      "type": "string",
-                      "description": "List of \"sidecars\" for the phone if in use. Use multiple if multiple side car's in use."
+                      "type": "array",
+                      "description": "The sidecars attached to the phone, in order. Allowed models are in the phone's device profile, in `profile-sidecar-support`."
                 },
                 "phoneconfiguration-extra": {
                       "type": "object",
-                      "description": "This is an \"extra\" object that will be used for easy expansion when needed later. Available optional declerations will be defined below."
+                      "description": "Extra settings for the layout, as a JSON object. Stored as sent. `{}` when there are none."
                 },
                 "phoneconfiguration-directory": {
                       "type": "object",
-                      "description": "phoneconfiguration-directory"
+                      "description": "How the phone's directory is built: which contacts it lists, their order, and who is left out. Stored as sent."
                 },
                 "phoneconfiguration-buttons": {
                       "type": "array",
-                      "description": "phoneconfiguration-buttons"
+                      "description": "The buttons, in any order. Every button you send is saved, and the buttons belong to this configuration in this domain only. On an update, the list replaces every button: an update without it deletes every button."
                 }
           },
           "required": [
                 "domain",
-                "phoneconfiguration-description",
-                "phoneconfiguration-brand",
-                "phoneconfiguration-model"
+                "phoneconfiguration-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/phonetemplates',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -122,17 +160,17 @@ export const post_domains_by_domain_phonetemplates: ToolDefinition = {
 export const get_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phonetemplates_by_name',
-    description: 'Read Specific Phone Templates by name  — [GET /domains/{domain}/phonetemplates/{name}]',
+    description: 'Read phone template — Returns one phone template with its buttons, directory settings, sidecars, and extra settings. Buttons are in `phoneconfiguration-button-order` order. A `queue_status` button returns an empty target, and a `timeframe_status` button returns the time frame name.  The name can also match a platform-wide template, whose `phoneconfiguration-domain` is `*`. Returns `404` when no template has this name.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. Office Manager Read-Only can read. Below Reseller scope, the domain of your token is read, whatever domain the path names. — [GET /domains/{domain}/phonetemplates/{name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "name": {
                       "type": "string",
-                      "description": "name"
+                      "description": "The template name (`phoneconfiguration-name`). Encode a space as `%20`."
                 }
           },
           "required": [
@@ -140,6 +178,12 @@ export const get_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
                 "name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonetemplates/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'name'];
@@ -165,45 +209,58 @@ export const get_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
 export const put_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_phonetemplates_by_name',
-    description: 'Update Phone Template  in domain — [PUT /domains/{domain}/phonetemplates/{name}]',
+    description: 'Update phone template — Changes a phone template in the domain. The path names the template. Fields you leave out keep their values, except the buttons.  `phoneconfiguration-buttons` replaces the whole button list. Send every button on each update: an update without `phoneconfiguration-buttons` deletes every button. Every button you send is saved, and the buttons belong to this configuration in this domain only. The button types and features a model supports come from `GET /deviceprofiles/{brand}/{model}`, in `devicemodel`.  Two button features also write a dial rule. It goes in the dial plan of the user on the first `line` button, or in the domain\\\'s dial plan when there is no `line` button. A `queue_status` button toggles the user\\\'s call queue availability: its target is ignored, and reads return it empty. A `timeframe_status` button toggles a time frame: its target is the time frame name, and `Default` means the default time frame. Add `targetUser` to the button\\\'s `phoneconfiguration-extra` to toggle another user\\\'s time frame. The dial rules appear with the dial plan\\\'s other dial rules.  `phoneconfiguration-domain` in the body is ignored: the domain comes from the path. Platform-wide templates cannot be changed. Returns `404` when the domain has no template with this name. A `202` means the change is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [PUT /domains/{domain}/phonetemplates/{name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "name": {
                       "type": "string",
-                      "description": "name"
+                      "description": "The template name (`phoneconfiguration-name`). Encode a space as `%20`."
                 },
                 "phoneconfiguration-description": {
                       "type": "string",
-                      "description": "This is a plain description of the configuration"
+                      "description": "A description of the layout. Up to 255 characters."
+                },
+                "phoneconfiguration-brand": {
+                      "type": "string",
+                      "description": "The phone brand, as `device-models-brand` spells it in the device profiles. Up to 127 characters."
+                },
+                "phoneconfiguration-model": {
+                      "type": "string",
+                      "description": "The phone model, as `device-models-model` spells it in the device profiles. Up to 127 characters."
                 },
                 "phoneconfiguration-sidecars": {
-                      "type": "string",
-                      "description": "List of \"sidecars\" for the phone if in use. Use multiple if multiple side car's in use."
+                      "type": "array",
+                      "description": "The sidecars attached to the phone, in order. Allowed models are in the phone's device profile, in `profile-sidecar-support`."
                 },
                 "phoneconfiguration-extra": {
                       "type": "object",
-                      "description": "This is an \"extra\" object that will be used for easy expansion when needed later. Available optional declerations will be defined below."
+                      "description": "Extra settings for the layout, as a JSON object. Stored as sent. `{}` when there are none."
                 },
                 "phoneconfiguration-directory": {
                       "type": "object",
-                      "description": "phoneconfiguration-directory"
+                      "description": "How the phone's directory is built: which contacts it lists, their order, and who is left out. Stored as sent."
                 },
                 "phoneconfiguration-buttons": {
                       "type": "array",
-                      "description": "phoneconfiguration-buttons"
+                      "description": "The buttons, in any order. Every button you send is saved, and the buttons belong to this configuration in this domain only. On an update, the list replaces every button: an update without it deletes every button."
                 }
           },
           "required": [
                 "domain",
-                "name",
-                "phoneconfiguration-description"
+                "name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/phonetemplates/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'name'];
@@ -211,7 +268,7 @@ export const put_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['phoneconfiguration-description', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
+    const bodyParamNames = ['phoneconfiguration-description', 'phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-sidecars', 'phoneconfiguration-extra', 'phoneconfiguration-directory', 'phoneconfiguration-buttons'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -235,17 +292,17 @@ export const put_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
 export const delete_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_phonetemplates_by_name',
-    description: 'Delete Phone Template  in domain — [DELETE /domains/{domain}/phonetemplates/{name}]',
+    description: 'Delete phone template — Deletes a phone template and its buttons from the domain. Platform-wide templates cannot be deleted. Returns `404` when the domain has no template with this name. A `202` means the delete is accepted and already applied.  Requires Office Manager scope or above for your own domain, Reseller scope for the domains in your territory, or Super User scope. — [DELETE /domains/{domain}/phonetemplates/{name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "name": {
                       "type": "string",
-                      "description": "name"
+                      "description": "The template name (`phoneconfiguration-name`). Encode a space as `%20`."
                 }
           },
           "required": [
@@ -253,6 +310,12 @@ export const delete_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
                 "name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/phonetemplates/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'name'];
@@ -278,13 +341,25 @@ export const delete_domains_by_domain_phonetemplates_by_name: ToolDefinition = {
 export const get_domains_by_domain_phonetemplates_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_phonetemplates_count',
-    description: 'Count Phone Templates for a Domain — [GET /domains/{domain}/phonetemplates/count]',
+    description: 'Count phone templates — Returns the number of phone templates a domain can use, including the platform-wide templates. It takes the same filters as `GET /domains/{domain}/phonetemplates`. Returns `404` when the domain does not exist.  Requires Office Manager, Reseller, Super User, or Super User Read Only scope. Other scopes get `403`. — [GET /domains/{domain}/phonetemplates/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "phoneconfiguration-brand": {
+                      "type": "string",
+                      "description": "Returns only this brand. Exact match."
+                },
+                "phoneconfiguration-model": {
+                      "type": "string",
+                      "description": "Returns only this model. Exact match."
+                },
+                "phoneconfiguration-description": {
+                      "type": "string",
+                      "description": "Returns only templates with this description. Exact match."
                 }
           },
           "required": [
@@ -292,16 +367,28 @@ export const get_domains_by_domain_phonetemplates_count: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/phonetemplates/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['phoneconfiguration-brand', 'phoneconfiguration-model', 'phoneconfiguration-description'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/phonetemplates/count',
       pathParams,
+      queryParams,
     });
 
     return {

@@ -7,8 +7,11 @@ tsconfig.json
 # Tests
 test/
 tests/
+src/__tests__/
 *.test.js
+*.test.ts
 *.spec.js
+*.spec.ts
 
 # Development files
 .git/
@@ -17,14 +20,16 @@ tests/
 .vscode/
 .idea/
 
-# Docker files (include these separately if users want to build)
+# Docker files
 Dockerfile
 .dockerignore
 docker-compose.yml
 
-# Documentation and examples (keep README)
+# Documentation and specifications
 docs/
+spec/
 examples/
+scripts/
 
 # Logs and temporary files
 *.log
@@ -32,7 +37,7 @@ logs/
 tmp/
 temp/
 
-# Build artifacts we don't need
+# Build artifacts
 *.tsbuildinfo
 .eslintcache
 

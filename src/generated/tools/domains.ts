@@ -5,25 +5,44 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains: ToolDefinition = {
   schema: {
     name: 'get_domains',
-    description: 'Get Domains  — This API is the same for both Super User and Reseller. If using Reseller scopped access there territory/reseller will be used from the access rights for the filter. — [GET /domains]',
+    description: 'List domains — Returns the domains your token can see, sorted by name. Resellers see the domains in their territory, and Super User sees every domain. A Super User can send `reseller` to list one territory.  Page through the list with `start` and `limit`. `limit` defaults to `100`. `GET /domains/count` returns the number of domains.  A list row leaves out the caller ID, area code, language, and voicemail defaults, and reads the time zone, dial plan, and dial permission from the domain record. `GET /domains/{domain}` returns all of them as new users inherit them. — [GET /domains]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
                       "default": 0
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of domains to return. Defaults to `100`. `count-users-configured` is included only when it is 100 or less. Default: 100",
                       "default": 100
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Super User only: limit the result to the domains of one reseller (territory). Resellers always get their own territory."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `email-send-smtp-password` in full instead of masked. Super User scope only: any other scope gets `403`. Every request is logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['start', 'limit'];
+    const queryParamNames = ['start', 'limit', 'reseller', 'include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -46,13 +65,13 @@ export const get_domains: ToolDefinition = {
 export const create_domain: ToolDefinition = {
   schema: {
     name: 'create_domain',
-    description: 'Create a Domain — This API will allow a new domain to be created. Version 2 of the api will assist in creating some resources that previously were not auto created on api domain create inlcuding creating a "domain" subscriber  for the owner to hold the defaults and creating a dialplan with a name that matches the domain that is chained up to a system wide table. — [POST /domains]',
+    description: 'Create domain — Creates a domain in a reseller\\\'s territory. Requires Reseller scope for that territory, or Super User scope. Send `reseller` as `~` to use your own territory.  With the domain, the API creates its dial plan, named by `dial-plan` or after the domain, with a default dial rule. It also creates the domain user `domain@<domain>`, which holds the defaults new users inherit: time zone, dial plan, dial permission, caller ID, area code, language, and voicemail settings. Fields you leave out take your reseller\\\'s or the platform\\\'s default values.  A `202` means the domain is accepted and created shortly after. Send `synchronous=yes` to wait instead: the answer is `200` with the new domain, or `202` if it is not ready within about 10 seconds.  A domain name that already exists returns `409`. Setting `recording-configuration` requires Reseller scope or above. — [POST /domains]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "synchronous": {
+                "include-secrets": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` returns `email-send-smtp-password` in full in the `synchronous=yes` answer instead of masked. Super User scope only: any other scope gets `403` before the domain is created. Every request is logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -61,124 +80,42 @@ export const create_domain: ToolDefinition = {
                 },
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
+                      "description": "The domain name. Letters, digits, and `. - _`, up to 63 characters. It cannot be changed after the domain is created."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "This is the reseller that owns this domain. Must be a valid resller name on creation. If Reseller level scope you can use \"~\" to set your own reseller on create, Super User's will need to set this to a valid Reseller."
+                      "description": "The reseller (territory) the domain belongs to. Required on create. Send `~` for your own territory. Changing it moves the domain and its devices to the new territory."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This is a description of the domain. This will be shown in many places to help show a more user friendly version of the domain to help identify it."
+                      "description": "A display name for the domain, up to 127 characters. Defaults to the domain name."
                 },
-                "music-on-hold-enabled": {
+                "synchronous": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ]
-                },
-                "music-on-ring-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "music-on-hold-randomized-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
+                      ],
+                      "default": "no"
                 },
                 "domain-type": {
                       "type": "string",
-                      "description": "Allows a special domain type to be set for specific use cases. Currently Residenital and Hospitality are options which will limit and effect the users expierence. Allowed values: \"Standard\", \"Residential\", \"Hospitality\"",
+                      "description": "The feature set of the domain: - `Standard` is for a business, with a company directory and configurable PBX features - `Residential` has no company directory and no PBX features, like an analog line - `Hospitality` is for hotels, with limited voicemail and no company directory. Errors forward to the operator Any other value is stored as `Standard`. Allowed values: \"Standard\", \"Residential\", \"Hospitality\". Default: \"Standard\"",
                       "enum": [
                             "Standard",
                             "Residential",
                             "Hospitality"
-                      ]
+                      ],
+                      "default": "Standard"
                 },
                 "dial-plan": {
                       "type": "string",
-                      "description": "This is the default dial plan that will be used for new users created in the domain. A dial plan is created by default on new domain creation with a name matching the domain."
+                      "description": "The dial plan new users in the domain get. On create, a dial plan with this name is created; it defaults to the domain name. On update, it changes the plan for users created afterward."
                 },
                 "dial-policy": {
                       "type": "string",
-                      "description": "This is the default dial policy (permission) that will be used for new users added ot the domain. Generally these are system wide policies and will not need to create one per domain."
-                },
-                "email-send-from-address": {
-                      "type": "string",
-                      "description": "This is the email source that will be used when sending out emails for this domain. This address should be configured properly through the email server so that emails are not blocked. In most cases this is recommended to be an address on the service providers or resellers hostname so DNS SPF records can be added on the hostname to prevent spam issues.  More info on SPF records available via https://www.cloudflare.com/learning/dns/dns-records/dns-spf-record/"
-                },
-                "single-sign-on-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "area-code": {
-                      "type": "number",
-                      "description": "The default area code for the domain. This is used by default on 7 digit dials to extent the number to a valid 10 digit number."
-                },
-                "caller-id-name": {
-                      "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number": {
-                      "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number-emergency": {
-                      "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
-                },
-                "limits-max-subcriber-resources-total": {
-                      "type": "number",
-                      "description": "This is the maximum number of subscribers allowed for domain including the subscribers that would be created as part of resources like call queues and auto attendants. If looking to limit nornal users it would be better to use limits-max-users"
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the limit for the number of active calls allowed in the domain simultaniously. Note: this will count and limit intra domain calls."
-                },
-                "limits-max-active-calls-offnet": {
-                      "type": "number",
-                      "description": "This is the limit for the number of active calls allowed in the domain simultaniously that are connected to offnet or external numbers."
-                },
-                "limits-max-call-queues": {
-                      "type": "number",
-                      "description": "This is the maximum number of call queues that would be allowed to be created in this domain."
-                },
-                "limits-max-auto-attendants": {
-                      "type": "number",
-                      "description": "This is the maximum number of auto attendants that would be allowed to be created in this domain."
-                },
-                "limits-max-conferences": {
-                      "type": "number",
-                      "description": "This is the maximum number of conference bridges that would be allowed to be created in this domain."
-                },
-                "limits-max-departments": {
-                      "type": "number",
-                      "description": "This is the maximum number of departments that would be allowed to be created in this domain."
-                },
-                "limits-max-users": {
-                      "type": "number",
-                      "description": "This is the maximum number of regular users that would be allowed to be created in this domain."
-                },
-                "limits-max-sites": {
-                      "type": "number",
-                      "description": "This is the maximum number of sites that would be allowed to be created in this domain."
-                },
-                "limits-max-fax-accounts": {
-                      "type": "number",
-                      "description": "This is the maximum number of fax accounts that would be allowed to be created in this domain."
+                      "description": "The dial permission new users in the domain get. Name an existing dial permission."
                 },
                 "time-zone": {
                       "type": "string",
@@ -407,49 +344,74 @@ export const create_domain: ToolDefinition = {
                             "Pacific/Tahiti"
                       ]
                 },
-                "email-send-smtp-hostname": {
+                "language-token": {
                       "type": "string",
-                      "description": "This is the SMTP server hostname. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The language new users in the domain see in the portal. Default: \"en_US\"",
+                      "default": "en_US"
                 },
-                "email-send-smtp-port": {
+                "area-code": {
+                      "type": "number",
+                      "description": "The area code added to a 7-digit number dialed by users in the domain."
+                },
+                "caller-id-name": {
                       "type": "string",
-                      "description": "This is the SMTP port for sending emails. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The caller ID name used on outbound calls when no user or site caller ID applies."
                 },
-                "email-send-smtp-username": {
+                "caller-id-number": {
                       "type": "string",
-                      "description": "This is the username used in connecting to SMTP  server for sending email. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The caller ID number used on outbound calls when no user or site caller ID applies."
                 },
-                "email-send-smtp-password": {
+                "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "This is the password used in connecting to SMTP  server for sending email. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain including on-net (intra domain) calls and calls across geo servers and calls linked to \"guest\" video sessions"
-                },
-                "active-calls-against-license-count": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain including on-net (intra domain) calls but counted as the license would be enforced inlcuding ignoring geo call legs and guest video sessions."
-                },
-                "active-calls-offnet-current": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain only including calls that are connected to a remote (non intra domain) caller/calling party."
-                },
-                "count-subcriber-resources-total": {
-                      "type": "number",
-                      "description": "This is the total number of users plus all the system users as well for the entire domain."
+                      "description": "The caller ID number used on emergency calls when no user or site emergency caller ID applies."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
+                      "description": "The emergency address used for users that have no user or site address. Use the `address-id` of an address in the domain."
                 },
-                "voicemail-enabled": {
+                "music-on-hold-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
+                },
+                "music-on-ring-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "music-on-hold-randomized-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "voicemail-user-control-enabled": {
+                      "type": "string",
+                      "description": "Whether voicemail is enabled for new users in the domain. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "voicemail-transcription-enabled": {
+                      "type": "string",
+                      "description": "The vendor that transcribes voicemail for new users in the domain. `no` turns transcription off. Allowed values: \"no\", \"deepgram\", \"google\", \"mutare\", \"voicebase\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "deepgram",
+                            "google",
+                            "mutare",
+                            "voicebase"
+                      ],
+                      "default": "no"
                 },
                 "recording-configuration": {
                       "type": "string",
@@ -462,26 +424,9 @@ export const create_domain: ToolDefinition = {
                       ],
                       "default": "no"
                 },
-                "voicemail-transcription-enabled": {
-                      "type": "string",
-                      "description": "Enable this setting and select a vendor if you wish to have voicemails transcripted after a voicemail is recorded. Allowed values: \"no\", \"Deepgram\", \"Google\", \"Mutare\", \"Voicebase\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "Deepgram",
-                            "Google",
-                            "Mutare",
-                            "Voicebase"
-                      ],
-                      "default": "no"
-                },
-                "language-token": {
-                      "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
-                },
                 "is-domain-locked": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -489,7 +434,7 @@ export const create_domain: ToolDefinition = {
                 },
                 "is-stir-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -497,11 +442,203 @@ export const create_domain: ToolDefinition = {
                 },
                 "is-ivr-forward-change-blocked": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
+                },
+                "single-sign-on-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "allow_user_primary_email_edit": {
+                      "type": "number",
+                      "description": "`1` lets Office Manager and lower scopes edit primary email addresses. Which addresses a user can change still depends on scope. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "account_recovery_user_primary_email": {
+                      "type": "number",
+                      "description": "`1` lets users recover their account from the login page with a verified email. `0` means an Office Manager or above must reset the password. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "require_unique_primary_user_email": {
+                      "type": "number",
+                      "description": "`1` requires each user's primary email to be unique in the domain. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "allow_sso_with_additional_emails": {
+                      "type": "number",
+                      "description": "`1` lets one user log in with SSO from more than one email address. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "email-send-from-address": {
+                      "type": "string",
+                      "description": "The sender address for email the platform sends for the domain. Use an address your mail server and SPF record allow, or email can be marked as spam. An address that is not valid is replaced by the platform default when email is sent."
+                },
+                "email-send-smtp-hostname": {
+                      "type": "string",
+                      "description": "SMTP server for the domain's email. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-port": {
+                      "type": "string",
+                      "description": "SMTP port, 1 to 65535, sent as a string. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-username": {
+                      "type": "string",
+                      "description": "SMTP user name. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-password": {
+                      "type": "string",
+                      "description": "SMTP password. Empty uses the reseller or platform server. Office Manager, Reseller, and Super User scopes get it masked, such as `co*****************ry`. Other scopes do not get the field. A Super User can send `include-secrets=yes` to get it in full. On update, sending the masked value back keeps the stored password, and any other masked value returns `400`."
+                },
+                "limits-max-subscriber-resources-total": {
+                      "type": "number",
+                      "description": "Maximum number of users in the domain, counting the system users that call queues, auto attendants, and other features create. To limit regular users only, use `limits-max-users`."
+                },
+                "limits-max-users": {
+                      "type": "number",
+                      "description": "Maximum number of regular users in the domain."
+                },
+                "limits-max-active-calls-total": {
+                      "type": "number",
+                      "description": "Maximum number of simultaneous calls in the domain, on-net and off-net."
+                },
+                "limits-max-active-calls-offnet": {
+                      "type": "number",
+                      "description": "Maximum number of simultaneous calls to or from off-net destinations."
+                },
+                "limits-max-call-queues": {
+                      "type": "number",
+                      "description": "Maximum number of call queues in the domain."
+                },
+                "limits-max-auto-attendants": {
+                      "type": "number",
+                      "description": "Maximum number of auto attendants in the domain."
+                },
+                "limits-max-conferences": {
+                      "type": "number",
+                      "description": "Maximum number of conference bridges in the domain."
+                },
+                "limits-max-departments": {
+                      "type": "number",
+                      "description": "Maximum number of departments in the domain."
+                },
+                "limits-max-sites": {
+                      "type": "number",
+                      "description": "Maximum number of sites in the domain."
+                },
+                "limits-max-fax-accounts": {
+                      "type": "number",
+                      "description": "Maximum number of fax accounts in the domain. Default: -1",
+                      "default": -1
+                },
+                "maxCallMinute": {
+                      "type": "number",
+                      "description": "Maximum length of any call in the domain. On a call between two domains, the lower non-zero limit applies. Default: 0",
+                      "default": 0
+                },
+                "active-calls-total-current": {
+                      "type": "number",
+                      "description": "Calls in progress in the domain, including calls across geographic servers and guest video sessions."
+                },
+                "active-calls-against-license-count": {
+                      "type": "number",
+                      "description": "Calls in progress that count against the platform license. Excludes legs on other geographic servers and guest video sessions."
+                },
+                "active-calls-offnet-current": {
+                      "type": "number",
+                      "description": "Calls in progress to or from off-net destinations."
+                },
+                "count-users-configured": {
+                      "type": "number",
+                      "description": "Number of users in the domain, not counting departments and the system users that features create. In a list, it is counted only when `limit` is 100 or less."
+                },
+                "hipaa-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain handles protected health information. Reads of personal data in the domain are then recorded in the access log. Allowed values: 0, 1. Default: 1",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 1
+                },
+                "gdpr-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain is in GDPR scope. Reads of personal data in the domain are then recorded in the access log. Allowed values: 0, 1. Default: 1",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 1
+                },
+                "part2-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain is a 42 CFR Part 2 covered facility. Allowed values: 0, 1. Default: 0",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 0
+                },
+                "account-id": {
+                      "type": "string",
+                      "description": "Your own account reference for the domain, up to 64 characters."
+                },
+                "provider-notes": {
+                      "type": "string",
+                      "description": "Free-form notes about the domain. No practical length limit."
+                },
+                "iotum-default-plan": {
+                      "type": "string",
+                      "description": "The premium video plan new users in the domain get. `null` when premium video is not set up."
+                },
+                "iotum-video-status": {
+                      "type": "string",
+                      "description": "Premium video status for the domain, as a JSON-encoded string such as `{\"status\":\"active\"}`. `null` when premium video is not set up."
+                },
+                "iotum_company_id": {
+                      "type": "string",
+                      "description": "The premium video account ID of the domain. `null` when premium video is not set up."
+                },
+                "iotum_domain": {
+                      "type": "string",
+                      "description": "The premium video host name of the domain, such as `example.video.example.com`. `null` when premium video is not set up."
+                },
+                "iotum-default-add-ons": {
+                      "type": "string",
+                      "description": "Legacy. Premium video add-ons are no longer used."
+                },
+                "last-modified-datetime": {
+                      "type": "string",
+                      "description": "When the domain record last changed, in RFC 3339 format."
+                },
+                "user-authentication": {
+                      "type": "string",
+                      "description": "Defines the login authentication method for users within the domain. There are four possible settings for this parameter. - ‎`login_name_and_password` allows for username/password login, SSO (Single Sign-On) or TOTP (multi-factor authentication using an authenticator app). - ‎`authenticator_totp` forces all users in the domain to log in using TOTP (multi-factor authentication using an authenticator app). - `single_sign_on`forces all users in the domain to log in using SSO (Single Sign-On). - `authenticator_totp_sso` allows users to log in using TOTP or SSO. Allowed values: \"login_name_and_password\", \"authenticator_totp\", \"single_sign_on\", \"authenticator_totp_sso\". Default: \"login_name_and_password\"",
+                      "enum": [
+                            "login_name_and_password",
+                            "authenticator_totp",
+                            "single_sign_on",
+                            "authenticator_totp_sso"
+                      ],
+                      "default": "login_name_and_password"
                 }
           },
           "required": [
@@ -510,8 +647,19 @@ export const create_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['synchronous', 'domain', 'reseller', 'description', 'music-on-hold-enabled', 'music-on-ring-enabled', 'music-on-hold-randomized-enabled', 'domain-type', 'dial-plan', 'dial-policy', 'email-send-from-address', 'single-sign-on-enabled', 'area-code', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'limits-max-subcriber-resources-total', 'limits-max-active-calls-total', 'limits-max-active-calls-offnet', 'limits-max-call-queues', 'limits-max-auto-attendants', 'limits-max-conferences', 'limits-max-departments', 'limits-max-users', 'limits-max-sites', 'limits-max-fax-accounts', 'time-zone', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'active-calls-total-current', 'active-calls-against-license-count', 'active-calls-offnet-current', 'count-subcriber-resources-total', 'emergency-address-id', 'voicemail-enabled', 'recording-configuration', 'voicemail-transcription-enabled', 'language-token', 'is-domain-locked', 'is-stir-enabled', 'is-ivr-forward-change-blocked'];
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const bodyParamNames = ['domain', 'reseller', 'description', 'synchronous', 'domain-type', 'dial-plan', 'dial-policy', 'time-zone', 'language-token', 'area-code', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'emergency-address-id', 'music-on-hold-enabled', 'music-on-ring-enabled', 'music-on-hold-randomized-enabled', 'voicemail-user-control-enabled', 'voicemail-transcription-enabled', 'recording-configuration', 'is-domain-locked', 'is-stir-enabled', 'is-ivr-forward-change-blocked', 'single-sign-on-enabled', 'allow_user_primary_email_edit', 'account_recovery_user_primary_email', 'require_unique_primary_user_email', 'allow_sso_with_additional_emails', 'email-send-from-address', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'limits-max-subscriber-resources-total', 'limits-max-users', 'limits-max-active-calls-total', 'limits-max-active-calls-offnet', 'limits-max-call-queues', 'limits-max-auto-attendants', 'limits-max-conferences', 'limits-max-departments', 'limits-max-sites', 'limits-max-fax-accounts', 'maxCallMinute', 'active-calls-total-current', 'active-calls-against-license-count', 'active-calls-offnet-current', 'count-users-configured', 'hipaa-covered', 'gdpr-covered', 'part2-covered', 'account-id', 'provider-notes', 'iotum-default-plan', 'iotum-video-status', 'iotum_company_id', 'iotum_domain', 'iotum-default-add-ons', 'last-modified-datetime', 'user-authentication'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -519,6 +667,7 @@ export const create_domain: ToolDefinition = {
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains',
+      queryParams,
       body,
     });
 
@@ -534,16 +683,33 @@ export const create_domain: ToolDefinition = {
 export const count_domains: ToolDefinition = {
   schema: {
     name: 'count_domains',
-    description: 'Count Domains — This API is the same for both Super User and Reseller. If using Reseller scopped access there territory/reseller will be used from the access rights for the filter. — [GET /domains/count]',
+    description: 'Count domains — Returns the number of domains your token can see. Resellers count the domains in their territory, and Super User counts every domain, or one territory when `reseller` is sent. `GET /domains` lists them. — [GET /domains/count]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "reseller": {
+                      "type": "string",
+                      "description": "Super User only: limit the result to the domains of one reseller (territory). Resellers always get their own territory."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['reseller'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/count',
+      queryParams,
     });
 
     return {
@@ -558,13 +724,22 @@ export const count_domains: ToolDefinition = {
 export const get_domain: ToolDefinition = {
   schema: {
     name: 'get_domain',
-    description: 'Get Specific Domain — [GET /domains/{domain}]',
+    description: 'Read domain — Returns one domain. Every user can read their own domain, and Resellers can read the domains in their territory. Use `~` for the domain of your token.  The time zone, dial plan, dial permission, caller ID, area code, language, and voicemail defaults come from the domain user `domain@<domain>`: they are the values new users in the domain inherit. `GET /domains/{domain}/billing` returns usage counters for the domain. — [GET /domains/{domain}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "The Domain name for the resource being requested. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns `email-send-smtp-password` in full instead of masked. Super User scope only: any other scope gets `403`. Every request is logged. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -572,16 +747,28 @@ export const get_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -596,130 +783,39 @@ export const get_domain: ToolDefinition = {
 export const update_domain: ToolDefinition = {
   schema: {
     name: 'update_domain',
-    description: 'Update a Domain — [PUT /domains/{domain}]',
+    description: 'Update domain — Changes a domain. Send only the fields to change. Requires Office Manager scope for your own domain, Reseller scope for a domain in your territory, or Super User scope. Setting `recording-configuration` requires Reseller scope or above.  The time zone, dial plan, dial permission, caller ID, area code, language, and voicemail defaults are also written to the domain user, so users created afterward get the new values. Existing users keep theirs. Changing `reseller` also moves the domain\\\'s devices to the new territory.  A `202` means the change is accepted and applied shortly after. — [PUT /domains/{domain}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "This is the reseller that owns this domain. Must be a valid resller name on creation. If Reseller level scope you can use \"~\" to set your own reseller on create, Super User's will need to set this to a valid Reseller."
+                      "description": "The reseller (territory) the domain belongs to. Required on create. Send `~` for your own territory. Changing it moves the domain and its devices to the new territory."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This is a description of the domain. This will be shown in many places to help show a more user friendly version of the domain to help identify it."
-                },
-                "music-on-hold-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "music-on-ring-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "music-on-hold-randomized-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
+                      "description": "A display name for the domain, up to 127 characters. Defaults to the domain name."
                 },
                 "domain-type": {
                       "type": "string",
-                      "description": "Allows a special domain type to be set for specific use cases. Currently Residenital and Hospitality are options which will limit and effect the users expierence. Allowed values: \"Standard\", \"Residential\", \"Hospitality\"",
+                      "description": "The feature set of the domain: - `Standard` is for a business, with a company directory and configurable PBX features - `Residential` has no company directory and no PBX features, like an analog line - `Hospitality` is for hotels, with limited voicemail and no company directory. Errors forward to the operator Any other value is stored as `Standard`. Allowed values: \"Standard\", \"Residential\", \"Hospitality\". Default: \"Standard\"",
                       "enum": [
                             "Standard",
                             "Residential",
                             "Hospitality"
-                      ]
+                      ],
+                      "default": "Standard"
                 },
                 "dial-plan": {
                       "type": "string",
-                      "description": "This is the default dial plan that will be used for new users created in the domain. A dial plan is created by default on new domain creation with a name matching the domain."
+                      "description": "The dial plan new users in the domain get. On create, a dial plan with this name is created; it defaults to the domain name. On update, it changes the plan for users created afterward."
                 },
                 "dial-policy": {
                       "type": "string",
-                      "description": "This is the default dial policy (permission) that will be used for new users added ot the domain. Generally these are system wide policies and will not need to create one per domain."
-                },
-                "email-send-from-address": {
-                      "type": "string",
-                      "description": "This is the email source that will be used when sending out emails for this domain. This address should be configured properly through the email server so that emails are not blocked. In most cases this is recommended to be an address on the service providers or resellers hostname so DNS SPF records can be added on the hostname to prevent spam issues.  More info on SPF records available via https://www.cloudflare.com/learning/dns/dns-records/dns-spf-record/"
-                },
-                "single-sign-on-enabled": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ]
-                },
-                "area-code": {
-                      "type": "number",
-                      "description": "The default area code for the domain. This is used by default on 7 digit dials to extent the number to a valid 10 digit number."
-                },
-                "caller-id-name": {
-                      "type": "string",
-                      "description": "This is the main caller id name for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number": {
-                      "type": "string",
-                      "description": "This is the main caller id number for the user to be used for outbound calls outside of the domain."
-                },
-                "caller-id-number-emergency": {
-                      "type": "string",
-                      "description": "This is the main caller id that will be used for emergency calls when placed by the user."
-                },
-                "limits-max-subcriber-resources-total": {
-                      "type": "number",
-                      "description": "This is the maximum number of subscribers allowed for domain including the subscribers that would be created as part of resources like call queues and auto attendants. If looking to limit nornal users it would be better to use limits-max-users"
-                },
-                "limits-max-active-calls-total": {
-                      "type": "number",
-                      "description": "This is the limit for the number of active calls allowed in the domain simultaniously. Note: this will count and limit intra domain calls."
-                },
-                "limits-max-active-calls-offnet": {
-                      "type": "number",
-                      "description": "This is the limit for the number of active calls allowed in the domain simultaniously that are connected to offnet or external numbers."
-                },
-                "limits-max-call-queues": {
-                      "type": "number",
-                      "description": "This is the maximum number of call queues that would be allowed to be created in this domain."
-                },
-                "limits-max-auto-attendants": {
-                      "type": "number",
-                      "description": "This is the maximum number of auto attendants that would be allowed to be created in this domain."
-                },
-                "limits-max-conferences": {
-                      "type": "number",
-                      "description": "This is the maximum number of conference bridges that would be allowed to be created in this domain."
-                },
-                "limits-max-departments": {
-                      "type": "number",
-                      "description": "This is the maximum number of departments that would be allowed to be created in this domain."
-                },
-                "limits-max-users": {
-                      "type": "number",
-                      "description": "This is the maximum number of regular users that would be allowed to be created in this domain."
-                },
-                "limits-max-sites": {
-                      "type": "number",
-                      "description": "This is the maximum number of sites that would be allowed to be created in this domain."
-                },
-                "limits-max-fax-accounts": {
-                      "type": "number",
-                      "description": "This is the maximum number of fax accounts that would be allowed to be created in this domain."
+                      "description": "The dial permission new users in the domain get. Name an existing dial permission."
                 },
                 "time-zone": {
                       "type": "string",
@@ -948,49 +1044,74 @@ export const update_domain: ToolDefinition = {
                             "Pacific/Tahiti"
                       ]
                 },
-                "email-send-smtp-hostname": {
+                "language-token": {
                       "type": "string",
-                      "description": "This is the SMTP server hostname. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The language new users in the domain see in the portal. Default: \"en_US\"",
+                      "default": "en_US"
                 },
-                "email-send-smtp-port": {
+                "area-code": {
+                      "type": "number",
+                      "description": "The area code added to a 7-digit number dialed by users in the domain."
+                },
+                "caller-id-name": {
                       "type": "string",
-                      "description": "This is the SMTP port for sending emails. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The caller ID name used on outbound calls when no user or site caller ID applies."
                 },
-                "email-send-smtp-username": {
+                "caller-id-number": {
                       "type": "string",
-                      "description": "This is the username used in connecting to SMTP  server for sending email. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
+                      "description": "The caller ID number used on outbound calls when no user or site caller ID applies."
                 },
-                "email-send-smtp-password": {
+                "caller-id-number-emergency": {
                       "type": "string",
-                      "description": "This is the password used in connecting to SMTP  server for sending email. SMTP server configs are NOT required at domain level as they will inherit reseller or system level as needed."
-                },
-                "active-calls-total-current": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain including on-net (intra domain) calls and calls across geo servers and calls linked to \"guest\" video sessions"
-                },
-                "active-calls-against-license-count": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain including on-net (intra domain) calls but counted as the license would be enforced inlcuding ignoring geo call legs and guest video sessions."
-                },
-                "active-calls-offnet-current": {
-                      "type": "number",
-                      "description": "This is the total active calls for the domain only including calls that are connected to a remote (non intra domain) caller/calling party."
-                },
-                "count-subcriber-resources-total": {
-                      "type": "number",
-                      "description": "This is the total number of users plus all the system users as well for the entire domain."
+                      "description": "The caller ID number used on emergency calls when no user or site emergency caller ID applies."
                 },
                 "emergency-address-id": {
                       "type": "string",
-                      "description": "Value will need to be an exact match to an address-id which links to a address for DLR (dynamic location routing) for emergency calling"
+                      "description": "The emergency address used for users that have no user or site address. Use the `address-id` of an address in the domain."
                 },
-                "voicemail-enabled": {
+                "music-on-hold-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
+                },
+                "music-on-ring-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "music-on-hold-randomized-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "voicemail-user-control-enabled": {
+                      "type": "string",
+                      "description": "Whether voicemail is enabled for new users in the domain. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "voicemail-transcription-enabled": {
+                      "type": "string",
+                      "description": "The vendor that transcribes voicemail for new users in the domain. `no` turns transcription off. Allowed values: \"no\", \"deepgram\", \"google\", \"mutare\", \"voicebase\". Default: \"no\"",
+                      "enum": [
+                            "no",
+                            "deepgram",
+                            "google",
+                            "mutare",
+                            "voicebase"
+                      ],
+                      "default": "no"
                 },
                 "recording-configuration": {
                       "type": "string",
@@ -1003,26 +1124,9 @@ export const update_domain: ToolDefinition = {
                       ],
                       "default": "no"
                 },
-                "voicemail-transcription-enabled": {
-                      "type": "string",
-                      "description": "Enable this setting and select a vendor if you wish to have voicemails transcripted after a voicemail is recorded. Allowed values: \"no\", \"Deepgram\", \"Google\", \"Mutare\", \"Voicebase\". Default: \"no\"",
-                      "enum": [
-                            "no",
-                            "Deepgram",
-                            "Google",
-                            "Mutare",
-                            "Voicebase"
-                      ],
-                      "default": "no"
-                },
-                "language-token": {
-                      "type": "string",
-                      "description": "This is the language that is set for the user to be used for portal viewing. Default: \"en_US\"",
-                      "default": "en_US"
-                },
                 "is-domain-locked": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -1030,7 +1134,7 @@ export const update_domain: ToolDefinition = {
                 },
                 "is-stir-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -1038,11 +1142,163 @@ export const update_domain: ToolDefinition = {
                 },
                 "is-ivr-forward-change-blocked": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\"",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
                       ]
+                },
+                "single-sign-on-enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "allow_user_primary_email_edit": {
+                      "type": "number",
+                      "description": "`1` lets Office Manager and lower scopes edit primary email addresses. Which addresses a user can change still depends on scope. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "account_recovery_user_primary_email": {
+                      "type": "number",
+                      "description": "`1` lets users recover their account from the login page with a verified email. `0` means an Office Manager or above must reset the password. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "require_unique_primary_user_email": {
+                      "type": "number",
+                      "description": "`1` requires each user's primary email to be unique in the domain. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "allow_sso_with_additional_emails": {
+                      "type": "number",
+                      "description": "`1` lets one user log in with SSO from more than one email address. Allowed values: 0, 1",
+                      "enum": [
+                            0,
+                            1
+                      ]
+                },
+                "email-send-from-address": {
+                      "type": "string",
+                      "description": "The sender address for email the platform sends for the domain. Use an address your mail server and SPF record allow, or email can be marked as spam. An address that is not valid is replaced by the platform default when email is sent."
+                },
+                "email-send-smtp-hostname": {
+                      "type": "string",
+                      "description": "SMTP server for the domain's email. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-port": {
+                      "type": "string",
+                      "description": "SMTP port, 1 to 65535, sent as a string. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-username": {
+                      "type": "string",
+                      "description": "SMTP user name. Empty uses the reseller or platform server."
+                },
+                "email-send-smtp-password": {
+                      "type": "string",
+                      "description": "SMTP password. Empty uses the reseller or platform server. Send the masked value a read returned to keep the stored password. Any other masked value returns `400`."
+                },
+                "limits-max-subscriber-resources-total": {
+                      "type": "number",
+                      "description": "Maximum number of users in the domain, counting the system users that call queues, auto attendants, and other features create. To limit regular users only, use `limits-max-users`."
+                },
+                "limits-max-users": {
+                      "type": "number",
+                      "description": "Maximum number of regular users in the domain."
+                },
+                "limits-max-active-calls-total": {
+                      "type": "number",
+                      "description": "Maximum number of simultaneous calls in the domain, on-net and off-net."
+                },
+                "limits-max-active-calls-offnet": {
+                      "type": "number",
+                      "description": "Maximum number of simultaneous calls to or from off-net destinations."
+                },
+                "limits-max-call-queues": {
+                      "type": "number",
+                      "description": "Maximum number of call queues in the domain."
+                },
+                "limits-max-auto-attendants": {
+                      "type": "number",
+                      "description": "Maximum number of auto attendants in the domain."
+                },
+                "limits-max-conferences": {
+                      "type": "number",
+                      "description": "Maximum number of conference bridges in the domain."
+                },
+                "limits-max-departments": {
+                      "type": "number",
+                      "description": "Maximum number of departments in the domain."
+                },
+                "limits-max-sites": {
+                      "type": "number",
+                      "description": "Maximum number of sites in the domain."
+                },
+                "limits-max-fax-accounts": {
+                      "type": "number",
+                      "description": "Maximum number of fax accounts in the domain. Default: -1",
+                      "default": -1
+                },
+                "maxCallMinute": {
+                      "type": "number",
+                      "description": "Maximum length of any call in the domain. On a call between two domains, the lower non-zero limit applies. Default: 0",
+                      "default": 0
+                },
+                "hipaa-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain handles protected health information. Reads of personal data in the domain are then recorded in the access log. Allowed values: 0, 1. Default: 1",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 1
+                },
+                "gdpr-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain is in GDPR scope. Reads of personal data in the domain are then recorded in the access log. Allowed values: 0, 1. Default: 1",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 1
+                },
+                "part2-covered": {
+                      "type": "number",
+                      "description": "`1` when the domain is a 42 CFR Part 2 covered facility. Allowed values: 0, 1. Default: 0",
+                      "enum": [
+                            0,
+                            1
+                      ],
+                      "default": 0
+                },
+                "account-id": {
+                      "type": "string",
+                      "description": "Your own account reference for the domain, up to 64 characters."
+                },
+                "provider-notes": {
+                      "type": "string",
+                      "description": "Free-form notes about the domain. No practical length limit."
+                },
+                "user-authentication": {
+                      "type": "string",
+                      "description": "Defines the login authentication method for users within the domain. There are four possible settings for this parameter. - ‎`login_name_and_password` allows for username/password login, SSO (Single Sign-On) or TOTP (multi-factor authentication using an authenticator app). - ‎`authenticator_totp` forces all users in the domain to log in using TOTP (multi-factor authentication using an authenticator app). - `single_sign_on`forces all users in the domain to log in using SSO (Single Sign-On). - `authenticator_totp_sso` allows users to log in using TOTP or SSO. Allowed values: \"login_name_and_password\", \"authenticator_totp\", \"single_sign_on\", \"authenticator_totp_sso\". Default: \"login_name_and_password\"",
+                      "enum": [
+                            "login_name_and_password",
+                            "authenticator_totp",
+                            "single_sign_on",
+                            "authenticator_totp_sso"
+                      ],
+                      "default": "login_name_and_password"
                 }
           },
           "required": [
@@ -1050,13 +1306,19 @@ export const update_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['reseller', 'description', 'music-on-hold-enabled', 'music-on-ring-enabled', 'music-on-hold-randomized-enabled', 'domain-type', 'dial-plan', 'dial-policy', 'email-send-from-address', 'single-sign-on-enabled', 'area-code', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'limits-max-subcriber-resources-total', 'limits-max-active-calls-total', 'limits-max-active-calls-offnet', 'limits-max-call-queues', 'limits-max-auto-attendants', 'limits-max-conferences', 'limits-max-departments', 'limits-max-users', 'limits-max-sites', 'limits-max-fax-accounts', 'time-zone', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'active-calls-total-current', 'active-calls-against-license-count', 'active-calls-offnet-current', 'count-subcriber-resources-total', 'emergency-address-id', 'voicemail-enabled', 'recording-configuration', 'voicemail-transcription-enabled', 'language-token', 'is-domain-locked', 'is-stir-enabled', 'is-ivr-forward-change-blocked'];
+    const bodyParamNames = ['reseller', 'description', 'domain-type', 'dial-plan', 'dial-policy', 'time-zone', 'language-token', 'area-code', 'caller-id-name', 'caller-id-number', 'caller-id-number-emergency', 'emergency-address-id', 'music-on-hold-enabled', 'music-on-ring-enabled', 'music-on-hold-randomized-enabled', 'voicemail-user-control-enabled', 'voicemail-transcription-enabled', 'recording-configuration', 'is-domain-locked', 'is-stir-enabled', 'is-ivr-forward-change-blocked', 'single-sign-on-enabled', 'allow_user_primary_email_edit', 'account_recovery_user_primary_email', 'require_unique_primary_user_email', 'allow_sso_with_additional_emails', 'email-send-from-address', 'email-send-smtp-hostname', 'email-send-smtp-port', 'email-send-smtp-username', 'email-send-smtp-password', 'limits-max-subscriber-resources-total', 'limits-max-users', 'limits-max-active-calls-total', 'limits-max-active-calls-offnet', 'limits-max-call-queues', 'limits-max-auto-attendants', 'limits-max-conferences', 'limits-max-departments', 'limits-max-sites', 'limits-max-fax-accounts', 'maxCallMinute', 'hipaa-covered', 'gdpr-covered', 'part2-covered', 'account-id', 'provider-notes', 'user-authentication'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -1080,13 +1342,34 @@ export const update_domain: ToolDefinition = {
 export const delete_domain: ToolDefinition = {
   schema: {
     name: 'delete_domain',
-    description: 'Delete a Domain — [DELETE /domains/{domain}]',
+    description: 'Delete domain — Deletes a domain and everything in it: users and their devices, dial plans and dial rules, call queues, conferences, connections, recording settings, time frames, emergency addresses and numbers, and settings. Requires Reseller scope for the domain\\\'s territory, or Super User scope. A delete cannot be undone.  Phone numbers, SMS numbers, and device (MAC) records assigned to the domain are deleted too, unless you send `phone_numbers_option`, `sms_numbers_option`, or `mac_option` set to `unassign`. An unassigned phone number goes back to the pool of available numbers, an unassigned SMS number becomes available, and an unassigned MAC is cleared and kept.  The request can take a while on a large domain. A `202` means the delete is accepted and applied shortly after. — [DELETE /domains/{domain}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "The Domain name for the resource being requested. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "phone_numbers_option": {
+                      "type": "string",
+                      "description": "`unassign` keeps the domain's phone numbers and returns them to the pool of available numbers. Omit it to delete them. Allowed values: \"unassign\"",
+                      "enum": [
+                            "unassign"
+                      ]
+                },
+                "sms_numbers_option": {
+                      "type": "string",
+                      "description": "`unassign` keeps the domain's SMS numbers and marks them available. Omit it to delete them. Allowed values: \"unassign\"",
+                      "enum": [
+                            "unassign"
+                      ]
+                },
+                "mac_option": {
+                      "type": "string",
+                      "description": "`unassign` keeps the domain's device (MAC) records, cleared of their lines and credentials. Omit it to delete them. Allowed values: \"unassign\"",
+                      "enum": [
+                            "unassign"
+                      ]
                 }
           },
           "required": [
@@ -1094,16 +1377,28 @@ export const delete_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['phone_numbers_option', 'sms_numbers_option', 'mac_option'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'DELETE',
       pathTemplate: '/domains/{domain}',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -1118,19 +1413,25 @@ export const delete_domain: ToolDefinition = {
 export const domain_billing: ToolDefinition = {
   schema: {
     name: 'domain_billing',
-    description: 'Get Specific Domain With Billing Summary — [GET /domains/{domain}/billing]',
+    description: 'Read domain billing summary — Returns usage counters for one domain next to its main limits: users, departments, call queues, agents, call parks, auto attendants, conferences, phone numbers, and devices, plus peak simultaneous calls and SMS volumes for this month and last month. Any token that can read the domain can read its summary. Use `~` for the domain of your token.  The counters are calculated on each request, so the call can be slow on a large domain. Counters by user scope, service code, and transcription vendor are present only for the ones in use. When video conferencing is licensed, `allow-video-conference` and video usage counters are added. — [GET /domains/{domain}/billing]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "The Domain name for the resource being requested. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/billing',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1162,6 +1463,12 @@ export const get_my_domain: ToolDefinition = {
           "properties": {}
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const response = await client.request({
       method: 'GET',
@@ -1180,19 +1487,25 @@ export const get_my_domain: ToolDefinition = {
 export const count_domain: ToolDefinition = {
   schema: {
     name: 'count_domain',
-    description: 'Check if Domain Exists — [GET /domains/{domain}/count]',
+    description: 'Check domain exists — Returns `{"total": 1}` when the domain exists and your token can read it. A domain that does not exist returns `404`, and a domain your token cannot read returns `403`. Use `~` for the domain of your token. — [GET /domains/{domain}/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "The Domain name for the resource being requested. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 }
           },
           "required": [
                 "domain"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -1203,6 +1516,50 @@ export const count_domain: ToolDefinition = {
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/count',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_domain_sip_servers: ToolDefinition = {
+  schema: {
+    name: 'get_domain_sip_servers',
+    description: 'Read domain SIP servers — Returns the SIP servers a domain\\\'s clients connect to, in the order to try them, with the WebSocket URI for web phones and the DNS SRV records for each transport. Every user can read the servers of their own domain, and Resellers the domains in their territory.  How the list is built:  1. The preferred server is the `provisioning.preferred-server` domain setting, read from the domain, then the reseller, then the system. When none is set, the legacy portal setting is used, then the platform default. 2. The other servers in the preferred server\\\'s geographic group follow, if they allow backup. When the `provisioning.redundancy` setting is `none`, the list holds the preferred server alone. 3. `servers` is sorted by `priority`, lowest first. The order is not by distance: the API has no location for a browser.  `srv` lists the `_sip._tls`, `_sip._tcp`, and `_sip._udp` names of each server group with their resolved records. `preferred-srv` is the entry for the `provisioning.preferred-transport` setting, or `tls` when it is unset.  The answer is cached for up to 5 minutes, so a change can take that long to show. — [GET /domains/{domain}/sip-servers]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/sip-servers',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/sip-servers',
       pathParams,
     });
 

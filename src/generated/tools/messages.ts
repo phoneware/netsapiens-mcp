@@ -2,154 +2,74 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-export const get_message_sessions_for_domain: ToolDefinition = {
-  schema: {
-    name: 'get_message_sessions_for_domain',
-    description: 'Get Messagesessions for Domain — [GET /domains/{domain}/messagesessions]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "limit": {
-                      "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
-                      "default": 100
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const queryParamNames = ['limit'];
-    const queryParams: Record<string, unknown> = {};
-    for (const name of queryParamNames) {
-      if (args[name] !== undefined) queryParams[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/messagesessions',
-      pathParams,
-      queryParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const start_session: ToolDefinition = {
-  schema: {
-    name: 'start_session',
-    description: 'Start a new Message Session — This is a good place to start with messaging if you do not already have a message session ID. — [POST /domains/{domain}/users/{user}/messages]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "type": {
-                      "type": "string",
-                      "description": "type"
-                },
-                "message": {
-                      "type": "string",
-                      "description": "This is the text that will be sent as the message"
-                },
-                "destination": {
-                      "type": "string",
-                      "description": "This is a single user or phonenumber for chat and SMS respectively. If sending to multiple recipients, then should be an array of users or phonenumbers"
-                },
-                "from-number": {
-                      "type": "string",
-                      "description": "This is used only for SMS. This is the user's number used to send outbound for SMS"
-                },
-                "data": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the base64 data of the media file to be sent"
-                },
-                "mime-type": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the mime type of the media file to be sent"
-                },
-                "size": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the size in bytes of the media file being sent"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "type",
-                "message",
-                "destination"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['type', 'message', 'destination', 'from-number', 'data', 'mime-type', 'size'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/users/{user}/messages',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_message_sessions_for_user: ToolDefinition = {
   schema: {
     name: 'get_message_sessions_for_user',
-    description: 'Get Messagesessions for User — [GET /domains/{domain}/users/{user}/messagesessions]',
+    description: 'List message sessions — Returns a user\\\'s message sessions: their chat, SMS, and MMS conversations, the most recently active first. Each row carries the last message, so this is the conversation list. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  A session the user deleted or left is not returned. `limit` defaults to `100`. For the total, call `GET /domains/{domain}/users/{user}/messagesessions/count` with the same filters. For the messages in one session, call `GET /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages`. — [GET /domains/{domain}/users/{user}/messagesessions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
                       "default": 100
+                },
+                "messagesession-id": {
+                      "type": "string",
+                      "description": "Returns only the session with this ID."
+                },
+                "messagesession-remote": {
+                      "type": "string",
+                      "description": "Returns only the sessions with this remote party: a user ID such as `1002@example.com`, or a phone number. A 10-digit number gets a leading `1`. Exact match."
+                },
+                "messagesession-last-status": {
+                      "type": "string",
+                      "description": "Returns only `read` or only `unread` sessions. Allowed values: \"read\", \"unread\"",
+                      "enum": [
+                            "read",
+                            "unread"
+                      ]
+                },
+                "messagesession-muted": {
+                      "type": "string",
+                      "description": "Returns only muted (`yes`) or only unmuted (`no`) sessions. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "messagesession-last-sender": {
+                      "type": "string",
+                      "description": "Returns only the sessions whose last message came from this user ID or number. `remote` returns the sessions whose last message did not come from the user."
+                },
+                "messagesession-queue-termination": {
+                      "type": "string",
+                      "description": "Returns only the call queue conversations of this queue, as its user ID."
+                },
+                "messagesession-queue-status": {
+                      "type": "string",
+                      "description": "Returns only the call queue conversations in this state, such as `queued` or `active`."
+                },
+                "session-name": {
+                      "type": "string",
+                      "description": "Returns only the sessions whose name matches. Use `%` as the wildcard, for example `Front%`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "The order of the results: a column name with `asc` or `desc`. Defaults to `last_timestamp desc`, the most recently active session first."
                 }
           },
           "required": [
@@ -158,13 +78,19 @@ export const get_message_sessions_for_user: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/messagesessions',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['limit', 'messagesession-id', 'messagesession-remote', 'messagesession-last-status', 'messagesession-muted', 'messagesession-last-sender', 'messagesession-queue-termination', 'messagesession-queue-status', 'session-name', 'start', 'sort'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -185,184 +111,51 @@ export const get_message_sessions_for_user: ToolDefinition = {
   },
 };
 
-export const get_message_session_for_user: ToolDefinition = {
-  schema: {
-    name: 'get_message_session_for_user',
-    description: 'Get Messagesession for User — [GET /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "messagesession": {
-                      "type": "string",
-                      "description": "messagesession"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "messagesession"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'messagesession'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const update_message_session_participants: ToolDefinition = {
-  schema: {
-    name: 'update_message_session_participants',
-    description: 'Update Messagesession (Participants) — This is how you add or remove participants from a chat message session. You cannot add or remove from a group MMS session, in that case you must start a new session. — [PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "messagesession": {
-                      "type": "string",
-                      "description": "ID of the message session to send in (when changing participants, do not change the session ID)"
-                },
-                "participants": {
-                      "type": "string",
-                      "description": "This is a comma separated list of User IDs that will be the final list of users in the group chat. This includes the current user's User ID"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "messagesession",
-                "participants"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'messagesession'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['participants'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PUT',
-      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const delete_messagesession: ToolDefinition = {
-  schema: {
-    name: 'delete_messagesession',
-    description: 'Delete Messagesession — [DELETE /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "messagesession": {
-                      "type": "string",
-                      "description": "ID of the message session to delete"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "messagesession"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'messagesession'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'DELETE',
-      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const get_messages_for_messagesession: ToolDefinition = {
   schema: {
     name: 'get_messages_for_messagesession',
-    description: 'Get Messages for Messagesession — [GET /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages]',
+    description: 'List messages in session — Returns the messages of one session, newest first. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  The user must have the session: for a session ID the user does not have, the answer is an empty array. For a video meeting chat, a user-level scope reads it only when your token\\\'s user is an attendee of that meeting; otherwise the answer is an empty array too. Messages from before the user\\\'s `messagesession-start-datetime`, such as those before a delete, are not returned. `limit` defaults to `100`, and `0` returns every message.  A message with a file carries `file-access-url`, a signed link that expires. `timestamp` is UTC in the form `YYYY-MM-DD HH:MM:SS`. — [GET /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "messagesession": {
                       "type": "string",
-                      "description": "messagesession"
+                      "description": "The message session ID, as returned in `messagesession-id`. Chat, SMS, and MMS sessions use a 32-character lowercase hex ID."
                 },
                 "limit": {
                       "type": "number",
-                      "description": "This is the limit of the number of objects that will be returned in the read/list API call. This can be used with pagination to help retrieve smaller chunks of data. Should be used in conjunction with Start. Default: 100",
+                      "description": "The most messages to return. Defaults to `100`. `0` returns every message. Default: 100",
                       "default": 100
+                },
+                "start": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first message to return. Use it with `limit` to page back through history. Default: 0",
+                      "default": 0
+                },
+                "order": {
+                      "type": "string",
+                      "description": "The order of the messages. Defaults to `timestamp desc`, the newest first. `timestamp asc` returns the oldest first. Allowed values: \"timestamp desc\", \"timestamp asc\". Default: \"timestamp desc\"",
+                      "enum": [
+                            "timestamp desc",
+                            "timestamp asc"
+                      ],
+                      "default": "timestamp desc"
+                },
+                "messagesession-start-datetime": {
+                      "type": "string",
+                      "description": "Returns only the messages sent at or after this time, in UTC, in the form `YYYY-MM-DD HH:MM:SS`. Use it to fetch only what is new since your last read."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "Returns only the message with this ID."
                 }
           },
           "required": [
@@ -372,13 +165,19 @@ export const get_messages_for_messagesession: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['limit'];
+    const queryParamNames = ['limit', 'start', 'order', 'messagesession-start-datetime', 'id'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -402,60 +201,35 @@ export const get_messages_for_messagesession: ToolDefinition = {
 export const send_message_chat: ToolDefinition = {
   schema: {
     name: 'send_message_chat',
-    description: 'Send a message (Chat) — [POST /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages]',
+    description: 'Send message — Sends a chat, SMS, or MMS message in an existing session. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain. You send as the user in the path.  Leave `type` out, or send `chat`, in an SMS or MMS session, and the message goes out as that session\\\'s type, to its number, from the number used last. To start a conversation without a session ID, use `POST /domains/{domain}/users/{user}/messages`.  `type` is one of these values:  - `chat`: a text message to users in the same domain. The default. - `chat-media`: a chat message with a file attached. - `sms`: a text message to phone numbers, sent from one of your SMS numbers. - `mms`: an SMS with a file attached. - `chat-video-invite`, `chat-video-decline`: video call invitations sent in a chat.  The API itself writes `chat-name-change`, `chat-participant-add`, `chat-participant-remove`, `chat-participant-remove-notification`, and `chat-participant-leave` messages when a session changes. Do not send them.  ### Chat  Send `message` and `destination`, the extension of a user in the same domain. `type` can be left out.  ### Group chat  Send `destination` as a list of extensions, or as one comma-separated string.  ### Media chat  Set `type` to `chat-media` and attach the file as base64 in `data`, with `mime-type` and `size`. Or send `upload_id` for a file you already uploaded. `message` is still required.  ### SMS  Set `type` to `sms`, `destination` to the phone number, and `from-number` to your SMS number. `from-number` must be assigned in this domain to the sending user, or to a call queue.  ### Group SMS  Send `destination` as a list of numbers. The message goes out as a group MMS.  ### MMS  Set `type` to `mms`, add `from-number`, and attach the file as for a media chat.  A number that texted STOP to `from-number` does not get the message. When every recipient has opted out, the request answers `409`. For the opt-out list, see `GET /domains/{domain}/smsblocks`.  Below Office Manager, your token\\\'s user must be a participant of the session: posting into anyone else\\\'s session answers `403`. A session ID that no session has yet is allowed, and starts that session. A video meeting chat is the exception: your token\\\'s user must attend the meeting, even to post its first message, and only a host or presenter can post into the meeting\\\'s hosts chat.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. — [POST /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "messagesession": {
                       "type": "string",
-                      "description": "ID of the message session to send in. Needs to be at least 32 characters long and random. Only alphanumeric chracters and underscore are allowed."
-                },
-                "type": {
-                      "type": "string",
-                      "description": "type"
-                },
-                "message": {
-                      "type": "string",
-                      "description": "This is the text that will be sent as the message"
-                },
-                "destination": {
-                      "type": "string",
-                      "description": "This is a single user or phonenumber for chat and SMS respectively. If sending to multiple recipients, then should be an array of users or phonenumbers"
-                },
-                "from-number": {
-                      "type": "string",
-                      "description": "This is used only for SMS. This is the user's number used to send outbound for SMS"
-                },
-                "data": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the base64 data of the media file to be sent"
-                },
-                "mime-type": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the mime type of the media file to be sent"
-                },
-                "size": {
-                      "type": "string",
-                      "description": "This is used only for media chat or MMS. This is the size in bytes of the media file being sent"
+                      "description": "The message session ID, as returned in `messagesession-id`. 30 to 128 letters, digits, and underscores. Chat, SMS, and MMS sessions use a 32-character lowercase hex ID."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "messagesession",
-                "type",
-                "message",
-                "destination"
+                "messagesession"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
@@ -463,16 +237,10 @@ export const send_message_chat: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['type', 'message', 'destination', 'from-number', 'data', 'mime-type', 'size'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages',
       pathParams,
-      body,
     });
 
     return {
@@ -541,6 +309,12 @@ export const send_message_group_chat: ToolDefinition = {
                 "destination"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
@@ -627,6 +401,12 @@ export const send_message_media_chat: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
     const pathParams: Record<string, string> = {};
@@ -711,6 +491,12 @@ export const send_message_sms: ToolDefinition = {
                 "destination"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
@@ -797,6 +583,12 @@ export const send_message_group_sms: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
     const pathParams: Record<string, string> = {};
@@ -882,6 +674,12 @@ export const send_message_mms: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
     const pathParams: Record<string, string> = {};
@@ -898,6 +696,114 @@ export const send_message_mms: ToolDefinition = {
       pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}/messages',
       pathParams,
       body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_message_session_participants: ToolDefinition = {
+  schema: {
+    name: 'update_message_session_participants',
+    description: 'Update message session — Changes a message session: renames a group session, sets a group chat\\\'s participants, or marks your copy read or muted. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain. Send one shape per request.  ### Rename the session  Send `session-name`. Every participant\\\'s copy is renamed, and every participant gets a `chat-name-change` message.  ### Set the participants  Send `messagesession-participants` with the complete list of user IDs, including your own, for example `1001@example.com,1002@example.com,1003@example.com`. A user added gets the session, and a user left out loses it. The other participants get a `chat-participant-add` or `chat-participant-remove` message, and a removed user gets a `chat-participant-remove-notification`. Use it on a group chat only.  Below Office Manager, only a participant can rename a session or change its participants: your token\\\'s user must hold a copy of it, or the answer is `403`. Marking read or muted touches only the path user\\\'s copy and needs no such check. To leave a group yourself, use `PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}/leave`.  ### Mark read or mute  Send `messagesession-last-status` `read` after the user has seen the last message, or `messagesession-muted` `yes` or `no`. Only your own copy changes.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. When you only mark read or muted, a session ID the user does not have changes nothing and still answers `202`. — [PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "messagesession": {
+                      "type": "string",
+                      "description": "The message session ID, as returned in `messagesession-id`. A chat, SMS, or MMS session ID is 32 lowercase hex characters. Any other ID is refused with `400` unless it is a video meeting chat ID."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "messagesession"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/messagesessions/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'messagesession'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_messagesession: ToolDefinition = {
+  schema: {
+    name: 'delete_messagesession',
+    description: 'Delete message session — Removes a conversation from one user\\\'s session list. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  Only this user\\\'s copy changes: the other participants keep the session and every message. The session disappears from the user\\\'s list, and its earlier messages are no longer returned to this user. A new message in the conversation brings the session back, starting from that message.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. A session ID the user does not have answers `202` too. — [DELETE /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "messagesession": {
+                      "type": "string",
+                      "description": "The message session ID, as returned in `messagesession-id`."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "messagesession"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/messagesessions/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'messagesession'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
+      pathParams,
     });
 
     return {
@@ -941,6 +847,12 @@ export const update_message_session_session_name: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/messagesessions/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
     const pathParams: Record<string, string> = {};
@@ -971,21 +883,21 @@ export const update_message_session_session_name: ToolDefinition = {
 export const leave_messagesession: ToolDefinition = {
   schema: {
     name: 'leave_messagesession',
-    description: 'Update Messagesession (Leave) — This is how you leave a chat conversation. — [PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}/leave]',
+    description: 'Leave message session — Takes the user out of a group chat. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  The user\\\'s copy of the session is hidden, the other participants\\\' lists drop the user, and they get a `chat-participant-leave` message naming the user. The session must be a group chat: a one-to-one session answers `400`. To hide a one-to-one session, use `DELETE /domains/{domain}/users/{user}/messagesessions/{messagesession}`. `POST` does the same as `PUT`.  Below Office Manager, your token\\\'s user must be a participant of the session, or the answer is `403`, and the remaining participants are always worked out from the session.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. — [PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}/leave]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "messagesession": {
                       "type": "string",
-                      "description": "ID of the message session to send in (when changing participants, do not change the session ID)"
+                      "description": "The message session ID, as returned in `messagesession-id`."
                 }
           },
           "required": [
@@ -994,6 +906,12 @@ export const leave_messagesession: ToolDefinition = {
                 "messagesession"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/messagesessions/{}/leave',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'messagesession'];
@@ -1005,6 +923,418 @@ export const leave_messagesession: ToolDefinition = {
       method: 'PUT',
       pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}/leave',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_message_sessions_for_domain: ToolDefinition = {
+  schema: {
+    name: 'get_message_sessions_for_domain',
+    description: 'List message sessions in domain — Returns every user\\\'s message sessions in a domain, the most recently active first. Requires Office Manager, Reseller, Super User, or Super User Read Only scope. A Reseller reads the domains in its territory.  Each participant has their own copy of a session, so a conversation between two users appears twice, once per `user`. Sessions that were deleted or left are not returned. `limit` defaults to `100`. For one user\\\'s sessions, call `GET /domains/{domain}/users/{user}/messagesessions`. — [GET /domains/{domain}/messagesessions]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "messagesession-id": {
+                      "type": "string",
+                      "description": "Returns only the session with this ID."
+                },
+                "messagesession-remote": {
+                      "type": "string",
+                      "description": "Returns only the sessions with this remote party: a user ID such as `1002@example.com`, or a phone number. A 10-digit number gets a leading `1`. Exact match."
+                },
+                "messagesession-last-status": {
+                      "type": "string",
+                      "description": "Returns only `read` or only `unread` sessions. Allowed values: \"read\", \"unread\"",
+                      "enum": [
+                            "read",
+                            "unread"
+                      ]
+                },
+                "messagesession-muted": {
+                      "type": "string",
+                      "description": "Returns only muted (`yes`) or only unmuted (`no`) sessions. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "messagesession-last-sender": {
+                      "type": "string",
+                      "description": "Returns only the sessions whose last message came from this user ID or number. `remote` returns the sessions whose last message did not come from the user."
+                },
+                "messagesession-queue-termination": {
+                      "type": "string",
+                      "description": "Returns only the call queue conversations of this queue, as its user ID."
+                },
+                "messagesession-queue-status": {
+                      "type": "string",
+                      "description": "Returns only the call queue conversations in this state, such as `queued` or `active`."
+                },
+                "session-name": {
+                      "type": "string",
+                      "description": "Returns only the sessions whose name matches. Use `%` as the wildcard, for example `Front%`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "The order of the results: a column name with `asc` or `desc`. Defaults to `last_timestamp desc`, the most recently active session first."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/messagesessions',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['limit', 'messagesession-id', 'messagesession-remote', 'messagesession-last-status', 'messagesession-muted', 'messagesession-last-sender', 'messagesession-queue-termination', 'messagesession-queue-status', 'session-name', 'start', 'sort'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/messagesessions',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const start_session: ToolDefinition = {
+  schema: {
+    name: 'start_session',
+    description: 'Start message session — Sends a chat, SMS, or MMS message without a session ID, and answers with the stored message. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain. You send as the user in the path.  The session is found from who takes part: the same sender and recipients always land in the same session, so calling this again continues the conversation. Read `messagesession-id` in the answer and use it with `POST /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages` for later messages.  `type` is one of these values:  - `chat`: a text message to users in the same domain. The default. - `chat-media`: a chat message with a file attached. - `sms`: a text message to phone numbers, sent from one of your SMS numbers. - `mms`: an SMS with a file attached. - `chat-video-invite`, `chat-video-decline`: video call invitations sent in a chat.  The API itself writes `chat-name-change`, `chat-participant-add`, `chat-participant-remove`, `chat-participant-remove-notification`, and `chat-participant-leave` messages when a session changes. Do not send them.  ### Chat  Send `message` and `destination`, the extension of a user in the same domain. `type` can be left out.  ### Group chat  Send `destination` as a list of extensions, or as one comma-separated string.  ### Media chat  Set `type` to `chat-media` and attach the file as base64 in `data`, with `mime-type` and `size`. Or send `upload_id` for a file you already uploaded. `message` is still required.  ### SMS  Set `type` to `sms`, `destination` to the phone number, and `from-number` to your SMS number. `from-number` must be assigned in this domain to the sending user, or to a call queue.  ### Group SMS  Send `destination` as a list of numbers. The message goes out as a group MMS.  ### MMS  Set `type` to `mms`, add `from-number`, and attach the file as for a media chat.  A number that texted STOP to `from-number` does not get the message. When every recipient has opted out, the request answers `409`. For the opt-out list, see `GET /domains/{domain}/smsblocks`. — [POST /domains/{domain}/users/{user}/messages]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messages',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/messages',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_message_session_for_user: ToolDefinition = {
+  schema: {
+    name: 'get_message_session_for_user',
+    description: 'Read message session — Returns one of a user\\\'s message sessions. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  The answer is an array with the session, or an empty array when the user has no session with this ID. A session the user deleted or left is returned too, with its last message cleared. — [GET /domains/{domain}/users/{user}/messagesessions/{messagesession}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "messagesession": {
+                      "type": "string",
+                      "description": "The message session ID, as returned in `messagesession-id`. Chat, SMS, and MMS sessions use a 32-character lowercase hex ID."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "messagesession"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/messagesessions/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'messagesession'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_message_sessions: ToolDefinition = {
+  schema: {
+    name: 'count_message_sessions',
+    description: 'Count message sessions — Returns how many message sessions a user has. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain.  It counts what `GET /domains/{domain}/users/{user}/messagesessions` lists, and takes these filters: `messagesession-id`, `messagesession-remote`, `messagesession-last-status`, `messagesession-muted`, and `messagesession-last-sender`. Use `messagesession-last-status=unread` for an unread badge. — [GET /domains/{domain}/users/{user}/messagesessions/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "messagesession-id": {
+                      "type": "string",
+                      "description": "Counts only the session with this ID."
+                },
+                "messagesession-remote": {
+                      "type": "string",
+                      "description": "Counts only the sessions with this remote party: a user ID such as `1002@example.com`, or a phone number. A 10-digit number gets a leading `1`. Exact match."
+                },
+                "messagesession-last-status": {
+                      "type": "string",
+                      "description": "Counts only `read` or only `unread` sessions. Allowed values: \"read\", \"unread\"",
+                      "enum": [
+                            "read",
+                            "unread"
+                      ]
+                },
+                "messagesession-muted": {
+                      "type": "string",
+                      "description": "Counts only muted (`yes`) or only unmuted (`no`) sessions. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "messagesession-last-sender": {
+                      "type": "string",
+                      "description": "Counts only the sessions whose last message came from this user ID or number. `remote` returns the sessions whose last message did not come from the user."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/messagesessions/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['messagesession-id', 'messagesession-remote', 'messagesession-last-status', 'messagesession-muted', 'messagesession-last-sender'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_message_session: ToolDefinition = {
+  schema: {
+    name: 'create_message_session',
+    description: 'Create message session — Starts a message session by sending its first message, and answers `202`. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain. You send as the user in the path.  The body is the one `POST /domains/{domain}/users/{user}/messages` takes, with the same `type` values and fields. The session is found from who takes part, so the same sender and recipients continue an existing session. To get the stored message and its `messagesession-id` in the answer, use `POST /domains/{domain}/users/{user}/messages` instead. For later messages, use `POST /domains/{domain}/users/{user}/messagesessions/{messagesession}/messages`.  A number that texted STOP to `from-number` does not get the message. When every recipient has opted out, the request answers `409`.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. — [POST /domains/{domain}/users/{user}/messagesessions]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                }
+          },
+          "required": [
+                "domain",
+                "user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/messagesessions',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const accept_message_session: ToolDefinition = {
+  schema: {
+    name: 'accept_message_session',
+    description: 'Accept call queue conversation — Takes an SMS conversation that is waiting in a call queue and assigns it to the user, as its agent. Every scope reaches its own user. Office Manager reaches every user in its domain, Reseller the domains in its territory, and Super User every domain. `POST` does the same as `PUT`.  Send the queue\\\'s user ID in `messagesession-queue-termination`, as the session shows it. The session moves to `active` for this user, and `messagesession-agent-start-datetime` is set.  Below Office Manager, the user in the path must be an agent of the queue the conversation is waiting in, as the user itself or through one of its devices, or the user the conversation was already offered to. Anyone else gets `403`. Office Manager and above can assign the conversation to any user.  When another agent already has the conversation, or every copy is `complete`, the answer is `200` with a body whose `code` is `400` and `status` is `failure`, and nothing changes. Check `code` in the body, not only the HTTP status.  A `202` means the change is accepted and applied shortly after, so a read made right away can still show the old values. — [PUT /domains/{domain}/users/{user}/messagesessions/{messagesession}/accept]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "messagesession": {
+                      "type": "string",
+                      "description": "The message session ID, as returned in `messagesession-id`."
+                },
+                "messagesession-queue-termination": {
+                      "type": "string",
+                      "description": "The call queue the conversation is waiting in, as its user ID. Read it from the session's `messagesession-queue-termination`."
+                },
+                "messagesession-last-status": {
+                      "type": "string",
+                      "description": "Optionally marks the conversation `read` or `unread` for you. Allowed values: \"read\", \"unread\"",
+                      "enum": [
+                            "read",
+                            "unread"
+                      ]
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "messagesession",
+                "messagesession-queue-termination"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/messagesessions/{}/accept',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'messagesession'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['messagesession-queue-termination', 'messagesession-last-status'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/messagesessions/{messagesession}/accept',
+      pathParams,
+      body,
     });
 
     return {

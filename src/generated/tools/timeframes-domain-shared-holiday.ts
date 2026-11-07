@@ -2,6 +2,78 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+export const post_domains_by_domain_timeframes_4: ToolDefinition = {
+  schema: {
+    name: 'post_domains_by_domain_timeframes_4',
+    description: 'Create Holidays Timeframe — When creating a Holiday timeframe it is not necessary to supply a ```timeframe-id``` for the timeframe or for the holidays within that timeframe. These ```timeframe-id```s will be generated automatically. — [POST /domains/{domain}/timeframes]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "timeframe-name": {
+                      "type": "string",
+                      "description": "timeframe-name"
+                },
+                "timeframe-type": {
+                      "type": "string",
+                      "description": "```days-of-week```: Days of Week ```specific-dates```: Specific Dates ```holiday```: Holidays ```custom```: Custom ```always```: Always"
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "timeframe-holiday-array"
+                }
+          },
+          "required": [
+                "domain",
+                "synchronous"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['synchronous', 'timeframe-name', 'timeframe-type', 'timeframe-holiday-array'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/timeframes',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const post_domains_by_domain_timeframes_by_id_2: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_timeframes_by_id_2',
@@ -27,6 +99,12 @@ export const post_domains_by_domain_timeframes_by_id_2: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/timeframes/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -82,6 +160,12 @@ export const delete_domains_by_domain_timeframes_by_id_2: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
@@ -95,125 +179,6 @@ export const delete_domains_by_domain_timeframes_by_id_2: ToolDefinition = {
     }
     const response = await client.request({
       method: 'DELETE',
-      pathTemplate: '/domains/{domain}/timeframes/{id}',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const post_domains_by_domain_timeframes_4: ToolDefinition = {
-  schema: {
-    name: 'post_domains_by_domain_timeframes_4',
-    description: 'Create Holidays Timeframe — When creating a Holiday timeframe it is not necessary to supply a ```timeframe-id``` for the timeframe or for the holidays within that timeframe. These ```timeframe-id```s will be generated automatically. — [POST /domains/{domain}/timeframes]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "synchronous": {
-                      "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "no"
-                },
-                "timeframe-name": {
-                      "type": "string",
-                      "description": "timeframe-name"
-                },
-                "timeframe-type": {
-                      "type": "string",
-                      "description": "```days-of-week```: Days of Week ```specific-dates```: Specific Dates ```holiday```: Holidays ```custom```: Custom ```always```: Always"
-                },
-                "timeframe-holiday-array": {
-                      "type": "array",
-                      "description": "timeframe-holiday-array"
-                }
-          },
-          "required": [
-                "domain",
-                "synchronous"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['synchronous', 'timeframe-name', 'timeframe-type', 'timeframe-holiday-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/timeframes',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const put_domains_by_domain_timeframes_by_id_4: ToolDefinition = {
-  schema: {
-    name: 'put_domains_by_domain_timeframes_by_id_4',
-    description: 'Replace All Holidays in Holiday Timeframe — If a new array of holiday objects is supplied in the update request for a Holidays timeframe, it will replace all existing holidays in the timeframe, meaning that any existing holidays in that timeframe will be removed. To update individual holidays within a Holiday timeframe, refer to "Update Holidays within Holiday Timeframe." It is not necessary to supply a ```timeframe-id``` for the new holidays. These ```timeframe-id```s will be generated automatically. — [PUT /domains/{domain}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to modify"
-                },
-                "timeframe-holiday-array": {
-                      "type": "array",
-                      "description": "timeframe-holiday-array"
-                }
-          },
-          "required": [
-                "domain",
-                "id"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['timeframe-holiday-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PUT',
       pathTemplate: '/domains/{domain}/timeframes/{id}',
       pathParams,
       body,
@@ -259,6 +224,12 @@ export const put_domains_by_domain_timeframes_by_id_5: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
@@ -266,6 +237,65 @@ export const put_domains_by_domain_timeframes_by_id_5: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const bodyParamNames = ['update-only', 'timeframe-holiday-array'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/timeframes/{id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const put_domains_by_domain_timeframes_by_id_4: ToolDefinition = {
+  schema: {
+    name: 'put_domains_by_domain_timeframes_by_id_4',
+    description: 'Replace All Holidays in Holiday Timeframe — If a new array of holiday objects is supplied in the update request for a Holidays timeframe, it will replace all existing holidays in the timeframe, meaning that any existing holidays in that timeframe will be removed. To update individual holidays within a Holiday timeframe, refer to "Update Holidays within Holiday Timeframe." It is not necessary to supply a ```timeframe-id``` for the new holidays. These ```timeframe-id```s will be generated automatically. — [PUT /domains/{domain}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                },
+                "id": {
+                      "type": "string",
+                      "description": "```timeframe-id``` of the timeframe to modify"
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "timeframe-holiday-array"
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['timeframe-holiday-array'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];

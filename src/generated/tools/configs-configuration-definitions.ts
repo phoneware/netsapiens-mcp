@@ -5,16 +5,69 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_config_definitions: ToolDefinition = {
   schema: {
     name: 'get_config_definitions',
-    description: 'Read all Configuration Definitions — [GET /config-definitions]',
+    description: 'List configuration definitions — Lists configuration definitions. A configuration definition describes one setting: what it controls, its `default` value, its `data-type`, the release it first applies to, and whether a Reseller may set it. Configuration rows (`/configurations`) then set values for it at each tier.  Super User and Super User Read Only read every definition. Reseller and Route Manager Reseller read the definitions whose `config-def-allow-reseller-access` is `yes`, the settings a Reseller may set. Other scopes get `403`. The default values of secret-named settings are masked, as for `/configurations`; a Super User can send `include-secrets=yes` to get them in clear.  Filter by `tags`, `filter`, or `config-def-allow-reseller-access` (Super User and Super User Read Only). Definitions are paged with `start` and `limit`, which defaults to `100`, newest `code-version` first. To read one definition, or all names matching a `*` pattern, call `GET /config-definitions/{config-name}`. — [GET /config-definitions]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "tags": {
+                      "type": "string",
+                      "description": "Comma-separated tags. Returns definitions whose `tags` contain every one, such as `portal,contacts`."
+                },
+                "filter": {
+                      "type": "string",
+                      "description": "Returns definitions whose name contains this text. A comma-separated list matches each entry as a name pattern instead, where `%` matches any run of characters."
+                },
+                "config-def-allow-reseller-access": {
+                      "type": "string",
+                      "description": "Returns only definitions with this `config-def-allow-reseller-access`. Honored for Super User and Super User Read Only; below them only `yes` definitions are returned anyway. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most definitions to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated column names, each optionally followed by `asc` or `desc`. Columns: `config_name`, `description`, `code_version`, `data_type`, `default`, `default_bu`, `default_om`, `default_ccs`, `default_r`, `default_su`, `allow_reseller_access`, `allow_hostname`, `tags`, and `notes`. Anything else returns `400`. Defaults to `code_version desc,config_name asc`. Default: \"code_version desc,config_name asc\"",
+                      "default": "code_version desc,config_name asc"
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns secret-named values in clear. Super User only; any other scope that sends `yes` gets `403`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /config-definitions',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['tags', 'filter', 'config-def-allow-reseller-access', 'start', 'limit', 'sort', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/config-definitions',
+      queryParams,
     });
 
     return {
@@ -29,71 +82,69 @@ export const get_config_definitions: ToolDefinition = {
 export const post_config_definitions: ToolDefinition = {
   schema: {
     name: 'post_config_definitions',
-    description: 'Create a Configuration Definition — [POST /config-definitions]',
+    description: 'Create configuration definition — Creates a configuration definition. A configuration definition describes one setting: what it controls, its `default` value, its `data-type`, the release it first applies to, and whether a Reseller may set it. Configuration rows (`/configurations`) then set values for it at each tier.  Requires Super User scope. Every other scope gets `403`.  `config-name`, `description`, `default`, `code-version`, and `data-type` are required. `config-name` takes letters, digits, and `@ . - _ \\\'`. `config-def-allow-reseller-access` and `config-def-allow-hostname` take `yes` or `no` and default to `yes`; the scope-specific defaults default to empty. A name that already has a definition returns `409`. A masked default value for a secret-named setting returns `400`.  Definitions the platform ships are reloaded from its master list on every upgrade, which resets their fields; a definition you create keeps its values. The definition is published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted, not yet stored. — [POST /config-definitions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "This is the name of the configuration being defined"
+                      "description": "Name of the setting the definition describes: letters, digits, and `@ . - _ '`. No `*`"
                 },
                 "description": {
                       "type": "string",
-                      "description": "This describes the configuration being defined"
+                      "description": "What the setting controls"
                 },
                 "default": {
                       "type": "string",
-                      "description": "default"
+                      "description": "Default value of the setting where no configuration row applies"
                 },
                 "code-version": {
                       "type": "string",
-                      "description": "This is the code version this definition starts to become applicable"
+                      "description": "First release the setting applies to, such as `v44.0`"
                 },
                 "data-type": {
                       "type": "string",
-                      "description": "This is the data type allowed for this configuration"
-                },
-                "config-def-allow-hostname": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "config-def-allow-reseller-access": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "config-def-default-basic-user": {
-                      "type": "string",
-                      "description": "config-def-default-basic-user"
-                },
-                "config-def-default-call-center-supervisor": {
-                      "type": "string",
-                      "description": "config-def-default-call-center-supervisor"
-                },
-                "config-def-default-office-manager": {
-                      "type": "string",
-                      "description": "config-def-default-office-manager"
-                },
-                "config-def-default-reseller": {
-                      "type": "string",
-                      "description": "config-def-default-reseller"
+                      "description": "Kind of value the setting holds, such as `string`, `boolean`, or `integer`. Informational: values are not checked against it"
                 },
                 "config-def-default-super-user": {
                       "type": "string",
-                      "description": "config-def-default-super-user"
+                      "description": "Scope-specific default for Super User. Empty means none is set"
+                },
+                "config-def-default-reseller": {
+                      "type": "string",
+                      "description": "Scope-specific default for Reseller. Empty means none is set"
+                },
+                "config-def-default-office-manager": {
+                      "type": "string",
+                      "description": "Scope-specific default for Office Manager. Empty means none is set"
+                },
+                "config-def-default-call-center-supervisor": {
+                      "type": "string",
+                      "description": "Scope-specific default for Call Center Supervisor. Empty means none is set"
+                },
+                "config-def-default-basic-user": {
+                      "type": "string",
+                      "description": "Scope-specific default for Basic User. Empty means none is set"
+                },
+                "config-def-allow-reseller-access": {
+                      "type": "string",
+                      "description": "`yes` opens the setting below Super User: a Reseller can read the definition, and every scope that writes configurations can set it within its own tier. Defaults to `yes` on create. Anything but `yes` or `no` (any case) returns `400`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "config-def-allow-hostname": {
+                      "type": "string",
+                      "description": "Whether the setting is meant to vary by core server (`core-server`). Informational: the API does not enforce it. Defaults to `yes` on create. Anything but `yes` or `no` (any case) returns `400`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "tags": {
                       "type": "string",
-                      "description": "Any tags, comma seperated, that should be applied to the defintion"
+                      "description": "Comma-separated tags for finding the definition, such as `portal,contacts`"
                 }
           },
           "required": [
@@ -105,8 +156,14 @@ export const post_config_definitions: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /config-definitions',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['config-name', 'description', 'default', 'code-version', 'data-type', 'config-def-allow-hostname', 'config-def-allow-reseller-access', 'config-def-default-basic-user', 'config-def-default-call-center-supervisor', 'config-def-default-office-manager', 'config-def-default-reseller', 'config-def-default-super-user', 'tags'];
+    const bodyParamNames = ['config-name', 'description', 'default', 'code-version', 'data-type', 'config-def-default-super-user', 'config-def-default-reseller', 'config-def-default-office-manager', 'config-def-default-call-center-supervisor', 'config-def-default-basic-user', 'config-def-allow-reseller-access', 'config-def-allow-hostname', 'tags'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -129,31 +186,41 @@ export const post_config_definitions: ToolDefinition = {
 export const get_config_definitions_by_config_name: ToolDefinition = {
   schema: {
     name: 'get_config_definitions_by_config_name',
-    description: 'Read a Specific Configuration Definition — [GET /config-definitions/{config-name}]',
+    description: 'Read configuration definition — Returns the definition of one setting, or of every setting whose name matches a `*` pattern. A configuration definition describes one setting: what it controls, its `default` value, its `data-type`, the release it first applies to, and whether a Reseller may set it. Configuration rows (`/configurations`) then set values for it at each tier.  Super User and Super User Read Only read every definition. Reseller and Route Manager Reseller read the definitions whose `config-def-allow-reseller-access` is `yes`, the settings a Reseller may set. Other scopes get `403`. The default values of secret-named settings are masked, as for `/configurations`; a Super User can send `include-secrets=yes` to get them in clear.  The response is an array. An unknown name returns an empty array. With a pattern, filter further by `tags` and page with `start` and `limit`, which defaults to `100`. — [GET /config-definitions/{config-name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "To read definitions for all configurations, use \"*\""
+                      "description": "Name of the setting, such as `PORTAL_SHOW_SHARED_CONTACTS`. `*` matches any run of characters: `*` alone returns every definition, `PORTAL_CONTACTS_*` a group."
                 },
                 "tags": {
                       "type": "string",
-                      "description": "An optional comma seperated list of tags the definition to search has. To search all configs with the tags, set config-name to \"*\""
+                      "description": "Comma-separated tags. Returns definitions whose `tags` contain every one, such as `portal,contacts`."
                 },
                 "start": {
                       "type": "number",
-                      "description": "This is the start value when using pagination. 0 is the default and the minimum value. For example the default of 0 paired with the default limit of 100 would return the first 100 objects in the data request. A start of 100 and a default limit of 100 would give you the second 100 results in the response. Default: 0",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
                       "default": 0
                 },
                 "limit": {
                       "type": "number",
-                      "description": "Default to 100. Default: 100",
+                      "description": "Most definitions to return. Defaults to `100`. Default: 100",
                       "default": 100
                 },
                 "sort": {
                       "type": "string",
-                      "description": "Defaults to \"code_version desc,config_name asc\""
+                      "description": "Sort order: comma-separated column names, each optionally followed by `asc` or `desc`. Columns: `config_name`, `description`, `code_version`, `data_type`, `default`, `default_bu`, `default_om`, `default_ccs`, `default_r`, `default_su`, `allow_reseller_access`, `allow_hostname`, `tags`, and `notes`. Anything else returns `400`. Defaults to `code_version desc,config_name asc`. Default: \"code_version desc,config_name asc\"",
+                      "default": "code_version desc,config_name asc"
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns secret-named values in clear. Super User only; any other scope that sends `yes` gets `403`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -161,13 +228,19 @@ export const get_config_definitions_by_config_name: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /config-definitions/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['config-name'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['tags', 'start', 'limit', 'sort'];
+    const queryParamNames = ['tags', 'start', 'limit', 'sort', 'include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -191,81 +264,77 @@ export const get_config_definitions_by_config_name: ToolDefinition = {
 export const put_config_definitions_by_config_name: ToolDefinition = {
   schema: {
     name: 'put_config_definitions_by_config_name',
-    description: 'Update a Configuration Definition — [PUT /config-definitions/{config-name}]',
+    description: 'Update configuration definition — Changes an existing configuration definition. Send only the fields to change. `code-version` cannot be changed and is ignored.  Requires Super User scope. Every other scope gets `403`.  A name with no definition returns `404`. The same field checks as a create apply. For a secret-named setting, a masked default value read back and sent unchanged keeps the stored value. Changing `default` changes the value of every configuration that has no row of its own. Definitions the platform ships are reset to their shipped values on the next upgrade, except that `config-def-allow-reseller-access` set to `yes` is kept.  The change is published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted, not yet stored. — [PUT /config-definitions/{config-name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "config-name"
+                      "description": "Name of the setting whose definition to change, such as `PORTAL_SHOW_SHARED_CONTACTS`."
                 },
                 "description": {
                       "type": "string",
-                      "description": "This describes the configuration being defined"
+                      "description": "What the setting controls"
                 },
                 "default": {
                       "type": "string",
-                      "description": "default"
-                },
-                "code-version": {
-                      "type": "string",
-                      "description": "This is the code version this definition starts to become applicable"
+                      "description": "Default value of the setting where no configuration row applies"
                 },
                 "data-type": {
                       "type": "string",
-                      "description": "This is the data type allowed for this configuration"
-                },
-                "config-def-allow-hostname": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "config-def-allow-reseller-access": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "config-def-default-basic-user": {
-                      "type": "string",
-                      "description": "config-def-default-basic-user"
-                },
-                "config-def-default-call-center-supervisor": {
-                      "type": "string",
-                      "description": "config-def-default-call-center-supervisor"
-                },
-                "config-def-default-office-manager": {
-                      "type": "string",
-                      "description": "config-def-default-office-manager"
-                },
-                "config-def-default-reseller": {
-                      "type": "string",
-                      "description": "config-def-default-reseller"
+                      "description": "Kind of value the setting holds, such as `string`, `boolean`, or `integer`. Informational: values are not checked against it"
                 },
                 "config-def-default-super-user": {
                       "type": "string",
-                      "description": "config-def-default-super-user"
+                      "description": "Scope-specific default for Super User. Empty means none is set"
+                },
+                "config-def-default-reseller": {
+                      "type": "string",
+                      "description": "Scope-specific default for Reseller. Empty means none is set"
+                },
+                "config-def-default-office-manager": {
+                      "type": "string",
+                      "description": "Scope-specific default for Office Manager. Empty means none is set"
+                },
+                "config-def-default-call-center-supervisor": {
+                      "type": "string",
+                      "description": "Scope-specific default for Call Center Supervisor. Empty means none is set"
+                },
+                "config-def-default-basic-user": {
+                      "type": "string",
+                      "description": "Scope-specific default for Basic User. Empty means none is set"
+                },
+                "config-def-allow-reseller-access": {
+                      "type": "string",
+                      "description": "`yes` opens the setting below Super User: a Reseller can read the definition, and every scope that writes configurations can set it within its own tier. Defaults to `yes` on create. Anything but `yes` or `no` (any case) returns `400`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "config-def-allow-hostname": {
+                      "type": "string",
+                      "description": "Whether the setting is meant to vary by core server (`core-server`). Informational: the API does not enforce it. Defaults to `yes` on create. Anything but `yes` or `no` (any case) returns `400`. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
                 },
                 "tags": {
                       "type": "string",
-                      "description": "Any tags, comma seperated, that should be applied to the defintion"
+                      "description": "Comma-separated tags for finding the definition, such as `portal,contacts`"
                 }
           },
           "required": [
-                "config-name",
-                "description",
-                "default",
-                "code-version",
-                "data-type"
+                "config-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /config-definitions/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['config-name'];
@@ -273,7 +342,7 @@ export const put_config_definitions_by_config_name: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['description', 'default', 'code-version', 'data-type', 'config-def-allow-hostname', 'config-def-allow-reseller-access', 'config-def-default-basic-user', 'config-def-default-call-center-supervisor', 'config-def-default-office-manager', 'config-def-default-reseller', 'config-def-default-super-user', 'tags'];
+    const bodyParamNames = ['description', 'default', 'data-type', 'config-def-default-super-user', 'config-def-default-reseller', 'config-def-default-office-manager', 'config-def-default-call-center-supervisor', 'config-def-default-basic-user', 'config-def-allow-reseller-access', 'config-def-allow-hostname', 'tags'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -297,19 +366,25 @@ export const put_config_definitions_by_config_name: ToolDefinition = {
 export const delete_config_definitions_by_config_name: ToolDefinition = {
   schema: {
     name: 'delete_config_definitions_by_config_name',
-    description: 'Delete Configuration Definition — This will delete the configuration definition and all configurations that match the name. — [DELETE /config-definitions/{config-name}]',
+    description: 'Delete configuration definition — Deletes a configuration definition and every configuration row with the same name, at every tier.  Requires Super User scope. Every other scope gets `403`.  Name one definition exactly: any `*` returns `400`, and a name with no definition returns `404`. The configuration rows are published for deletion first; if any cannot be published, the definition is kept and the answer is `400`, so retry the delete. A definition the platform ships comes back on the next upgrade; its configuration rows do not. The deletes are published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted. — [DELETE /config-definitions/{config-name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "config-name"
+                      "description": "Name of the setting whose definition to delete, such as `PORTAL_SHOW_SHARED_CONTACTS`. No `*`."
                 }
           },
           "required": [
                 "config-name"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /config-definitions/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['config-name'];

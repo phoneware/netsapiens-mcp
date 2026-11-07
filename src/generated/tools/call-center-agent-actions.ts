@@ -5,21 +5,21 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const agent_login: ToolDefinition = {
   schema: {
     name: 'agent_login',
-    description: 'Agent Login  — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/login]',
+    description: 'Log agent in — Logs an agent in to one call queue, or to every queue they are on with `all`: the agent\\\'s availability becomes `automatic` and calls are dispatched to them. The agent log records `Auto`, shown as Online.  Call Center Agent, Basic User, Advanced User, and Simple User act only on their own agent entries: use `~` as the agent. Site Manager acts on agents who are users at its own site; on a named queue, the queue must be at its site too. Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User act on any agent in the domain. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the change was published over the service bus (SBUS), not yet applied. The action is also written to the agent log, which `GET /domains/{domain}/agents/{callqueue-agent-id}/status` reads back. `PUT` on this path does the same as `PATCH`; other methods return `405`. The request has no body. Logging in clears the user\\\'s `status-message`. — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/login]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`, or `all` to apply the action to every queue the agent is on."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 }
           },
           "required": [
@@ -28,6 +28,12 @@ export const agent_login: ToolDefinition = {
                 "callqueue-agent-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/callqueues/{}/agents/{}/login',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
@@ -53,21 +59,21 @@ export const agent_login: ToolDefinition = {
 export const agent_logout: ToolDefinition = {
   schema: {
     name: 'agent_logout',
-    description: 'Agent Logout — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/logout]',
+    description: 'Log agent out — Logs an agent out of one call queue, or out of every queue with `all`, which ends their shift: availability becomes `manual` and no calls are dispatched. The agent log records `Logout`, shown as End shift.  Call Center Agent, Basic User, Advanced User, and Simple User act only on their own agent entries: use `~` as the agent. Site Manager acts on agents who are users at its own site; on a named queue, the queue must be at its site too. Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User act on any agent in the domain. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the change was published over the service bus (SBUS), not yet applied. The action is also written to the agent log, which `GET /domains/{domain}/agents/{callqueue-agent-id}/status` reads back. `PUT` on this path does the same as `PATCH`; other methods return `405`. The request has no body. Logging out clears the user\\\'s `status-message`. To go offline without ending the shift, use `PATCH .../agents/{callqueue-agent-id}/manual` or an offline reason. — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/logout]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`, or `all` to apply the action to every queue the agent is on."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 }
           },
           "required": [
@@ -76,6 +82,12 @@ export const agent_logout: ToolDefinition = {
                 "callqueue-agent-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/callqueues/{}/agents/{}/logout',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
@@ -101,21 +113,21 @@ export const agent_logout: ToolDefinition = {
 export const agent_single_call: ToolDefinition = {
   schema: {
     name: 'agent_single_call',
-    description: 'Agent Single Call — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/onecall]',
+    description: 'Set agent to single call mode — Puts an agent in single call mode on one call queue, or on every queue with `all`: the agent is offered one call and then goes offline until they are made available again. The agent log records `Manual-avail`, shown as Single Call.  Call Center Agent, Basic User, Advanced User, and Simple User act only on their own agent entries: use `~` as the agent. Site Manager acts on agents who are users at its own site; on a named queue, the queue must be at its site too. Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User act on any agent in the domain. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the change was published over the service bus (SBUS), not yet applied. The action is also written to the agent log, which `GET /domains/{domain}/agents/{callqueue-agent-id}/status` reads back. `PUT` on this path does the same as `PATCH`; other methods return `405`. The request has no body. This call takes about half a second longer than the others, because the platform makes the agent available again after the mode change. — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/onecall]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue": {
                       "type": "string",
-                      "description": "When used in path the callqueue value will link to a extension id for a preconfigured callqueue. If using agent actions like \"login\" you can use \"all\" to change action for all of the queues the agent is in currently, it can not be used for agent update requests."
+                      "description": "Extension of the call queue, such as `4000`, or `all` to apply the action to every queue the agent is on."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 }
           },
           "required": [
@@ -124,6 +136,12 @@ export const agent_single_call: ToolDefinition = {
                 "callqueue-agent-id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/callqueues/{}/agents/{}/onecall',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
@@ -149,21 +167,37 @@ export const agent_single_call: ToolDefinition = {
 export const agent_status: ToolDefinition = {
   schema: {
     name: 'agent_status',
-    description: 'Agent Set Offline Status — [PATCH /domains/{domain}/callqueues/all/agents/{callqueue-agent-id}/{status}]',
+    description: 'Set agent offline reason — Takes an agent offline on every queue they are on, with a reason: availability becomes `manual`, and the reason is recorded in the agent log and shown as the user\\\'s `status-message`.  Call Center Agent, Basic User, Advanced User, and Simple User act only on their own agent entries: use `~` as the agent. Site Manager acts on agents who are users at its own site; on a named queue, the queue must be at its site too. Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User act on any agent in the domain. Office Manager Read-Only and Super User Read Only get `403`.  The reasons are `Break`, `Lunch`, `Meeting`, `Web`, `Other`, `Manual-unavail` (Unavailable), and `cust1` to `cust8`, the domain\\\'s own reasons. The named reasons are case-sensitive; `cust1` to `cust8` are accepted in any case and stored lower-case. A `cust` reason shows the label set in the domain\\\'s `PORTAL_CALL_QUEUE_STATUS_CUSTOM_<N>` configuration, or no message when none is set. A reason applies to every queue, so the path always says `all`; a reason on a named queue returns `400`.  `202` means the change was published over the service bus (SBUS), not yet applied. `GET /domains/{domain}/agents/{callqueue-agent-id}/status` reads the reason back. To log in again, call `PATCH .../agents/{callqueue-agent-id}/login`. — [PATCH /domains/{domain}/callqueues/all/agents/{callqueue-agent-id}/{status}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "callqueue-agent-id": {
                       "type": "string",
-                      "description": "This is the agent identified to be used to manage a agent in a call queue. The format can be user@domain or sip:device@domain depending on how the queue is indented to be administered.  If you are using a auth method with a valid user level access you can use \"~\" and the api will assume the agent is user@domain format and grab that from the token."
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
                 },
                 "status": {
                       "type": "string",
-                      "description": "If you're going to use the custom status such as how you set it in the portal, you need to use \"cust1\" through \"cust8\" instead of the literal/actual status name you intend to use, and then alias/reference the \"custX\" status in your code."
+                      "description": "The offline reason. `cust1` to `cust8` are the domain's own reasons; send the slot, not its label. `Manual-unavail` sets Unavailable. Allowed values: \"Break\", \"Lunch\", \"Meeting\", \"Web\", \"Other\", \"Manual-unavail\", \"cust1\", \"cust2\", \"cust3\", \"cust4\", \"cust5\", \"cust6\", \"cust7\", \"cust8\"",
+                      "enum": [
+                            "Break",
+                            "Lunch",
+                            "Meeting",
+                            "Web",
+                            "Other",
+                            "Manual-unavail",
+                            "cust1",
+                            "cust2",
+                            "cust3",
+                            "cust4",
+                            "cust5",
+                            "cust6",
+                            "cust7",
+                            "cust8"
+                      ]
                 }
           },
           "required": [
@@ -172,6 +206,12 @@ export const agent_status: ToolDefinition = {
                 "status"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/callqueues/all/agents/{}/{}',
+    method: 'PATCH',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'callqueue-agent-id', 'status'];
@@ -182,6 +222,109 @@ export const agent_status: ToolDefinition = {
     const response = await client.request({
       method: 'PATCH',
       pathTemplate: '/domains/{domain}/callqueues/all/agents/{callqueue-agent-id}/{status}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_agent_status: ToolDefinition = {
+  schema: {
+    name: 'read_agent_status',
+    description: 'Read agent status — Returns an agent\\\'s current call center status, one value across every queue they are on, so a client can restore its status control after a reload.  Call Center Agent, Basic User, Advanced User, and Simple User read only their own status: use `~` as the agent. Site Manager reads agents who are users at its own site. Call Center Supervisor, Office Manager, Route Manager, Office Manager Read-Only, Reseller, Super User, and Super User Read Only read any agent in the domain (Reseller within its territory).  Three fields describe the status, because three names exist for one state: `callqueue-agent-status` is what the agent log stores (`Auto`), `callqueue-agent-status-action` is the action path to call to return to it (`login`), and `callqueue-agent-status-label` is what the portal shows (`Online`). Match your control on `-action` and show `-label`. User and agent reads also carry the stored value as `callqueue-agent-state`, but only an action on every queue (`all`) sets it. This read takes the agent\\\'s latest logged action, including a login or logout on one queue, and adds the action, label, and time. The user\\\'s `status-message` only carries an offline reason.  An agent who has never logged a status and is on no queue returns `404`, as does an agent id that names another domain or a device address nobody owns. — [GET /domains/{domain}/agents/{callqueue-agent-id}/status]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callqueue-agent-id": {
+                      "type": "string",
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
+                }
+          },
+          "required": [
+                "domain",
+                "callqueue-agent-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/agents/{}/status',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callqueue-agent-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/agents/{callqueue-agent-id}/status',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const agent_manual: ToolDefinition = {
+  schema: {
+    name: 'agent_manual',
+    description: 'Set agent offline — Takes an agent offline on one call queue, or on every queue with `all`, without ending their shift: availability becomes `manual` and no calls are dispatched until they log in again. The agent log records `Manual`, shown as Offline.  Call Center Agent, Basic User, Advanced User, and Simple User act only on their own agent entries: use `~` as the agent. Site Manager acts on agents who are users at its own site; on a named queue, the queue must be at its site too. Call Center Supervisor, Office Manager, Route Manager, Reseller, and Super User act on any agent in the domain. Office Manager Read-Only and Super User Read Only get `403`.  `202` means the change was published over the service bus (SBUS), not yet applied. The action is also written to the agent log, which `GET /domains/{domain}/agents/{callqueue-agent-id}/status` reads back. `PUT` on this path does the same as `PATCH`; other methods return `405`. The request has no body. To give a reason such as Break or Lunch, use `PATCH /domains/{domain}/callqueues/all/agents/{callqueue-agent-id}/{status}` instead. — [PATCH /domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/manual]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "callqueue": {
+                      "type": "string",
+                      "description": "Extension of the call queue, such as `4000`, or `all` to apply the action to every queue the agent is on."
+                },
+                "callqueue-agent-id": {
+                      "type": "string",
+                      "description": "The agent, as `callqueue-agent-id` returns it: `user@domain` for a user agent (`1001@example.com`), or `sip:` and the device address for a device agent (`sip:1001wp@example.com`). `~` means you. URL-encode it if your client does not."
+                }
+          },
+          "required": [
+                "domain",
+                "callqueue",
+                "callqueue-agent-id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PATCH /domains/{}/callqueues/{}/agents/{}/manual',
+    method: 'PATCH',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'callqueue', 'callqueue-agent-id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'PATCH',
+      pathTemplate: '/domains/{domain}/callqueues/{callqueue}/agents/{callqueue-agent-id}/manual',
       pathParams,
     });
 

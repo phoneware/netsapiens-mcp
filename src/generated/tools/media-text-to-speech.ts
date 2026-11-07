@@ -5,37 +5,37 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_voices_by_language: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_voices_by_language',
-    description: 'Get Available Voices — [GET /domains/{domain}/users/{user}/voices/{language}]',
+    description: 'List text-to-speech voices — Lists the text-to-speech voices the voice service offers for one language. Use a voice\\\'s `id` as `text-to-speech-voice-id` when you create a greeting, hold message, or music on hold (MoH) file from text.  Needs the `read` right on audio for the user in the path: every user for itself; Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User for any user in the domain; Office Manager Read-Only and Super User Read Only as their parent scope. The voice service answers for the user in the path, and its text-to-speech settings must allow it, or the call returns `403`. The list is kept for a few minutes on each server, per path user, caller scope, and language.  `language` must be a BCP 47 tag of letters and hyphens, such as `en-US`: a tag the router accepts but BCP 47 does not returns `400`, and one with a digit (`es-419`) is not a route and returns `404`. Narrow the list with `text-to-speech-gender`, `text-to-speech-name`, `vendor` (matches `text-to-speech-type`), or `id`. A filter that matches nothing answers an empty array. A voice-service failure returns `503`. — [GET /domains/{domain}/users/{user}/voices/{language}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "language": {
                       "type": "string",
-                      "description": "language"
-                },
-                "gender": {
-                      "type": "string",
-                      "description": "gender"
+                      "description": "Language to list voices for, a BCP 47 tag of letters and hyphens such as `en-US` or `fr-CA`. A tag that is not BCP 47, including a singleton with no subtag after it (`en-x`), returns `400`; one with a digit (`es-419`) is not a route and returns `404`."
                 },
                 "vendor": {
                       "type": "string",
-                      "description": "vendor"
+                      "description": "Only voices whose `text-to-speech-type` is exactly this, such as `WaveNet`."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "Only the voice with this `id`."
                 },
-                "name": {
+                "text-to-speech-gender": {
                       "type": "string",
-                      "description": "name"
+                      "description": "Only voices of this gender, spelled as the voice service reports it, such as `FEMALE`."
+                },
+                "text-to-speech-name": {
+                      "type": "string",
+                      "description": "Only the voice with this name."
                 }
           },
           "required": [
@@ -45,13 +45,19 @@ export const get_domains_by_domain_users_by_user_voices_by_language: ToolDefinit
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voices/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'language'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['gender', 'vendor', 'id', 'name'];
+    const queryParamNames = ['vendor', 'id', 'text-to-speech-gender', 'text-to-speech-name'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -75,28 +81,51 @@ export const get_domains_by_domain_users_by_user_voices_by_language: ToolDefinit
 export const get_domains_by_domain_users_by_user_voices: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_voices',
-    description: 'Synthesize Voice (Text to Speech)  via GET — [GET /domains/{domain}/users/{user}/voices]',
+    description: 'Synthesize speech with query string — Speaks the text in the `file-script-text` query parameter and returns the audio, without storing it. It works like `POST /domains/{domain}/users/{user}/voices`, for players that can only fetch a URL.  Needs the `create` right on audio for the user in the path: Basic User, Advanced User, Simple User, and Call Center Agent for themselves; Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User for any user in the domain. Office Manager Read-Only and Super User Read Only get `403`. Synthesis also needs text to speech enabled (`PORTAL_VOICE_TEXT_TO_SPEECH`) for the user in the path, or the call returns `400`; the voice service answers for that user, and refuses with `403` when its settings do not allow text to speech.  Returns the audio as `audio/wav` (8 kHz, 8-bit, mono), named `tts_<hash>.wav` in `Content-Disposition`. A request with a `Range` header gets `206` with that byte range unless you send `download`. The same words in the same voice for the same user are rendered once and served from cache afterward. Text to speech not enabled for the path user, or a `text-to-speech-language` that is not a BCP 47 tag, returns `400`; a voice-service failure, including no voice for the language, returns `503`. Long text is better sent with `POST`, since URLs have length limits. There is no usage cap: synthesis is limited only by your scope and the platform\\\'s general request rate limit, and each new text is a call to the voice service. Usage is billed to the owner in the path: that user, or the domain itself for a domain-owned path. — [GET /domains/{domain}/users/{user}/voices]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "script": {
+                "file-script-text": {
                       "type": "string",
-                      "description": "script"
+                      "description": "Words to speak."
+                },
+                "text-to-speech-voice-id": {
+                      "type": "string",
+                      "description": "Voice to speak with, by id, name, or gender. Omit it to use the domain's default voice."
+                },
+                "text-to-speech-language": {
+                      "type": "string",
+                      "description": "Language of the voice, a BCP 47 tag such as `en-US`; anything else returns `400`, including a singleton (such as `x` or `u`) with no subtag after it. Omit it to use the domain's default language."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "Any value turns off byte ranges: the whole file is sent with `200`."
+                },
+                "nofilename": {
+                      "type": "string",
+                      "description": "Any value leaves out `Content-Disposition`, so a browser plays the audio in place."
                 }
           },
           "required": [
                 "domain",
-                "user"
+                "user",
+                "file-script-text"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/voices',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -104,7 +133,7 @@ export const get_domains_by_domain_users_by_user_voices: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['script'];
+    const queryParamNames = ['file-script-text', 'text-to-speech-voice-id', 'text-to-speech-language', 'download', 'nofilename'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -128,39 +157,51 @@ export const get_domains_by_domain_users_by_user_voices: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_voices: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_voices',
-    description: 'Synthesize Voice (Text to Speech)  — [POST /domains/{domain}/users/{user}/voices]',
+    description: 'Synthesize speech — Speaks the text in `file-script-text` and returns the audio, without storing it. Use it to preview a greeting, hold message, or music on hold (MoH) file before you create it.  Needs the `create` right on audio for the user in the path: Basic User, Advanced User, Simple User, and Call Center Agent for themselves; Office Manager, Site Manager, Call Center Supervisor, Route Manager, Reseller, and Super User for any user in the domain. Office Manager Read-Only and Super User Read Only get `403`. Synthesis also needs text to speech enabled (`PORTAL_VOICE_TEXT_TO_SPEECH`) for the user in the path, or the call returns `400`; the voice service answers for that user, and refuses with `403` when its settings do not allow text to speech.  Returns the audio as `audio/wav` (8 kHz, 8-bit, mono), named `tts_<hash>.wav` in `Content-Disposition`. A request with a `Range` header gets `206` with that byte range unless you send `download`. The same words in the same voice for the same user are rendered once and served from cache afterward. The voice defaults to the domain\\\'s text-to-speech voice (`en-US-Wavenet-C` in `en-US` when none is set). Text to speech not enabled for the path user, or a `text-to-speech-language` that is not a BCP 47 tag, returns `400`; a voice-service failure, including no voice for the language, returns `503`. There is no usage cap: synthesis is limited only by your scope and the platform\\\'s general request rate limit, and each new text is a call to the voice service. Usage is billed to the owner in the path: that user, or the domain itself for a domain-owned path. — [POST /domains/{domain}/users/{user}/voices]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
-                "script": {
+                "file-script-text": {
                       "type": "string",
-                      "description": "This is a simple explanation of what the audio is and can include what is said in the audio file for explanation."
+                      "description": "Words to speak."
                 },
-                "voice_language": {
+                "text-to-speech-voice-id": {
                       "type": "string",
-                      "description": "This is the language that can be requested when using TTS feature. Leave of to have API lookup configs from the defaults or domain specific configs. Default: \"en-US\"",
-                      "default": "en-US"
+                      "description": "Voice to speak with, by id, name, or gender, as `GET /domains/{domain}/users/{user}/voices/{language}` lists them. Omit it to use the domain's default voice. A voice the language does not offer falls back to the language's first voice."
                 },
-                "voice_id": {
+                "text-to-speech-language": {
                       "type": "string",
-                      "description": "This value will allow you to select the voice to be used for TTS applications. Value must be valid or will cause errors. leave off request to have the API lookup defaults from system and/or domain. Default: \"en-US-Wavenet-C\"",
-                      "default": "en-US-Wavenet-C"
+                      "description": "Language of the voice, a BCP 47 tag such as `en-US`; anything else returns `400`, including a singleton (such as `x` or `u`) with no subtag after it. Omit it to use the domain's default language."
+                },
+                "download": {
+                      "type": "string",
+                      "description": "Any value turns off byte ranges: the whole file is sent with `200` even when the request has a `Range` header."
+                },
+                "nofilename": {
+                      "type": "string",
+                      "description": "Any value leaves out the `Content-Disposition` header, so a browser plays the audio in place instead of saving it."
                 }
           },
           "required": [
                 "domain",
                 "user",
-                "script"
+                "file-script-text"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/voices',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -168,7 +209,7 @@ export const post_domains_by_domain_users_by_user_voices: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['script', 'voice_language', 'voice_id'];
+    const bodyParamNames = ['file-script-text', 'text-to-speech-voice-id', 'text-to-speech-language', 'download', 'nofilename'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];

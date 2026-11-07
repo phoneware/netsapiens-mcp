@@ -7,45 +7,19 @@ services:
     container_name: netsapiens-mcp
     ports:
       - "${MCP_PORT:-3000}:3000"
+    env_file:
+      - .env
     environment:
-      # Required: NetSapiens API URL (set by the server operator)
-      - NETSAPIENS_API_URL=${NETSAPIENS_API_URL:-https://edge.phoneware.cloud}
-
-      # Required for HTTP transport: operator-level NS OAuth credentials
-      # These are used server-side to run password grants on behalf of users.
-      # Users authenticate via the browser login page — their credentials
-      # never pass through the MCP transport or LLM.
-      - NETSAPIENS_OAUTH_CLIENT_ID=${NETSAPIENS_OAUTH_CLIENT_ID}
-      - NETSAPIENS_OAUTH_CLIENT_SECRET=${NETSAPIENS_OAUTH_CLIENT_SECRET}
-
-      # Transport configuration
       - MCP_TRANSPORT=http
       - MCP_PORT=3000
-      # Public base URL for OAuth metadata discovery (set to your external URL)
-      - MCP_BASE_URL=${MCP_BASE_URL:-http://localhost:3000}
-
-      # Optional: Server Configuration
-      - DEBUG=${DEBUG:-false}
-      - NODE_ENV=production
-
-    # Persist OAuth tokens across container restarts
+      - MCP_PERSISTENCE=sqlite
+      # MCP_SESSION_SECRET (>= 32 chars) is required and must be supplied via .env.
+      # NETSAPIENS_API_URL and OAuth client credentials are also supplied via .env.
+    # SQLite uses an exclusive file lock. Each container must use its own dedicated volume;
+    # do not mount a single volume across multiple concurrent containers.
     volumes:
       - token-data:/home/nodejs/.netsapiens-mcp
-
-    # Resource limits (adjust as needed)
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.5'
-          memory: 256M
-
-    # Restart policy
     restart: unless-stopped
-
-    # Health check
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s

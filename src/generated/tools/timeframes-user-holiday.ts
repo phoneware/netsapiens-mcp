@@ -2,6 +2,75 @@
 import type { ToolDefinition, GenericApiClient } from '../types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
+export const put_domains_by_domain_users_by_user_timeframes_by_id_4: ToolDefinition = {
+  schema: {
+    name: 'put_domains_by_domain_users_by_user_timeframes_by_id_4',
+    description: 'Update Holidays within Holiday Timeframe — In order to update holidays within a Holiday timeframe, include the parameter ```update_only``` and provide within the array ```timeframe-holiday-array``` the new values for the holidays you intend to update, including in each holiday object the associated ```timeframe-id``` for that holiday. If any holidays are missing the ```timeframe-id``` parameter, it may result in undesired behavior.  The value for ```update-only``` must be set to ```yes``` for this operation to succeed as desired. If any other value is supplied or the parameter ```update-only``` is omitted, it will result in the behavior described in "Replace All Holidays in Holiday Timeframe" - see examples for more information.  IMPORTANT: Updates to holidays are limited to workweek, observance configurations, time-of-day configurations, and recurrence. To add a different holiday, remove the existing holiday and then create the desired holiday. — [PUT /domains/{domain}/users/{user}/timeframes/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                },
+                "user": {
+                      "type": "string",
+                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                },
+                "id": {
+                      "type": "string",
+                      "description": "```timeframe-id``` of the timeframe to modify"
+                },
+                "update-only": {
+                      "type": "string",
+                      "description": "The value for ```update-only``` must be set to ```yes``` for this operation to succeed as desired. If any other value is supplied or the parameter ```update-only``` is omitted, undesired behavior will occur."
+                },
+                "timeframe-holiday-array": {
+                      "type": "array",
+                      "description": "timeframe-holiday-array"
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "id",
+                "update-only"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['update-only', 'timeframe-holiday-array'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const post_domains_by_domain_users_by_user_timeframes_by_id_2: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_timeframes_by_id_2',
@@ -32,6 +101,12 @@ export const post_domains_by_domain_users_by_user_timeframes_by_id_2: ToolDefini
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/timeframes/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];
@@ -91,6 +166,12 @@ export const delete_domains_by_domain_users_by_user_timeframes_by_id_2: ToolDefi
                 "child_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/timeframes/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];
@@ -163,6 +244,12 @@ export const post_domains_by_domain_users_by_user_timeframes_4: ToolDefinition =
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/timeframes',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
@@ -177,69 +264,6 @@ export const post_domains_by_domain_users_by_user_timeframes_4: ToolDefinition =
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/domains/{domain}/users/{user}/timeframes',
-      pathParams,
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const put_domains_by_domain_users_by_user_timeframes_by_id_4: ToolDefinition = {
-  schema: {
-    name: 'put_domains_by_domain_users_by_user_timeframes_by_id_4',
-    description: 'Update Holidays within Holiday Timeframe — In order to update holidays within a Holiday timeframe, include the parameter ```update_only``` and provide within the array ```timeframe-holiday-array``` the new values for the holidays you intend to update, including in each holiday object the associated ```timeframe-id``` for that holiday. If any holidays are missing the ```timeframe-id``` parameter, it may result in undesired behavior.  The value for ```update-only``` must be set to ```yes``` for this operation to succeed as desired. If any other value is supplied or the parameter ```update-only``` is omitted, it will result in the behavior described in "Replace All Holidays in Holiday Timeframe" - see examples for more information.  IMPORTANT: Updates to holidays are limited to workweek, observance configurations, time-of-day configurations, and recurrence. To add a different holiday, remove the existing holiday and then create the desired holiday. — [PUT /domains/{domain}/users/{user}/timeframes/{id}]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
-                },
-                "id": {
-                      "type": "string",
-                      "description": "```timeframe-id``` of the timeframe to modify"
-                },
-                "update-only": {
-                      "type": "string",
-                      "description": "The value for ```update-only``` must be set to ```yes``` for this operation to succeed as desired. If any other value is supplied or the parameter ```update-only``` is omitted, undesired behavior will occur."
-                },
-                "timeframe-holiday-array": {
-                      "type": "array",
-                      "description": "timeframe-holiday-array"
-                }
-          },
-          "required": [
-                "domain",
-                "user",
-                "id",
-                "update-only"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'user', 'id'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['update-only', 'timeframe-holiday-array'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'PUT',
-      pathTemplate: '/domains/{domain}/users/{user}/timeframes/{id}',
       pathParams,
       body,
     });
@@ -283,6 +307,12 @@ export const put_domains_by_domain_users_by_user_timeframes_by_id_5: ToolDefinit
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/timeframes/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user', 'id'];

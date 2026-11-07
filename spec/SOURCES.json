@@ -1,0 +1,38 @@
+{
+  "spec/v1/apidoc-44.4.10.json": {
+    "url": "https://<netsapiens-host>/ns-api/webroot/apidoc/api_data.json",
+    "effectiveUrl": null,
+    "retrievedAt": null,
+    "apiVersion": "44.4.10",
+    "sha256": "3db526bbbe4e8db9a5a84a54d66f85dd83903a16762b08d1e4c343d82c5a2e60",
+    "bytes": 879330
+  },
+  "spec/v2/44.3.json": {
+    "url": "https://docs.ns-api.com/v44.3/openapi/netsapiens-api-v2.json",
+    "effectiveUrl": "https://docs.ns-api.com/v44.3/openapi/netsapiens-api-v2.json",
+    "retrievedAt": "2026-10-29T18:44:17.005Z",
+    "sha256": "9db3e785e8a127ffc10ea7256ac9d8f421c4307bb9761138dbfa3d65ee82db1e",
+    "bytes": 1651874
+  },
+  "spec/v2/44.4.json": {
+    "url": "https://docs.ns-api.com/v44.4/openapi/netsapiens-api-v2.json",
+    "effectiveUrl": "https://docs.ns-api.com/v44.4/openapi/netsapiens-api-v2.json",
+    "retrievedAt": "2026-10-29T18:44:17.217Z",
+    "sha256": "4ececbd3359baa9ca3537d6e6a5e542195bf7d0da10d60eda759ccac079d0859",
+    "bytes": 1712574
+  },
+  "spec/v2/45.0.json": {
+    "url": "https://docs.ns-api.com/v45.0/openapi/netsapiens-api-v2.json",
+    "effectiveUrl": "https://docs.ns-api.com/openapi/netsapiens-api-v2.json",
+    "retrievedAt": "2026-10-29T18:44:17.564Z",
+    "sha256": "bce16087d4799e267378c8d2b5bd1c615ae0d30d13da72464d81a48563417731",
+    "bytes": 2272475
+  },
+  "spec/v2/46.0.json": {
+    "url": "https://docs.ns-api.com/v46.0/openapi/netsapiens-api-v2.json",
+    "effectiveUrl": "https://docs.ns-api.com/v46.0/openapi/netsapiens-api-v2.json",
+    "retrievedAt": "2026-10-29T18:44:17.978Z",
+    "sha256": "7410f1e3df0d329234592801de5f1f5a89590c1950ea6e2cc865ed033af73d5c",
+    "bytes": 6534674
+  }
+}

@@ -5,13 +5,40 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_smsblocks: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_smsblocks',
-    description: 'Read SMS Blocks for Domain — [GET /domains/{domain}/smsblocks]',
+    description: 'List SMS blocks — Returns the SMS opt-outs of a domain, the newest first. Requires Reseller, Super User, or Super User Read Only scope. A Reseller reads the domains in its territory.  An SMS block is an opt-out: an off-net number texted STOP to one of your numbers. The platform adds the block on STOP and sets it `inactive` on START. While it is `active`, an SMS or MMS from `blocked-number` to `requesting-number` is refused.  Only `active` blocks are returned unless you send `status`. `limit` defaults to `100`. — [GET /domains/{domain}/smsblocks]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "status": {
+                      "type": "string",
+                      "description": "Returns only `active` or only `inactive` blocks. Defaults to `active`. Allowed values: \"active\", \"inactive\". Default: \"active\"",
+                      "enum": [
+                            "active",
+                            "inactive"
+                      ],
+                      "default": "active"
+                },
+                "requesting-number": {
+                      "type": "string",
+                      "description": "Returns only the blocks whose `requesting-number` contains this text."
+                },
+                "blocked-number": {
+                      "type": "string",
+                      "description": "Returns only the blocks whose `blocked-number` contains this text."
+                },
+                "offset": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first block to return. Use it with `limit` to page. Default: 0",
+                      "default": 0
                 }
           },
           "required": [
@@ -19,16 +46,28 @@ export const get_domains_by_domain_smsblocks: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/smsblocks',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['limit', 'status', 'requesting-number', 'blocked-number', 'offset'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/smsblocks',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -43,30 +82,21 @@ export const get_domains_by_domain_smsblocks: ToolDefinition = {
 export const post_domains_by_domain_smsblocks: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_smsblocks',
-    description: 'Add SMS Blocks for Domain — [POST /domains/{domain}/smsblocks]',
+    description: 'Create SMS block — Adds an SMS opt-out, so `blocked-number` can no longer send SMS or MMS to `requesting-number`. Requires Reseller or Super User scope. A Reseller reaches the domains in its territory.  An SMS block is an opt-out: an off-net number texted STOP to one of your numbers. The platform adds the block on STOP and sets it `inactive` on START. While it is `active`, an SMS or MMS from `blocked-number` to `requesting-number` is refused. Use this to record an opt-out that reached you another way. The block is created `active`, and both numbers are normalized: spaces and punctuation are removed, and a 10-digit number gets `+1`. Adding a pair that was set `inactive` makes it `active` again.  Below Super User, the block must name a domain, and `blocked-number` must be an SMS number of that domain. A block applies wherever `blocked-number` is used, so a block on another tenant\\\'s number, or one without a domain, is Super User only.  The change is applied at once. — [POST /domains/{domain}/smsblocks]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "requesting-number": {
                       "type": "string",
-                      "description": "This is the number that is requesting the block be added against the blocked-number."
+                      "description": "The off-net number that asked to stop receiving messages. Spaces and punctuation are removed, and a 10-digit number gets `+1`."
                 },
                 "blocked-number": {
                       "type": "string",
-                      "description": "This is the number that will be blocked from sending new SMS to the requesting-number"
-                },
-                "status": {
-                      "type": "string",
-                      "description": "active/inactive. Allowed values: \"active\", \"inactive\". Default: \"active\"",
-                      "enum": [
-                            "active",
-                            "inactive"
-                      ],
-                      "default": "active"
+                      "description": "Your number that may no longer message `requesting-number`. Normalized the same way."
                 }
           },
           "required": [
@@ -76,13 +106,19 @@ export const post_domains_by_domain_smsblocks: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/smsblocks',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['requesting-number', 'blocked-number', 'status'];
+    const bodyParamNames = ['requesting-number', 'blocked-number'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -106,16 +142,56 @@ export const post_domains_by_domain_smsblocks: ToolDefinition = {
 export const get_smsblocks: ToolDefinition = {
   schema: {
     name: 'get_smsblocks',
-    description: 'Read SMS Blocks for all Domains — [GET /smsblocks]',
+    description: 'List SMS blocks in all domains — Returns the SMS opt-outs across every domain, the newest first. Requires Reseller, Super User, or Super User Read Only scope. A Reseller gets the blocks of the domains in its territory.  An SMS block is an opt-out: an off-net number texted STOP to one of your numbers. The platform adds the block on STOP and sets it `inactive` on START. While it is `active`, an SMS or MMS from `blocked-number` to `requesting-number` is refused.  Only `active` blocks are returned unless you send `status`. `limit` defaults to `100`. For one domain, use `GET /domains/{domain}/smsblocks`. — [GET /smsblocks]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "status": {
+                      "type": "string",
+                      "description": "Returns only `active` or only `inactive` blocks. Defaults to `active`. Allowed values: \"active\", \"inactive\". Default: \"active\"",
+                      "enum": [
+                            "active",
+                            "inactive"
+                      ],
+                      "default": "active"
+                },
+                "requesting-number": {
+                      "type": "string",
+                      "description": "Returns only the blocks whose `requesting-number` contains this text."
+                },
+                "blocked-number": {
+                      "type": "string",
+                      "description": "Returns only the blocks whose `blocked-number` contains this text."
+                },
+                "offset": {
+                      "type": "number",
+                      "description": "The zero-based offset of the first block to return. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /smsblocks',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['limit', 'status', 'requesting-number', 'blocked-number', 'offset'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/smsblocks',
+      queryParams,
     });
 
     return {
@@ -130,41 +206,39 @@ export const get_smsblocks: ToolDefinition = {
 export const put_domains_by_domain_smsblocks_by_id: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_smsblocks_by_id',
-    description: 'Update SMS Block for Domain — [PUT /domains/{domain}/smsblocks/{id}]',
+    description: 'Update SMS block — Turns an SMS opt-out on or off. Requires Reseller or Super User scope. A Reseller reaches the domains in its territory.  Only `status` changes. `inactive` stops blocking but keeps the record, and `active` blocks again. `status` is required.  The block must belong to the domain in the path; a block of another domain answers `404`, as an unknown ID does. — [PUT /domains/{domain}/smsblocks/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The SMS block ID, as returned in `id`: 40 lowercase hex characters."
                 },
                 "status": {
                       "type": "string",
-                      "description": "active/inactive. Allowed values: \"active\", \"inactive\". Default: \"active\"",
+                      "description": "`active` blocks messages again. `inactive` stops blocking but keeps the record. Allowed values: \"active\", \"inactive\"",
                       "enum": [
                             "active",
                             "inactive"
-                      ],
-                      "default": "active"
-                },
-                "created-datetime": {
-                      "type": "string",
-                      "description": "created-datetime"
-                },
-                "last-modified-datetime": {
-                      "type": "string",
-                      "description": "last-modified-datetime"
+                      ]
                 }
           },
           "required": [
                 "domain",
-                "id"
+                "id",
+                "status"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/smsblocks/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -172,7 +246,7 @@ export const put_domains_by_domain_smsblocks_by_id: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['status', 'created-datetime', 'last-modified-datetime'];
+    const bodyParamNames = ['status'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -196,17 +270,17 @@ export const put_domains_by_domain_smsblocks_by_id: ToolDefinition = {
 export const delete_domains_by_domain_smsblocks_by_id: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_smsblocks_by_id',
-    description: 'Delete/Deactivate SMS Block for Domain — NOTE: This will not remove the row from the database, it will just made the status inactive and prevent the block from denying requests. — [DELETE /domains/{domain}/smsblocks/{id}]',
+    description: 'Delete SMS block — Turns an SMS opt-out off. Requires Reseller or Super User scope. A Reseller reaches the domains in its territory.  The record is kept with `status` `inactive`, so it still appears with `status=inactive` on a read. To block the pair again, create it again or update it to `active`.  The block must belong to the domain in the path; a block of another domain answers `404`, as an unknown ID does. — [DELETE /domains/{domain}/smsblocks/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The SMS block ID, as returned in `id`: 40 lowercase hex characters."
                 }
           },
           "required": [
@@ -214,6 +288,12 @@ export const delete_domains_by_domain_smsblocks_by_id: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/smsblocks/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -225,6 +305,135 @@ export const delete_domains_by_domain_smsblocks_by_id: ToolDefinition = {
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/smsblocks/{id}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_sms_block: ToolDefinition = {
+  schema: {
+    name: 'read_sms_block',
+    description: 'Read SMS block — Returns one SMS opt-out. Requires Reseller, Super User, or Super User Read Only scope. A Reseller reads the domains in its territory.  An `inactive` block answers `404` unless you send `status=inactive`. — [GET /domains/{domain}/smsblocks/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "The SMS block ID, as returned in `id`: 40 lowercase hex characters."
+                },
+                "status": {
+                      "type": "string",
+                      "description": "Returns only `active` or only `inactive` blocks. Defaults to `active`. Allowed values: \"active\", \"inactive\". Default: \"active\"",
+                      "enum": [
+                            "active",
+                            "inactive"
+                      ],
+                      "default": "active"
+                }
+          },
+          "required": [
+                "domain",
+                "id"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/smsblocks/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'id'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['status'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/smsblocks/{id}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_sms_block_for_user: ToolDefinition = {
+  schema: {
+    name: 'create_sms_block_for_user',
+    description: 'Create SMS block for user — Adds an SMS opt-out, so `blocked-number` can no longer send SMS or MMS to `requesting-number`. Requires Reseller or Super User scope. A Reseller reaches the domains in its territory.  An SMS block is an opt-out: an off-net number texted STOP to one of your numbers. The platform adds the block on STOP and sets it `inactive` on START. While it is `active`, an SMS or MMS from `blocked-number` to `requesting-number` is refused. Use this to record an opt-out that reached you another way. The block is created `active`, and both numbers are normalized: spaces and punctuation are removed, and a 10-digit number gets `+1`. Adding a pair that was set `inactive` makes it `active` again.  Below Super User, the block must name a domain, and `blocked-number` must be an SMS number of that domain. A block applies wherever `blocked-number` is used, so a block on another tenant\\\'s number, or one without a domain, is Super User only.  The change is applied at once.  This is the same create as `POST /domains/{domain}/smsblocks`: the user in the path is not stored on the block. — [POST /domains/{domain}/users/{user}/smsblocks]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
+                },
+                "requesting-number": {
+                      "type": "string",
+                      "description": "The off-net number that asked to stop receiving messages. Spaces and punctuation are removed, and a 10-digit number gets `+1`."
+                },
+                "blocked-number": {
+                      "type": "string",
+                      "description": "Your number that may no longer message `requesting-number`. Normalized the same way."
+                }
+          },
+          "required": [
+                "domain",
+                "user",
+                "requesting-number",
+                "blocked-number"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/smsblocks',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'user'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['requesting-number', 'blocked-number'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/users/{user}/smsblocks',
+      pathParams,
+      body,
     });
 
     return {

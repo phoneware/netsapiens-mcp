@@ -20,6 +20,8 @@ export const STANDARD_WRAPPER_RULES: readonly FieldRule[] = [
 ];
 
 export interface CuratedTool extends Omit<ToolDefinition, 'handler'> {
+ /** Operations that the handler may request. */
+ operations: readonly string[];
  /**
   * Curated handlers also receive the caller's NS scope tier. A tool can use
   * it to pick the right default breadth: an office manager asking about

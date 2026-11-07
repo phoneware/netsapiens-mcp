@@ -96,8 +96,8 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/router.js', () => ({
   getOAuthProtectedResourceMetadataUrl: vi.fn(() => 'http://localhost:3000/.well-known/oauth-protected-resource/mcp'),
 }));
 
-vi.mock('../auth/kit/bearer.js', () => ({
-  requireBearer: vi.fn(() => {
+vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => ({
+  requireBearerAuth: vi.fn(() => {
     // Return middleware that always passes with mock auth info
     return (req: any, _res: any, next: any) => {
       req.auth = {
@@ -116,6 +116,12 @@ vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
     this.clientsStore = { getClient: vi.fn() };
     this.handleLogin = vi.fn();
+    this.verifyAccessToken = vi.fn().mockResolvedValue({
+      token: 'test-bearer-token',
+      clientId: 'test-client',
+      scopes: [],
+      extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
+    });
   }),
 }));
 
@@ -135,48 +141,69 @@ const ENV_KEYS = [
   'NETSAPIENS_OAUTH_PASSWORD',
   'DEBUG',
   'MCP_TRANSPORT',
+  'MCP_SESSION_SECRET',
   'MCP_PORT',
   'MCP_HOST',
   'MCP_BASE_URL',
   'MCP_STATELESS',
 ] as const;
 
-/** Make a simple HTTP request to localhost */
-function request(
+/** Make a simple HTTP request to localhost with transient retry */
+async function request(
   port: number,
   method: string,
   path: string,
   options: { headers?: Record<string, string>; body?: unknown } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
-  return new Promise((resolve, reject) => {
-    const reqHeaders: Record<string, string> = {
-      ...options.headers,
-    };
-    let bodyStr: string | undefined;
-    if (options.body) {
-      bodyStr = JSON.stringify(options.body);
-      reqHeaders['content-type'] = 'application/json';
-      reqHeaders['accept'] = 'application/json, text/event-stream';
-    }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const { promise, resolve, reject } = Promise.withResolvers<{
+        status: number;
+        headers: http.IncomingHttpHeaders;
+        body: string;
+      }>();
+      const reqHeaders: Record<string, string> = {
+        ...options.headers,
+      };
+      let bodyStr: string | undefined;
+      if (options.body) {
+        bodyStr = JSON.stringify(options.body);
+        reqHeaders['content-type'] = 'application/json';
+        reqHeaders['accept'] = 'application/json, text/event-stream';
+      }
 
-    const req = http.request(
-      { hostname: '127.0.0.1', port, path, method, headers: reqHeaders },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(chunk));
-        res.on('end', () => {
-          resolve({
-            status: res.statusCode!,
-            headers: res.headers,
-            body: Buffer.concat(chunks).toString(),
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path, method, headers: reqHeaders },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => {
+            resolve({
+              status: res.statusCode!,
+              headers: res.headers,
+              body: Buffer.concat(chunks).toString(),
+            });
           });
-        });
-      },
-    );
-    req.on('error', reject);
-    if (bodyStr) req.write(bodyStr);
-    req.end();
-  });
+        },
+      );
+      req.on('error', reject);
+      if (bodyStr) req.write(bodyStr);
+      req.end();
+      return await promise;
+    } catch (err: unknown) {
+      const isErrno = err && typeof err === 'object' && 'code' in err;
+      const code = isErrno && typeof err.code === 'string' ? err.code : undefined;
+      if (code === 'ECONNREFUSED' && attempt < 4) {
+        // Kernel loopback socket unbinding delay requires brief real-clock yield before retry
+        const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
+        setTimeout(delayResolve, 50);
+        await delayPromise;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('request unreachable');
 }
 
 /**
@@ -207,6 +234,8 @@ describe('startHttpServer()', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;
@@ -244,7 +273,8 @@ describe('startHttpServer()', () => {
     expect(body.status).toBe('ok');
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('activeSessions');
-    expect(body).toHaveProperty('nsApiUrl');
+    expect(body).not.toHaveProperty('nsApiUrl');
+    expect(body).toHaveProperty('netsapiens');
     expect(body).toHaveProperty('version');
     expect(body.mode).toBe('session');
 
@@ -370,6 +400,8 @@ describe('stateless MCP transport', () => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
 
     process.env.NETSAPIENS_API_TOKEN = 'test-token';
+    process.env.NETSAPIENS_API_URL = 'https://netsapiens.example.com';
+    process.env.MCP_SESSION_SECRET = 's'.repeat(32);
     process.env.NETSAPIENS_OAUTH_CLIENT_ID = 'test-ns-client-id';
     process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'test-ns-client-secret';
     delete process.env.MCP_HOST;

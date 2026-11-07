@@ -5,17 +5,51 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_dialrules: ToolDefinition = {
   schema: {
     name: 'read_dialrules',
-    description: 'Read Dialrules in a Dialplan — [GET /domains/{domain}/dialplans/{dialplan}/dialrules]',
+    description: 'List dial rules in dial plan — Returns the dial rules in a dial plan, up to `limit` at a time (100 by default). Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope, and Super User Read Only can read. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Filter with the query parameters below. `dial-rule-application` and `dial-rule-description` match with SQL `LIKE`, so `%` is a wildcard; the others match exactly. Each rule carries a `dialrule` id to read, update, or delete it with.  For the total, call `/dialrules/count` with the same filters. For only the identifying fields of each rule, call `/dialrules/list`. — [GET /domains/{domain}/dialplans/{dialplan}/dialrules]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rules to return. Defaults to `100`. Default: 100",
+                      "default": 100
                 }
           },
           "required": [
@@ -24,16 +58,28 @@ export const read_dialrules: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/{}/dialrules',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/domains/{domain}/dialplans/{dialplan}/dialrules',
       pathParams,
+      queryParams,
     });
 
     return {
@@ -48,21 +94,21 @@ export const read_dialrules: ToolDefinition = {
 export const create_dialrule: ToolDefinition = {
   schema: {
     name: 'create_dialrule',
-    description: 'Add a new dial rule into a dial plan — [POST /domains/{domain}/dialplans/{dialplan}/dialrules]',
+    description: 'Create dial rule — Creates a dial rule in a dial plan. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Send at least `dial-rule-matching-to-uri` and `dial-rule-translation-destination-user`. The dial plan and domain come from the path. The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet. Send `synchronous=yes` to wait up to 2 seconds and get `200` with the created rule instead.  A rule with the same match fields already in the plan returns `409`. To change a rule\\\'s match fields later, delete it and create a new one: `PUT` updates only the other fields. — [POST /domains/{domain}/dialplans/{dialplan}/dialrules]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
                 },
                 "synchronous": {
                       "type": "string",
-                      "description": "When synchronous is requested with \"yes\" the response will be a 200 on success and will contain a valid JSON representiation of the new resource. If no or left off request a 202 \"Accepted\" will be given in a success case and this can be considered a success. Synchronous responses will be a little slower as the API will process the geo replication request and wait till the local copy has been written and can be read back berfore sending a response. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
                       "enum": [
                             "yes",
                             "no"
@@ -71,11 +117,11 @@ export const create_dialrule: ToolDefinition = {
                 },
                 "dial-rule-matching-to-uri": {
                       "type": "string",
-                      "description": "This is the main digit string match for the dial translation."
+                      "description": "Destination pattern the rule matches, as a SIP URI. `?` matches one character and `*` matches anything, so `sip:611@*` matches 611 dialed to any host"
                 },
                 "enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -84,37 +130,37 @@ export const create_dialrule: ToolDefinition = {
                 },
                 "dial-rule-matching-from-uri": {
                       "type": "string",
-                      "description": "This is a source match that would allow for a specific dial rule match based on the caller as well as the forward destination of dial-rule-matching-to-uri. Default: \"*\"",
+                      "description": "Caller pattern the rule also requires, as a SIP URI. `*` matches any caller. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-matching-day-of-week": {
                       "type": "string",
-                      "description": "This is a field that will control the DOW (day of week) match for this rule. Default is * or to match all the time, but valid format will allow any single day of the week 0-6 (sunday-saturday) or a range in square brackets like [0-6]. Default: \"*\"",
+                      "description": "Days the rule applies: one digit from `0` (Sunday) to `6` (Saturday), or a range in brackets such as `[1-5]`. `*` matches every day. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-matching-start-date": {
                       "type": "string",
-                      "description": "This is the start of a the valid date range for this rule.  Keep to * if you do not want to use date range for this rule. Default: \"*\"",
+                      "description": "First day the rule applies, as `YYYY-MM-DD`. `*` means no start date. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-matching-end-date": {
                       "type": "string",
-                      "description": "This is the end of a the valid date range for this rule.  Keep to * if you do not want to use date range for this rule. Default: \"*\"",
+                      "description": "Last day the rule applies, as `YYYY-MM-DD`. `*` means no end date. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-matching-start-time": {
                       "type": "string",
-                      "description": "This is the start of a the valid time range for this rule.  Keep to * if you do not want to use time range for this rule. The format is a valid HH:MM format from 00:00 to 23:59. The timezone would be the user's timezone if passing through a user already. Default: \"*\"",
+                      "description": "Time of day the rule starts applying, as `HH:MM` from `00:00` to `23:59`. `*` means all day. Uses the time zone of the user the call passes through, when there is one. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-matching-end-time": {
                       "type": "string",
-                      "description": "This is the end of a the valid time range for this rule.  Keep to * if you do not want to use time range for this rule. The format is a valid HH:MM format from 00:00 to 23:59. The timezone would be the user's timezone if passing through a user already. Default: \"*\"",
+                      "description": "Time of day the rule stops applying, as `HH:MM` from `00:00` to `23:59`. `*` means all day. Uses the time zone of the user the call passes through, when there is one. Default: \"*\"",
                       "default": "*"
                 },
                 "dial-rule-application": {
                       "type": "string",
-                      "description": "This is the application that the call will be routed using. It works in partnership with dial-rule-translation-destination-user and dial-rule-translation-destination-host to forward to a next destination. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-force-caller-id\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\"",
+                      "description": "Application that routes the call, together with the destination user and host. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"to-connection-add-header-update-cdr-by-user\"",
                       "enum": [
                             "available-number",
                             "to-voicemail-residential",
@@ -130,7 +176,6 @@ export const create_dialrule: ToolDefinition = {
                             "spam-screening",
                             "to-connection-block-caller-id",
                             "to-connection-no-timeout",
-                            "to-connection-add-header-force-caller-id",
                             "to-connection-add-header-no-timeout",
                             "to-connection-add-header",
                             "to-single-device-add-header-allow-voicemail",
@@ -141,16 +186,17 @@ export const create_dialrule: ToolDefinition = {
                             "to-user-notify-of-recording",
                             "hangup",
                             "to-user-answer-and-fake-ringback",
-                            "toggle-timeframe"
+                            "toggle-timeframe",
+                            "to-connection-add-header-update-cdr-by-user"
                       ]
                 },
                 "dial-rule-parameter": {
                       "type": "string",
-                      "description": "This is the application parameter field that can be used for additional settings based on the dial-rule-application. Default is empty string."
+                      "description": "Extra setting for the application in `dial-rule-application`. Its meaning depends on the application. Empty by default"
                 },
                 "dial-rule-translation-destination-scheme": {
                       "type": "string",
-                      "description": "This setting controls the \"sip schema\" on the destination, in most all case setting to \"[*]\" is correct. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "description": "URI scheme of the destination. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
                       "enum": [
                             "[*]",
                             "sip:",
@@ -160,21 +206,21 @@ export const create_dialrule: ToolDefinition = {
                 },
                 "dial-rule-translation-destination-user": {
                       "type": "string",
-                      "description": "This is the forward destination the call will be sent to in partnership with the application (dial-rule-application) and host (dial-rule-translation-destination-host). This might be a user, queue or offnet number depending on the application."
+                      "description": "Where a matching call goes, read together with `dial-rule-application` and `dial-rule-translation-destination-host`. A user, a call queue, or an off-net number, depending on the application"
                 },
                 "dial-rule-translation-destination-host": {
                       "type": "string",
-                      "description": "This is the forward destination host the call will be sent to in partnership with the application (dial-rule-application) and user (dial-rule-translation-destination-user). This might be the domain name or a connection name if trying to route offnet. Default: \"[*]\"",
+                      "description": "Host of the destination: usually a domain, or a connection name for off-net routing. `[*]` keeps the incoming host. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-name": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"name\" often used for the caller id name or the the descriptive quoted value outside of the sip uri. Defaults to [*] but you can add a prefix for example with something like this, sales_[*]. Default: \"[*]\"",
+                      "description": "Caller ID name passed on. `[*]` keeps the incoming value. Add text around it to change it, for example `sales_[*]`. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-scheme": {
                       "type": "string",
-                      "description": "This setting controls the \"sip schema\" on the destination, in most all case setting to \"[*]\" is correct. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "description": "URI scheme of the caller. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
                       "enum": [
                             "[*]",
                             "sip:",
@@ -184,27 +230,32 @@ export const create_dialrule: ToolDefinition = {
                 },
                 "dial-rule-translation-source-user": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"user\" which is often the caller id number or the value before the @ in then SIP uri. Defaults to [*] but you can modify and include [*] as the previous value. An example would be using a token like <OwnCidNmbr> to replace with a user's caller id number. Default: \"[*]\"",
+                      "description": "Caller ID number passed on: the part of the caller's SIP URI before `@`. `[*]` keeps the incoming value. `<OwnCidNmbr>` substitutes the user's caller ID number. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-host": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"host\" which is  the value after the @ in then SIP uri. Defaults to [*] but you can modify and include [*] as the previous value. An example would be using a token like <OwnDomain> to replace with a user's domain. Default: \"[*]\"",
+                      "description": "Host part of the caller's SIP URI, after `@`. `[*]` keeps the incoming value. `<OwnDomain>` substitutes the user's domain. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "This is a description of the number/rule that can be used for defintion or tracking purposes."
+                      "description": "Free-text description of the rule"
                 }
           },
           "required": [
                 "domain",
                 "dialplan",
-                "synchronous",
                 "dial-rule-matching-to-uri",
                 "dial-rule-translation-destination-user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/dialplans/{}/dialrules',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan'];
@@ -233,67 +284,24 @@ export const create_dialrule: ToolDefinition = {
   },
 };
 
-export const get_domains_by_domain_dialplans_by_dialplan_dialrules_count: ToolDefinition = {
-  schema: {
-    name: 'get_domains_by_domain_dialplans_by_dialplan_dialrules_count',
-    description: 'Count Dialrules in a Dialplan — [GET /domains/{domain}/dialplans/{dialplan}/dialrules/count]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                },
-                "dialplan": {
-                      "type": "string",
-                      "description": "dialplan"
-                }
-          },
-          "required": [
-                "domain",
-                "dialplan"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain', 'dialplan'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/dialplans/{dialplan}/dialrules/count',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
 export const read_dialrule: ToolDefinition = {
   schema: {
     name: 'read_dialrule',
-    description: 'Read Specific Dialrule in a Dialplan — [GET /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
+    description: 'Read dial rule — Returns one dial rule, addressed by its `dialrule` id. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope, and Super User Read Only can read. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  The id comes from the `dialrule` field of a list or read response. — [GET /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
                 },
                 "dialrule": {
                       "type": "string",
-                      "description": "dialrule"
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
                 }
           },
           "required": [
@@ -302,6 +310,12 @@ export const read_dialrule: ToolDefinition = {
                 "dialrule"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/{}/dialrules/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan', 'dialrule'];
@@ -327,25 +341,25 @@ export const read_dialrule: ToolDefinition = {
 export const update_dialrule: ToolDefinition = {
   schema: {
     name: 'update_dialrule',
-    description: 'Update a dial rule by ID in a dial plan — Note you cannot update any fields starting with dial-rule-matching (like dial-rule-matching-to-uri and dial-rule-matching-from-uri) , any modification there should be a delete and create new. — [PUT /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
+    description: 'Update dial rule — Updates a dial rule\\\'s routing: its application, parameter, destination, caller ID translation, enabled state, or description. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Send only the fields to change; the others keep their current values. The match fields (`dial-rule-matching-*`) make up the `dialrule` id, so this endpoint cannot change them and ignores any in the body. To change what a rule matches, delete it and create a new one.  The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet. An unknown `dialrule` id returns `404`. — [PUT /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
                 },
                 "dialrule": {
                       "type": "string",
-                      "description": "This is the dialrule id that will be given with each read action that will be needed to read back individual value, update specific rules or delete rules. If wanting to programatically generate the dial rule id is a base64 encoding of the concatination with \"||\" of the following fields in order, dail-rule-matching-to-uri, dail-rule-matching-from-uri, dail-rule-matching-day-of-week, dail-rule-matching-start-date, dail-rule-matching-end-date, dail-rule-matching-start-time, dail-rule-matching-end-time"
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
                 },
                 "enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -354,7 +368,7 @@ export const update_dialrule: ToolDefinition = {
                 },
                 "dial-rule-application": {
                       "type": "string",
-                      "description": "This is the application that the call will be routed using. It works in partnership with dial-rule-translation-destination-user and dial-rule-translation-destination-host to forward to a next destination. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-force-caller-id\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\"",
+                      "description": "Application that routes the call, together with the destination user and host. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"to-connection-add-header-update-cdr-by-user\"",
                       "enum": [
                             "available-number",
                             "to-voicemail-residential",
@@ -370,7 +384,6 @@ export const update_dialrule: ToolDefinition = {
                             "spam-screening",
                             "to-connection-block-caller-id",
                             "to-connection-no-timeout",
-                            "to-connection-add-header-force-caller-id",
                             "to-connection-add-header-no-timeout",
                             "to-connection-add-header",
                             "to-single-device-add-header-allow-voicemail",
@@ -381,16 +394,17 @@ export const update_dialrule: ToolDefinition = {
                             "to-user-notify-of-recording",
                             "hangup",
                             "to-user-answer-and-fake-ringback",
-                            "toggle-timeframe"
+                            "toggle-timeframe",
+                            "to-connection-add-header-update-cdr-by-user"
                       ]
                 },
                 "dial-rule-parameter": {
                       "type": "string",
-                      "description": "This is the application parameter field that can be used for additional settings based on the dial-rule-application. Default is empty string."
+                      "description": "Extra setting for the application in `dial-rule-application`. Its meaning depends on the application. Empty by default"
                 },
                 "dial-rule-translation-destination-scheme": {
                       "type": "string",
-                      "description": "This setting controls the \"sip schema\" on the destination, in most all case setting to \"[*]\" is correct. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "description": "URI scheme of the destination. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
                       "enum": [
                             "[*]",
                             "sip:",
@@ -400,21 +414,21 @@ export const update_dialrule: ToolDefinition = {
                 },
                 "dial-rule-translation-destination-user": {
                       "type": "string",
-                      "description": "This is the forward destination the call will be sent to in partnership with the application (dial-rule-application) and host (dial-rule-translation-destination-host). This might be a user, queue or offnet number depending on the application."
+                      "description": "Where a matching call goes, read together with `dial-rule-application` and `dial-rule-translation-destination-host`. A user, a call queue, or an off-net number, depending on the application"
                 },
                 "dial-rule-translation-destination-host": {
                       "type": "string",
-                      "description": "This is the forward destination host the call will be sent to in partnership with the application (dial-rule-application) and user (dial-rule-translation-destination-user). This might be the domain name or a connection name if trying to route offnet. Default: \"[*]\"",
+                      "description": "Host of the destination: usually a domain, or a connection name for off-net routing. `[*]` keeps the incoming host. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-name": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"name\" often used for the caller id name or the the descriptive quoted value outside of the sip uri. Defaults to [*] but you can add a prefix for example with something like this, sales_[*]. Default: \"[*]\"",
+                      "description": "Caller ID name passed on. `[*]` keeps the incoming value. Add text around it to change it, for example `sales_[*]`. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-scheme": {
                       "type": "string",
-                      "description": "This setting controls the \"sip schema\" on the destination, in most all case setting to \"[*]\" is correct. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "description": "URI scheme of the caller. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
                       "enum": [
                             "[*]",
                             "sip:",
@@ -424,26 +438,31 @@ export const update_dialrule: ToolDefinition = {
                 },
                 "dial-rule-translation-source-user": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"user\" which is often the caller id number or the value before the @ in then SIP uri. Defaults to [*] but you can modify and include [*] as the previous value. An example would be using a token like <OwnCidNmbr> to replace with a user's caller id number. Default: \"[*]\"",
+                      "description": "Caller ID number passed on: the part of the caller's SIP URI before `@`. `[*]` keeps the incoming value. `<OwnCidNmbr>` substitutes the user's caller ID number. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-translation-source-host": {
                       "type": "string",
-                      "description": "This field will allow customization of the source \"host\" which is  the value after the @ in then SIP uri. Defaults to [*] but you can modify and include [*] as the previous value. An example would be using a token like <OwnDomain> to replace with a user's domain. Default: \"[*]\"",
+                      "description": "Host part of the caller's SIP URI, after `@`. `[*]` keeps the incoming value. `<OwnDomain>` substitutes the user's domain. Default: \"[*]\"",
                       "default": "[*]"
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "This is a description of the number/rule that can be used for defintion or tracking purposes."
+                      "description": "Free-text description of the rule"
                 }
           },
           "required": [
                 "domain",
                 "dialplan",
-                "dialrule",
-                "dial-rule-translation-destination-user"
+                "dialrule"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/dialplans/{}/dialrules/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan', 'dialrule'];
@@ -451,7 +470,7 @@ export const update_dialrule: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['dialrule', 'enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-scheme', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-translation-source-scheme', 'dial-rule-translation-source-user', 'dial-rule-translation-source-host', 'dial-rule-description'];
+    const bodyParamNames = ['enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-scheme', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-translation-source-scheme', 'dial-rule-translation-source-user', 'dial-rule-translation-source-host', 'dial-rule-description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -475,21 +494,21 @@ export const update_dialrule: ToolDefinition = {
 export const delete_dialrule: ToolDefinition = {
   schema: {
     name: 'delete_dialrule',
-    description: 'Delete a dial rule by ID in a dial plan — [DELETE /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
+    description: 'Delete dial rule — Deletes a dial rule, addressed by its `dialrule` id. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet. An unknown `dialrule` id returns `404`. — [DELETE /domains/{domain}/dialplans/{dialplan}/dialrules/{dialrule}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
                 },
                 "dialrule": {
                       "type": "string",
-                      "description": "dialrule"
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
                 }
           },
           "required": [
@@ -498,6 +517,12 @@ export const delete_dialrule: ToolDefinition = {
                 "dialrule"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/dialplans/{}/dialrules/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan', 'dialrule'];
@@ -520,19 +545,133 @@ export const delete_dialrule: ToolDefinition = {
   },
 };
 
+export const get_domains_by_domain_dialplans_by_dialplan_dialrules_count: ToolDefinition = {
+  schema: {
+    name: 'get_domains_by_domain_dialplans_by_dialplan_dialrules_count',
+    description: 'Count dial rules in dial plan — Returns the number of dial rules in a dial plan that match the filters. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope, and Super User Read Only can read. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Takes the same filters as the dial rule list, so the count matches the list. — [GET /domains/{domain}/dialplans/{dialplan}/dialrules/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dialplan": {
+                      "type": "string",
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                }
+          },
+          "required": [
+                "domain",
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/{}/dialrules/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialplans/{dialplan}/dialrules/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
 export const get_dialplans: ToolDefinition = {
   schema: {
     name: 'get_dialplans',
-    description: 'Read Dialplans — [GET /dialplans]',
+    description: 'List dial plans — Returns the dial plans your token can see. What that covers depends on your scope:  - Super User and Super User Read Only: every plan on the platform. Send `territory` to narrow it to one territory - Reseller: plans owned by domains in your territory - Office Manager, Site Manager, and every other scope: `403`. Use `GET /domains/{domain}/dialplans` instead  Both also see the platform-shared plans, whose `domain` is `admin-only` or `*`. For the total, call `/dialplans/count`. For one admin-only plan, use `GET /dialplans/{dialplan}`. — [GET /dialplans]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "dial-rule-dial-plan": {
+                      "type": "string",
+                      "description": "Return only the dial plan with this name."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only dial plans whose description matches. SQL `LIKE`, so `%` is a wildcard."
+                },
+                "territory": {
+                      "type": "string",
+                      "description": "Super User and Super User Read Only only: return only plans owned by domains in this territory. A Reseller that sends a territory other than its own gets `403`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of dial plans to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['dial-rule-dial-plan', 'dial-rule-description', 'territory', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/dialplans',
+      queryParams,
     });
 
     return {
@@ -547,29 +686,34 @@ export const get_dialplans: ToolDefinition = {
 export const post_dialplans: ToolDefinition = {
   schema: {
     name: 'post_dialplans',
-    description: 'Create Dialplan Global — [POST /dialplans]',
+    description: 'Create dial plan with domain in body — Creates a dial plan for the domain named in the body. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Send `domain` and `dial-rule-dial-plan`, the plan name. `dial-rule-description` is optional and defaults to `dialplan for <domain>`. A `domain` of `admin-only` or `*` makes a platform-shared plan and needs Super User scope; any other scope gets `403`. `POST /dialplans/{dialplan}` is the dedicated form for an `admin-only` plan. The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet.  `POST /domains/{domain}/dialplans` does the same with the domain in the path. — [POST /dialplans]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "domain"
+                      "description": "Domain that owns the dial plan. `admin-only` or `*` for a platform-shared plan"
                 },
                 "dial-rule-dial-plan": {
                       "type": "string",
-                      "description": "dial-rule-dial-plan"
+                      "description": "Name of the dial plan"
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "dial-rule-description"
+                      "description": "Free-text description of the dial plan. Defaults to `dialplan for <domain>` when created without one"
                 }
           },
           "required": [
                 "domain",
-                "dial-rule-dial-plan",
-                "dial-rule-description"
+                "dial-rule-dial-plan"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /dialplans',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const bodyParamNames = ['domain', 'dial-rule-dial-plan', 'dial-rule-description'];
@@ -595,29 +739,34 @@ export const post_dialplans: ToolDefinition = {
 export const post_domains_by_domain_dialplans: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_dialplans',
-    description: 'Create Dialplan for Domain — [POST /domains/{domain}/dialplans]',
+    description: 'Create dial plan in domain — Creates a dial plan in the domain. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory.  Send `dial-rule-dial-plan`, the plan name. `dial-rule-description` is optional and defaults to `dialplan for <domain>`. The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet.  Add rules to the new plan with `POST /domains/{domain}/dialplans/{dialplan}/dialrules`. — [POST /domains/{domain}/dialplans]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dial-rule-dial-plan": {
                       "type": "string",
-                      "description": "dial-rule-dial-plan"
+                      "description": "Name of the dial plan"
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "dial-rule-description"
+                      "description": "Free-text description of the dial plan. Defaults to `dialplan for <domain>` when created without one"
                 }
           },
           "required": [
                 "domain",
-                "dial-rule-dial-plan",
-                "dial-rule-description"
+                "dial-rule-dial-plan"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/dialplans',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain'];
@@ -649,29 +798,34 @@ export const post_domains_by_domain_dialplans: ToolDefinition = {
 export const put_domains_by_domain_dialplans_by_dialplan: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_dialplans_by_dialplan',
-    description: 'Update Dialplan for Domain — [PUT /domains/{domain}/dialplans/{dialplan}]',
+    description: 'Update dial plan — Updates a dial plan\\\'s description. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory.  The path names the plan, and a plan cannot be renamed. The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet. A plan name the domain does not have is not checked: it also returns `202` and changes nothing. — [PUT /domains/{domain}/dialplans/{dialplan}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
                 },
                 "dial-rule-description": {
                       "type": "string",
-                      "description": "dial-rule-description"
+                      "description": "Free-text description of the dial plan. Defaults to `dialplan for <domain>` when created without one"
                 }
           },
           "required": [
                 "domain",
-                "dialplan",
-                "dial-rule-description"
+                "dialplan"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/dialplans/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan'];
@@ -703,17 +857,24 @@ export const put_domains_by_domain_dialplans_by_dialplan: ToolDefinition = {
 export const delete_domains_by_domain_dialplans_by_dialplan: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_dialplans_by_dialplan',
-    description: 'Delete Dialplan for Domain — [DELETE /domains/{domain}/dialplans/{dialplan}]',
+    description: 'Delete dial plan — Deletes a dial plan. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory.  Its dial rules are not deleted unless you send `empty=true`, which first deletes every rule this domain owns in the plan. Rules other domains own in a plan of the same name are not touched. If any rule deletion cannot be published, the response is `400` and the plan is kept, so a retry finds the remaining rules. The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet. — [DELETE /domains/{domain}/dialplans/{dialplan}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "dialplan": {
                       "type": "string",
-                      "description": "dialplan"
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
+                },
+                "empty": {
+                      "type": "string",
+                      "description": "Send `true` to delete every dial rule in the plan before deleting the plan. Without it the rules are not deleted. Allowed values: \"true\"",
+                      "enum": [
+                            "true"
+                      ]
                 }
           },
           "required": [
@@ -722,6 +883,1186 @@ export const delete_domains_by_domain_dialplans_by_dialplan: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/dialplans/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['empty'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/domains/{domain}/dialplans/{dialplan}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_dialplans: ToolDefinition = {
+  schema: {
+    name: 'count_dialplans',
+    description: 'Count dial plans — Returns the number of dial plans your token can see. It is scoped the same way as `GET /dialplans` and takes the same filters, so the count matches the list. Office Manager, Site Manager, and every other scope below Reseller get `403`; use `GET /domains/{domain}/dialplans/count` instead. — [GET /dialplans/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dial-rule-dial-plan": {
+                      "type": "string",
+                      "description": "Return only the dial plan with this name."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only dial plans whose description matches. SQL `LIKE`, so `%` is a wildcard."
+                },
+                "territory": {
+                      "type": "string",
+                      "description": "Super User and Super User Read Only only: return only plans owned by domains in this territory. A Reseller that sends a territory other than its own gets `403`."
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['dial-rule-dial-plan', 'dial-rule-description', 'territory'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/count',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_dialplan_summaries: ToolDefinition = {
+  schema: {
+    name: 'list_dialplan_summaries',
+    description: 'List dial plan summaries — Returns the dial plans your token can see, reduced to `dial-rule-dial-plan`, `dial-rule-description`, and `domain`. It is scoped the same way as `GET /dialplans` and takes the same filters. Unlike `GET /dialplans` it has no default `limit`: without one it returns every matching plan. Use it to fill a picker. — [GET /dialplans/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dial-rule-dial-plan": {
+                      "type": "string",
+                      "description": "Return only the dial plan with this name."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only dial plans whose description matches. SQL `LIKE`, so `%` is a wildcard."
+                },
+                "territory": {
+                      "type": "string",
+                      "description": "Super User and Super User Read Only only: return only plans owned by domains in this territory. A Reseller that sends a territory other than its own gets `403`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rows to return. With no `limit`, `/list` returns every matching row. Default: 100",
+                      "default": 100
+                }
+          }
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['dial-rule-dial-plan', 'dial-rule-description', 'territory', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/list',
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_admin_only_dialplan: ToolDefinition = {
+  schema: {
+    name: 'read_admin_only_dialplan',
+    description: 'Read admin-only dial plan — Returns the named admin-only dial plan. The response is an array, like `GET /dialplans`. A name with no such plan returns `200` with `[]`.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [GET /dialplans/{dialplan}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/{dialplan}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_admin_only_dialplan: ToolDefinition = {
+  schema: {
+    name: 'create_admin_only_dialplan',
+    description: 'Create admin-only dial plan — Creates an admin-only dial plan. The path names the plan.  `dial-rule-description` is optional. The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet.  Add rules to the new plan with `POST /dialplans/{dialplan}/dialrules`.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [POST /dialplans/{dialplan}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the new admin-only dial plan."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Free-text description of the dial plan. Defaults to `dialplan for <domain>` when created without one"
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /dialplans/{}',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['dial-rule-description'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/dialplans/{dialplan}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_admin_only_dialplan: ToolDefinition = {
+  schema: {
+    name: 'update_admin_only_dialplan',
+    description: 'Update admin-only dial plan — Updates a dial plan\\\'s description.  The path names the plan, and a plan cannot be renamed. The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [PUT /dialplans/{dialplan}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Free-text description of the dial plan. Defaults to `dialplan for <domain>` when created without one"
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /dialplans/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['dial-rule-description'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/dialplans/{dialplan}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_admin_only_dialplan: ToolDefinition = {
+  schema: {
+    name: 'delete_admin_only_dialplan',
+    description: 'Delete admin-only dial plan — Deletes a dial plan.  Its dial rules are not deleted unless you send `empty=true`, which first deletes every rule in the plan. If any rule deletion cannot be published, the response is `400` and the plan is kept, so a retry finds the remaining rules. The response is `202`: the change is published, not yet applied, so a read straight after it may not show the change yet.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [DELETE /dialplans/{dialplan}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "empty": {
+                      "type": "string",
+                      "description": "Send `true` to delete every dial rule in the plan before deleting the plan. Without it the rules are not deleted. Allowed values: \"true\"",
+                      "enum": [
+                            "true"
+                      ]
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /dialplans/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['empty'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/dialplans/{dialplan}',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_admin_only_dialrules: ToolDefinition = {
+  schema: {
+    name: 'count_admin_only_dialrules',
+    description: 'Count dial rules in admin-only dial plan — Returns the number of dial rules in an admin-only dial plan that match the filters.  Takes the same filters as the dial rule list, so the count matches the list.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [GET /dialplans/{dialplan}/dialrules/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/{}/dialrules/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/{dialplan}/dialrules/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_admin_only_dialrule_summaries: ToolDefinition = {
+  schema: {
+    name: 'list_admin_only_dialrule_summaries',
+    description: 'List dial rule summaries in admin-only dial plan — Returns the dial rules in an admin-only dial plan with only their identifying fields: `dialrule`, `dial-rule-matching-to-uri`, `dial-rule-translation-destination-user`, `dial-rule-dial-plan`, `dial-rule-description`, and `domain`. Takes the same filters as the full list. Unlike the full list, it has no default `limit`: without one it returns every matching rule.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [GET /dialplans/{dialplan}/dialrules/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rows to return. With no `limit`, `/list` returns every matching row. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/{}/dialrules/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/{dialplan}/dialrules/list',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_admin_only_dialrules: ToolDefinition = {
+  schema: {
+    name: 'read_admin_only_dialrules',
+    description: 'List dial rules in admin-only dial plan — Returns the dial rules in an admin-only dial plan, up to `limit` at a time (100 by default).  Filter with the query parameters below. `dial-rule-application` and `dial-rule-description` match with SQL `LIKE`, so `%` is a wildcard; the others match exactly. Each rule carries a `dialrule` id to read, update, or delete it with.  For the total, call `/dialrules/count` with the same filters. For only the identifying fields of each rule, call `/dialrules/list`.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [GET /dialplans/{dialplan}/dialrules]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rules to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/{}/dialrules',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/{dialplan}/dialrules',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_admin_only_dialrule: ToolDefinition = {
+  schema: {
+    name: 'create_admin_only_dialrule',
+    description: 'Create dial rule in admin-only dial plan — Creates a dial rule in an admin-only dial plan.  Send at least `dial-rule-matching-to-uri` and `dial-rule-translation-destination-user`. The dial plan comes from the path. The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet. Send `synchronous=yes` to wait up to 2 seconds and get `200` with the created rule instead.  A rule with the same match fields already in the plan returns `409`. To change a rule\\\'s match fields later, delete it and create a new one: `PUT` updates only the other fields.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [POST /dialplans/{dialplan}/dialrules]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "synchronous": {
+                      "type": "string",
+                      "description": "`yes` waits until the change is applied before answering. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Destination pattern the rule matches, as a SIP URI. `?` matches one character and `*` matches anything, so `sip:611@*` matches 611 dialed to any host"
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Caller pattern the rule also requires, as a SIP URI. `*` matches any caller. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-matching-day-of-week": {
+                      "type": "string",
+                      "description": "Days the rule applies: one digit from `0` (Sunday) to `6` (Saturday), or a range in brackets such as `[1-5]`. `*` matches every day. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-matching-start-date": {
+                      "type": "string",
+                      "description": "First day the rule applies, as `YYYY-MM-DD`. `*` means no start date. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-matching-end-date": {
+                      "type": "string",
+                      "description": "Last day the rule applies, as `YYYY-MM-DD`. `*` means no end date. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-matching-start-time": {
+                      "type": "string",
+                      "description": "Time of day the rule starts applying, as `HH:MM` from `00:00` to `23:59`. `*` means all day. Uses the time zone of the user the call passes through, when there is one. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-matching-end-time": {
+                      "type": "string",
+                      "description": "Time of day the rule stops applying, as `HH:MM` from `00:00` to `23:59`. `*` means all day. Uses the time zone of the user the call passes through, when there is one. Default: \"*\"",
+                      "default": "*"
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Application that routes the call, together with the destination user and host. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"to-connection-add-header-update-cdr-by-user\"",
+                      "enum": [
+                            "available-number",
+                            "to-voicemail-residential",
+                            "to-callqueue",
+                            "to-callqueue-announce-count-callers-ahead",
+                            "to-callqueue-announce-expected-wait-time",
+                            "to-connection",
+                            "to-connection-or-user-no-failover",
+                            "to-single-device",
+                            "to-user",
+                            "to-user-residential",
+                            "to-voicemail",
+                            "spam-screening",
+                            "to-connection-block-caller-id",
+                            "to-connection-no-timeout",
+                            "to-connection-add-header-no-timeout",
+                            "to-connection-add-header",
+                            "to-single-device-add-header-allow-voicemail",
+                            "to-single-device-add-header-allow-voicemail-residential",
+                            "to-single-device-add-header",
+                            "to-user-add-header",
+                            "to-user-residential-add-header",
+                            "to-user-notify-of-recording",
+                            "hangup",
+                            "to-user-answer-and-fake-ringback",
+                            "toggle-timeframe",
+                            "to-connection-add-header-update-cdr-by-user"
+                      ]
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Extra setting for the application in `dial-rule-application`. Its meaning depends on the application. Empty by default"
+                },
+                "dial-rule-translation-destination-scheme": {
+                      "type": "string",
+                      "description": "URI scheme of the destination. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "enum": [
+                            "[*]",
+                            "sip:",
+                            "<Null>"
+                      ],
+                      "default": "[*]"
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Where a matching call goes, read together with `dial-rule-application` and `dial-rule-translation-destination-host`. A user, a call queue, or an off-net number, depending on the application"
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Host of the destination: usually a domain, or a connection name for off-net routing. `[*]` keeps the incoming host. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-name": {
+                      "type": "string",
+                      "description": "Caller ID name passed on. `[*]` keeps the incoming value. Add text around it to change it, for example `sales_[*]`. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-scheme": {
+                      "type": "string",
+                      "description": "URI scheme of the caller. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "enum": [
+                            "[*]",
+                            "sip:",
+                            "<Null>"
+                      ],
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-user": {
+                      "type": "string",
+                      "description": "Caller ID number passed on: the part of the caller's SIP URI before `@`. `[*]` keeps the incoming value. `<OwnCidNmbr>` substitutes the user's caller ID number. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-host": {
+                      "type": "string",
+                      "description": "Host part of the caller's SIP URI, after `@`. `[*]` keeps the incoming value. `<OwnDomain>` substitutes the user's domain. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Free-text description of the rule"
+                }
+          },
+          "required": [
+                "dialplan",
+                "dial-rule-matching-to-uri",
+                "dial-rule-translation-destination-user"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /dialplans/{}/dialrules',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['synchronous', 'dial-rule-matching-to-uri', 'enabled', 'dial-rule-matching-from-uri', 'dial-rule-matching-day-of-week', 'dial-rule-matching-start-date', 'dial-rule-matching-end-date', 'dial-rule-matching-start-time', 'dial-rule-matching-end-time', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-scheme', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-translation-source-scheme', 'dial-rule-translation-source-user', 'dial-rule-translation-source-host', 'dial-rule-description'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/dialplans/{dialplan}/dialrules',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_admin_only_dialrule: ToolDefinition = {
+  schema: {
+    name: 'read_admin_only_dialrule',
+    description: 'Read dial rule in admin-only dial plan — Returns one dial rule, addressed by its `dialrule` id.  The id comes from the `dialrule` field of a list or read response.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [GET /dialplans/{dialplan}/dialrules/{dialrule}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dialrule": {
+                      "type": "string",
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
+                }
+          },
+          "required": [
+                "dialplan",
+                "dialrule"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /dialplans/{}/dialrules/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan', 'dialrule'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/dialplans/{dialplan}/dialrules/{dialrule}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_admin_only_dialrule: ToolDefinition = {
+  schema: {
+    name: 'update_admin_only_dialrule',
+    description: 'Update dial rule in admin-only dial plan — Updates a dial rule\\\'s routing: its application, parameter, destination, caller ID translation, enabled state, or description.  Send only the fields to change; the others keep their current values. The match fields (`dial-rule-matching-*`) make up the `dialrule` id, so this endpoint cannot change them and ignores any in the body. To change what a rule matches, delete it and create a new one.  The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet. An unknown `dialrule` id returns `404`.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [PUT /dialplans/{dialplan}/dialrules/{dialrule}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dialrule": {
+                      "type": "string",
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
+                },
+                "enabled": {
+                      "type": "string",
+                      "description": "`yes` or `no`. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "yes"
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Application that routes the call, together with the destination user and host. Allowed values: \"available-number\", \"to-voicemail-residential\", \"to-callqueue\", \"to-callqueue-announce-count-callers-ahead\", \"to-callqueue-announce-expected-wait-time\", \"to-connection\", \"to-connection-or-user-no-failover\", \"to-single-device\", \"to-user\", \"to-user-residential\", \"to-voicemail\", \"spam-screening\", \"to-connection-block-caller-id\", \"to-connection-no-timeout\", \"to-connection-add-header-no-timeout\", \"to-connection-add-header\", \"to-single-device-add-header-allow-voicemail\", \"to-single-device-add-header-allow-voicemail-residential\", \"to-single-device-add-header\", \"to-user-add-header\", \"to-user-residential-add-header\", \"to-user-notify-of-recording\", \"hangup\", \"to-user-answer-and-fake-ringback\", \"toggle-timeframe\", \"to-connection-add-header-update-cdr-by-user\"",
+                      "enum": [
+                            "available-number",
+                            "to-voicemail-residential",
+                            "to-callqueue",
+                            "to-callqueue-announce-count-callers-ahead",
+                            "to-callqueue-announce-expected-wait-time",
+                            "to-connection",
+                            "to-connection-or-user-no-failover",
+                            "to-single-device",
+                            "to-user",
+                            "to-user-residential",
+                            "to-voicemail",
+                            "spam-screening",
+                            "to-connection-block-caller-id",
+                            "to-connection-no-timeout",
+                            "to-connection-add-header-no-timeout",
+                            "to-connection-add-header",
+                            "to-single-device-add-header-allow-voicemail",
+                            "to-single-device-add-header-allow-voicemail-residential",
+                            "to-single-device-add-header",
+                            "to-user-add-header",
+                            "to-user-residential-add-header",
+                            "to-user-notify-of-recording",
+                            "hangup",
+                            "to-user-answer-and-fake-ringback",
+                            "toggle-timeframe",
+                            "to-connection-add-header-update-cdr-by-user"
+                      ]
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Extra setting for the application in `dial-rule-application`. Its meaning depends on the application. Empty by default"
+                },
+                "dial-rule-translation-destination-scheme": {
+                      "type": "string",
+                      "description": "URI scheme of the destination. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "enum": [
+                            "[*]",
+                            "sip:",
+                            "<Null>"
+                      ],
+                      "default": "[*]"
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Where a matching call goes, read together with `dial-rule-application` and `dial-rule-translation-destination-host`. A user, a call queue, or an off-net number, depending on the application"
+                },
+                "dial-rule-translation-destination-host": {
+                      "type": "string",
+                      "description": "Host of the destination: usually a domain, or a connection name for off-net routing. `[*]` keeps the incoming host. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-name": {
+                      "type": "string",
+                      "description": "Caller ID name passed on. `[*]` keeps the incoming value. Add text around it to change it, for example `sales_[*]`. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-scheme": {
+                      "type": "string",
+                      "description": "URI scheme of the caller. `[*]` keeps the scheme of the incoming request and is correct in most cases. `sip:` sets it to SIP. Allowed values: \"[*]\", \"sip:\", \"<Null>\". Default: \"[*]\"",
+                      "enum": [
+                            "[*]",
+                            "sip:",
+                            "<Null>"
+                      ],
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-user": {
+                      "type": "string",
+                      "description": "Caller ID number passed on: the part of the caller's SIP URI before `@`. `[*]` keeps the incoming value. `<OwnCidNmbr>` substitutes the user's caller ID number. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-translation-source-host": {
+                      "type": "string",
+                      "description": "Host part of the caller's SIP URI, after `@`. `[*]` keeps the incoming value. `<OwnDomain>` substitutes the user's domain. Default: \"[*]\"",
+                      "default": "[*]"
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Free-text description of the rule"
+                }
+          },
+          "required": [
+                "dialplan",
+                "dialrule"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /dialplans/{}/dialrules/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan', 'dialrule'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['enabled', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-scheme', 'dial-rule-translation-destination-user', 'dial-rule-translation-destination-host', 'dial-rule-translation-source-name', 'dial-rule-translation-source-scheme', 'dial-rule-translation-source-user', 'dial-rule-translation-source-host', 'dial-rule-description'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/dialplans/{dialplan}/dialrules/{dialrule}',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const delete_admin_only_dialrule: ToolDefinition = {
+  schema: {
+    name: 'delete_admin_only_dialrule',
+    description: 'Delete dial rule in admin-only dial plan — Deletes a dial rule, addressed by its `dialrule` id.  The response is `202`: the change is published and applied within a few seconds, so a read straight after it may not show the change yet. An unknown `dialrule` id returns `404`.  This is the admin-only form of the endpoint, for the platform-shared dial plans whose `domain` is `admin-only`. Requires Super User scope. Super User Read Only can use `GET`; every other scope gets `403`. The server sets `domain` to `admin-only` itself. For a plan that belongs to a domain, use the `/domains/{domain}/dialplans/...` form. — [DELETE /dialplans/{dialplan}/dialrules/{dialrule}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "dialplan": {
+                      "type": "string",
+                      "description": "Name of the admin-only dial plan."
+                },
+                "dialrule": {
+                      "type": "string",
+                      "description": "Dial rule id, from the `dialrule` field of a list or read response."
+                }
+          },
+          "required": [
+                "dialplan",
+                "dialrule"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /dialplans/{}/dialrules/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['dialplan', 'dialrule'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const response = await client.request({
+      method: 'DELETE',
+      pathTemplate: '/dialplans/{dialplan}/dialrules/{dialrule}',
+      pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const count_dialplans_for_domain: ToolDefinition = {
+  schema: {
+    name: 'count_dialplans_for_domain',
+    description: 'Count dial plans in domain — Returns the number of dial plans a domain can use, counted the same way as `GET /domains/{domain}/dialplans`: its own plans plus the platform-shared ones. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory. — [GET /domains/{domain}/dialplans/count]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dial-rule-dial-plan": {
+                      "type": "string",
+                      "description": "Return only the dial plan with this name."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only dial plans whose description matches. SQL `LIKE`, so `%` is a wildcard."
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-dial-plan', 'dial-rule-description'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialplans/count',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_dialplans_for_domain: ToolDefinition = {
+  schema: {
+    name: 'list_dialplans_for_domain',
+    description: 'List dial plans in domain — Returns the dial plans a domain can use: its own plans plus the platform-shared plans, whose `domain` is `admin-only` or `*`. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory.  For the total, call `/domains/{domain}/dialplans/count`. To list across domains, use `GET /dialplans`. — [GET /domains/{domain}/dialplans]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dial-rule-dial-plan": {
+                      "type": "string",
+                      "description": "Return only the dial plan with this name."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only dial plans whose description matches. SQL `LIKE`, so `%` is a wildcard."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of dial plans to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-dial-plan', 'dial-rule-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialplans',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const read_dialplan_for_domain: ToolDefinition = {
+  schema: {
+    name: 'read_dialplan_for_domain',
+    description: 'Read dial plan — Returns the named dial plan when the domain can use it: a plan the domain owns, or a platform-shared plan. Requires Office Manager, Site Manager, Reseller, or Super User scope. A Reseller reaches only domains in its territory.  The response is an array, like `GET /domains/{domain}/dialplans`. A plan the domain cannot use, or one that does not exist, returns `200` with `[]`. — [GET /domains/{domain}/dialplans/{dialplan}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dialplan": {
+                      "type": "string",
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
+                }
+          },
+          "required": [
+                "domain",
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'dialplan'];
     const pathParams: Record<string, string> = {};
@@ -729,9 +2070,98 @@ export const delete_domains_by_domain_dialplans_by_dialplan: ToolDefinition = {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
     const response = await client.request({
-      method: 'DELETE',
+      method: 'GET',
       pathTemplate: '/domains/{domain}/dialplans/{dialplan}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_dial_plan_dial_rules: ToolDefinition = {
+  schema: {
+    name: 'list_dial_plan_dial_rules',
+    description: 'List dial rule summaries in dial plan — Returns the dial rules in a dial plan with only their identifying fields: `dialrule`, `dial-rule-matching-to-uri`, `dial-rule-translation-destination-user`, `dial-rule-dial-plan`, `dial-rule-description`, and `domain`. Requires Basic User, Site Manager, Office Manager, Reseller, or Super User scope, and Super User Read Only can read. A Reseller reaches only domains in its territory; every other scope reaches only its own domain.  Takes the same filters as the full list. Unlike the full list, it has no default `limit`: without one it returns every matching rule. Use it to fill a picker, then read a single rule for its full routing. — [GET /domains/{domain}/dialplans/{dialplan}/dialrules/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "dialplan": {
+                      "type": "string",
+                      "description": "Dial plan name. `~` means the domain's own dial plan, which is named after the domain."
+                },
+                "dial-rule-matching-to-uri": {
+                      "type": "string",
+                      "description": "Return only the rule with this destination pattern, for example `sip:611@*`."
+                },
+                "dial-rule-matching-from-uri": {
+                      "type": "string",
+                      "description": "Return only rules with this caller pattern."
+                },
+                "dial-rule-application": {
+                      "type": "string",
+                      "description": "Return only rules using this application. SQL `LIKE`: `to-callqueue%` matches every call queue application."
+                },
+                "dial-rule-parameter": {
+                      "type": "string",
+                      "description": "Return only rules with this application parameter."
+                },
+                "dial-rule-translation-destination-user": {
+                      "type": "string",
+                      "description": "Return only rules that send calls to this destination user."
+                },
+                "dial-rule-description": {
+                      "type": "string",
+                      "description": "Return only rules whose description matches. SQL `LIKE`: `%support%` matches any description containing \"support\"."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of rows to return. With no `limit`, `/list` returns every matching row. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain",
+                "dialplan"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/dialplans/{}/dialrules/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain', 'dialplan'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['dial-rule-matching-to-uri', 'dial-rule-matching-from-uri', 'dial-rule-application', 'dial-rule-parameter', 'dial-rule-translation-destination-user', 'dial-rule-description', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/dialplans/{dialplan}/dialrules/list',
+      pathParams,
+      queryParams,
     });
 
     return {

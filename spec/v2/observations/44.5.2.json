@@ -1,0 +1,2330 @@
+{
+  "schemaVersion": 2,
+  "apiVersion": "44.5.2",
+  "probedAt": "2026-11-01",
+  "source": "maintainer",
+  "probe": {
+    "version": "3.0.0",
+    "keyCount": 578,
+    "keySetSha256": "d08ca44036fed7f5cb5b3cd4fbd144570f4b88ff2267cd206fb29da05b5390a5"
+  },
+  "rule": "unauthenticated GET; 404 with 'No Route Found' = absent; any other status = present",
+  "control": {
+    "status": 404,
+    "noRouteFound": true
+  },
+  "results": {
+    "GET /accesslog": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apikeys": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /apikeys/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apns": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apns/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apns/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /appinfo": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apt/installed": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apt/installed/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apt/repos/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /apt/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /auditlog": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /avatar": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /avatar/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /avatar/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brand-defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brand-defaults/brands": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brand-defaults/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brand-defaults/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brand-defaults/{}/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /brands": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /callqueues/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /calls/active-history": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /cdrs": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /cdrs/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /cdrs/stats": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /cdrs/top": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /cdrs/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /cdrs/{}/quality": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /certificates": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /certificates/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /certificates/validate": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /certificates/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /config-definitions": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /config-definitions/{}": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /configurations": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /configurations/count": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /configurations/{}": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /connections": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /connections/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /connections/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /defaults/objects": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /defaults/objects/{}/fields": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /deviceprofiles": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /deviceprofiles/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /deviceprofiles/image/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /deviceprofiles/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /devices": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/{}/dialrules": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/{}/dialrules/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/{}/dialrules/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialplans/{}/dialrules/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialpolicy": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialpolicy/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialpolicy/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialpolicy/{}/permission": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /dialpolicy/{}/permission/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/templates": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/templates/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses/endpoints": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses/endpoints/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/addresses/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/agents": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/agents/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/agents/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/agents/{}/status": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/autoattendants": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/autoattendants/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/autoattendants/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/billing": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/brands": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/active": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/{}/assets": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/{}/assets/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/brands/{}/{}/assets/{}/download": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-codes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-codes/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-codes/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-codes/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-reports": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-reports/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callcenter-reports/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callqueuereport/abandoned": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callqueuereport/abandoned/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/callqueues": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/{}/agents": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/{}/agents/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/{}/agents/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/callqueues/{}/agents/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/calls": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/calls/active-history": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/calls/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/calls/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/cdrs": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/cdrs/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/cdrs/stats": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/cdrs/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/cdrs/{}/cradle2grave": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/cdrs/{}/quality": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/cdrs/{}/sipflow": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/cdrs/{}/vcon": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/charts/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/charts/{}/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/charts/{}/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/{}/cdr": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/{}/participants": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/{}/participants/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/conferences/{}/participants/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/connections": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/connections/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/connections/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/contacts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/contacts/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/contacts/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/contacts/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/contacts/{}/avatar": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/contacts/{}/avatar/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/defaults/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments/{}/presence": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/departments/{}/presence/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/devices": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/devices/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/devices/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/devices/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/devices/{}/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialplans": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialplans/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialplans/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialplans/{}/dialrules": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/dialplans/{}/dialrules/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/dialplans/{}/dialrules/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/dialplans/{}/dialrules/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/dialpolicy": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialpolicy/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialpolicy/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialpolicy/{}/permission": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialpolicy/{}/permission/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dialpolicy/{}/permission/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dispositions": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/dispositions/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/fax/cover-page": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/fax/cover-page/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/fax/vendor": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/faxnumbers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/faxnumbers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/inboxes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/inboxes/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/inboxes/{}/members": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/inboxes/{}/members/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/messagesessions": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/moh": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/moh/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/moh/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/moh/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/msg": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/msg/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/msg/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/msg/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/networktests": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/networktests/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/number-filters": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/oidc-providers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/oidc-providers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/parks": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/parks/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/parks/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/parks/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phoneconfiguration/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phoneconfiguration/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phonenumbers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phonenumbers/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phonenumbers/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phonenumbers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phones": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phones/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phones/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/phones/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phones/{}/config": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phonetemplates": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phonetemplates/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/phonetemplates/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/presence": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/presence/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/provisioning-defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/provisioning-defaults/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/provisioning-defaults/{}/raw": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/provisioning-defaults/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/push": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/push/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/queuedcall/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/quotas": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/quotas/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/recording-storage": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/recording-storage/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/recordings/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/restore": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/routeprofiles": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/routeprofiles/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/{}/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/{}/exports": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/{}/exports/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/schedule/{}/exports/{}/download": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/servicecode": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/servicecode/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/servicecode/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/servicecode/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/settings": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/settings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sip-servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sipflow/export": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sipflow/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sites": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/sites/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/sites/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/sites/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/sites/{}/provisioning-defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sites/{}/provisioning-defaults/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sites/{}/provisioning-defaults/{}/raw": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/sites/{}/provisioning-defaults/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/smsblocks": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/smsblocks/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/smsnumbers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/smsnumbers/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/smsnumbers/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/speech-words": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/speech-words/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/speech-words/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/speech-words/{}/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/speech-words/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/statistics/DNIS": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/DNIS/callqueues/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/agent": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/agent/callqueues/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/agent/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/agent/{}/timeline": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/agentLog": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/callqueues/aggregate": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/callqueues/history": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/callqueues/live-history": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/callqueues/per-queue": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/statistics/callqueues/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/subscriptions": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/subscriptions/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/template-variables": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/template-variables/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/template-variables/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/timeframes": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/timeframes/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/timeframes/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/timeframes/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/transcriptions": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/userinfo": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{user}number-filters": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/addresses": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/addresses/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/addresses/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/answerrules": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/answerrules/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/answerrules/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/answerrules/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/autoattendants/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/avatar": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/avatar/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/avatar/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/calls": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/calls/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/cdrs": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/cdrs/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/cdrs/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts/groups": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/contacts/{}/avatar": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/contacts/{}/avatar/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/dashboards": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/dashboards/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/dashboards/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/devices": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/devices/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/devices/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/devices/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/email/checkVerified/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/emailreports": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/fax/cover-page": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/fax/cover-page/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxes/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxes/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxes/{}/thumbnail": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxnumbers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/faxnumbers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/greetings": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/greetings/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/greetings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/greetings/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/host": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/host/contacts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/inboxes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/meetings/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/meetings/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/meetings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings/{}/attendee/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings/{}/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings/{}/instance/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings/{}/instance/{}/log": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/meetings/{}/sfu": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/messagesessions": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/messagesessions/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/messagesessions/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/messagesessions/{}/messages": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/moh": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/moh/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/moh/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/moh/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/msg": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/msg/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/msg/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/msg/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/networktests": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/networktests/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/number-filters": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/push": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/push/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/recordings/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/settings": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/settings/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/settings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/smsnumbers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/smsnumbers/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/timeframes": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/timeframes/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/timeframes/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/vcon/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/video": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/video/conference": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/video/contacts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/vmailnag": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/vmailnag/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/voicemails/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/voicemails/{}/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/voicemails/{}/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/voicemails/{}/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/users/{}/voices": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/users/{}/voices/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/vcon/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /domains/{}/video": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/video/availableproducts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/video/hosts": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/video/products": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /domains/{}/video/subscription/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /fax/cover-page": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /fax/cover-page/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /fax/vendors": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /firebase": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /firebase/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /firebase/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /health": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /holidays/countries": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /holidays/regions": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /holidays/{}/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /holidays/{}/{}/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /images/{}": {
+      "status": 404,
+      "result": "present"
+    },
+    "GET /insight/active_alerts": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /insight/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/allowed_ips": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/config": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/config/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/core": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/firewall": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/firewall/stats": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/healthz": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ipaware/{}/statusz": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /jwt": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /license": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /license/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /meetings/register/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ndpconfig": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ndpconfig/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ndpconfig/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /networktests": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /networktests/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsconfig": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsconfig/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsconfig/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsconfig/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsconfig/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsstatus": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsstatus/metrics": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nmsstatus/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /nsconfigs": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-clients": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-clients/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-clients/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-tokens": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-tokens/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oauth-tokens/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oidc-providers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oidc-providers/public": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oidc-providers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oidc-providers/{}/logo": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /oidc/authorize": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /parks": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /parks/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phonenumbers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phonenumbers/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/list": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/models": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/models/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phones/models/{}/{}/overrides": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phones/models/{}/{}/overrides/raw": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phones/models/{}/{}/overrides/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phones/servers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/servers/readconfig": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/servers/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /phones/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /phones/{}/config": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /processes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /processes/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /processes/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /processes/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /provisioning-defaults/domains": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /provisioning-defaults/domains/{}/sites": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /push": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /push/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /quotas": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /quotas/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /quotas/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/archive-configs": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/archive-configs/{}/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/config": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/config/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/config/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/coreservers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/coreservers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/entries": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/entries/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/nmc-config": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/nmc-config/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/nmc-config/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers/{}/entries": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers/{}/entries/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/servers/{}/entries/sync/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /recordings/storage": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /rejectlog": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /rejectlog/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /resellers/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /resellers/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /resellers/{}/brands": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/active": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/{}/assets": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/{}/assets/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/brands/{}/{}/assets/{}/download": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/defaults": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/devices": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/devices/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/fax/cover-page": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/fax/cover-page/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/quotas": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/quotas/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/quotas/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/{}/exports": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/{}/exports/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/schedule/{}/exports/{}/download": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/settings": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /resellers/{}/settings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /restore": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /routecon": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /routecon/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /routeprofiles": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /routeprofiles/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /routes": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /routes/count": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /routes/{}/routecon": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/{}/exports": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/{}/exports/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /schedule/{}/exports/{}/download": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /scopes": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /scopes/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /scopes/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /scopes/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /servicecode": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /servicecode/count": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /servicecode/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /services/catalog": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /services/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /services/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /settings": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /settings/catalog": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /settings/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /sipflow": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /sipflow/download/{k}.txt": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /sipflow/events": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /sipflow/export": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /sipflow/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /smsblocks": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /smscarriers": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /smscarriers/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /smsnumbers": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /speech-words": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /speech-words/list": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /speech-words/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /speech-words/{}/file": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /speech-words/{}/play": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /subscriptions": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /subscriptions/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /templates/{}": {
+      "status": 400,
+      "result": "present"
+    },
+    "GET /translations/descriptions/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /translations/locales": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /translations/namespaces": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /translations/raw": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /translations/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /translations/{}/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions/registry": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions/registry/{}": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions/registry/{}/access": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions/registry/{}/versions": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /ui-extensions/settings": {
+      "status": 404,
+      "result": "absent"
+    },
+    "GET /version": {
+      "status": 200,
+      "result": "present"
+    },
+    "GET /video/resellers": {
+      "status": 400,
+      "result": "present"
+    }
+  }
+}

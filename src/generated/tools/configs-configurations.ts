@@ -5,39 +5,51 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_specific_configuration: ToolDefinition = {
   schema: {
     name: 'read_specific_configuration',
-    description: 'Read a Specific Configuration — [GET /configurations/{config-name}]',
+    description: 'Read configuration — Returns the value of one setting in the context you describe with the key parts. Configurations are the named settings the portal and the API look up at run time, such as `PORTAL_SHOW_SHARED_CONTACTS`. Each row sets one value for one combination of key parts: `reseller`, `domain`, `user`, `user-scope`, `admin-ui-account-type`, and `core-server`. A key part of `*` matches everything, so the row with every key part `*` is the system value.  Name every key part that applies, such as `reseller`, `domain`, and `user`. For each one you send, rows with that value or with `*` match, and the most specific row is returned. Each key part you leave out matches only `*`, so with none you get the system value. `include_wildcards=false` matches only the exact values you sent.  Every scope reads its own tiers and the system rows, never another tenant\\\'s:  - Super User and Super User Read Only read every row. - Reseller reads its territory\\\'s rows, rows of domains in its territory, and system rows. - Office Manager reads its own domain\\\'s rows and system rows. - Other scopes read the rows for their own domain, user, and scope, and system rows. Sending a `user-scope` other than your own returns `403`.  Values of secret-named settings are masked, as `/nmsconfig` masks them: a name containing a secret keyword (`password`, `key`, `token`, `secret`, and others), less the names in the `NsConfigurationMaskExempt` setting, has its value masked unless the value is shorter than `NsConfigurationMaskMinLength` (default `4`) or a plain switch (`yes`, `no`, `true`, `false`, `on`, `off`, `enabled`, `disabled`). A Super User can send `include-secrets=yes` to get them in clear; any other scope that sends it gets `403`.  The response is an array with at most one row. A setting with no matching row returns an empty array: its definition\\\'s `default` then applies (`GET /config-definitions/{config-name}`). — [GET /configurations/{config-name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "config-name"
+                      "description": "Name of the setting, such as `PORTAL_SHOW_SHARED_CONTACTS`. On a read, `*` matches any run of characters."
                 },
                 "domain": {
                       "type": "string",
-                      "description": "This is the domain this configuration applies to. Defaults to search for \"*\". Default: \"~\"",
-                      "default": "~"
+                      "description": "Domain to resolve for, such as `example.com`. Rows for this domain and rows with `*` match. Left out, only `*` matches."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "This is the reseller or territory this configuration applies to. Defaults to search for \"*\""
+                      "description": "Territory to resolve for, such as `example-reseller`. Rows for this territory and rows with `*` match. Left out, only `*` matches."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the user this configuration applies to. Defaults to search for \"*\". Default: \"~\"",
-                      "default": "~"
+                      "description": "User (extension) to resolve for, such as `1001`. Rows for this user and rows with `*` match. Left out, only `*` matches."
                 },
                 "core-server": {
                       "type": "string",
-                      "description": "This is the hostname this configuration applies to. Defaults to search for \"*\""
+                      "description": "Core server to resolve for, such as `core1.example.com`. Left out, only `*` matches."
                 },
                 "user-scope": {
                       "type": "string",
-                      "description": "This is the user scope this configuration applies to. Defaults to search for \"*\""
+                      "description": "User scope to resolve for, such as `Office Manager`. Scopes below Office Manager may send only their own. With `Office Manager` or `Basic User` and no `admin-ui-account-type`, the login type `Domain` or `Subscriber` is assumed."
                 },
                 "admin-ui-account-type": {
                       "type": "string",
-                      "description": "This is the admin UI account this configuration applies to. Defaults to search for \"*\""
+                      "description": "Login type to resolve for, such as `Domain` or `Subscriber`. Left out, only `*` matches."
+                },
+                "include_wildcards": {
+                      "type": "boolean",
+                      "description": "`false` matches only the exact key-part values you sent, without falling back to `*`. Defaults to `true`. Default: true",
+                      "default": true
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns secret-named values in clear. Super User only; any other scope that sends `yes` gets `403`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
                 }
           },
           "required": [
@@ -45,13 +57,19 @@ export const read_specific_configuration: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /configurations/{}',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['config-name'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const queryParamNames = ['domain', 'reseller', 'user', 'core-server', 'user-scope', 'admin-ui-account-type'];
+    const queryParamNames = ['domain', 'reseller', 'user', 'core-server', 'user-scope', 'admin-ui-account-type', 'include_wildcards', 'include-secrets'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -75,41 +93,42 @@ export const read_specific_configuration: ToolDefinition = {
 export const delete_configuration: ToolDefinition = {
   schema: {
     name: 'delete_configuration',
-    description: 'Delete a Configuration — [DELETE /configurations/{config-name}]',
+    description: 'Delete configuration — Deletes one configuration row. The name comes from the path; name the rest of the key in the body, as the list returns it. Each key part you leave out is `*`, except that below Reseller your own domain and user fill in, so a Super User\\\'s body-less delete removes the system row. After that the next less specific row, or the definition\\\'s `default`, applies.  Who can delete:  - Super User deletes any row, including system rows, for any name. - Reseller deletes rows for its own territory or a domain in it. With neither `reseller` nor `domain`, the row is stored for your territory. - Office Manager and Route Manager delete their own domain\\\'s rows. `domain` left out means your domain. - Other scopes with delete rights delete only their own user\\\'s rows in their own domain. `user` and `domain` left out mean yours. - Super User Read Only, Route Manager Reseller, Call Center Supervisor, Site Manager, and Office Manager Read-Only are read-only and get `403`.  Below Super User, the setting must have a definition whose `config-def-allow-reseller-access` is `yes`. A key outside your tier returns `403`.  A key that matches no row returns `404`. `DELETE /configurations` without a name answers `405`. The delete is published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted. Send `domain`, `reseller`, and `user` in the body: in the query string they\\\'re ignored. — [DELETE /configurations/{config-name}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "config-name"
-                },
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
-                },
-                "admin-ui-account-type": {
-                      "type": "string",
-                      "description": "Default: \"*\"",
-                      "default": "*"
+                      "description": "Name of the setting, such as `PORTAL_SHOW_SHARED_CONTACTS`. `*` returns `400` here."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "Territory the row applies to, or `*` for every territory. Default: \"*\"",
+                      "default": "*"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the row applies to, or `*` for every domain. Default: \"*\"",
                       "default": "*"
                 },
                 "user": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "User (extension) the row applies to, or `*` for every user. Default: \"*\"",
                       "default": "*"
                 },
                 "user-scope": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "User scope the row applies to, such as `Office Manager`, or `*` for every scope. Default: \"*\"",
+                      "default": "*"
+                },
+                "admin-ui-account-type": {
+                      "type": "string",
+                      "description": "Login type the row applies to, such as `Domain` or `Subscriber`, or `*` for every login type. Default: \"*\"",
                       "default": "*"
                 },
                 "core-server": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "Hostname of the core server the row applies to, such as `core1.example.com`, or `*` for every server. Default: \"*\"",
                       "default": "*"
                 }
           },
@@ -118,13 +137,19 @@ export const delete_configuration: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /configurations/{}',
+    method: 'DELETE',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['config-name'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['domain', 'admin-ui-account-type', 'reseller', 'user', 'user-scope', 'core-server'];
+    const bodyParamNames = ['reseller', 'domain', 'user', 'user-scope', 'admin-ui-account-type', 'core-server'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -148,16 +173,89 @@ export const delete_configuration: ToolDefinition = {
 export const read_all_configurations: ToolDefinition = {
   schema: {
     name: 'read_all_configurations',
-    description: 'Read all Configurations — [GET /configurations]',
+    description: 'List configurations — Lists configuration rows. Configurations are the named settings the portal and the API look up at run time, such as `PORTAL_SHOW_SHARED_CONTACTS`. Each row sets one value for one combination of key parts: `reseller`, `domain`, `user`, `user-scope`, `admin-ui-account-type`, and `core-server`. A key part of `*` matches everything, so the row with every key part `*` is the system value.  Every scope reads its own tiers and the system rows, never another tenant\\\'s:  - Super User and Super User Read Only read every row. - Reseller reads its territory\\\'s rows, rows of domains in its territory, and system rows. - Office Manager reads its own domain\\\'s rows and system rows. - Other scopes read the rows for their own domain, user, and scope, and system rows. Sending a `user-scope` other than your own returns `403`.  Values of secret-named settings are masked, as `/nmsconfig` masks them: a name containing a secret keyword (`password`, `key`, `token`, `secret`, and others), less the names in the `NsConfigurationMaskExempt` setting, has its value masked unless the value is shorter than `NsConfigurationMaskMinLength` (default `4`) or a plain switch (`yes`, `no`, `true`, `false`, `on`, `off`, `enabled`, `disabled`). A Super User can send `include-secrets=yes` to get them in clear; any other scope that sends it gets `403`.  How the filters work:  - `config-name` takes one name, a pattern with `*`, or a comma-separated list. It defaults to `*`. - Each key part you send matches that value. Each key part you leave out matches only `*`, so with no filters the list holds the system rows. - For one exact `config-name`, rows with `*` in a key part you sent match too, and the most specific row comes first. That row is the value that applies in that context. `include_wildcards` turns this on or off. - The result has one row per config name.  Rows are paged with `start` and `limit`, which defaults to `100`. No match returns an empty array. `GET /configurations/count` counts differently: a key part it is not sent matches every value. To see what each setting means, call `GET /config-definitions`. — [GET /configurations]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "config-name": {
+                      "type": "string",
+                      "description": "Name to return, such as `PORTAL_SHOW_SHARED_CONTACTS`. `*` matches any run of characters (`PORTAL_CONTACTS_*`), and a comma-separated list returns each name. Defaults to `*`. Default: \"*\"",
+                      "default": "*"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Returns rows for this domain, such as `example.com`. Left out, only rows whose `domain` is `*` match."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Returns rows for this territory, such as `example-reseller`. Left out, only rows whose `reseller` is `*` match."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Returns rows for this user (extension), such as `1001`. Left out, only rows whose `user` is `*` match."
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Returns rows for this user scope, such as `Office Manager`. Scopes below Office Manager may send only their own. Left out, only rows whose `user-scope` is `*` match."
+                },
+                "admin-ui-account-type": {
+                      "type": "string",
+                      "description": "Returns rows for this login type, such as `Domain` or `Subscriber`. Left out, only rows whose `admin-ui-account-type` is `*` match."
+                },
+                "core-server": {
+                      "type": "string",
+                      "description": "Returns rows for this core server, such as `core1.example.com`. Left out, only rows whose `core-server` is `*` match."
+                },
+                "include_wildcards": {
+                      "type": "boolean",
+                      "description": "`true` also matches rows with `*` in each key part you sent. Defaults to `true` for one exact `config-name` and `false` for a pattern or list."
+                },
+                "filter": {
+                      "type": "string",
+                      "description": "Returns rows where the name, value, `reseller`, `domain`, `user-scope`, `user`, or `admin-ui-account-type` contains this text. With a `*` or list `config-name`, replaces the name filter."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most rows to return. Defaults to `100`. Default: 100",
+                      "default": 100
+                },
+                "sort": {
+                      "type": "string",
+                      "description": "Sort order: comma-separated column names, each optionally followed by `asc` or `desc`. Columns: `config_name`, `config_value`, `description`, `reseller`, `domain`, `user`, `role`, `login_type`, and `hostname`. Anything else returns `400`. With no `sort`, the most specific rows come first."
+                },
+                "include-secrets": {
+                      "type": "string",
+                      "description": "`yes` returns secret-named values in clear. Super User only; any other scope that sends `yes` gets `403`. Defaults to `no`. Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ],
+                      "default": "no"
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /configurations',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['config-name', 'domain', 'reseller', 'user', 'user-scope', 'admin-ui-account-type', 'core-server', 'include_wildcards', 'filter', 'start', 'limit', 'sort', 'include-secrets'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/configurations',
+      queryParams,
     });
 
     return {
@@ -172,49 +270,50 @@ export const read_all_configurations: ToolDefinition = {
 export const create_configuration: ToolDefinition = {
   schema: {
     name: 'create_configuration',
-    description: 'Create a Configuration — [POST /configurations]',
+    description: 'Create configuration — Creates a configuration row: one value for one combination of key parts. Each key part you leave out is `*`, except that below Reseller your own domain and user fill in. Configurations are the named settings the portal and the API look up at run time, such as `PORTAL_SHOW_SHARED_CONTACTS`. Each row sets one value for one combination of key parts: `reseller`, `domain`, `user`, `user-scope`, `admin-ui-account-type`, and `core-server`. A key part of `*` matches everything, so the row with every key part `*` is the system value.  Who can write:  - Super User writes any row, including system rows, for any name. - Reseller writes rows for its own territory or a domain in it. With neither `reseller` nor `domain`, the row is stored for your territory. - Office Manager and Route Manager write their own domain\\\'s rows. `domain` left out means your domain. - Other scopes with write rights write only their own user\\\'s rows in their own domain. `user` and `domain` left out mean yours. - Super User Read Only, Route Manager Reseller, Call Center Supervisor, Site Manager, and Office Manager Read-Only are read-only and get `403`.  Below Super User, the setting must have a definition whose `config-def-allow-reseller-access` is `yes`. A key outside your tier returns `403`.  `config-name` takes letters, digits, and `@ . - _ \\\'`; `*` returns `400`. `config-value` is stored as a string and is not checked against the definition\\\'s `data-type`. A row with the same key returns `409`; change it with `PUT /configurations/{config-name}`. A masked value for a secret-named setting returns `400`: send the real value.  The row is checked, then published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted, not yet stored. Send `domain`, `reseller`, and `user` in the body: in the query string they\\\'re ignored. — [POST /configurations]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "config-name": {
                       "type": "string",
-                      "description": "This is the name of the configuration"
+                      "description": "Name of the setting, such as `PORTAL_SHOW_SHARED_CONTACTS`: letters, digits, and `@ . - _ '`. No `*`"
                 },
                 "config-value": {
                       "type": "string",
-                      "description": "This is the configuration value. Can be a string, boolean, or integer"
-                },
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. ~ and * can be used alone in special cases to mean My Domain (~) and All Domains (\\*)."
+                      "description": "Value of the setting. Stored and returned as a string; send flags as `yes` or `no`. Not checked against the definition's `data-type`. For a secret-named setting, the masked value read back and sent unchanged keeps the stored value; a mask sent for a new row returns `400`"
                 },
                 "description": {
                       "type": "string",
-                      "description": "This describes the configuration"
-                },
-                "admin-ui-account-type": {
-                      "type": "string",
-                      "description": "Default: \"*\"",
-                      "default": "*"
+                      "description": "Free-text note about this row"
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "Territory the row applies to, or `*` for every territory. Default: \"*\"",
+                      "default": "*"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the row applies to, or `*` for every domain. Default: \"*\"",
                       "default": "*"
                 },
                 "user": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "User (extension) the row applies to, or `*` for every user. Default: \"*\"",
                       "default": "*"
                 },
                 "user-scope": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "User scope the row applies to, such as `Office Manager`, or `*` for every scope. Default: \"*\"",
+                      "default": "*"
+                },
+                "admin-ui-account-type": {
+                      "type": "string",
+                      "description": "Login type the row applies to, such as `Domain` or `Subscriber`, or `*` for every login type. Default: \"*\"",
                       "default": "*"
                 },
                 "core-server": {
                       "type": "string",
-                      "description": "Default: \"*\"",
+                      "description": "Hostname of the core server the row applies to, such as `core1.example.com`, or `*` for every server. Default: \"*\"",
                       "default": "*"
                 }
           },
@@ -224,8 +323,14 @@ export const create_configuration: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /configurations',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['config-name', 'config-value', 'domain', 'description', 'admin-ui-account-type', 'reseller', 'user', 'user-scope', 'core-server'];
+    const bodyParamNames = ['config-name', 'config-value', 'description', 'reseller', 'domain', 'user', 'user-scope', 'admin-ui-account-type', 'core-server'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -300,6 +405,12 @@ export const update_configuration: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /configurations',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const bodyParamNames = ['config-name', 'config-value', 'domain', 'description', 'admin-ui-account-type', 'reseller', 'user', 'user-scope', 'core-server'];
     const body: Record<string, unknown> = {};
@@ -324,49 +435,54 @@ export const update_configuration: ToolDefinition = {
 export const get_configurations_count: ToolDefinition = {
   schema: {
     name: 'get_configurations_count',
-    description: 'Count Configurations — [GET /configurations/count]',
+    description: 'Count configurations — Counts configuration rows that match the filters. Configurations are the named settings the portal and the API look up at run time, such as `PORTAL_SHOW_SHARED_CONTACTS`. Each row sets one value for one combination of key parts: `reseller`, `domain`, `user`, `user-scope`, `admin-ui-account-type`, and `core-server`. A key part of `*` matches everything, so the row with every key part `*` is the system value.  The count is confined like `GET /configurations`: Super User and Super User Read Only count every row, Reseller its territory\\\'s rows, its domains\\\' rows, and system rows, Office Manager its own domain\\\'s rows and system rows, and other scopes the rows for their own domain, user, and scope.  Unlike the list, a key part you leave out matches every value, and rows are not collapsed to one per name. With no filters this counts every row you can read, at every tier. `config-name` takes one name, a pattern with `*`, or a comma-separated list, and defaults to `*`. A `reseller` or `domain` that does not exist returns `403`. — [GET /configurations/count]',
     inputSchema: {
           "type": "object",
           "properties": {
-                "hostname": {
-                      "type": "string",
-                      "description": "Identify UI Configuration to count by its hostname"
-                },
                 "reseller": {
                       "type": "string",
-                      "description": "Identify UI Configuration to count by its reseller"
+                      "description": "Counts rows for this territory, such as `example-reseller`. A territory that does not exist returns `403`."
                 },
                 "domain": {
                       "type": "string",
-                      "description": "Identify UI Configuration to count by its domain. Default: \"~\"",
-                      "default": "~"
+                      "description": "Counts rows for this domain, such as `example.com`. A domain that does not exist returns `403`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "Identify UI Configuration to count by its user. Default: \"~\"",
-                      "default": "~"
-                },
-                "role": {
-                      "type": "string",
-                      "description": "Identify UI Configuration to count by its role"
-                },
-                "login_type": {
-                      "type": "string",
-                      "description": "Identify UI Configuration to count by its login type"
-                },
-                "config_name": {
-                      "type": "string",
-                      "description": "Identify UI Configuration to count by its name"
+                      "description": "Counts rows for this user (extension), such as `1001`."
                 },
                 "include_wildcards": {
                       "type": "boolean",
-                      "description": "Set to true to also include wildcard (*) matches in the query results"
+                      "description": "`true` also counts rows with `*` in each key part you sent. Defaults to `true` for one exact `config-name` and `false` otherwise."
+                },
+                "config-name": {
+                      "type": "string",
+                      "description": "Name to count, such as `PORTAL_SHOW_SHARED_CONTACTS`. `*` matches any run of characters, and a comma-separated list counts each name. Defaults to `*`. Default: \"*\"",
+                      "default": "*"
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Counts rows for this user scope, such as `Office Manager`. Scopes below Office Manager may send only their own."
+                },
+                "admin-ui-account-type": {
+                      "type": "string",
+                      "description": "Counts rows for this login type, such as `Domain` or `Subscriber`."
+                },
+                "core-server": {
+                      "type": "string",
+                      "description": "Counts rows for this core server, such as `core1.example.com`."
                 }
           }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /configurations/count',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const queryParamNames = ['hostname', 'reseller', 'domain', 'user', 'role', 'login_type', 'config_name', 'include_wildcards'];
+    const queryParamNames = ['reseller', 'domain', 'user', 'include_wildcards', 'config-name', 'user-scope', 'admin-ui-account-type', 'core-server'];
     const queryParams: Record<string, unknown> = {};
     for (const name of queryParamNames) {
       if (args[name] !== undefined) queryParams[name] = args[name];
@@ -375,6 +491,95 @@ export const get_configurations_count: ToolDefinition = {
       method: 'GET',
       pathTemplate: '/configurations/count',
       queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_configuration_2: ToolDefinition = {
+  schema: {
+    name: 'update_configuration_2',
+    description: 'Update configuration — Changes the value of an existing configuration row. The name comes from the path; name the rest of the key in the body, as the list returns it. Each key part you leave out is `*`, except that below Reseller your own domain and user fill in. A key that matches no row returns `404`; to add a row, call `POST /configurations`. `PUT` /configurations` without a name answers `405`.  Who can write:  - Super User writes any row, including system rows, for any name. - Reseller writes rows for its own territory or a domain in it. With neither `reseller` nor `domain`, the row is stored for your territory. - Office Manager and Route Manager write their own domain\\\'s rows. `domain` left out means your domain. - Other scopes with write rights write only their own user\\\'s rows in their own domain. `user` and `domain` left out mean yours. - Super User Read Only, Route Manager Reseller, Call Center Supervisor, Site Manager, and Office Manager Read-Only are read-only and get `403`.  Below Super User, the setting must have a definition whose `config-def-allow-reseller-access` is `yes`. A key outside your tier returns `403`.  For a secret-named setting, the masked value read back and sent unchanged keeps the stored value. The change is checked, then published over the service bus (SBUS) and applied on every server shortly after, so `202` means accepted, not yet stored. Send `domain`, `reseller`, and `user` in the body: in the query string they\\\'re ignored. — [PUT /configurations/{config-name}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "config-name": {
+                      "type": "string",
+                      "description": "Name of the setting, such as `PORTAL_SHOW_SHARED_CONTACTS`. `*` returns `400` here."
+                },
+                "config-value": {
+                      "type": "string",
+                      "description": "Value of the setting. Stored and returned as a string; send flags as `yes` or `no`. Not checked against the definition's `data-type`. For a secret-named setting, the masked value read back and sent unchanged keeps the stored value; a mask sent for a new row returns `400`"
+                },
+                "description": {
+                      "type": "string",
+                      "description": "Free-text note about this row"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Territory the row applies to, or `*` for every territory. Default: \"*\"",
+                      "default": "*"
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain the row applies to, or `*` for every domain. Default: \"*\"",
+                      "default": "*"
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User (extension) the row applies to, or `*` for every user. Default: \"*\"",
+                      "default": "*"
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "User scope the row applies to, such as `Office Manager`, or `*` for every scope. Default: \"*\"",
+                      "default": "*"
+                },
+                "admin-ui-account-type": {
+                      "type": "string",
+                      "description": "Login type the row applies to, such as `Domain` or `Subscriber`, or `*` for every login type. Default: \"*\"",
+                      "default": "*"
+                },
+                "core-server": {
+                      "type": "string",
+                      "description": "Hostname of the core server the row applies to, such as `core1.example.com`, or `*` for every server. Default: \"*\"",
+                      "default": "*"
+                }
+          },
+          "required": [
+                "config-name",
+                "config-value"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /configurations/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['config-name'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['config-value', 'description', 'reseller', 'domain', 'user', 'user-scope', 'admin-ui-account-type', 'core-server'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'PUT',
+      pathTemplate: '/configurations/{config-name}',
+      pathParams,
+      body,
     });
 
     return {

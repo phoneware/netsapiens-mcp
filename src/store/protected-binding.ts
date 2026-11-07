@@ -1,0 +1,138 @@
+import type { SubjectDescriptor } from './subject-descriptor.js';
+import { createHash } from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
+import { canonicalJson } from '../cutover/dsse-verifier-core.mjs';
+import { CutoverFenceError, CutoverRefusedError } from './errors.js';
+
+// Private provenance for a database handle created by the protected factory.
+// Module-private state only: the public façade and the bundle entry never
+// export these functions. Each handle runs exactly one protected operation.
+
+export type ProtectedOperation = 'inspect' | 'adopt' | 'activate' | 'status' | 'verifyActive';
+
+export interface ProtectedIdentityFields {
+  readonly namespace: string;
+  readonly expectedEpoch: number;
+  readonly migrationRunId: string;
+  readonly codeSha: string;
+  readonly codeArtifact: string;
+  readonly packageIntegrity: string;
+  readonly protocolDigest: string;
+}
+
+export interface ProtectedBinding extends ProtectedIdentityFields {
+  readonly profile: 'production' | 'emulator';
+  // The fixed profile row's project and database. The core's manifest check compares both (spec §2).
+  readonly project: string;
+  readonly database: string;
+  readonly assemblyDigest: string;
+  readonly indexSchemaDigest: string;
+  readonly indexPolicyDigest: string;
+  readonly indexSchema: unknown;
+  readonly key: Uint8Array;
+  readonly FieldPath: unknown;
+  readonly authorized: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> };
+  readonly adminAccess: { readonly getAccessToken: () => Promise<string>; readonly fetchFn: typeof fetch } | null;
+  readonly invocation: { readonly runId: string; readonly runAttempt: string } | null;
+  // SHA-256 of the exact oidc.jwt bytes that STS accepted for this handle.
+  // Production only; null for the emulator, which has no credential file.
+  readonly credentialDigest: string | null;
+  // SHA-256 of the Admin read token the STS exchange produced. Fresh index
+  // observations must be read with exactly this token. Null for the emulator.
+  readonly adminTokenDigest: string | null;
+  // The approval's verified subject descriptor (null or flat), bound module-private from the
+  // predicate. Never taken from the request, options or index schema.
+  readonly subjectDescriptor: SubjectDescriptor | null;
+}
+
+const CREDENTIAL_PATH = '/run/cutover/oidc.jwt';
+const MAX_CREDENTIAL_BYTES = 64 * 1024;
+const bindings = new WeakMap<object, ProtectedBinding>();
+const consumed = new WeakSet<object>();
+
+function deepFreeze<T>(value: T): T {
+  // Typed-array views cannot be frozen in Node. The retained authority key is kept in a closure and exposed
+  // only through fresh copies; other byte views are treated as leaves.
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value) && !ArrayBuffer.isView(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
+}
+
+export function bindProtectedContext(db: object, binding: ProtectedBinding): void {
+  if (bindings.has(db)) {
+    throw new CutoverFenceError('Protected migration database handle is already bound');
+  }
+  // Dedicated ArrayBuffers prevent a caller from reaching the retained key through a pooled Buffer's `.buffer`.
+  const privateKey = Uint8Array.from(binding.key);
+  const stored = { ...binding, get key() { return Uint8Array.from(privateKey); } };
+  bindings.set(db, deepFreeze(stored));
+}
+
+// Re-reads the mounted credential and requires the exact bytes STS accepted.
+// Called at every protected operation entry and at each mutating transaction
+// start. A rotated or swapped file refuses; decoded claims are never authority.
+export function assertCredentialUnchanged(db: object): void {
+  const binding = bindings.get(db);
+  if (!binding) throw new CutoverRefusedError('Protected migration context required: database handle is not bound');
+  if (binding.credentialDigest === null) return;
+  const stat = lstatSync(CREDENTIAL_PATH);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CREDENTIAL_BYTES) {
+    throw new CutoverRefusedError('Credential token file is not a bounded regular file');
+  }
+  const digest = createHash('sha256').update(readFileSync(CREDENTIAL_PATH)).digest('hex');
+  if (digest !== binding.credentialDigest) {
+    throw new CutoverRefusedError('Credential token bytes changed since the authenticated exchange');
+  }
+}
+
+interface ContextFields extends ProtectedIdentityFields {
+  readonly db: object;
+  readonly FieldPath: unknown;
+  readonly key: Uint8Array;
+}
+
+// Refuses before any Firestore data access unless the caller's context is the
+// one this handle was authenticated for, the operation matches, the options
+// equal the authorized options exactly, and the credential bytes are unchanged.
+// Marks the handle consumed.
+export function assertProtectedContext(
+  context: ContextFields,
+  request: { readonly operation: ProtectedOperation; readonly options: Record<string, unknown> },
+): ProtectedBinding {
+  const binding = bindings.get(context.db);
+  if (!binding) {
+    throw new CutoverRefusedError('Protected migration context required: database handle is not bound');
+  }
+  if (consumed.has(context.db)) {
+    throw new CutoverRefusedError('Protected migration database handle was already used for an operation');
+  }
+  if (binding.authorized.operation !== request.operation) {
+    throw new CutoverRefusedError('Protected migration operation is not the authorized operation');
+  }
+  if (canonicalJson(request.options) !== canonicalJson(binding.authorized.options)) {
+    throw new CutoverRefusedError('Protected migration options do not match the authorized options');
+  }
+  const mismatch = (
+    binding.namespace !== context.namespace ||
+    binding.expectedEpoch !== context.expectedEpoch ||
+    binding.migrationRunId !== context.migrationRunId ||
+    binding.codeSha !== context.codeSha ||
+    binding.codeArtifact !== context.codeArtifact ||
+    binding.packageIntegrity !== context.packageIntegrity ||
+    binding.protocolDigest !== context.protocolDigest ||
+    binding.FieldPath !== context.FieldPath ||
+    !Buffer.from(context.key).equals(Buffer.from(binding.key))
+  );
+  if (mismatch) {
+    throw new CutoverRefusedError('Protected migration context does not match the authenticated binding');
+  }
+  assertCredentialUnchanged(context.db);
+  consumed.add(context.db);
+  return binding;
+}
+
+export function getProtectedBinding(db: object): ProtectedBinding | undefined {
+  return bindings.get(db);
+}

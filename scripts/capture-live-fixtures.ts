@@ -5,12 +5,23 @@ import { NetSapiensClient } from '../src/netsapiens-client.js';
 import { CURATED_CATALOG } from '../src/tools/curated/catalog.js';
 import { ROLE_HIERARCHY, type UserRole } from '../src/auth/roles.js';
 
-const PROOF_PATH = `${process.env.HOME}/.config/phoneware/phonewarelab-mcp-proof.json`;
-const NS_CLIENT_PATH = `${process.env.HOME}/.config/phoneware/ns-oauth-client.json`;
-const NS_URL = 'https://edge.phoneware.cloud';
+const args = process.argv.slice(2);
+const readArg = (name: string): string | undefined => {
+ const i = args.indexOf(name);
+ return i < 0 ? undefined : args[i + 1];
+};
 
-const proof = JSON.parse(readFileSync(PROOF_PATH, 'utf8'));
-const nsClient = JSON.parse(readFileSync(NS_CLIENT_PATH, 'utf8'));
+const NS_URL = readArg('--api-url');
+const credentialsPath = readArg('--credentials');
+
+if (!NS_URL || !credentialsPath) {
+ console.error('Usage: tsx scripts/capture-live-fixtures.ts --api-url <url> --credentials <file>');
+ process.exit(1);
+}
+
+const credsRaw = JSON.parse(readFileSync(resolve(credentialsPath), 'utf8'));
+const proof = credsRaw.proof ?? credsRaw;
+const nsClient = credsRaw.nsClient ?? credsRaw.client ?? credsRaw;
 
 const FIXTURES_DIR = resolve('src/__tests__/fixtures/live');
 mkdirSync(FIXTURES_DIR, { recursive: true });

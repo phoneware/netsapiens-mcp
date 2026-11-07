@@ -5,32 +5,39 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_template: ToolDefinition = {
   schema: {
     name: 'read_template',
-    description: 'Read Template — Read a template file — [GET /templates/{filename}]',
+    description: 'Read template — Returns the details of one stored template, such as an HTML email template or the Word fax cover letter: who it applies to, its media type and size, and a link that downloads the file. The response is JSON. The template file itself is not in it; download it from `file-access-url`.  Requires Super User, Super User Read Only, or Reseller scope. A Super User and a Super User Read Only can read every template. A Reseller can read templates stored for its own reseller or for a domain in it, and templates that apply to every reseller. Other scopes get `403`.  A template is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly here: a template stored for every domain is not found when you name one domain. Name the reseller, domain, and server in the query string to read a copy stored for them.  When the platform sends an email, it uses the most specific copy instead: a copy for the sending server first, then one for the reseller, then one for the domain, falling back to `*` at each level. To override a template for one domain, store it with both `reseller` and `domain` set. — [GET /templates/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "Name the template is stored under, such as `welcome_email (PHP)`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly. Email templates use the fixed names the platform looks up, such as `welcome_email (PHP)`, `password_reset_email (PHP)`, or `email_vmail_link (PHP)`; the fax cover letter is `fax_cover_letter.docx`. A language copy adds `_` and the user's language code before ` (PHP)`."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the template file applies to. Defaults to \"*\""
+                      "description": "Reseller the template is stored for. Omit it, or send `*`, for a template that applies to every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
+                      "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the template file applies to. Defaults to \"*\". Default: \"~\"",
-                      "default": "~"
+                      "description": "Domain the template is stored for, such as `example.com`. Omit it, or send `*`, for a template that applies to every domain. A Reseller token can name only a domain in its own reseller."
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the template file applies to. Defaults to \"*\""
+                      "description": "Hostname of the server the template is stored for. Omit it, or send `*`, for a template that applies to every server. Default: \"*\"",
+                      "default": "*"
                 }
           },
           "required": [
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /templates/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -62,48 +69,53 @@ export const read_template: ToolDefinition = {
 export const create_template_base64: ToolDefinition = {
   schema: {
     name: 'create_template_base64',
-    description: 'Create Template from Upload (JSON + Base64 File) — Create a template file — [POST /templates/{filename}]',
+    description: 'Create template — Stores a new template under the name in the path, for a reseller, a domain, a server, or all of them. Send the file as a multipart part, or as base64 in a JSON body.  Requires Super User or Reseller scope. A Reseller can manage templates stored for its own reseller or for a domain in it. A template that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  A template is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly here: a template stored for every domain is not found when you name one domain. If a template already exists under this name for the same reseller, domain, and server, the request returns `400`; replace it with `PUT /templates/{filename}`.  The file must be an HTML template, a plain-text template, or a Word `.docx` document. The file\\\'s contents are checked, and the type detected from them is the one stored: `text/html`, `text/plain`, `text/x-php` for one whose contents read as PHP, such as a file that begins with `<?php`, or `application/vnd.openxmlformats-officedocument.word` for a `.docx`. Any other file, such as an image, SVG, JSON, a zip, or an executable, returns `400`. A declared media type is optional; when one is sent, it must name the same kind as the contents. The file can be at most 1 MB (1,048,576 bytes); a larger one returns `413`. Store images with `/images`.  Send `reseller` and `domain` in the body; query-string values for them are ignored. The request returns `202`: the template is accepted and stored shortly after. — [POST /templates/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "Name the template is stored under, such as `welcome_email (PHP)`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly. Email templates use the fixed names the platform looks up, such as `welcome_email (PHP)`, `password_reset_email (PHP)`, or `email_vmail_link (PHP)`; the fax cover letter is `fax_cover_letter.docx`. A language copy adds `_` and the user's language code before ` (PHP)`."
+                },
+                "file-base64": {
+                      "type": "string",
+                      "description": "The template file as standard base64, without a `data:` prefix. The decoded file must be HTML, plain text, or a Word `.docx`, and at most 1 MB (1,048,576 bytes). A value that is not valid base64, that decodes to an empty file, or that decodes to any other kind of file returns `400`; a larger file returns `413`."
+                },
+                "file-mime-type": {
+                      "type": "string",
+                      "description": "Media type of the template. Optional: omit it, or send `application/octet-stream`, and the type is taken from the file's contents. When sent, it must be `text/html`, `text/plain`, a PHP text type such as `text/php`, or, for a `.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/zip`, and it must name the same kind as the contents; otherwise the request returns `400`. The type detected from the contents is the one stored."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the template file applies to. Default: \"*\"",
+                      "description": "Reseller the template applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the template file applies to. Default: \"*\"",
+                      "description": "Domain the template applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the template file applies to. Default: \"*\"",
+                      "description": "Hostname of the server the template applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
                       "default": "*"
                 },
                 "description": {
                       "type": "string",
-                      "description": "A description of the template file to indicate what it is used for"
-                },
-                "filetype": {
-                      "type": "string",
-                      "description": "Encoding (content type) of the template file"
-                },
-                "base64_file": {
-                      "type": "string",
-                      "description": "A base64 encoded string formatted without line breaks or spaces."
+                      "description": "What the template is used for. Optional; stored as sent."
                 }
           },
           "required": [
                 "filename",
-                "filetype",
-                "base64_file"
+                "file-base64"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /templates/{}',
+    method: 'POST',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -111,7 +123,7 @@ export const create_template_base64: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['reseller', 'domain', 'server', 'description', 'filetype', 'base64_file'];
+    const bodyParamNames = ['file-base64', 'file-mime-type', 'reseller', 'domain', 'server', 'description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -135,48 +147,53 @@ export const create_template_base64: ToolDefinition = {
 export const update_template_base64: ToolDefinition = {
   schema: {
     name: 'update_template_base64',
-    description: 'Update Template from Upload (JSON + Base64 File) — Update a template file — [PUT /templates/{filename}]',
+    description: 'Update template — Replaces the file of a template already stored under the name in the path. Send the new file as base64 in a JSON body, or as a multipart part.  Requires Super User or Reseller scope. A Reseller can manage templates stored for its own reseller or for a domain in it. A template that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  A template is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly here: a template stored for every domain is not found when you name one domain. Name the same reseller, domain, and server the template was created with. Every update must carry a file; `description` cannot be changed on its own. An image stored under the same name cannot be replaced here.  The file must be an HTML template, a plain-text template, or a Word `.docx` document. The file\\\'s contents are checked, and the type detected from them is the one stored: `text/html`, `text/plain`, `text/x-php` for one whose contents read as PHP, such as a file that begins with `<?php`, or `application/vnd.openxmlformats-officedocument.word` for a `.docx`. Any other file, such as an image, SVG, JSON, a zip, or an executable, returns `400`. A declared media type is optional; when one is sent, it must name the same kind as the contents. The file can be at most 1 MB (1,048,576 bytes); a larger one returns `413`.  Send a file part with `Content-Type: multipart/form-data`; only a multipart request is read as an upload. Send a JSON body with `Content-Type: application/json`. Send `reseller` and `domain` in the body; query-string values for them are ignored. The request returns `202`: the change is accepted and applied shortly after. — [PUT /templates/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "Name the template is stored under, such as `welcome_email (PHP)`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly. Email templates use the fixed names the platform looks up, such as `welcome_email (PHP)`, `password_reset_email (PHP)`, or `email_vmail_link (PHP)`; the fax cover letter is `fax_cover_letter.docx`. A language copy adds `_` and the user's language code before ` (PHP)`."
+                },
+                "file-base64": {
+                      "type": "string",
+                      "description": "The template file as standard base64, without a `data:` prefix. The decoded file must be HTML, plain text, or a Word `.docx`, and at most 1 MB (1,048,576 bytes). A value that is not valid base64, that decodes to an empty file, or that decodes to any other kind of file returns `400`; a larger file returns `413`."
+                },
+                "file-mime-type": {
+                      "type": "string",
+                      "description": "Media type of the template. Optional: omit it, or send `application/octet-stream`, and the type is taken from the file's contents. When sent, it must be `text/html`, `text/plain`, a PHP text type such as `text/php`, or, for a `.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/zip`, and it must name the same kind as the contents; otherwise the request returns `400`. The type detected from the contents is the one stored."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the template file applies to. Default: \"*\"",
+                      "description": "Reseller the template applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the template file applies to. Default: \"*\"",
+                      "description": "Domain the template applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the template file applies to. Default: \"*\"",
+                      "description": "Hostname of the server the template applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
                       "default": "*"
                 },
                 "description": {
                       "type": "string",
-                      "description": "A description of the template file to indicate what it is used for"
-                },
-                "filetype": {
-                      "type": "string",
-                      "description": "Encoding (content type) of the template file"
-                },
-                "base64_file": {
-                      "type": "string",
-                      "description": "A base64 encoded string formatted without line breaks or spaces."
+                      "description": "What the template is used for. Optional; stored as sent."
                 }
           },
           "required": [
                 "filename",
-                "filetype",
-                "base64_file"
+                "file-base64"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'PUT /templates/{}',
+    method: 'PUT',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];
@@ -184,7 +201,7 @@ export const update_template_base64: ToolDefinition = {
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['reseller', 'domain', 'server', 'description', 'filetype', 'base64_file'];
+    const bodyParamNames = ['file-base64', 'file-mime-type', 'reseller', 'domain', 'server', 'description'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -208,27 +225,27 @@ export const update_template_base64: ToolDefinition = {
 export const delete_template: ToolDefinition = {
   schema: {
     name: 'delete_template',
-    description: 'Delete a Template — Delete a template file — [DELETE /templates/{filename}]',
+    description: 'Delete template — Deletes one stored template.  Requires Super User or Reseller scope. A Reseller can manage templates stored for its own reseller or for a domain in it. A template that applies to every reseller and every domain (`reseller` and `domain` both `*`) is platform-wide, and only a Super User can create, change, or delete it. Other scopes get `403`.  A template is stored per reseller, domain, and server, and each defaults to `*`, meaning all. The values are matched exactly here: a template stored for every domain is not found when you name one domain. Name the reseller and domain in the request body; query-string values for them are ignored. With no body, the request targets the platform-wide template, which only a Super User can delete. An image stored under the same name is not deleted here.  When a reseller or domain copy is deleted, emails fall back to the next most specific copy, usually the platform-wide one. The request returns `202`: the template is removed shortly after. — [DELETE /templates/{filename}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "filename": {
                       "type": "string",
-                      "description": "filename"
+                      "description": "Name the template is stored under, such as `welcome_email (PHP)`. Letters, digits, `-`, `.`, and `_` only. The name is matched exactly. Email templates use the fixed names the platform looks up, such as `welcome_email (PHP)`, `password_reset_email (PHP)`, or `email_vmail_link (PHP)`; the fax cover letter is `fax_cover_letter.docx`. A language copy adds `_` and the user's language code before ` (PHP)`."
                 },
                 "reseller": {
                       "type": "string",
-                      "description": "The reseller or territory the template file applies to. Default: \"*\"",
+                      "description": "Reseller the template applies to. `*`, the default, means every reseller. A Reseller token can name only its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "domain": {
                       "type": "string",
-                      "description": "The domain the template file applies to. Default: \"*\"",
+                      "description": "Domain the template applies to, such as `example.com`. `*`, the default, means every domain in the reseller. A Reseller token can name only a domain in its own reseller. Default: \"*\"",
                       "default": "*"
                 },
                 "server": {
                       "type": "string",
-                      "description": "The server the template file applies to. Default: \"*\"",
+                      "description": "Hostname of the server the template applies to, such as `core1.example.com`. `*`, the default, means every server. Default: \"*\"",
                       "default": "*"
                 }
           },
@@ -236,6 +253,12 @@ export const delete_template: ToolDefinition = {
                 "filename"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /templates/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['filename'];

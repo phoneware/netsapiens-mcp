@@ -5,16 +5,52 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const version: ToolDefinition = {
   schema: {
     name: 'version',
-    description: 'Read API Version  — [GET /version]',
+    description: 'Get API version — Returns the build that the answering server runs. Behind a load balancer, `hostname` in the response tells you which server replied. To check the API\\\'s dependencies rather than its build, use `GET /health`.  Without a token, the response carries only `apiversion`, `git-commit`, `hostname`, and `current-time`. With a valid token it also carries the full commit hash, the branch, the build date, and the PHP and framework versions. No token is needed. You can still send one (a bearer access token, an API key, or the `ns_access_token` cookie) to get the longer response. Any valid token works, whatever its scope. A token that is sent but is invalid or expired is refused with `401`, and an API key that is not valid with `403`; you do not get the shorter response instead.  `current-time` is `YYYY-MM-DD hh:mm:ss` with no offset, not RFC 3339. Takes no parameters. — [GET /version]',
     inputSchema: {
           "type": "object",
           "properties": {}
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /version',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/version',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const get_health_status_api: ToolDefinition = {
+  schema: {
+    name: 'get_health_status_api',
+    description: 'Check API health — Checks the dependencies of the server that answered: the cache, every configured database connection, and the message bus. Load balancers and monitoring services can call it without a token.  Without a token, the response carries only `status`, `timestamp`, `hostname`, and `app_version`. With a valid token it also carries `environment`, `php_version`, and `checks`, the result of each dependency. No token is needed. You can still send one (a bearer access token, an API key, or the `ns_access_token` cookie) to get the longer response. Any valid token works, whatever its scope. A token that is sent but is invalid or expired is refused with `401`, and an API key that is not valid with `403`; you do not get the shorter response instead.  The HTTP status is always `200`. Read `status`: `healthy` means every check passed, and `degraded` means at least one failed. Results are cached for 15 seconds per server, so a failure can take up to 15 seconds to show, and repeated calls in that window do not repeat the checks. The `X-Health-Cache` response header is `hit` when the result came from that cache and `miss` when it was just computed. Takes no parameters. — [GET /health]',
+    inputSchema: {
+          "type": "object",
+          "properties": {}
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /health',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/health',
     });
 
     return {

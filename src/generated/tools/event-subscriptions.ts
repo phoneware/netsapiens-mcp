@@ -5,16 +5,55 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const read_subscriptions: ToolDefinition = {
   schema: {
     name: 'read_subscriptions',
-    description: 'Read Event Subscriptions — [GET /subscriptions]',
+    description: 'List event subscriptions — Returns the event subscriptions your token can see. Each one sends events of one `model` to its `post-url`.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only. Super User and Super User Read Only see every subscription. A Reseller sees the subscriptions in its own territory, except the ones a Super User created, and can narrow to one of its domains. Every other scope sees the subscriptions its own scope created in its own domain, and user-level scopes see only their own and domain-wide ones. Naming a domain you cannot see returns `403`.  `post-url` comes back in full only when you can change the subscription. Otherwise its user-info, query string, and fragment are masked.  Filter with `domain`, `user`, and, for a Super User or Super User Read Only, `reseller` and `user-scope`. Page with `start` and `limit`, 100 subscriptions by default. There is no sort and no `/count`. `GET /subscriptions/list` returns fewer fields per subscription. — [GET /subscriptions]',
     inputSchema: {
           "type": "object",
-          "properties": {}
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Only subscriptions for this domain. A domain you cannot see returns `403`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Only subscriptions for this user. `*` means no filter."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Only subscriptions whose territory is this one. Super User and Super User Read Only only. A Reseller always gets its own territory."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                },
+                "user-scope": {
+                      "type": "string",
+                      "description": "Only subscriptions created with this scope. Super User and Super User Read Only only."
+                }
+          }
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'GET /subscriptions',
+    method: 'GET',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const queryParamNames = ['domain', 'user', 'reseller', 'start', 'limit', 'user-scope'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
     const response = await client.request({
       method: 'GET',
       pathTemplate: '/subscriptions',
+      queryParams,
     });
 
     return {
@@ -29,13 +68,13 @@ export const read_subscriptions: ToolDefinition = {
 export const create_subscription: ToolDefinition = {
   schema: {
     name: 'create_subscription',
-    description: 'Create a Event Subscription — [POST /subscriptions]',
+    description: 'Create event subscription — Creates a subscription that sends events of one `model` to your `post-url` as they happen. Create one subscription per model.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User, and read access to the model you name. Without it you get `403`. An unknown `model` returns `400`.  What you can subscribe to depends on your scope:  - Super User: any domain, or `*` for every domain on the platform - Reseller: one domain in its own territory, for one user or `*` for all - Office Manager: its own domain, for one user or `*` for all - Site Manager: users of its own site in its own domain, never `*` - Basic User: its own extension  A platform-wide subscription (`domain` `*`) from any other scope returns `403`, and a domain that does not exist returns `404`. The territory is taken from the domain.  Choose `model` from these values:  | `model` | Sends | |---|---| | `call` | Active call updates | | `call_origid` | Active call updates, only the latest state of each call per batch | | `cdr` | Completed call records | | `agent` | Call center agent status changes, matched on the call queue | | `voicemail` | New voicemail | | `message`, `messagesession` | Chat and SMS messages and sessions |  Also available: `presence`, `subscriber`, `auditlog`, `auditlog_lite` (creates and deletes of main objects only), `domain`, and `device`. `presense` is a misspelt presence model that is still accepted.  Events are matched on `domain` and `user` only. `*` matches every value.  `post-url` must be an `http://` or `https://` URL with a host, at most 256 characters, with the scheme only once and no `user:password@` part. Unless you are a Super User, every address the host resolves to must be public: loopback, link-local, private, shared (CGNAT), and unique-local addresses are refused, and so are this platform\\\'s own servers. A host that does not resolve is refused too. Each refusal is a `400` that names the rule. An installation can allow private addresses with the `NsSubscriptionAllowPrivateUrls` setting. Use `https://` with a certificate that validates, because a certificate error counts as a failed delivery.  `subscription-expires-datetime` takes RFC 3339, such as `2027-09-01T14:30:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. It is stored in UTC and read back as RFC 3339. Any other value returns `400`.  The `id` is derived from the model, scope, territory, domain, user, `post-url`, and `subscription-geo-support`, so creating the same subscription twice returns `409`. The call waits up to 5 seconds for the new subscription to be stored and then returns it with `200`. Delivery starts within about 5 seconds after that.  Delivery: every 500 milliseconds, the server that owns the subscription sends one `POST` to `post-url` with a JSON array of every event queued since the last send. The request carries `Content-Type: application/json; charset=utf-8` and `X-Correlation-ID` set to the subscription `id`, and no credentials or signature. The events are the platform\\\'s own records, with their internal field names, not the v2 names. A response above `302`, a connection failure, or no answer within 15 seconds counts as an error. A failed batch is not retried and its events are lost, so reconcile gaps with the matching read endpoint. Redirects are not followed, and a `301` or `302` counts as delivered. Repeated failures never disable a subscription: it keeps sending until it expires or you delete it. Retries and a signing secret are tracked in NN-663.  Watch `status` and `error-count` to see whether delivery works. Delivery stops at `subscription-expires-datetime`, and the subscription is deleted about 8 hours later. To keep it, send a later `subscription-expires-datetime` with `PUT /subscriptions/{id}` before then. — [POST /subscriptions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "model": {
                       "type": "string",
-                      "description": "This is the type of data that will be sent. you will need to reqest multiple subscriptions if you want more than one model. Addtional details available in guide at https://docs.ns-api.com/docs/event-subscriptions-1. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"message\", \"messagesession\", \"subscriber\", \"presence\", \"voicemail\"",
+                      "description": "Kind of event the subscription sends. One model per subscription: `call`, `call_origid` (latest state of each call only), `cdr`, `agent` (matched on the call queue), `voicemail`, `message`, `messagesession`, `presence`, `presense` (a misspelt presence model, still accepted), `subscriber`, `auditlog`, `auditlog_lite` (creates and deletes of main objects only), `domain`, or `device`. Your scope needs read access to the model. Any other value returns `400`. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"device\", \"domain\", \"message\", \"messagesession\", \"presence\", \"presense\", \"subscriber\", \"voicemail\"",
                       "enum": [
                             "agent",
                             "auditlog",
@@ -43,53 +82,65 @@ export const create_subscription: ToolDefinition = {
                             "call",
                             "call_origid",
                             "cdr",
+                            "device",
+                            "domain",
                             "message",
                             "messagesession",
-                            "subscriber",
                             "presence",
+                            "presense",
+                            "subscriber",
                             "voicemail"
                       ]
                 },
                 "post-url": {
                       "type": "string",
-                      "description": "This is the url the API will be posting data to. Should be in the format including https://. Can make a custom port if needed and the URL should have a valid SSL certificate as well. Http:// is supproted but not ideal for production."
+                      "description": "URL each batch of events is sent to with `POST`. An `http://` or `https://` URL with a host, up to 256 characters, with no `user:password@` part. Unless a Super User sets it, it must resolve only to public addresses outside this platform."
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Domain whose events are sent. Defaults to your own domain. `*` means every domain and needs Super User (`403` otherwise). A domain that does not exist returns `404`. Ignored on `/domains/{domain}/subscriptions`, which takes the path domain."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose events are sent, or `*` for every user in the domain. `*` needs Office Manager, Reseller, or Super User; a Site Manager must name a user of its own site, and user-level scopes always get their own extension. Default: \"*\"",
+                      "default": "*"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Ignored: the territory comes from the domain. A Super User sending it with `domain` `*` gets `400`."
                 },
                 "subscription-geo-support": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` stores the subscription on every server and has one of them deliver it, with another taking over if that server stops. `no` stores it only on the server that handled the create, which alone delivers it. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
                       ],
                       "default": "yes"
                 },
-                "reseller": {
-                      "type": "string",
-                      "description": "This is the reseller that the subscription will filter data for. * will be used for all resellers, but only valid with Super User scope on the request."
-                },
-                "domain": {
-                      "type": "string",
-                      "description": "This is the domain that the subscription will filter data for. \"*\" will be used for all domains, but only valid with Super User scope. Default: \"*\"",
-                      "default": "*"
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the user that the subscription will filter data for. * will be used for all users. Default: \"*\"",
-                      "default": "*"
-                },
                 "subscription-expires-datetime": {
                       "type": "string",
-                      "description": "This timestamp in the format of YYYY-MM-DD HH:MM:SS will be with the subscription will expire. After it expires it will be removed after some amount of time. If left blank it will set the expires time to the expires time of the timed token used, if using a APIkey it will be 20 years from the creation date that it will set for the expires for the new subscription"
+                      "description": "When delivery stops, as RFC 3339 or `YYYY-MM-DD HH:MM:SS` in UTC. Stored in UTC. Defaults to the expiry of your token, or 20 years for a token that does not expire. Any other value returns `400`."
                 },
                 "preferred-server": {
                       "type": "string",
-                      "description": "This is the server hostname for the prefered server for this subscription, meaning if this server is up and online it will be the one sending the events. It wil fail back to this servre after 60s of stability."
+                      "description": "Hostname of the core server that should deliver a `subscription-geo-support: yes` subscription. It takes over after it has been up for 60 seconds. Defaults to the server that handled the create. Name a real core server: an unknown hostname can leave the subscription with no server delivering it."
                 }
-          }
+          },
+          "required": [
+                "model",
+                "post-url"
+          ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /subscriptions',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const bodyParamNames = ['model', 'post-url', 'subscription-geo-support', 'reseller', 'domain', 'user', 'subscription-expires-datetime', 'preferred-server'];
+    const bodyParamNames = ['model', 'post-url', 'domain', 'user', 'reseller', 'subscription-geo-support', 'subscription-expires-datetime', 'preferred-server'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -97,136 +148,6 @@ export const create_subscription: ToolDefinition = {
     const response = await client.request({
       method: 'POST',
       pathTemplate: '/subscriptions',
-      body,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const read_subscriptions_domain: ToolDefinition = {
-  schema: {
-    name: 'read_subscriptions_domain',
-    description: 'Read Event Subscriptions for Domain — [GET /domains/{domain}/subscriptions]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const response = await client.request({
-      method: 'GET',
-      pathTemplate: '/domains/{domain}/subscriptions',
-      pathParams,
-    });
-
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify(response, null, 2),
-      }],
-    };
-  },
-};
-
-export const create_subscription_domain: ToolDefinition = {
-  schema: {
-    name: 'create_subscription_domain',
-    description: 'Create a Event Subscription for Domain — [POST /domains/{domain}/subscriptions]',
-    inputSchema: {
-          "type": "object",
-          "properties": {
-                "domain": {
-                      "type": "string",
-                      "description": "This is the domain that the subscription will filter data for. \"*\" will be used for all domains, but only valid with Super User scope. Default: \"*\"",
-                      "default": "*"
-                },
-                "model": {
-                      "type": "string",
-                      "description": "This is the type of data that will be sent. you will need to reqest multiple subscriptions if you want more than one model. Addtional details available in guide at https://docs.ns-api.com/docs/event-subscriptions-1. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"message\", \"messagesession\", \"subscriber\", \"presence\", \"voicemail\"",
-                      "enum": [
-                            "agent",
-                            "auditlog",
-                            "auditlog_lite",
-                            "call",
-                            "call_origid",
-                            "cdr",
-                            "message",
-                            "messagesession",
-                            "subscriber",
-                            "presence",
-                            "voicemail"
-                      ]
-                },
-                "post-url": {
-                      "type": "string",
-                      "description": "This is the url the API will be posting data to. Should be in the format including https://. Can make a custom port if needed and the URL should have a valid SSL certificate as well. Http:// is supproted but not ideal for production."
-                },
-                "subscription-geo-support": {
-                      "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
-                      "enum": [
-                            "yes",
-                            "no"
-                      ],
-                      "default": "yes"
-                },
-                "reseller": {
-                      "type": "string",
-                      "description": "This is the reseller that the subscription will filter data for. * will be used for all resellers, but only valid with Super User scope on the request."
-                },
-                "user": {
-                      "type": "string",
-                      "description": "This is the user that the subscription will filter data for. * will be used for all users. Default: \"*\"",
-                      "default": "*"
-                },
-                "subscription-expires-datetime": {
-                      "type": "string",
-                      "description": "This timestamp in the format of YYYY-MM-DD HH:MM:SS will be with the subscription will expire. After it expires it will be removed after some amount of time. If left blank it will set the expires time to the expires time of the timed token used, if using a APIkey it will be 20 years from the creation date that it will set for the expires for the new subscription"
-                },
-                "preferred-server": {
-                      "type": "string",
-                      "description": "This is the server hostname for the prefered server for this subscription, meaning if this server is up and online it will be the one sending the events. It wil fail back to this servre after 60s of stability."
-                }
-          },
-          "required": [
-                "domain"
-          ]
-    },
-  },
-  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
-    const pathParamNames = ['domain'];
-    const pathParams: Record<string, string> = {};
-    for (const name of pathParamNames) {
-      if (args[name] !== undefined) pathParams[name] = String(args[name]);
-    }
-    const bodyParamNames = ['model', 'post-url', 'subscription-geo-support', 'reseller', 'domain', 'user', 'subscription-expires-datetime', 'preferred-server'];
-    const body: Record<string, unknown> = {};
-    for (const name of bodyParamNames) {
-      if (args[name] !== undefined) body[name] = args[name];
-    }
-    const response = await client.request({
-      method: 'POST',
-      pathTemplate: '/domains/{domain}/subscriptions',
-      pathParams,
       body,
     });
 
@@ -242,19 +163,25 @@ export const create_subscription_domain: ToolDefinition = {
 export const read_subscription: ToolDefinition = {
   schema: {
     name: 'read_subscription',
-    description: 'Read Event Subscription By Id — [GET /subscriptions/{id}]',
+    description: 'Read event subscription — Returns one event subscription, with its delivery state: `status`, `error-count`, `posts-count`, and `current-active-server`.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only. Super User and Super User Read Only see every subscription. A Reseller sees the subscriptions in its own territory, except the ones a Super User created, and can narrow to one of its domains. Every other scope sees the subscriptions its own scope created in its own domain, and user-level scopes see only their own and domain-wide ones. Naming a domain you cannot see returns `403`.  `post-url` comes back in full only when you can change the subscription. Otherwise its user-info, query string, and fragment are masked. A subscription you cannot see returns `404`, the same as one that does not exist.  Use it after a create to see whether delivery works. `status` is `error` when a delivery failed in the last 5-second cycle. — [GET /subscriptions/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The subscription's `id`, as returned by the create or a read. Subscriptions created through the API have a 32-character lowercase hexadecimal `id`."
                 }
           },
           "required": [
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /subscriptions/{}',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['id'];
@@ -280,17 +207,21 @@ export const read_subscription: ToolDefinition = {
 export const update_subscription: ToolDefinition = {
   schema: {
     name: 'update_subscription',
-    description: 'Update an Event Subscription — [PUT /subscriptions/{id}]',
+    description: 'Update event subscription — Changes where a subscription sends, what it sends, or how long it lives. Send only the fields to change.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User.  Who can change or delete a subscription:  - Super User: any subscription - Reseller: one for a domain in its own territory, never a platform-wide one or one a Super User created - Office Manager: any in its own domain - Site Manager: its own, or one for a user of its own site, never a domain-wide one - Every other scope: its own  Anything else returns `403`, and the message names the reason.  You can change `post-url`, `model`, `subscription-expires-datetime`, `subscription-geo-support`, and `preferred-server`. A new `post-url` follows the create rules. A new `model` must be a known model (`400`) that you can read (`403`). Send `error-count` or `posts-count` as `0` to reset it; any other value is ignored. `domain`, `user`, and `reseller` cannot change: a different value returns `400`, so delete the subscription and create a new one. Leaving out `subscription-expires-datetime` keeps the current expiry. `subscription-expires-datetime` takes RFC 3339, such as `2027-09-01T14:30:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. It is stored in UTC and read back as RFC 3339. Any other value returns `400`.  A `202` means the change was saved on this server and published to the others over the service bus (SBUS), including a switch of `subscription-geo-support` from `yes` to `no`. Delivery picks it up within about 5 seconds. — [PUT /subscriptions/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The subscription's `id`, as returned by the create or a read. Subscriptions created through the API have a 32-character lowercase hexadecimal `id`."
+                },
+                "post-url": {
+                      "type": "string",
+                      "description": "New URL to send events to. Follows the create rules for `post-url`."
                 },
                 "model": {
                       "type": "string",
-                      "description": "This is the type of data that will be sent. you will need to reqest multiple subscriptions if you want more than one model. Addtional details available in guide at https://docs.ns-api.com/docs/event-subscriptions-1. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"message\", \"messagesession\", \"subscriber\", \"presence\", \"voicemail\"",
+                      "description": "New kind of event to send. Must be a known model (`400`) that you can read (`403`). Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"device\", \"domain\", \"message\", \"messagesession\", \"presence\", \"presense\", \"subscriber\", \"voicemail\"",
                       "enum": [
                             "agent",
                             "auditlog",
@@ -298,41 +229,57 @@ export const update_subscription: ToolDefinition = {
                             "call",
                             "call_origid",
                             "cdr",
+                            "device",
+                            "domain",
                             "message",
                             "messagesession",
-                            "subscriber",
                             "presence",
+                            "presense",
+                            "subscriber",
                             "voicemail"
                       ]
                 },
-                "post-url": {
+                "subscription-expires-datetime": {
                       "type": "string",
-                      "description": "This is the url the API will be posting data to. Should be in the format including https://. Can make a custom port if needed and the URL should have a valid SSL certificate as well. Http:// is supproted but not ideal for production."
+                      "description": "New expiry, as RFC 3339 or `YYYY-MM-DD HH:MM:SS` in UTC. Leave it out to keep the current one."
                 },
                 "subscription-geo-support": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` stores the subscription on every server and has one of them deliver it, with another taking over if that server stops. `no` stores it only on the server that handled the create, which alone delivers it. Defaults to `yes`. A switch from `yes` to `no` removes the copies on the other servers. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "yes"
-                },
-                "subscription-expires-datetime": {
-                      "type": "string",
-                      "description": "This timestamp in the format of YYYY-MM-DD HH:MM:SS will be with the subscription will expire. After it expires it will be removed after some amount of time. If left blank it will set the expires time to the expires time of the timed token used, if using a APIkey it will be 20 years from the creation date that it will set for the expires for the new subscription"
+                      ]
                 },
                 "preferred-server": {
                       "type": "string",
-                      "description": "This is the server hostname for the prefered server for this subscription, meaning if this server is up and online it will be the one sending the events. It wil fail back to this servre after 60s of stability."
+                      "description": "Hostname of the core server that should deliver a `subscription-geo-support: yes` subscription. It takes over after it has been up for 60 seconds. Defaults to the server that handled the create. Name a real core server: an unknown hostname can leave the subscription with no server delivering it."
                 },
                 "error-count": {
                       "type": "number",
-                      "description": "This is the number of attempted post's that resulted in a error, either an inability to send to a server (network,dns, timeout, etc.) or a response code that is above a 302. This value can be \"reset\" by setting it to 0 in a update request, but only 0 is allowed value."
+                      "description": "Send `0` to reset the failed-delivery counter. Allowed values: 0",
+                      "enum": [
+                            0
+                      ]
                 },
                 "posts-count": {
                       "type": "number",
-                      "description": "This is the number of attempted post's in this schedule. This includes error and success attempts. This value can be \"reset\" by setting it to 0 in a update request, but only 0 is allowed value."
+                      "description": "Send `0` to reset the delivery counter. Allowed values: 0",
+                      "enum": [
+                            0
+                      ]
+                },
+                "domain": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
                 }
           },
           "required": [
@@ -340,13 +287,19 @@ export const update_subscription: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /subscriptions/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['model', 'post-url', 'subscription-geo-support', 'subscription-expires-datetime', 'preferred-server', 'error-count', 'posts-count'];
+    const bodyParamNames = ['post-url', 'model', 'subscription-expires-datetime', 'subscription-geo-support', 'preferred-server', 'error-count', 'posts-count', 'domain', 'user', 'reseller'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -370,21 +323,21 @@ export const update_subscription: ToolDefinition = {
 export const delete_subscription: ToolDefinition = {
   schema: {
     name: 'delete_subscription',
-    description: 'Delete a subscription — [DELETE /subscriptions/{id}]',
+    description: 'Delete event subscription — Deletes an event subscription. Delivery stops within about 5 seconds.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User.  Who can change or delete a subscription:  - Super User: any subscription - Reseller: one for a domain in its own territory, never a platform-wide one or one a Super User created - Office Manager: any in its own domain - Site Manager: its own, or one for a user of its own site, never a domain-wide one - Every other scope: its own  Anything else returns `403`, and the message names the reason.  No body is needed. A `202` for a subscription with `subscription-geo-support` set to `yes` means the delete was published over the service bus (SBUS) and is applied on each server shortly after. A subscription with `no` is deleted at once. — [DELETE /subscriptions/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The subscription's `id`, as returned by the create or a read. Subscriptions created through the API have a 32-character lowercase hexadecimal `id`."
                 },
                 "subscription_id": {
                       "type": "string",
-                      "description": "ID of subscription to be deleted"
+                      "description": "The ID of the Event Subscription. The subscription ID can be found in API responses when creating or reading Event Subscriptions."
                 },
                 "domain": {
                       "type": "string",
-                      "description": "Required when requests are submitted as scopes lower than Super User"
+                      "description": "Required when requests are submitted as scopes lower than Super User."
                 }
           },
           "required": [
@@ -392,6 +345,12 @@ export const delete_subscription: ToolDefinition = {
                 "subscription_id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /subscriptions/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['id'];
@@ -420,24 +379,84 @@ export const delete_subscription: ToolDefinition = {
   },
 };
 
-export const update_subscription_domain: ToolDefinition = {
+export const read_subscriptions_domain: ToolDefinition = {
   schema: {
-    name: 'update_subscription_domain',
-    description: 'Update an Event Subscription for Domain — [PUT /domains/{domain}/subscriptions/{id}]',
+    name: 'read_subscriptions_domain',
+    description: 'List domain event subscriptions — Returns the event subscriptions for one domain. Subscriptions for every domain (`domain` is `*`) are not included.  Requires Basic User, Site Manager, Office Manager, Reseller, Super User, or Super User Read Only. Super User and Super User Read Only see every subscription. A Reseller sees the subscriptions in its own territory, except the ones a Super User created, and can narrow to one of its domains. Every other scope sees the subscriptions its own scope created in its own domain, and user-level scopes see only their own and domain-wide ones. Naming a domain you cannot see returns `403`.  `post-url` comes back in full only when you can change the subscription. Otherwise its user-info, query string, and fragment are masked.  Filter with `user`. Page with `start` and `limit`, 100 subscriptions by default. `GET /domains/{domain}/subscriptions/list` returns fewer fields per subscription.  A domain that does not exist returns `404`, and one you cannot see returns `403`. — [GET /domains/{domain}/subscriptions]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
-                "id": {
+                "user": {
                       "type": "string",
-                      "description": "id"
+                      "description": "Only subscriptions for this user. `*` means no filter."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Maximum number of records to return. Defaults to `100`. Use it with `start` to page. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/subscriptions',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['user', 'start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/subscriptions',
+      pathParams,
+      queryParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const create_subscription_domain: ToolDefinition = {
+  schema: {
+    name: 'create_subscription_domain',
+    description: 'Create domain event subscription — Creates a subscription that sends one domain\\\'s events of one `model` to your `post-url`. It is `POST /subscriptions` with the domain taken from the path; a `domain` in the body is ignored.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User, and read access to the model (`403` without it). A Reseller can name any domain in its own territory. Office Manager, Site Manager, and Basic User can name only their own domain, and a Site Manager only users of its own site.  Choose `model` from these values:  | `model` | Sends | |---|---| | `call` | Active call updates | | `call_origid` | Active call updates, only the latest state of each call per batch | | `cdr` | Completed call records | | `agent` | Call center agent status changes, matched on the call queue | | `voicemail` | New voicemail | | `message`, `messagesession` | Chat and SMS messages and sessions |  Also available: `presence`, `subscriber`, `auditlog`, `auditlog_lite` (creates and deletes of main objects only), `domain`, and `device`.  `post-url` must be an `http://` or `https://` URL with a host, at most 256 characters, with the scheme only once and no `user:password@` part. Unless you are a Super User, every address the host resolves to must be public: loopback, link-local, private, shared (CGNAT), and unique-local addresses are refused, and so are this platform\\\'s own servers. A host that does not resolve is refused too. Each refusal is a `400` that names the rule. An installation can allow private addresses with the `NsSubscriptionAllowPrivateUrls` setting. Use `https://` with a certificate that validates, because a certificate error counts as a failed delivery.  `subscription-expires-datetime` takes RFC 3339, such as `2027-09-01T14:30:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. It is stored in UTC and read back as RFC 3339. Any other value returns `400`.  The call waits up to 5 seconds for the subscription to be stored, then returns it with `200`. Creating the same subscription twice returns `409`. See `POST /subscriptions` for how events are delivered and expired. Retries and a signing secret are tracked in NN-663. — [POST /domains/{domain}/subscriptions]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain whose events are sent. Defaults to your own domain. `*` means every domain and needs Super User (`403` otherwise). A domain that does not exist returns `404`. Ignored on `/domains/{domain}/subscriptions`, which takes the path domain."
                 },
                 "model": {
                       "type": "string",
-                      "description": "This is the type of data that will be sent. you will need to reqest multiple subscriptions if you want more than one model. Addtional details available in guide at https://docs.ns-api.com/docs/event-subscriptions-1. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"message\", \"messagesession\", \"subscriber\", \"presence\", \"voicemail\"",
+                      "description": "Kind of event the subscription sends. One model per subscription: `call`, `call_origid` (latest state of each call only), `cdr`, `agent` (matched on the call queue), `voicemail`, `message`, `messagesession`, `presence`, `presense` (a misspelt presence model, still accepted), `subscriber`, `auditlog`, `auditlog_lite` (creates and deletes of main objects only), `domain`, or `device`. Your scope needs read access to the model. Any other value returns `400`. Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"device\", \"domain\", \"message\", \"messagesession\", \"presence\", \"presense\", \"subscriber\", \"voicemail\"",
                       "enum": [
                             "agent",
                             "auditlog",
@@ -445,20 +464,32 @@ export const update_subscription_domain: ToolDefinition = {
                             "call",
                             "call_origid",
                             "cdr",
+                            "device",
+                            "domain",
                             "message",
                             "messagesession",
-                            "subscriber",
                             "presence",
+                            "presense",
+                            "subscriber",
                             "voicemail"
                       ]
                 },
                 "post-url": {
                       "type": "string",
-                      "description": "This is the url the API will be posting data to. Should be in the format including https://. Can make a custom port if needed and the URL should have a valid SSL certificate as well. Http:// is supproted but not ideal for production."
+                      "description": "URL each batch of events is sent to with `POST`. An `http://` or `https://` URL with a host, up to 256 characters, with no `user:password@` part. Unless a Super User sets it, it must resolve only to public addresses outside this platform."
+                },
+                "user": {
+                      "type": "string",
+                      "description": "User whose events are sent, or `*` for every user in the domain. `*` needs Office Manager, Reseller, or Super User; a Site Manager must name a user of its own site, and user-level scopes always get their own extension. Default: \"*\"",
+                      "default": "*"
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Ignored: the territory comes from the domain. A Super User sending it with `domain` `*` gets `400`."
                 },
                 "subscription-geo-support": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"yes\"",
+                      "description": "`yes` stores the subscription on every server and has one of them deliver it, with another taking over if that server stops. `no` stores it only on the server that handled the create, which alone delivers it. Defaults to `yes`. Allowed values: \"yes\", \"no\". Default: \"yes\"",
                       "enum": [
                             "yes",
                             "no"
@@ -467,19 +498,129 @@ export const update_subscription_domain: ToolDefinition = {
                 },
                 "subscription-expires-datetime": {
                       "type": "string",
-                      "description": "This timestamp in the format of YYYY-MM-DD HH:MM:SS will be with the subscription will expire. After it expires it will be removed after some amount of time. If left blank it will set the expires time to the expires time of the timed token used, if using a APIkey it will be 20 years from the creation date that it will set for the expires for the new subscription"
+                      "description": "When delivery stops, as RFC 3339 or `YYYY-MM-DD HH:MM:SS` in UTC. Stored in UTC. Defaults to the expiry of your token, or 20 years for a token that does not expire. Any other value returns `400`."
                 },
                 "preferred-server": {
                       "type": "string",
-                      "description": "This is the server hostname for the prefered server for this subscription, meaning if this server is up and online it will be the one sending the events. It wil fail back to this servre after 60s of stability."
+                      "description": "Hostname of the core server that should deliver a `subscription-geo-support: yes` subscription. It takes over after it has been up for 60 seconds. Defaults to the server that handled the create. Name a real core server: an unknown hostname can leave the subscription with no server delivering it."
+                }
+          },
+          "required": [
+                "domain",
+                "model",
+                "post-url"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/subscriptions',
+    method: 'POST',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const bodyParamNames = ['model', 'post-url', 'domain', 'user', 'reseller', 'subscription-geo-support', 'subscription-expires-datetime', 'preferred-server'];
+    const body: Record<string, unknown> = {};
+    for (const name of bodyParamNames) {
+      if (args[name] !== undefined) body[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'POST',
+      pathTemplate: '/domains/{domain}/subscriptions',
+      pathParams,
+      body,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const update_subscription_domain: ToolDefinition = {
+  schema: {
+    name: 'update_subscription_domain',
+    description: 'Update domain event subscription — Changes where a subscription sends, what it sends, or how long it lives. Send only the fields to change.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User.  Who can change or delete a subscription:  - Super User: any subscription - Reseller: one for a domain in its own territory, never a platform-wide one or one a Super User created - Office Manager: any in its own domain - Site Manager: its own, or one for a user of its own site, never a domain-wide one - Every other scope: its own  Anything else returns `403`, and the message names the reason.  You can change `post-url`, `model`, `subscription-expires-datetime`, `subscription-geo-support`, and `preferred-server`. A new `post-url` follows the create rules. A new `model` must be a known model (`400`) that you can read (`403`). Send `error-count` or `posts-count` as `0` to reset it; any other value is ignored. `domain`, `user`, and `reseller` cannot change: a different value returns `400`, so delete the subscription and create a new one. Leaving out `subscription-expires-datetime` keeps the current expiry. `subscription-expires-datetime` takes RFC 3339, such as `2027-09-01T14:30:00+00:00`, or `YYYY-MM-DD HH:MM:SS` in UTC. It is stored in UTC and read back as RFC 3339. Any other value returns `400`.  A `202` means the change was saved on this server and published to the others over the service bus (SBUS), including a switch of `subscription-geo-support` from `yes` to `no`. Delivery picks it up within about 5 seconds.  This is `PUT /subscriptions/{id}` under a domain path. The subscription is found by `id` alone; the path domain is checked for your access, not matched against the subscription. — [PUT /domains/{domain}/subscriptions/{id}]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
+                },
+                "id": {
+                      "type": "string",
+                      "description": "The subscription's `id`, as returned by the create or a read. Subscriptions created through the API have a 32-character lowercase hexadecimal `id`."
+                },
+                "post-url": {
+                      "type": "string",
+                      "description": "New URL to send events to. Follows the create rules for `post-url`."
+                },
+                "model": {
+                      "type": "string",
+                      "description": "New kind of event to send. Must be a known model (`400`) that you can read (`403`). Allowed values: \"agent\", \"auditlog\", \"auditlog_lite\", \"call\", \"call_origid\", \"cdr\", \"device\", \"domain\", \"message\", \"messagesession\", \"presence\", \"presense\", \"subscriber\", \"voicemail\"",
+                      "enum": [
+                            "agent",
+                            "auditlog",
+                            "auditlog_lite",
+                            "call",
+                            "call_origid",
+                            "cdr",
+                            "device",
+                            "domain",
+                            "message",
+                            "messagesession",
+                            "presence",
+                            "presense",
+                            "subscriber",
+                            "voicemail"
+                      ]
+                },
+                "subscription-expires-datetime": {
+                      "type": "string",
+                      "description": "New expiry, as RFC 3339 or `YYYY-MM-DD HH:MM:SS` in UTC. Leave it out to keep the current one."
+                },
+                "subscription-geo-support": {
+                      "type": "string",
+                      "description": "`yes` stores the subscription on every server and has one of them deliver it, with another taking over if that server stops. `no` stores it only on the server that handled the create, which alone delivers it. Defaults to `yes`. A switch from `yes` to `no` removes the copies on the other servers. Allowed values: \"yes\", \"no\"",
+                      "enum": [
+                            "yes",
+                            "no"
+                      ]
+                },
+                "preferred-server": {
+                      "type": "string",
+                      "description": "Hostname of the core server that should deliver a `subscription-geo-support: yes` subscription. It takes over after it has been up for 60 seconds. Defaults to the server that handled the create. Name a real core server: an unknown hostname can leave the subscription with no server delivering it."
                 },
                 "error-count": {
                       "type": "number",
-                      "description": "This is the number of attempted post's that resulted in a error, either an inability to send to a server (network,dns, timeout, etc.) or a response code that is above a 302. This value can be \"reset\" by setting it to 0 in a update request, but only 0 is allowed value."
+                      "description": "Send `0` to reset the failed-delivery counter. Allowed values: 0",
+                      "enum": [
+                            0
+                      ]
                 },
                 "posts-count": {
                       "type": "number",
-                      "description": "This is the number of attempted post's in this schedule. This includes error and success attempts. This value can be \"reset\" by setting it to 0 in a update request, but only 0 is allowed value."
+                      "description": "Send `0` to reset the delivery counter. Allowed values: 0",
+                      "enum": [
+                            0
+                      ]
+                },
+                "user": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
+                },
+                "reseller": {
+                      "type": "string",
+                      "description": "Accepted only when equal to the stored value. Any other value returns `400`."
                 }
           },
           "required": [
@@ -488,13 +629,19 @@ export const update_subscription_domain: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/subscriptions/{}',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['model', 'post-url', 'subscription-geo-support', 'subscription-expires-datetime', 'preferred-server', 'error-count', 'posts-count'];
+    const bodyParamNames = ['post-url', 'model', 'subscription-expires-datetime', 'subscription-geo-support', 'preferred-server', 'error-count', 'posts-count', 'domain', 'user', 'reseller'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -518,17 +665,17 @@ export const update_subscription_domain: ToolDefinition = {
 export const delete_subscription_domain: ToolDefinition = {
   schema: {
     name: 'delete_subscription_domain',
-    description: 'Delete a subscription For Domain — [DELETE /domains/{domain}/subscriptions/{id}]',
+    description: 'Delete domain event subscription — Deletes an event subscription. Delivery stops within about 5 seconds.  Requires Basic User, Site Manager, Office Manager, Reseller, or Super User.  Who can change or delete a subscription:  - Super User: any subscription - Reseller: one for a domain in its own territory, never a platform-wide one or one a Super User created - Office Manager: any in its own domain - Site Manager: its own, or one for a user of its own site, never a domain-wide one - Every other scope: its own  Anything else returns `403`, and the message names the reason.  No body is needed. A `202` for a subscription with `subscription-geo-support` set to `yes` means the delete was published over the service bus (SBUS) and is applied on each server shortly after. A subscription with `no` is deleted at once.  This is `DELETE /subscriptions/{id}` under a domain path. The subscription is found by `id` alone; the path domain is checked for your access, not matched against the subscription. — [DELETE /domains/{domain}/subscriptions/{id}]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "id": {
                       "type": "string",
-                      "description": "id"
+                      "description": "The subscription's `id`, as returned by the create or a read. Subscriptions created through the API have a 32-character lowercase hexadecimal `id`."
                 }
           },
           "required": [
@@ -536,6 +683,12 @@ export const delete_subscription_domain: ToolDefinition = {
                 "id"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/subscriptions/{}',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'id'];
@@ -547,6 +700,66 @@ export const delete_subscription_domain: ToolDefinition = {
       method: 'DELETE',
       pathTemplate: '/domains/{domain}/subscriptions/{id}',
       pathParams,
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(response, null, 2),
+      }],
+    };
+  },
+};
+
+export const list_domain_subscriptions: ToolDefinition = {
+  schema: {
+    name: 'list_domain_subscriptions',
+    description: 'List domain event subscription summaries — Returns a domain\\\'s event subscriptions with six fields each: `id`, `model`, `post-url`, `domain`, `user`, and `status`. Use `GET /domains/{domain}/subscriptions` for the expiry, counters, and servers.  It uses the list privilege instead of read, which Basic User, Site Manager, Office Manager, Reseller, and Super User hold. The rows you see follow the same scope rules as the full read, and `post-url` is masked the same way when you cannot change the subscription.  There is no default limit: without `limit`, every matching subscription is returned. Append `/list` to `/domains/{domain}/subscriptions/{id}` for one subscription in this shape.  A domain that does not exist returns `404`. — [GET /domains/{domain}/subscriptions/list]',
+    inputSchema: {
+          "type": "object",
+          "properties": {
+                "domain": {
+                      "type": "string",
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
+                },
+                "start": {
+                      "type": "number",
+                      "description": "Number of records to skip before the first one returned. Defaults to `0`. Use it with `limit` to page. Default: 0",
+                      "default": 0
+                },
+                "limit": {
+                      "type": "number",
+                      "description": "Most subscriptions to return. No default: leave it out to get all of them. Default: 100",
+                      "default": 100
+                }
+          },
+          "required": [
+                "domain"
+          ]
+    },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/subscriptions/list',
+    method: 'GET',
+    multipartOnly: false,
+  },
+  handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
+    const pathParamNames = ['domain'];
+    const pathParams: Record<string, string> = {};
+    for (const name of pathParamNames) {
+      if (args[name] !== undefined) pathParams[name] = String(args[name]);
+    }
+    const queryParamNames = ['start', 'limit'];
+    const queryParams: Record<string, unknown> = {};
+    for (const name of queryParamNames) {
+      if (args[name] !== undefined) queryParams[name] = args[name];
+    }
+    const response = await client.request({
+      method: 'GET',
+      pathTemplate: '/domains/{domain}/subscriptions/list',
+      pathParams,
+      queryParams,
     });
 
     return {

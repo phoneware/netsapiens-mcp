@@ -5,17 +5,17 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const get_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_vmailnag',
-    description: 'Get Voicemail Reminders for Specific User — [GET /domains/{domain}/users/{user}/vmailnag]',
+    description: 'Read voicemail reminders — Returns a user\\\'s voicemail reminder settings: whether the platform repeats a reminder about unheard voicemail by phone call, SMS, and email, where each reminder goes, and how often it repeats.  Requires a token for this user, or Office Manager scope or higher for the domain. A Basic User can reach only its own reminders. A Site Manager can reach users in its own site.  A user has one set of reminder settings or none. A user with none returns `404`; create them with `POST /domains/{domain}/users/{user}/vmailnag`. To check without a `404`, use `GET /domains/{domain}/users/{user}/vmailnag/count`. Destination lists are returned as arrays. `voicemail-reminder-control-server` is returned only to Super User tokens. — [GET /domains/{domain}/users/{user}/vmailnag]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -23,6 +23,12 @@ export const get_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/vmailnag',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -48,68 +54,57 @@ export const get_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
 export const post_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
   schema: {
     name: 'post_domains_by_domain_users_by_user_vmailnag',
-    description: 'Create Voicemail Reminder — [POST /domains/{domain}/users/{user}/vmailnag]',
+    description: 'Create voicemail reminders — Turns on voicemail reminders for a user: while the user has unheard voicemail, the platform repeats a reminder by phone call, SMS, or email at the interval you set.  Requires a token for this user, or Office Manager scope or higher for the domain. A Basic User can reach only its own reminders. A Site Manager can reach users in its own site.  A user has one set of reminder settings; a second `POST` returns `400` `Record already exists.`, so change an existing set with `PUT`. Each channel sends only when its `-enabled` field is `yes` and it has at least one destination. A `202` means the settings are accepted and applied shortly after. Read them back with `GET` to confirm. — [POST /domains/{domain}/users/{user}/vmailnag]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "voicemail-reminder-phonecall-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent as phone calls to the numbers in `voicemail-reminder-phonecall-phonenumber-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-phonecall-phonenumber-array": {
                       "type": "array",
-                      "description": "Phone reminder numbers"
+                      "description": "Phone numbers to call, 3 to 15 digits with an optional leading `+`, such as `15555550100`. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-sms-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent as SMS messages to the numbers in `voicemail-reminder-sms-phonenumber-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-sms-phonenumber-array": {
                       "type": "array",
-                      "description": "SMS reminder numbers"
+                      "description": "Numbers to text, 3 to 15 digits with an optional leading `+`, such as `15555550100`. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-email-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent by email to the addresses in `voicemail-reminder-email-address-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-email-address-array": {
                       "type": "array",
-                      "description": "Email reminder addresses"
+                      "description": "Email addresses to notify, each a valid address of up to 254 characters. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-interval-minutes": {
                       "type": "number",
-                      "description": "Interval of reminders (minutes)"
-                },
-                "voicemail-reminder-last-sent": {
-                      "type": "number",
-                      "description": "Timestamp of last sent reminder"
-                },
-                "voicemail-reminder-control-server": {
-                      "type": "string",
-                      "description": "Current server managing the reminders for the user"
+                      "description": "Minutes between reminders while the user has unheard voicemail. A whole number, at least 5."
                 }
           },
           "required": [
@@ -118,13 +113,19 @@ export const post_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'POST /domains/{}/users/{}/vmailnag',
+    method: 'POST',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['voicemail-reminder-phonecall-enabled', 'voicemail-reminder-phonecall-phonenumber-array', 'voicemail-reminder-sms-enabled', 'voicemail-reminder-sms-phonenumber-array', 'voicemail-reminder-email-enabled', 'voicemail-reminder-email-address-array', 'voicemail-reminder-interval-minutes', 'voicemail-reminder-last-sent', 'voicemail-reminder-control-server'];
+    const bodyParamNames = ['voicemail-reminder-phonecall-enabled', 'voicemail-reminder-phonecall-phonenumber-array', 'voicemail-reminder-sms-enabled', 'voicemail-reminder-sms-phonenumber-array', 'voicemail-reminder-email-enabled', 'voicemail-reminder-email-address-array', 'voicemail-reminder-interval-minutes'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -148,68 +149,57 @@ export const post_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
 export const put_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
   schema: {
     name: 'put_domains_by_domain_users_by_user_vmailnag',
-    description: 'Update Voicemail Reminders for Specific User — [PUT /domains/{domain}/users/{user}/vmailnag]',
+    description: 'Update voicemail reminders — Changes a user\\\'s voicemail reminder settings. Send only the fields to change; the others keep their values. A destination list you send replaces the stored list, and `[]` clears it.  Requires a token for this user, or Office Manager scope or higher for the domain. A Basic User can reach only its own reminders. A Site Manager can reach users in its own site.  To stop one channel, set its `-enabled` field to `no`. To stop all reminders, delete the settings. A user with no reminder settings returns `404`; create them with `POST`. A `202` means the change is accepted and applied shortly after. — [PUT /domains/{domain}/users/{user}/vmailnag]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 },
                 "voicemail-reminder-phonecall-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent as phone calls to the numbers in `voicemail-reminder-phonecall-phonenumber-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-phonecall-phonenumber-array": {
                       "type": "array",
-                      "description": "Phone reminder numbers"
+                      "description": "Phone numbers to call, 3 to 15 digits with an optional leading `+`, such as `15555550100`. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-sms-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent as SMS messages to the numbers in `voicemail-reminder-sms-phonenumber-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-sms-phonenumber-array": {
                       "type": "array",
-                      "description": "SMS reminder numbers"
+                      "description": "Numbers to text, 3 to 15 digits with an optional leading `+`, such as `15555550100`. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-email-enabled": {
                       "type": "string",
-                      "description": "Allowed values: \"yes\", \"no\". Default: \"no\"",
+                      "description": "Whether reminders are sent by email to the addresses in `voicemail-reminder-email-address-array`. Allowed values: \"yes\", \"no\"",
                       "enum": [
                             "yes",
                             "no"
-                      ],
-                      "default": "no"
+                      ]
                 },
                 "voicemail-reminder-email-address-array": {
                       "type": "array",
-                      "description": "Email reminder addresses"
+                      "description": "Email addresses to notify, each a valid address of up to 254 characters. At most 10. The list replaces the stored one. Send `[]` to clear it."
                 },
                 "voicemail-reminder-interval-minutes": {
                       "type": "number",
-                      "description": "Interval of reminders (minutes)"
-                },
-                "voicemail-reminder-last-sent": {
-                      "type": "number",
-                      "description": "Timestamp of last sent reminder"
-                },
-                "voicemail-reminder-control-server": {
-                      "type": "string",
-                      "description": "Current server managing the reminders for the user"
+                      "description": "Minutes between reminders while the user has unheard voicemail. A whole number, at least 5."
                 }
           },
           "required": [
@@ -218,13 +208,19 @@ export const put_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
           ]
     },
   },
+  operation: {
+    family: 'v2',
+    key: 'PUT /domains/{}/users/{}/vmailnag',
+    method: 'PUT',
+    multipartOnly: false,
+  },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
     const pathParams: Record<string, string> = {};
     for (const name of pathParamNames) {
       if (args[name] !== undefined) pathParams[name] = String(args[name]);
     }
-    const bodyParamNames = ['voicemail-reminder-phonecall-enabled', 'voicemail-reminder-phonecall-phonenumber-array', 'voicemail-reminder-sms-enabled', 'voicemail-reminder-sms-phonenumber-array', 'voicemail-reminder-email-enabled', 'voicemail-reminder-email-address-array', 'voicemail-reminder-interval-minutes', 'voicemail-reminder-last-sent', 'voicemail-reminder-control-server'];
+    const bodyParamNames = ['voicemail-reminder-phonecall-enabled', 'voicemail-reminder-phonecall-phonenumber-array', 'voicemail-reminder-sms-enabled', 'voicemail-reminder-sms-phonenumber-array', 'voicemail-reminder-email-enabled', 'voicemail-reminder-email-address-array', 'voicemail-reminder-interval-minutes'];
     const body: Record<string, unknown> = {};
     for (const name of bodyParamNames) {
       if (args[name] !== undefined) body[name] = args[name];
@@ -248,17 +244,17 @@ export const put_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
 export const delete_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
   schema: {
     name: 'delete_domains_by_domain_users_by_user_vmailnag',
-    description: 'Delete Voicemail Reminders for Specific User — [DELETE /domains/{domain}/users/{user}/vmailnag]',
+    description: 'Delete voicemail reminders — Removes a user\\\'s voicemail reminder settings, which stops every reminder for that user.  Requires a token for this user, or Office Manager scope or higher for the domain. A Basic User can reach only its own reminders. A Site Manager can reach users in its own site.  To stop one channel and keep the rest, set its `-enabled` field to `no` with `PUT` instead. A user with no reminder settings returns `404`. A `202` means the deletion is accepted and applied shortly after. Deleting the user also deletes its reminder settings. — [DELETE /domains/{domain}/users/{user}/vmailnag]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -266,6 +262,12 @@ export const delete_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'DELETE /domains/{}/users/{}/vmailnag',
+    method: 'DELETE',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
@@ -291,17 +293,17 @@ export const delete_domains_by_domain_users_by_user_vmailnag: ToolDefinition = {
 export const get_domains_by_domain_users_by_user_vmailnag_count: ToolDefinition = {
   schema: {
     name: 'get_domains_by_domain_users_by_user_vmailnag_count',
-    description: 'Count Voicemail Reminders for Specific User — [GET /domains/{domain}/users/{user}/vmailnag/count]',
+    description: 'Count voicemail reminders — Returns `1` when the user has voicemail reminder settings and `0` when it has none. Use it to decide between `POST` and `PUT` without handling a `404`.  Requires a token for this user, or Site Manager, Office Manager, or higher scope for the domain. — [GET /domains/{domain}/users/{user}/vmailnag/count]',
     inputSchema: {
           "type": "object",
           "properties": {
                 "domain": {
                       "type": "string",
-                      "description": "This is the main organization name. This is used to link resource to its group/tenant/organization/enterprise. Then using in path for GET you can set to \"~\" to use the domain name linked to your token/key instead of the domain name itself when reading for your own domain. Default: \"~\""
+                      "description": "Domain name, such as `example.com`. `~` means your own domain. A domain that does not exist returns `404`."
                 },
                 "user": {
                       "type": "string",
-                      "description": "This is the main user extension for the user account. ~ can be used to mean \"my account\" which will extract the user from the token/key used for authentication. Default: \"~\""
+                      "description": "User's extension, such as `1001`. `~` means the user your token belongs to."
                 }
           },
           "required": [
@@ -309,6 +311,12 @@ export const get_domains_by_domain_users_by_user_vmailnag_count: ToolDefinition 
                 "user"
           ]
     },
+  },
+  operation: {
+    family: 'v2',
+    key: 'GET /domains/{}/users/{}/vmailnag/count',
+    method: 'GET',
+    multipartOnly: false,
   },
   handler: async (args: Record<string, unknown>, client: GenericApiClient): Promise<CallToolResult> => {
     const pathParamNames = ['domain', 'user'];
