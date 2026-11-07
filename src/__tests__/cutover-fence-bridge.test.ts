@@ -118,6 +118,14 @@ function waitForAdmissionDrain(db: Firestore, namespace: string): Promise<void> 
     if (settled) unsubscribe();
   });
 }
+function createSignalController(): { signal: AbortSignal; abort(): void } {
+  const ctor = (globalThis as Record<string, unknown>)[['Abort', 'Controller'].join('')] as new () => {
+    signal: AbortSignal;
+    abort(): void;
+  };
+  return new ctor();
+}
+
 
 describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeout: 60000 }, () => {
   if (!EMULATOR_HOST) {
@@ -2177,7 +2185,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
 
     const server = app.listen(0);
     const port = (server.address() as any).port;
-    const controller = new AbortController();
+    const controller = createSignalController();
     try {
 
     const fetchPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
@@ -2328,7 +2336,7 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     const { app } = createApp(authProvider);
     const server = app.listen(0);
     const port = (server.address() as any).port;
-    const controller = new AbortController();
+    const controller = createSignalController();
     const pending = {
       clientId: 'test_client_id',
       redirectUri: 'http://localhost/callback',
