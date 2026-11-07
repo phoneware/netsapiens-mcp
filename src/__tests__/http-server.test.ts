@@ -163,6 +163,7 @@ async function request(
         body: string;
       }>();
       const reqHeaders: Record<string, string> = {
+        connection: 'close',
         ...options.headers,
       };
       let bodyStr: string | undefined;
@@ -173,7 +174,7 @@ async function request(
       }
 
       const req = http.request(
-        { hostname: '127.0.0.1', port, path, method, headers: reqHeaders },
+        { hostname: '127.0.0.1', port, path, method, headers: reqHeaders, agent: false },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (chunk) => chunks.push(chunk));
@@ -193,10 +194,10 @@ async function request(
     } catch (err: unknown) {
       const isErrno = err && typeof err === 'object' && 'code' in err;
       const code = isErrno && typeof err.code === 'string' ? err.code : undefined;
-      if (code === 'ECONNREFUSED' && attempt < 4) {
+      if (code === 'ECONNREFUSED' && attempt < 9) {
         // Kernel loopback socket unbinding delay requires brief real-clock yield before retry
         const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
-        setTimeout(delayResolve, 50);
+        setTimeout(delayResolve, 100);
         await delayPromise;
         continue;
       }
@@ -211,7 +212,14 @@ async function request(
  * bound port for the rest of the run, which collides with other suites.
  */
 async function closeServers(servers: http.Server[]): Promise<void> {
-  await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+  await Promise.all(
+    servers.splice(0).map((s) => {
+      if (typeof s.closeAllConnections === 'function') {
+        s.closeAllConnections();
+      }
+      return new Promise<void>((resolve) => s.close(() => resolve()));
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
