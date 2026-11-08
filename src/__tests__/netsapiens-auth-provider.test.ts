@@ -42,7 +42,7 @@ function hiddenField(html: string, name: string): string | undefined {
   return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
-async function importApp() {
+async function importApp(persistence?: 'file') {
   // Re-import after env vars are set so loadConfig picks them up.
   vi.resetModules();
   process.env.MCP_TRANSPORT = 'http';
@@ -53,7 +53,8 @@ async function importApp() {
   process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
   // MCP_TOKEN_STORE_PATH is set per worker in src/__tests__/setup.ts, which
   // keeps every test off the developer's real token store.
-  delete process.env.MCP_PERSISTENCE;
+ if (persistence) process.env.MCP_PERSISTENCE = persistence;
+ else delete process.env.MCP_PERSISTENCE;
   const mod = await import('../http-server.js');
   const created = mod.createApp();
   // supertest binds and closes an ephemeral server for every request when
@@ -859,7 +860,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
   });
 
  it('returns retryable error for malformed refresh without consuming the memory-store token', async () => {
-  const { app } = await importApp();
+  const { app } = await importApp('file');
   const reg = await request(app).post('/register')
    .send({ redirect_uris: ['http://localhost/cb'], client_name: 'refresh-retry' }).expect(201);
   const verifier = randomBytes(32).toString('base64url');
