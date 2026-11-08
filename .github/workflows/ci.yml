@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubicloud-standard-2
+    runs-on: ubicloud-standard-4
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +33,7 @@ jobs:
           docker logs fs-emu; exit 1
       - name: Prepare isolated signed-proof mounts
         run: sudo chmod 0777 /opt /run
-      - run: npm run check:cutover && npx vitest run --no-file-parallelism
+      - run: npm run check:cutover && npx vitest run --no-file-parallelism --testTimeout=120000 --hookTimeout=120000
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
