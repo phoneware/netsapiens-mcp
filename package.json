@@ -1,6 +1,6 @@
 {
   "name": "netsapiens-mcp",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "NetSapiens MCP Server for NetSapiens Platform Integration",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -19,18 +19,19 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-cutover-runtime.mjs",
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "watch": "tsx watch src/index.ts",
     "clean": "rimraf build",
     "generate:governance": "tsx scripts/generate-governance.ts",
     "generate": "tsx scripts/generate-tools.ts && tsx scripts/generate-v1-tools.ts && tsx scripts/generate-governance.ts",
-    "prebuild": "npm run clean && npm run generate",
+    "prebuild": "npm run check:cutover && npm run clean && npm run generate",
     "prepack": "npm run build",
-    "test": "vitest run",
+    "test": "npm run check:cutover && vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "check:cutover": "node scripts/export-cutover-sources.mjs --consumer . --lock src/auth/kit/cutover-source-lock.json --check"
   },
   "keywords": [
     "mcp",
@@ -45,7 +46,7 @@
   "license": "MIT",
   "dependencies": {
     "@google-cloud/firestore": "^8.6.0",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "axios": "^1.6.0",
     "express": "^5.0.0",
     "express-rate-limit": "^8.2.1",

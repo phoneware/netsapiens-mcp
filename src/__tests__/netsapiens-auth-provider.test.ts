@@ -42,7 +42,7 @@ function hiddenField(html: string, name: string): string | undefined {
   return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
-async function importApp() {
+async function importApp(persistence?: 'file') {
   // Re-import after env vars are set so loadConfig picks them up.
   vi.resetModules();
   process.env.MCP_TRANSPORT = 'http';
@@ -53,7 +53,8 @@ async function importApp() {
   process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
   // MCP_TOKEN_STORE_PATH is set per worker in src/__tests__/setup.ts, which
   // keeps every test off the developer's real token store.
-  delete process.env.MCP_PERSISTENCE;
+ if (persistence) process.env.MCP_PERSISTENCE = persistence;
+ else delete process.env.MCP_PERSISTENCE;
   const mod = await import('../http-server.js');
   const created = mod.createApp();
   // supertest binds and closes an ephemeral server for every request when
@@ -426,7 +427,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
       });
     });
 
-    it('surfaces NS error messages in the login error page on failed grant', async () => {
+    it('redacts upstream error messages on failed login', async () => {
       const { app } = await importApp();
       const reg = await request(app)
         .post('/register')
@@ -454,7 +455,8 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
         .type('form')
         .send({ username: 'x', password: 'y', auth_state: authState })
         .expect(200);
-      expect(r.text).toContain('Invalid User Login');
+      expect(r.text).toContain('Authentication failed');
+      expect(r.text).not.toContain('Invalid User Login');
     });
 
     it('shows expired-session page when the post carries no state', async () => {
@@ -733,7 +735,8 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
         .type('form')
         .send({ username: 'alice', password: 'wrong', auth_state: authState })
         .expect(200);
-      expect(failed.text).toContain('Invalid User Login');
+      expect(failed.text).toContain('Authentication failed');
+      expect(failed.text).not.toContain('Invalid User Login');
 
       const retryState = hiddenField(failed.text, 'auth_state');
       expect(retryState).toBeTruthy();
@@ -855,6 +858,36 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
       expect(r.text).toMatch(/session has expired|reconnect/i);
     });
   });
+
+ it('returns retryable error for malformed refresh without consuming the memory-store token', async () => {
+  const { app } = await importApp('file');
+  const reg = await request(app).post('/register')
+   .send({ redirect_uris: ['http://localhost/cb'], client_name: 'refresh-retry' }).expect(201);
+  const verifier = randomBytes(32).toString('base64url');
+  const auth = await request(app).get('/authorize').query({
+   response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
+   code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256',
+  }).expect(200);
+  mockedAxios.post = vi.fn().mockResolvedValueOnce({ data: { access_token: 'old-ns', refresh_token: 'ns-refresh', expires_in: 3600 } });
+  mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Reseller' } });
+  const login = await request(app).post('/login').type('form')
+   .send({ username: 'alice', password: 'pw', auth_state: hiddenField(auth.text, 'auth_state') }).expect(302);
+  const code = new URL(login.headers.location as string).searchParams.get('code')!;
+  const issued = await request(app).post('/token').type('form').send({
+   grant_type: 'authorization_code', code, code_verifier: verifier, client_id: reg.body.client_id,
+   client_secret: reg.body.client_secret, redirect_uri: 'http://localhost/cb',
+  }).expect(200);
+  mockedAxios.post = vi.fn()
+   .mockResolvedValueOnce({ data: '<html>maintenance</html>' })
+   .mockResolvedValueOnce({ data: { access_token: 'fresh-ns', expires_in: 3600 } });
+  const form = { grant_type: 'refresh_token', client_id: reg.body.client_id, client_secret: reg.body.client_secret, refresh_token: issued.body.refresh_token };
+  const failure = await request(app).post('/token').type('form').send(form).expect(503);
+  expect(failure.body.error).toBe('temporarily_unavailable');
+  expect(JSON.stringify(failure.body)).not.toContain('maintenance');
+  const retried = await request(app).post('/token').type('form').send(form).expect(200);
+  expect(retried.body.access_token).toBeTruthy();
+  expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+ });
 
   describe('transparent NS token refresh', () => {
     it('refreshes the upstream NS token when it is within the skew window', async () => {

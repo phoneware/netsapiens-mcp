@@ -89,6 +89,20 @@ export MCP_SESSION_SECRET=<32+ random hex>     # signs and seals login-state blo
 npm start
 ```
 
+When `MCP_FENCE_ENFORCE=true`, set `MCP_SESSION_SECRET` to the same stable
+value of at least 32 characters on every writer in the namespace. The bridge
+derives its cutover identity key from that secret; the ephemeral login-state
+fallback cannot be used for a fenced deployment. Changing the secret requires
+a separately reviewed identity migration. Enabling the fence does not
+authorize a migration or resolve existing raw operation records.
+
+With Firestore persistence, a timeout, transport failure, or successful upstream
+response without a nonblank access token and positive integer expiry leaves the
+refresh claim held as ambiguous, even when the fence is disabled. There is no
+automatic reconciliation. Under the fence, a namespace cannot seal while the
+claim is held. A 401 client-authentication rejection releases the claim; a 401
+reported as a revoked grant remains held. Do not roll out this bridge unfenced.
+
 Connect from Claude / ChatGPT by giving it the URL `https://mcp.example.com/mcp`. The client will DCR-register, redirect the user to `/authorize`, the user signs in, and the bearer flows back to the AI automatically.
 
 ### Stateless by default

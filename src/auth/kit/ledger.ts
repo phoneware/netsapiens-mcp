@@ -1,4 +1,4 @@
-// Copied from @phoneware/mcp-oauth-kit 1.0.0 (phoneware/monorepo packages/mcp-oauth-kit/src/ledger.ts at 998685a9dd5843a89e6eb1f3659223e7f9e31fc5). Edit the canonical file, then re-copy.
+import type { LegacyOperationContext, PendingClaim } from './cutover-fence.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const REFRESH_RETRY_WINDOW_MS = 30_000;
@@ -29,6 +29,7 @@ export interface StoredRefreshRecord<T extends BaseStoredToken> {
 
 export interface StoredRefreshFamily {
   id: string;
+  generation?: number;
   currentAccessToken: string;
   currentRefreshToken: string;
   previousAccessToken?: string;
@@ -49,22 +50,28 @@ export type RefreshRotationResult<T extends BaseStoredToken> =
   | { status: 'replay' }
   | { status: 'missing' };
 
+export type UpstreamCompletion =
+  | Readonly<{ familyId: string; leaseOwner: string; operationId: null; pendingClaim?: never }>
+  | Readonly<{ familyId: string; leaseOwner: string; operationId: string; pendingClaim: PendingClaim }>;
+
 export interface TokenLedger<T extends BaseStoredToken> {
-  issue(token: T): Promise<T>;
+  issue(token: T, options?: { operation?: LegacyOperationContext }): Promise<T>;
   getByAccessToken(accessToken: string): Promise<T | undefined>;
   lookupRefresh(
     refreshToken: string,
     expectedClientId?: string,
     now?: number,
+    options?: { operation?: LegacyOperationContext },
   ): Promise<RefreshLookupResult<T>>;
   rotate(
     oldRefreshToken: string,
     replacement: T,
     expectedClientId: string,
     now?: number,
+    options?: { operation?: LegacyOperationContext; completeOperation?: boolean; upstreamCompletion?: UpstreamCompletion | null },
   ): Promise<RefreshRotationResult<T>>;
-  revokeFamily(familyId: string): Promise<void>;
-  revokeByToken(token: string): Promise<void>;
+  revokeFamily(familyId: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
+  revokeByToken(token: string, options?: { operation?: LegacyOperationContext }): Promise<void>;
 }
 
 export class MemoryTokenLedger<T extends BaseStoredToken> implements TokenLedger<T> {

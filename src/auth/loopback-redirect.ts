@@ -124,10 +124,7 @@ export class LoopbackTolerantClientsStore implements OAuthRegisteredClientsStore
   if (client.redirect_uris.includes(requested)) return client;
   if (!isLoopbackPortVariant(client.redirect_uris, requested)) return client;
 
-  logger.info('Accepting a loopback redirect_uri on a new port', {
-   clientId,
-   redirectUri: requested,
-  });
+  logger.info('Accepting a loopback redirect_uri on a new port');
   return { ...client, redirect_uris: [...client.redirect_uris, requested] };
  }
 }

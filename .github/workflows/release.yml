@@ -7,7 +7,7 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
     steps:
@@ -49,4 +49,4 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TARBALL="netsapiens-mcp-${VERSION}.tgz"
-          gh release create "$GITHUB_REF_NAME" "$TARBALL" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release create "$GITHUB_REF_NAME" "$TARBALL" --title "$GITHUB_REF_NAME" --generate-notes --latest=false
