@@ -22,6 +22,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import express, { type Request, type Response } from 'express';
 import request from 'supertest';
+import axios from 'axios';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { randomBytes } from 'node:crypto';
@@ -983,6 +984,33 @@ describe.skipIf(!emulatorRunning)('Multi-instance coordination (emulator)', () =
   const surviving = await provider.tokenStore.get(bearerToken);
   expect(surviving).toBeDefined();
   expect(surviving?.accessToken).toBe(bearerToken);
+ });
+
+ it('holds an unfenced malformed upstream response without deleting the bearer', async () => {
+  process.env.MCP_PERSISTENCE = 'firestore';
+  const collection = `tokens_${randomBytes(4).toString('hex')}`;
+  const provider = new NetSapiensAuthProvider({
+   nsApiUrl: 'https://example.com', nsClientId: 'cid', nsClientSecret: 'sec',
+   serverBaseUrl: 'http://localhost:3000',
+   collections: { tokens: collection, clients: `${collection}_clients`, authCodes: `${collection}_codes` },
+  });
+  const app = express();
+  app.post('/mcp', requireBearerAuth({
+   verifier: provider,
+   resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL('http://localhost:3000/mcp')),
+  }), (_req, res) => res.json({ ok: true }));
+  const bearerToken = 'malformed-upstream-bearer';
+  await provider.tokenStore.set({
+   accessToken: bearerToken, refreshToken: 'malformed-upstream-refresh', clientId: 'client-1',
+   expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns-token',
+   nsRefreshToken: 'old-refresh-token', nsExpiresAt: Date.now() - 5000, nsUsername: 'user@example.com',
+  });
+  vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 200, data: '<html>maintenance</html>' });
+  const response = await request(app).post('/mcp').set('Authorization', `Bearer ${bearerToken}`).send();
+  expect(response.status).toBe(500);
+  expect(response.headers['www-authenticate']).toBeUndefined();
+  const surviving = await provider.tokenStore.get(bearerToken);
+  expect(surviving).toMatchObject({ accessToken: bearerToken, nsAccessToken: 'old-ns-token', nsRefreshToken: 'old-refresh-token' });
  });
 
  it('definitive upstream refresh grant rejection (400 or 401) deletes bearer token and returns 401 invalid_token', async () => {

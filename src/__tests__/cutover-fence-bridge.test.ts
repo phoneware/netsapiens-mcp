@@ -3082,6 +3082,9 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
       expect(held.ambiguousOutcome).toBe(true);
       expect(held.ambiguousReason).toBe('upstream_transport_error');
       expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(1);
+      await transitionCutoverFenceState(db, 'mcp', { fromState: 'legacy_open', toState: 'closing', expectedEpoch: 1 });
+      await expect(transitionCutoverFenceState(db, 'mcp', { fromState: 'closing', toState: 'fenced', expectedEpoch: 1 }))
+        .rejects.toThrow(/active|pending/i);
     }
     expect(callback).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseNsRefreshResponse } from '../auth/ns-refresh-response.js';
-import { kitCodeOf } from '../auth/kit/errors.js';
+import { kitCodeOf, UpstreamRequestRejectedError, UpstreamRevokedError } from '../auth/kit/errors.js';
 
 describe('NetSapiens refresh response validation', () => {
   it('accepts a valid response, with optional refresh-token rotation', () => {
@@ -23,6 +23,8 @@ describe('NetSapiens refresh response validation', () => {
       expect.fail('malformed response was accepted');
     } catch (error) {
       expect(kitCodeOf(error)).toBe('upstream_unavailable');
+      expect(error).not.toBeInstanceOf(UpstreamRequestRejectedError);
+      expect(error).not.toBeInstanceOf(UpstreamRevokedError);
       expect((error as Error).message).toBe('Upstream refresh returned an invalid token response');
     }
   });
