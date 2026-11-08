@@ -465,18 +465,18 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           nsUsername: grantObj.nsUsername ?? stored.nsUsername,
           nsUserRole: grantObj.nsUserRole ?? stored.nsUserRole,
         };
-     const refreshed = parseNsRefreshResponse(await doRefresh(grantCandidate));
-     const expiresAt = this.localNow() + refreshed.expires_in * 1000;
+        const refreshed = parseNsRefreshResponse(await doRefresh(grantCandidate));
+        const expiresAt = this.localNow() + refreshed.expires_in * 1000;
         return {
           grant: {
             nsAccessToken: refreshed.access_token,
             nsRefreshToken: refreshed.refresh_token ?? authoritativeRefreshToken,
-       nsExpiresAt: expiresAt,
+            nsExpiresAt: expiresAt,
             nsUsername: stored.nsUsername,
             nsUserRole: stored.nsUserRole,
             nsApiUrl: authoritativeApiUrl,
           },
-      expiresAt,
+          expiresAt,
         };
       },
       {

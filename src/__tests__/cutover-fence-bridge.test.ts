@@ -3057,6 +3057,35 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect((await upstreamRef.get()).data()).toEqual(held);
   });
 
+  it.each([false, true])('validates a fenced store refresh callback before completion (valid=%s)', async (valid) => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence });
+    const token = await store.issue({
+      accessToken: 'callback-access', refreshToken: 'callback-refresh', clientId: 'callback-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns', nsRefreshToken: 'old-refresh',
+      nsExpiresAt: Date.now() - 1, nsUsername: 'user',
+    });
+    const before = (await store.upstreamDocRef(token.refreshFamilyId!).get()).data()!;
+    const callback = vi.fn().mockResolvedValue(valid
+      ? { access_token: 'new-ns', expires_in: 3600 }
+      : { access_token: 'new-ns' });
+    if (valid) {
+      const refreshed = await store.refreshNsToken(token.accessToken, callback);
+      expect(refreshed.nsAccessToken).toBe('new-ns');
+      expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
+    } else {
+      await expect(store.refreshNsToken(token.accessToken, callback)).rejects.toThrow();
+      const held = (await store.upstreamDocRef(token.refreshFamilyId!).get()).data()!;
+      expect(held.grant).toEqual(before.grant);
+      expect(held.ambiguousOutcome).toBe(true);
+      expect(held.ambiguousReason).toBe('upstream_transport_error');
+      expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(1);
+    }
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a retryable HTTP response without invalid-token challenge for a fenced invalid grant', async () => {
     configureHttpTest();
     const db = createTestDb();
