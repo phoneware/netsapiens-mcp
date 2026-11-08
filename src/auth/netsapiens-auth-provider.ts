@@ -23,6 +23,7 @@ import {
 } from 'node:crypto';
 import type { Request, Response } from 'express';
 import axios from 'axios';
+import { parseNsRefreshResponse } from './ns-refresh-response.js';
 import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
@@ -2071,9 +2072,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    );
 
    return {
-    access_token: response.data.access_token,
-    refresh_token: response.data.refresh_token,
-    expires_in: response.data.expires_in,
+    ...parseNsRefreshResponse(response.data),
     username: '', // caller fills this in
     nsApiUrl: targetApiUrl,
    };

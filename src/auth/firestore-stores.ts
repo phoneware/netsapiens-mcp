@@ -16,6 +16,7 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { TemporarilyUnavailableError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { StoredToken } from './token-store.js';
+import { parseNsRefreshResponse } from './ns-refresh-response.js';
 import type { PendingAuthorization, NsTokenResponse, AuthCodeData } from './types.js';
 import { FirestoreTokenLedger, docId } from './kit/firestore-ledger.js';
 import type { RefreshLookupResult, RefreshRotationResult, StoredRefreshFamily, UpstreamCompletion } from './kit/ledger.js';
@@ -464,17 +465,18 @@ export class FirestoreTokenStore extends FirestoreTokenLedger<StoredToken> {
           nsUsername: grantObj.nsUsername ?? stored.nsUsername,
           nsUserRole: grantObj.nsUserRole ?? stored.nsUserRole,
         };
-        const refreshed = await doRefresh(grantCandidate);
+     const refreshed = parseNsRefreshResponse(await doRefresh(grantCandidate));
+     const expiresAt = this.localNow() + refreshed.expires_in * 1000;
         return {
           grant: {
             nsAccessToken: refreshed.access_token,
             nsRefreshToken: refreshed.refresh_token ?? authoritativeRefreshToken,
-            nsExpiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+       nsExpiresAt: expiresAt,
             nsUsername: stored.nsUsername,
             nsUserRole: stored.nsUserRole,
             nsApiUrl: authoritativeApiUrl,
           },
-          expiresAt: refreshed.expires_in ? this.localNow() + refreshed.expires_in * 1000 : undefined,
+      expiresAt,
         };
       },
       {

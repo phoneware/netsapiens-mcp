@@ -3000,6 +3000,63 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect((await upstreamRef.get()).data()).toEqual(held);
   });
 
+  it.each([
+    ['exchange', '<html>maintenance</html>'],
+    ['exchange', { error: 'invalid_grant' }],
+    ['exchange', { access_token: 'new-ns' }],
+    ['exchange', { access_token: 'new-ns', expires_in: 3600, refresh_token: '' }],
+    ['transparent', '<html>maintenance</html>'],
+    ['transparent', { error: 'invalid_grant' }],
+    ['transparent', { access_token: 'new-ns' }],
+    ['transparent', { access_token: 'new-ns', expires_in: 3600, refresh_token: '' }],
+    ['forced', '<html>maintenance</html>'],
+    ['forced', { error: 'invalid_grant' }],
+    ['forced', { access_token: 'new-ns' }],
+    ['forced', { access_token: 'new-ns', expires_in: 3600, refresh_token: '' }],
+  ] as const)('holds fenced %s on malformed successful upstream response %#', async (mode, body) => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    let now = Date.now();
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence, now: () => now });
+    const provider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com', nsClientId: 'test', nsClientSecret: 'test',
+      tokenStore: store, firestore: db, fence, now: () => now,
+    });
+    const token = await store.issue({
+      accessToken: 'malformed-access', refreshToken: 'malformed-refresh', clientId: 'malformed-client',
+      expiresAt: now + 3600_000, nsAccessToken: 'committed-ns', nsRefreshToken: 'committed-ns-refresh',
+      nsExpiresAt: now - 1, nsUsername: 'user',
+    });
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: body });
+    const client = { client_id: token.clientId } as OAuthClientInformationFull;
+    const invoke = () => mode === 'exchange'
+      ? provider.exchangeRefreshToken(client, token.refreshToken)
+      : mode === 'transparent' ? provider.verifyAccessToken(token.accessToken)
+        : provider.forceRefreshUpstream(token.accessToken);
+    const upstreamRef = store.upstreamDocRef(token.refreshFamilyId!);
+    const before = (await upstreamRef.get()).data()!;
+    await expect(invoke()).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(1);
+    const held = (await upstreamRef.get()).data()!;
+    expect(held.grant).toEqual(before.grant);
+    expect(held.updatedAt).toBe(before.updatedAt);
+    expect(held.leaseOwner).toMatch(/^owner1_/);
+    expect(held.operationId).toMatch(/^op1_/);
+    expect(held.ambiguousOperationId).toBe(held.operationId);
+    expect(held.ambiguousOutcome).toBe(true);
+    expect(held.ambiguousReason).toBe('upstream_transport_error');
+    expect((await store.accessDocRef(token.accessToken).get()).exists).toBe(true);
+    expect((await store.refreshDocRef(token.refreshToken).get()).exists).toBe(true);
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(1);
+    const operation = await getCutoverFenceDocRef(db, 'mcp').collection('operations').doc(held.operationId).get();
+    expect(operation.data()).toMatchObject({ phase: 'upstream_pending', ambiguousRemoteOutcome: true });
+    now = held.leaseUntil + 1;
+    await expect(invoke()).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect((await upstreamRef.get()).data()).toEqual(held);
+  });
+
   it('returns a retryable HTTP response without invalid-token challenge for a fenced invalid grant', async () => {
     configureHttpTest();
     const db = createTestDb();
