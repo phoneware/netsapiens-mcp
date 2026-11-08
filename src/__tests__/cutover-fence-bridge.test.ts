@@ -3086,6 +3086,39 @@ describe('Legacy Bridge Cutover Fence & Regressions (C1-C5, S2, §5.1)', { timeo
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
+  it('releases a fenced refresh claim on a rejected client and accepts a later valid refresh', async () => {
+    const db = createTestDb();
+    await initializeCutoverFence(db, 'mcp');
+    const fence = { namespace: 'mcp' as const, enforce: true };
+    const store = new FirestoreTokenStore({ db, collection: 'mcp_tokens', fence });
+    const provider = new NetSapiensAuthProvider({
+      nsApiUrl: 'https://test.example.com', nsClientId: 'test', nsClientSecret: 'test',
+      tokenStore: store, firestore: db, fence,
+    });
+    const token = await store.issue({
+      accessToken: 'rejected-access', refreshToken: 'rejected-refresh', clientId: 'rejected-client',
+      expiresAt: Date.now() + 3600_000, nsAccessToken: 'old-ns', nsRefreshToken: 'old-refresh',
+      nsExpiresAt: Date.now() - 1, nsUsername: 'user',
+    });
+    const upstreamRef = store.upstreamDocRef(token.refreshFamilyId!);
+    const before = (await upstreamRef.get()).data()!;
+    const post = vi.spyOn(axios, 'post')
+      .mockRejectedValueOnce(Object.assign(new Error('rejected'), {
+        isAxiosError: true, response: { status: 401, data: { error: 'invalid_client' } },
+      }))
+      .mockResolvedValueOnce({ status: 200, data: { access_token: 'new-ns', expires_in: 3600 } });
+    const client = { client_id: token.clientId } as OAuthClientInformationFull;
+    await expect(provider.exchangeRefreshToken(client, token.refreshToken)).rejects.toThrow();
+    const released = (await upstreamRef.get()).data()!;
+    expect(released.grant).toEqual(before.grant);
+    expect(released.updatedAt).toBe(before.updatedAt);
+    expect(released.leaseOwner).toBeNull();
+    expect((await getCutoverFenceRecord(db, 'mcp'))?.activeOperations).toBe(0);
+    await expect(provider.exchangeRefreshToken(client, token.refreshToken)).resolves.toHaveProperty('access_token');
+    expect((await upstreamRef.get()).data()?.grant.nsAccessToken).toBe('new-ns');
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
   it('returns a retryable HTTP response without invalid-token challenge for a fenced invalid grant', async () => {
     configureHttpTest();
     const db = createTestDb();

@@ -96,6 +96,11 @@ fallback cannot be used for a fenced deployment. Changing the secret requires
 a separately reviewed identity migration. Enabling the fence does not
 authorize a migration or resolve existing raw operation records.
 
+Under the fence, a timeout, transport failure, or successful upstream response
+without a nonblank access token and positive integer expiry leaves the refresh
+claim held as ambiguous. A namespace cannot seal while that claim is held;
+there is no automatic reconciliation. An HTTP 401 releases the claim.
+
 Connect from Claude / ChatGPT by giving it the URL `https://mcp.example.com/mcp`. The client will DCR-register, redirect the user to `/authorize`, the user signs in, and the bearer flows back to the AI automatically.
 
 ### Stateless by default
