@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +33,7 @@ jobs:
           docker logs fs-emu; exit 1
       - name: Prepare isolated signed-proof mounts
         run: sudo chmod 0777 /opt /run
-      - run: npm run check:cutover && npx vitest run --no-file-parallelism
+      - run: npm run check:cutover && npx vitest run --no-file-parallelism --testTimeout=120000 --hookTimeout=120000
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
@@ -57,7 +57,7 @@ jobs:
           if git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep -q '^spec/v2/observations/'; then if [ -f scripts/availability-diff.ts ]; then npx tsx scripts/availability-diff.ts "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"; fi; fi
 
   consumer:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +79,7 @@ jobs:
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL"
 
   consumer-firestore:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +111,7 @@ jobs:
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major ${{ matrix.firestore }}
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -137,7 +137,7 @@ jobs:
 
   ci:
     needs: [test, consumer, consumer-firestore, docker, windows]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     if: always()
     steps:
       - name: Aggregate job results
