@@ -124,10 +124,61 @@ describe('migration candidate ordering', () => {
     'accepts one %s candidate', (kind) => checkPermutation([fixture(kind, 0)]),
   );
 
-  it('accepts both input orders of the same two resume tokens', () => {
-    const candidates = [fixture('resumeTokens', 0), fixture('resumeTokens', 1)].sort((a, b) => a.candidateId < b.candidateId ? -1 : 1);
-    expect(candidates[0].candidateId < candidates[1].candidateId).toBe(true);
+  it.each<Kind>(['pr56Families', 'baseFormatTokens', 'authCodes', 'resumeTokens'])(
+    'accepts both input orders of two %s candidates', (kind) => {
+      const candidates = [fixture(kind, 0), fixture(kind, 1)]
+        .sort((a, b) => a.candidateId < b.candidateId ? -1 : 1);
+      expect(candidates[0].candidateId < candidates[1].candidateId).toBe(true);
+      checkPermutation(candidates);
+    },
+  );
+
+  it('accepts clients whose raw-ID order reverses their keyed candidate-ID order', () => {
+    const clients = Array.from({ length: 128 }, (_, n) => fixture('clients', n))
+      .sort((a, b) => a.inventory.get('clients')![0].id < b.inventory.get('clients')![0].id ? -1 : 1);
+    let pair: [Fixture, Fixture] | undefined;
+    for (let i = 0; i < clients.length && !pair; i++) {
+      for (let j = i + 1; j < clients.length; j++) {
+        if (clients[i].candidateId > clients[j].candidateId) {
+          pair = [clients[i], clients[j]];
+          break;
+        }
+      }
+    }
+    if (!pair) throw new Error('Synthetic client IDs did not produce the requested inversion');
+    expect(pair[0].inventory.get('clients')![0].id < pair[1].inventory.get('clients')![0].id).toBe(true);
+    expect(pair[0].candidateId > pair[1].candidateId).toBe(true);
+    checkPermutation(pair);
+  });
+
+  it('accepts all five kinds with inverted discovery order', () => {
+    const families = Array.from({ length: 128 }, (_, n) => fixture('pr56Families', n))
+      .sort((a, b) => a.candidateId < b.candidateId ? -1 : 1);
+    const bases = Array.from({ length: 128 }, (_, n) => fixture('baseFormatTokens', n))
+      .sort((a, b) => a.candidateId < b.candidateId ? -1 : 1);
+    const candidates = [
+      families[families.length - 1], bases[0], fixture('authCodes', 0),
+      fixture('resumeTokens', 0), fixture('clients', 0),
+    ];
+    expect(candidates[0].candidateId > candidates[1].candidateId).toBe(true);
     checkPermutation(candidates);
+  });
+
+  it('rejects a reversed prepared commitment array under the unchanged validator', () => {
+    const candidates = [fixture('resumeTokens', 0), fixture('resumeTokens', 1)]
+      .sort((a, b) => a.candidateId < b.candidateId ? -1 : 1);
+    expect(candidates[0].candidateId < candidates[1].candidateId).toBe(true);
+    const result = extract(combine(candidates));
+    validate(result.plan as CompleteMigrationPlan);
+    const altered = {
+      ...result.plan,
+      prepared: {
+        ...result.plan.prepared,
+        candidateCommitments: [...result.plan.prepared.candidateCommitments].reverse(),
+      },
+    };
+    expect(() => validate(altered as CompleteMigrationPlan))
+      .toThrow('planSpec candidateId mismatch with prepared commitment id');
   });
 
   // Different kinds are discovered in fixed phases. Select real keyed IDs for

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixes
+
+- Build prepared Firestore migration commitments in the same canonical candidate order as their plan.
+
 ## 3.0.0
 
 ### Breaking Changes
