@@ -479,7 +479,6 @@ export function extractCandidatesAndPlan(params: {
   }
 
   const candidates: any[] = [];
-  const candidateCommitments: any[] = [];
   const claimedAccessIds = new Set<string>();
   const claimedRefreshIds = new Set<string>();
   const claimedRetiredFingerprints = new Set<string>();
@@ -778,7 +777,6 @@ export function extractCandidatesAndPlan(params: {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
-    candidateCommitments.push(candCommitment);
 
     claimedRefreshDocIds.add(curRefEntry.doc.id);
     if (prevRefEntry) claimedRefreshDocIds.add(prevRefEntry.doc.id);
@@ -951,7 +949,6 @@ export function extractCandidatesAndPlan(params: {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
-    candidateCommitments.push(candCommitment);
 
     claimedTokenDocIds.add(tokEntry.doc.id);
     if (baseRefEntry) claimedRefreshDocIds.add(baseRefEntry.doc.id);
@@ -1060,7 +1057,6 @@ export function extractCandidatesAndPlan(params: {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
-    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
@@ -1134,7 +1130,6 @@ export function extractCandidatesAndPlan(params: {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
-    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
@@ -1250,7 +1245,6 @@ export function extractCandidatesAndPlan(params: {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest,
     };
-    candidateCommitments.push(candCommitment);
 
     candidates.push({
       id: candidateId,
@@ -1289,8 +1283,8 @@ export function extractCandidatesAndPlan(params: {
     throw new CutoverFenceError('Duplicate candidateId detected in candidate extraction');
   }
 
-  const sortedCommitments = candidates.map((c) => c.commitment);
-  const sourceLogicalItems = sortedCommitments.map((c) => [c.id, c.logicalDigest] as [string, string]);
+  const candidateCommitments = candidates.map((candidate) => candidate.commitment);
+  const sourceLogicalItems = candidateCommitments.map((c) => [c.id, c.logicalDigest] as [string, string]);
   const sourceLogicalDigest = computeLogicalInventoryDigest(storeKey, namespace, epoch, sourceLogicalItems);
 
   // Source descriptors
@@ -1320,7 +1314,7 @@ export function extractCandidatesAndPlan(params: {
     assemblyDigest,
     indexSchemaDigest,
     encoderVersion: 1,
-    candidates: sortedCommitments.map((c) => {
+    candidates: candidateCommitments.map((c) => {
       const executionCand = candidateById.get(c.id);
       if (!executionCand) throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} missing from execution candidates`);
       return {
