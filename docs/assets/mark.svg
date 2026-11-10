@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="NetSapiens MCP Server">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" rx="46" fill="url(#g)"/>
+  <!-- handset -->
+  <path fill="#fff" d="M52 66c0-10 8-18 18-18h14c4 0 7 3 8 6l5 18c1 4-1 7-4 9l-9 5c7 15 18 26 33 33l5-9c2-3 5-5 9-4l18 5c3 1 6 4 6 8v14c0 10-8 18-18 18C99 151 52 104 52 66z"/>
+  <!-- signal arcs -->
+  <g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round">
+    <path d="M118 62a24 24 0 0 1 24 24"/>
+    <path d="M118 38a48 48 0 0 1 48 48" opacity=".65"/>
+  </g>
+</svg>
