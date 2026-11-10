@@ -193,12 +193,13 @@ python3 "$stage/check-tree.py" compare "$stage/source.tar" "$work/src"
 phase "$current" passed
 
 current=pack
-if ! npm pack --json --pack-destination "$work" >"$work/pack.json" 2>"$work/logs/pack.log"; then
+if ! npm pack --json --foreground-scripts=false --pack-destination "$work" >"$work/pack.json" 2>"$work/logs/pack.log"; then
   tail -c 8192 "$work/logs/pack.log" | cut -c1-1024 >&2 || :
   exit 1
 fi
 candidate=$(node -e 'const fs=require("node:fs"),path=require("node:path");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!Array.isArray(x)||x.length!==1||x[0].version!=="3.0.1"||typeof x[0].filename!=="string"||path.basename(x[0].filename)!==x[0].filename)process.exit(1);process.stdout.write(path.join(process.argv[2],x[0].filename))' "$work/pack.json" "$work")
 test -f "$candidate"
+[ "$(find "$work" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')" = 1 ] || { echo 'proof: pack produced more than one tarball' >&2; exit 1; }
 sha256sum "$candidate"
 sha512sum "$candidate"
 phase "$current" passed
