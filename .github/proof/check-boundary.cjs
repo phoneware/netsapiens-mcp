@@ -2,15 +2,19 @@
 // Containment, emulator and protected-result checks for the isolated proof.
 //   boundary <gateway-ipv4> <port>            no network device or route beyond lo; TCP and UDP to
 //                                             external and canary addresses unreachable; loopback usable
-//   probe-unreachable <ip> <port> <family>    TCP and UDP to ip:port must be unreachable; a reachable
-//                                             target fails with "unexpected connection"
-//   reach <gateway-ipv4> <port>               positive control: the host canary answers this container
+//   probe-tcp <ip> <port> <4|6>               TCP to ip:port must be unreachable. A reachable target fails
+//                                             with "unexpected connection"
+//   probe-udp <ip> <port> <4|6>               one UDP datagram to ip:port must fail with an unreachable
+//                                             error. A send that succeeds fails with "udp send succeeded"
+//   reach <gateway-ipv4> <port>               positive control: the host TCP canary answers this container
+//   reach-udp <gateway-ipv4> <port>           positive control: the host UDP canary replies to this container
 //   env [file]                                environment names and values in file (NUL-separated, e.g.
 //                                             /proc/1/environ, which is the container's own env, not a
 //                                             shell's exports); without a file, this process's env
-//   status                                    default seccomp filter, docker-default AppArmor, no_new_privs,
+//   status                                    seccomp mode 2 (filter), docker-default AppArmor, no_new_privs,
 //                                             empty capability sets
-//   emulator <pid>                            the pid owns 127.0.0.1:8080 and the protected projects behave
+//   emulator <pid>                            the pid owns 127.0.0.1:8080 and the protected projects behave,
+//                                             all within one 120 s monotonic budget
 //   identity <pid>                            stable pid:start-time:inode identity of that listener
 //   results <vitest.json> <expected> <root>   <expected> is the archive-derived suite inventory; protected
 //                                             files exist with exact case counts, all passed
@@ -44,9 +48,11 @@ const PROTECTED = [
   ['__tests__/pr56-adoption-e2e.test.ts', 10],
   ['__tests__/pr56-retired-replay.test.ts', 1],
 ];
-// Emulator readiness budget: 480 polls at 250 ms, so 120 s, matching CI.
-const EMULATOR_POLLS = 480;
+// One budget for the whole emulator check: readiness polling and the marker and reset calls share it.
+const EMULATOR_BUDGET_MS = 120000;
+const REQUEST_CAP_MS = 3000;
 const DOCKER_DEFAULT_APPARMOR = 'docker-default (enforce)';
+const UDP_REPLY = 'canary-udp-hit\n';
 
 function readOptional(file) {
   try {
@@ -66,12 +72,13 @@ function connectExpect(host, port, family, allowed) {
   });
 }
 
+// One datagram. An unreachable error passes; a send that completes fails. The canary logs a hit
+// for any datagram that reaches it, which is how the owned bridge negative shows the probe catches reachability.
 function udpExpect(host, port, family) {
   return new Promise((resolve, reject) => {
     const s = dgram.createSocket(family === 6 ? 'udp6' : 'udp4');
-    const timer = setTimeout(() => { s.close(); reject(new Error(`udp timed out: ${host}:${port}`)); }, 1500);
+    s.once('error', e => { s.close(); reject(new Error(`udp ${host}:${port}: ${e.code}`)); });
     s.send(Buffer.from('nsmcp-probe'), port, host, err => {
-      clearTimeout(timer);
       s.close();
       if (!err) reject(new Error(`udp send succeeded: ${host}:${port}`));
       else if (UNREACHABLE.includes(err.code)) resolve();
@@ -111,17 +118,24 @@ async function boundary(gateway, port) {
   await loopbackChild();
 }
 
-// probe-unreachable is the single-target probe used by negative controls: it must fail with
-// "unexpected connection" when the target is reachable, and pass when it is not.
-async function probeUnreachable(host, port, family) {
+function checkTarget(host, port, family) {
   assert.ok(net.isIP(host), 'target must be an IP literal');
   assert.match(port, /^\d+$/);
   assert.ok(family === '4' || family === '6', 'family must be 4 or 6');
-  await connectExpect(host, Number(port), Number(family), UNREACHABLE);
-  await udpExpect(host, Number(port), Number(family));
+  return { host, port: Number(port), family: Number(family) };
 }
 
-function reach(gateway, port) {
+async function probeTcp(host, port, family) {
+  const t = checkTarget(host, port, family);
+  await connectExpect(t.host, t.port, t.family, UNREACHABLE);
+}
+
+async function probeUdp(host, port, family) {
+  const t = checkTarget(host, port, family);
+  await udpExpect(t.host, t.port, t.family);
+}
+
+function reachTcp(gateway, port) {
   assert.ok(net.isIPv4(gateway), 'gateway must be IPv4');
   assert.match(port, /^\d+$/);
   return new Promise((resolve, reject) => {
@@ -131,6 +145,26 @@ function reach(gateway, port) {
     s.on('data', chunk => { body += chunk; });
     s.once('error', reject);
     s.once('close', () => (body === 'canary-hit\n' ? resolve() : reject(new Error(`canary reply: ${JSON.stringify(body)}`))));
+  });
+}
+
+// The UDP canary echoes a fixed reply to the sender. Receiving it proves the datagram reached the host.
+function reachUdp(gateway, port) {
+  assert.ok(net.isIPv4(gateway), 'gateway must be IPv4');
+  assert.match(port, /^\d+$/);
+  return new Promise((resolve, reject) => {
+    const s = dgram.createSocket('udp4');
+    const timer = setTimeout(() => { s.close(); reject(new Error('udp canary reply timed out')); }, REQUEST_CAP_MS);
+    s.once('error', e => { clearTimeout(timer); s.close(); reject(new Error(`udp canary: ${e.code}`)); });
+    s.once('message', msg => {
+      clearTimeout(timer);
+      s.close();
+      if (msg.toString('utf8') === UDP_REPLY) resolve();
+      else reject(new Error(`udp canary reply: ${JSON.stringify(msg.toString('utf8'))}`));
+    });
+    s.send(Buffer.from('nsmcp-probe'), Number(port), gateway, err => {
+      if (err) { clearTimeout(timer); s.close(); reject(new Error(`udp canary send: ${err.code}`)); }
+    });
   });
 }
 
@@ -165,12 +199,13 @@ function checkStatus() {
     assert(m, `missing ${k}`);
     return m[1];
   };
-  assert.equal(get('Seccomp'), '2', 'default seccomp filter is not active');
+  // Seccomp mode 2 proves a filter is loaded in filter mode. It does not prove Docker's default
+  // profile is the one loaded; the AppArmor label below is the only profile identity checked here.
+  assert.equal(get('Seccomp'), '2', 'seccomp mode is not 2 (filter)');
   assert.equal(get('NoNewPrivs'), '1', 'no_new_privs is not set');
   for (const k of ['CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb']) {
     assert.match(get(k), /^0+$/, `${k} is not empty`);
   }
-  // Seccomp: 2 says a filter is loaded, not which one. The AppArmor label names Docker's default profile.
   assert.equal(readOptional('/proc/self/attr/current').trim(), DOCKER_DEFAULT_APPARMOR,
     'AppArmor profile is not docker-default');
 }
@@ -200,8 +235,15 @@ function emulatorIdentity(pid) {
   return `${pid}:${start}:${inode}`;
 }
 
-async function request(url, options = {}) {
-  return fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
+// Every request is capped at 3 s and at whatever remains of the shared emulator deadline.
+function remaining(deadline) {
+  const left = deadline - performance.now();
+  if (left <= 0) throw new Error('emulator check exceeded its 120 s budget');
+  return left;
+}
+
+async function request(url, deadline, options = {}) {
+  return fetch(url, { ...options, signal: AbortSignal.timeout(Math.min(REQUEST_CAP_MS, remaining(deadline))) });
 }
 
 async function probe8081() {
@@ -212,14 +254,20 @@ async function probe8081() {
 
 async function emulator(pid) {
   assert.match(pid, /^\d+$/);
+  const deadline = performance.now() + EMULATOR_BUDGET_MS;
   await probe8081();
   let ready = false;
-  for (let i = 0; i < EMULATOR_POLLS; i++) {
+  while (performance.now() < deadline) {
     if (!fs.existsSync(`/proc/${pid}`)) throw new Error('emulator exited before becoming ready');
     if (ownerOf8080(pid)) {
-      try { const r = await request('http://127.0.0.1:8080/'); await r.text(); ready = true; break; } catch {}
+      try {
+        const r = await request('http://127.0.0.1:8080/', deadline);
+        await r.text();
+        ready = true;
+        break;
+      } catch {}
     }
-    await sleep(250);
+    await sleep(Math.min(250, Math.max(0, deadline - performance.now())));
   }
   assert(ready, 'emulator not ready within 120 s, or the process does not own port 8080');
   for (const project of ['firestore-test', 'demo-netsapiens-cutover']) {
@@ -227,22 +275,22 @@ async function emulator(pid) {
     const reset = `http://127.0.0.1:8080/emulator/v1/projects/${project}/databases/(default)/documents`;
     const doc = `${root}/proof_boundary/marker`;
     const json = { 'content-type': 'application/json' };
-    let r = await request(doc, { method: 'PATCH', headers: json, body: JSON.stringify({ fields: { marker: { stringValue: 'disposable-proof' } } }) });
+    let r = await request(doc, deadline, { method: 'PATCH', headers: json, body: JSON.stringify({ fields: { marker: { stringValue: 'disposable-proof' } } }) });
     assert(r.ok, `marker write failed: ${project} ${r.status}`);
-    r = await request(doc);
+    r = await request(doc, deadline);
     assert(r.ok, `marker read failed: ${project}`);
     assert.equal((await r.json()).fields.marker.stringValue, 'disposable-proof');
-    r = await request(doc, { method: 'DELETE' });
+    r = await request(doc, deadline, { method: 'DELETE' });
     assert(r.ok, `marker delete failed: ${project}`);
-    r = await request(doc);
+    r = await request(doc, deadline);
     assert.equal(r.status, 404, `marker survived deletion: ${project}`);
-    r = await request(doc, { method: 'PATCH', headers: json, body: JSON.stringify({ fields: { marker: { stringValue: 'reset-proof' } } }) });
+    r = await request(doc, deadline, { method: 'PATCH', headers: json, body: JSON.stringify({ fields: { marker: { stringValue: 'reset-proof' } } }) });
     assert(r.ok, `reset marker write failed: ${project}`);
-    r = await request(doc);
+    r = await request(doc, deadline);
     assert(r.ok && (await r.json()).fields.marker.stringValue === 'reset-proof', `reset marker read failed: ${project}`);
-    r = await request(reset, { method: 'DELETE' });
+    r = await request(reset, deadline, { method: 'DELETE' });
     assert(r.ok, `emulator reset failed: ${project} ${r.status}`);
-    r = await request(doc);
+    r = await request(doc, deadline);
     assert.equal(r.status, 404, `marker survived reset: ${project}`);
   }
   assert(ownerOf8080(pid), 'emulator no longer owns port 8080');
@@ -289,8 +337,10 @@ function results(file, expectedFile, root) {
 (async () => {
   const [mode, a, b, c] = process.argv.slice(2);
   if (mode === 'boundary') await boundary(a, b);
-  else if (mode === 'probe-unreachable') await probeUnreachable(a, b, c);
-  else if (mode === 'reach') await reach(a, b);
+  else if (mode === 'probe-tcp') await probeTcp(a, b, c);
+  else if (mode === 'probe-udp') await probeUdp(a, b, c);
+  else if (mode === 'reach') await reachTcp(a, b);
+  else if (mode === 'reach-udp') await reachUdp(a, b);
   else if (mode === 'env') checkEnv(a);
   else if (mode === 'status') checkStatus();
   else if (mode === 'emulator') await emulator(a);

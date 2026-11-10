@@ -4,7 +4,8 @@
 # failing logs. Exit status is the verdict.
 #
 #   inner.sh <canary-gateway-ipv4> <canary-port>   full candidate run
-#   inner.sh --launch-probe                        emulator launch form validation only (control)
+#   inner.sh --launch-probe                        emulator launch form validation only (control);
+#                                                  takes no gateway, so the boundary phase is skipped
 #
 # Order matches CI: committed-source check and Vitest, then build, then pack. The archived tree is
 # compared with the working tree at each step, so a build or pack that rewrites tracked files fails.
@@ -64,7 +65,7 @@ run_phase() {
 }
 
 # start_emulator: tries each launch form the jar supports until one owns 127.0.0.1:8080 and answers
-# the protected-project marker and reset API. Each attempt is bounded by the checker's 120 s wait.
+# the protected-project marker and reset API. Each attempt has its own 120 s monotonic budget in the checker.
 start_emulator() {
   local form
   local -a forms argv
@@ -109,9 +110,13 @@ node "$stage/check-boundary.cjs" env /proc/1/environ
 node "$stage/check-boundary.cjs" status
 phase "$current" passed
 
-current=boundary
-node "$stage/check-boundary.cjs" boundary "$gateway" "$canary_port"
-phase "$current" passed
+# The boundary phase needs the canary, so only a candidate run performs it. The launch probe is
+# validated by its own controls in the host launcher.
+if [ "$mode" = candidate ]; then
+  current=boundary
+  node "$stage/check-boundary.cjs" boundary "$gateway" "$canary_port"
+  phase "$current" passed
+fi
 
 current=filesystem
 python3 "$stage/check-filesystem.py" all

@@ -3,9 +3,14 @@
 #
 # Usage: bash .github/proof/stage.sh <preflight|stage|controls|run|all>
 #
+# SHA binding. Nothing here hardcodes a SHA. preflight enforces two relations on the checkout:
+#   GITHUB_SHA must equal HEAD, the workflow commit that carries these files, and
+#   CANDIDATE_SHA must equal HEAD^, the single commit that commit adds to. The workflow supplies
+#   both values. A dispatch whose CANDIDATE_SHA input names another commit fails closed here.
+#
 # Environment. The workflow supplies exactly these; nothing else is read.
-#   CANDIDATE_SHA        40 lowercase hex; must equal HEAD^ of the checkout. The workflow pins it.
-#   GITHUB_SHA           40 lowercase hex; the workflow commit, which must equal HEAD.
+#   CANDIDATE_SHA        40 lowercase hex; must equal HEAD^ of the checkout
+#   GITHUB_SHA           40 lowercase hex; must equal HEAD of the checkout
 #   GITHUB_EVENT_NAME    must be workflow_dispatch
 #   GITHUB_REF           must match refs/heads/proof/*
 #   GITHUB_WORKSPACE     checkout of the workflow commit, fetch-depth: 2
@@ -43,8 +48,11 @@ readonly ACQ_TIMEOUT_SECONDS=1800
 readonly RUN_TIMEOUT_SECONDS=2700
 readonly CONTROL_TIMEOUT_SECONDS=900
 readonly PROOF_UID=10001
+# Runner-compatible CPU share. ubuntu-24.04 hosted runners provide 2 vCPUs; --cpus above that is refused.
+readonly CONTAINER_CPUS=2
 
-# Lockfile gate: every package must resolve from the public npm registry, with no links.
+# Lockfile gate: every package must resolve from the public npm registry, with no links. Names are
+# printed with ascii(), so a key containing a newline or a "::" prefix cannot reach the log as a command.
 readonly LOCK_CHECK='import json, sys
 d = json.load(sys.stdin)
 if d.get("lockfileVersion") not in (2, 3) or not isinstance(d.get("packages"), dict):
@@ -54,11 +62,11 @@ for name, p in d["packages"].items():
     if name == "":
         continue
     if p.get("link") or p.get("inBundle"):
-        bad.append(name)
+        bad.append(ascii(name))
         continue
     r = p.get("resolved")
     if not isinstance(r, str) or not r.startswith("https://registry.npmjs.org/"):
-        bad.append(name)
+        bad.append(ascii(name))
 if bad:
     raise SystemExit("lock entries not from registry.npmjs.org or linked: " + ", ".join(bad[:5]))
 '
@@ -99,7 +107,8 @@ proof:x:10001:10001:proof:/work/home:/usr/sbin/nologin'
 readonly GROUP_LINES='root:x:0:
 proof:x:10001:'
 
-# HOME check run under env -i, the exact shape of the consumer config leg.
+# HOME check run under env -i, the exact shape of the consumer config leg. Without a passwd entry,
+# Node's os.homedir() fails inside libuv with uv_os_homedir, which is the expected negative text.
 readonly HOME_CHECK='if(require("node:os").homedir()!=="/work/home")process.exit(1)'
 
 say() { printf 'proof: %s %s\n' "$1" "$2"; }
@@ -123,6 +132,7 @@ HELPERS=''
 GATEWAY=''
 CANARY_PID=''
 CANARY_LOG=''
+CANARY_UDP_LOG=''
 CANARY_PORT=''
 CANARY_PORT_FILE=''
 ACQ_ID=''
@@ -131,7 +141,8 @@ RUN_ID=''
 BASE=()
 
 ctl_name() { printf 'nsmcp-%s-%s' "$RUN_TAG" "$1"; }
-hits_now() { wc -l <"$CANARY_LOG" | tr -d ' '; }
+# count_lines <file>: number of canary hits recorded in a log. A missing file counts as zero.
+count_lines() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
 
 require_env() {
   [[ "${CANDIDATE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die "CANDIDATE_SHA must be 40 lowercase hex"
@@ -218,7 +229,7 @@ acquire_cache() {
   ACQ_ID=$(docker create --pull never --init --log-driver none --name "$(ctl_name acquire)" \
     --user "$PROOF_UID:$PROOF_UID" \
     --cap-drop ALL --security-opt no-new-privileges --read-only \
-    --pids-limit 512 --memory 6g --memory-swap 6g --cpus 3 --workdir /work \
+    --pids-limit 512 --memory 6g --memory-swap 6g --cpus "$CONTAINER_CPUS" --workdir /work \
     --tmpfs "/work:rw,nosuid,nodev,exec,size=3g,uid=$PROOF_UID,gid=$PROOF_UID,mode=0700" \
     --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777" \
     --mount "type=bind,source=$ACQ/input,target=/input,readonly" \
@@ -305,7 +316,7 @@ build_base() {
   BASE=(
     --pull never --init --name "$name" --user "$PROOF_UID:$PROOF_UID"
     --cap-drop ALL --security-opt no-new-privileges --ipc none
-    --pids-limit 1024 --memory 8g --memory-swap 8g --cpus 3
+    --pids-limit 1024 --memory 8g --memory-swap 8g --cpus "$CONTAINER_CPUS"
     --tmpfs "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"
     --tmpfs "/opt:rw,nosuid,nodev,size=512m,uid=$PROOF_UID,gid=$PROOF_UID,mode=0755"
     --tmpfs "/run:rw,noexec,nosuid,nodev,size=64m,uid=$PROOF_UID,gid=$PROOF_UID,mode=0755"
@@ -324,6 +335,9 @@ build_base() {
   if [ "$root" = ro ]; then BASE+=(--read-only); fi
 }
 
+# start_canary: one host process with a TCP canary and a UDP canary on the same port number.
+# TCP hits go to CANARY_LOG, one line per accepted connection. UDP hits go to CANARY_UDP_LOG, one line
+# per datagram, and each datagram receives a fixed reply. Only bridge containers can reach either.
 start_canary() {
   command -v node >/dev/null 2>&1 || die "node is required on the runner for the canary"
   need_docker
@@ -331,13 +345,17 @@ start_canary() {
     || die "docker bridge network not found"
   [[ "$GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "bridge gateway is not IPv4"
   CANARY_LOG="$WORK_ROOT/canary.log"
+  CANARY_UDP_LOG="$WORK_ROOT/canary-udp.log"
   CANARY_PORT_FILE="$WORK_ROOT/canary.port"
   : >"$CANARY_LOG"
+  : >"$CANARY_UDP_LOG"
   rm -f "$CANARY_PORT_FILE"
-  CANARY_HOST="$GATEWAY" CANARY_LOG="$CANARY_LOG" CANARY_PORT_FILE="$CANARY_PORT_FILE" node - >"$WORK_ROOT/canary.out" 2>&1 <<'JS' &
+  CANARY_HOST="$GATEWAY" CANARY_LOG="$CANARY_LOG" CANARY_UDP_LOG="$CANARY_UDP_LOG" CANARY_PORT_FILE="$CANARY_PORT_FILE" \
+    node - >"$WORK_ROOT/canary.out" 2>&1 <<'JS' &
 const net = require('node:net');
+const dgram = require('node:dgram');
 const fs = require('node:fs');
-const { CANARY_HOST: host, CANARY_LOG: log, CANARY_PORT_FILE: portFile } = process.env;
+const { CANARY_HOST: host, CANARY_LOG: log, CANARY_UDP_LOG: udpLog, CANARY_PORT_FILE: portFile } = process.env;
 let hits = 0;
 const server = net.createServer(socket => {
   hits += 1;
@@ -346,7 +364,16 @@ const server = net.createServer(socket => {
   if (hits >= 50) server.close();
 });
 server.on('error', e => { console.error(e.code); process.exit(1); });
-server.listen(0, host, () => fs.writeFileSync(portFile, String(server.address().port)));
+server.listen(0, host, () => {
+  const port = server.address().port;
+  const udp = dgram.createSocket('udp4');
+  udp.on('error', e => { console.error(e.code); process.exit(1); });
+  udp.on('message', (_msg, rinfo) => {
+    fs.appendFileSync(udpLog, `${rinfo.address}\n`);
+    udp.send('canary-udp-hit\n', rinfo.port, rinfo.address);
+  });
+  udp.bind(port, host, () => fs.writeFileSync(portFile, String(port)));
+});
 process.on('SIGTERM', () => process.exit(0));
 JS
   CANARY_PID=$!
@@ -358,7 +385,7 @@ JS
   done
   CANARY_PORT=$(cat "$CANARY_PORT_FILE")
   [[ "$CANARY_PORT" =~ ^[0-9]+$ ]] || die "canary did not start"
-  say canary "listening on the bridge gateway"
+  say canary "listening on the bridge gateway (tcp and udp)"
 }
 
 stop_canary() {
@@ -369,20 +396,20 @@ stop_canary() {
   fi
 }
 
-# wait_hits <count>: the canary log is appended by a separate process, so a hit may land a moment after
-# the container exits. Poll for up to 3 s before judging the count.
-wait_hits() {
-  local want=$1 i
+# wait_lines <file> <want>: the canary log is appended by a separate process, so a hit may land a moment
+# after the container exits. Poll for up to 3 s before judging the count.
+wait_lines() {
+  local file=$1 want=$2 i
   for i in $(seq 1 30); do
-    [ "$(hits_now)" = "$want" ] && return 0
+    [ "$(count_lines "$file")" = "$want" ] && return 0
     sleep 0.1
   done
   return 1
 }
 
 # control <pass|fail> <label> <expected-output-regex|-> -- <docker create args and image command...>
-# A pass must exit 0. A fail must exit non-zero AND print the expected assertion text, so a
-# Docker error, a crash, or an unrelated failure cannot count as the negative control.
+# A pass must exit 0. A fail must exit non-zero AND print the expected text, so a Docker error, a
+# crash, or an unrelated failure cannot count as the negative control.
 control() {
   local want=$1 label=$2 expect=$3 rc=0 out id
   shift 4
@@ -399,7 +426,7 @@ control() {
     fi
   else
     [ "$rc" -ne 0 ] || die "negative control $label passed, so the check cannot fail"
-    if ! grep -Eq -- "$expect" "$out"; then
+    if ! grep -Fq -- "$expect" "$out"; then
       tail -c 2048 "$out" | cut -c1-512 | emit_untrusted >&2 || :
       die "negative control $label failed for an unexpected reason"
     fi
@@ -410,28 +437,49 @@ control() {
 controls() {
   verify_stage
   [ -n "${CANARY_PID:-}" ] || die "canary is not running"
-  local name hits0 hits1 canary_file rw_dir
-  hits0=$(hits_now)
+  local name tcp0 tcp1 udp0 udp1 canary_file rw_dir
 
-  # Reachability. The bridge reaches the host canary (positive). A single-target probe that expects
-  # unreachability must report "unexpected connection" and record one canary hit (negative). From
-  # network none the same probe must be unreachable and record nothing (positive).
+  # TCP reachability. The bridge reaches the host canary (positive). A single-target TCP probe that
+  # must be unreachable reports "unexpected connection" and records one canary hit (negative). From
+  # network none the same probe is unreachable and records nothing (positive).
+  tcp0=$(count_lines "$CANARY_LOG")
   name=$(ctl_name reach-canary); build_base ro "$name"
   control pass reach-canary - -- "${BASE[@]}" --network bridge \
     "$IMAGE" node /stage/check-boundary.cjs reach "$GATEWAY" "$CANARY_PORT"
-  wait_hits "$((hits0 + 1))" || die "canary did not record the positive-control connection"
-  hits1=$(hits_now)
+  wait_lines "$CANARY_LOG" "$((tcp0 + 1))" || die "canary did not record the TCP positive-control connection"
+  tcp1=$(count_lines "$CANARY_LOG")
 
-  name=$(ctl_name probe-bridge); build_base ro "$name"
-  control fail bridge-probe-must-fail 'unexpected connection' -- "${BASE[@]}" --network bridge \
-    "$IMAGE" node /stage/check-boundary.cjs probe-unreachable "$GATEWAY" "$CANARY_PORT" 4
-  wait_hits "$((hits1 + 1))" || die "bridge probe did not record its canary hit"
-  hits1=$(hits_now)
+  name=$(ctl_name probe-tcp-bridge); build_base ro "$name"
+  control fail tcp-bridge-must-fail 'unexpected connection' -- "${BASE[@]}" --network bridge \
+    "$IMAGE" node /stage/check-boundary.cjs probe-tcp "$GATEWAY" "$CANARY_PORT" 4
+  wait_lines "$CANARY_LOG" "$((tcp1 + 1))" || die "TCP bridge probe did not record its canary hit"
+  tcp1=$(count_lines "$CANARY_LOG")
 
-  name=$(ctl_name probe-none); build_base ro "$name"
-  control pass probe-no-network - -- "${BASE[@]}" --network none \
-    "$IMAGE" node /stage/check-boundary.cjs probe-unreachable "$GATEWAY" "$CANARY_PORT" 4
-  [ "$(hits_now)" = "$hits1" ] || die "canary received a connection from the no-network probe"
+  name=$(ctl_name probe-tcp-none); build_base ro "$name"
+  control pass tcp-probe-no-network - -- "${BASE[@]}" --network none \
+    "$IMAGE" node /stage/check-boundary.cjs probe-tcp "$GATEWAY" "$CANARY_PORT" 4
+  [ "$(count_lines "$CANARY_LOG")" = "$tcp1" ] || die "TCP canary received a connection from the no-network probe"
+
+  # UDP reachability, shown separately from TCP. The positive control receives a reply from the UDP canary.
+  # The bridge negative datagram must complete a send ("udp send succeeded") and must record a UDP hit.
+  # The no-network positive must fail with an unreachable error and record nothing.
+  udp0=$(count_lines "$CANARY_UDP_LOG")
+  name=$(ctl_name reach-udp); build_base ro "$name"
+  control pass reach-udp-canary - -- "${BASE[@]}" --network bridge \
+    "$IMAGE" node /stage/check-boundary.cjs reach-udp "$GATEWAY" "$CANARY_PORT"
+  wait_lines "$CANARY_UDP_LOG" "$((udp0 + 1))" || die "UDP canary did not record the positive-control datagram"
+  udp1=$(count_lines "$CANARY_UDP_LOG")
+
+  name=$(ctl_name probe-udp-bridge); build_base ro "$name"
+  control fail udp-bridge-must-fail 'udp send succeeded' -- "${BASE[@]}" --network bridge \
+    "$IMAGE" node /stage/check-boundary.cjs probe-udp "$GATEWAY" "$CANARY_PORT" 4
+  wait_lines "$CANARY_UDP_LOG" "$((udp1 + 1))" || die "UDP bridge probe did not record its canary datagram"
+  udp1=$(count_lines "$CANARY_UDP_LOG")
+
+  name=$(ctl_name probe-udp-none); build_base ro "$name"
+  control pass udp-probe-no-network - -- "${BASE[@]}" --network none \
+    "$IMAGE" node /stage/check-boundary.cjs probe-udp "$GATEWAY" "$CANARY_PORT" 4
+  [ "$(count_lines "$CANARY_UDP_LOG")" = "$udp1" ] || die "UDP canary received a datagram from the no-network probe"
 
   name=$(ctl_name boundary-bridge); build_base ro "$name"
   control fail boundary-bridge-must-fail 'unexpected network devices' -- "${BASE[@]}" --network bridge \
@@ -440,7 +488,8 @@ controls() {
   name=$(ctl_name boundary-none); build_base ro "$name"
   control pass boundary-no-network - -- "${BASE[@]}" --network none \
     "$IMAGE" node /stage/check-boundary.cjs boundary "$GATEWAY" "$CANARY_PORT"
-  [ "$(hits_now)" = "$hits1" ] || die "canary received a connection from the no-network container"
+  [ "$(count_lines "$CANARY_LOG")" = "$tcp1" ] || die "TCP canary received a connection from the no-network container"
+  [ "$(count_lines "$CANARY_UDP_LOG")" = "$udp1" ] || die "UDP canary received a datagram from the no-network container"
 
   # Environment, read the way the candidate phase reads it: from bash, reading the container's own
   # environment through /proc/1 (the init process), so bash's exports (PWD, SHLVL, _) are not counted.
@@ -459,19 +508,20 @@ controls() {
   control fail status-cap-add-must-fail 'is not empty' -- "${BASE[@]}" --network none \
     --cap-add NET_ADMIN "$IMAGE" node /stage/check-boundary.cjs status
   name=$(ctl_name status-seccomp); build_base ro "$name"
-  control fail status-seccomp-unconfined-must-fail 'default seccomp filter is not active' -- "${BASE[@]}" \
+  control fail status-seccomp-unconfined-must-fail 'seccomp mode is not 2 (filter)' -- "${BASE[@]}" \
     --network none --security-opt seccomp=unconfined "$IMAGE" node /stage/check-boundary.cjs status
   name=$(ctl_name status-apparmor); build_base ro "$name"
   control fail status-apparmor-unconfined-must-fail 'AppArmor profile is not docker-default' -- "${BASE[@]}" \
     --network none --security-opt apparmor=unconfined "$IMAGE" node /stage/check-boundary.cjs status
 
   # Config leg: the consumer config leg spawns npx with an env of PATH only, so HOME must come from the
-  # passwd entry. The positive control proves it; the negative removes that entry and must fail.
+  # passwd entry. The positive control proves it; the negative removes that entry and must fail with
+  # Node's uv_os_homedir error, which is not present in the check source itself.
   name=$(ctl_name home-passwd); build_base ro "$name"
   control pass home-from-passwd - -- "${BASE[@]}" --network none \
     "$IMAGE" env -i PATH=/usr/local/bin:/usr/bin:/bin node -e "$HOME_CHECK"
   name=$(ctl_name home-nopasswd); build_base ro "$name" nopasswd
-  control fail home-without-passwd-must-fail 'homedir' -- "${BASE[@]}" --network none \
+  control fail home-without-passwd-must-fail 'uv_os_homedir' -- "${BASE[@]}" --network none \
     "$IMAGE" env -i PATH=/usr/local/bin:/usr/bin:/bin node -e "$HOME_CHECK"
 
   name=$(ctl_name devices); build_base ro "$name"
@@ -519,8 +569,9 @@ controls_mode() {
 run() {
   verify_stage
   controls
-  local code hits0
-  hits0=$(hits_now)
+  local code tcp0 udp0
+  tcp0=$(count_lines "$CANARY_LOG")
+  udp0=$(count_lines "$CANARY_UDP_LOG")
   build_base ro "nsmcp-proof-$RUN_TAG"
   RUN_ID=$(docker create "${BASE[@]}" --network none "$IMAGE" /bin/bash /stage/inner.sh "$GATEWAY" "$CANARY_PORT") \
     || die "candidate container could not be created"
@@ -533,7 +584,8 @@ run() {
   head -c 262144 "$WORK_ROOT/candidate.log" | emit_untrusted
   docker rm -f "$RUN_ID" >/dev/null 2>&1 || :
   RUN_ID=''
-  [ "$(hits_now)" = "$hits0" ] || die "canary received a connection during the candidate run"
+  [ "$(count_lines "$CANARY_LOG")" = "$tcp0" ] || die "TCP canary received a connection during the candidate run"
+  [ "$(count_lines "$CANARY_UDP_LOG")" = "$udp0" ] || die "UDP canary received a datagram during the candidate run"
   [ "$code" = 0 ] || die "candidate exit status $code"
   grep -qx 'proof-phase complete passed' "$WORK_ROOT/candidate.log" \
     || die "candidate did not reach the completion marker"
