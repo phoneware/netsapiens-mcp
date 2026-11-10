@@ -144,6 +144,19 @@ ctl_name() { printf 'nsmcp-%s-%s' "$RUN_TAG" "$1"; }
 # count_lines <file>: number of canary hits recorded in a log. A missing file counts as zero.
 count_lines() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
 
+# canary_diagnostics: on a count that does not move, report hit counts, whether the canary process is
+# alive, and which UDP sockets are bound to the canary port. No candidate text is printed; the canary's
+# own log tail is printed between stop-commands tokens.
+canary_diagnostics() {
+  local alive=no
+  if [ -n "${CANARY_PID:-}" ] && kill -0 "$CANARY_PID" 2>/dev/null; then alive=yes; fi
+  say diagnostics "canary_alive=$alive port=$CANARY_PORT tcp_hits=$(count_lines "$CANARY_LOG") udp_hits=$(count_lines "$CANARY_UDP_LOG")"
+  if command -v ss >/dev/null 2>&1; then
+    ss -uanH 2>/dev/null | awk -v p=":$CANARY_PORT" '$4 ~ (p "$") { print "udp-socket " $1 " " $4 }' | head -n 4 | emit_untrusted || :
+  fi
+  tail -c 1024 "$WORK_ROOT/canary.out" 2>/dev/null | cut -c1-256 | emit_untrusted || :
+}
+
 require_env() {
   [[ "${CANDIDATE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die "CANDIDATE_SHA must be 40 lowercase hex"
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die "GITHUB_SHA must be 40 lowercase hex"
@@ -370,7 +383,7 @@ server.listen(0, host, () => {
   udp.on('error', e => { console.error(e.code); process.exit(1); });
   udp.on('message', (_msg, rinfo) => {
     fs.appendFileSync(udpLog, `${rinfo.address}\n`);
-    udp.send('canary-udp-hit\n', rinfo.port, rinfo.address);
+    udp.send('canary-udp-hit\n', rinfo.port, rinfo.address, err => { if (err) console.error('udp reply send: ' + err.code); });
   });
   udp.bind(port, host, () => fs.writeFileSync(portFile, String(port)));
 });
@@ -404,6 +417,7 @@ wait_lines() {
     [ "$(count_lines "$file")" = "$want" ] && return 0
     sleep 0.1
   done
+  canary_diagnostics
   return 1
 }
 
@@ -422,8 +436,10 @@ control() {
   if [ "$want" = pass ]; then
     if [ "$rc" -ne 0 ]; then
       tail -c 2048 "$out" | cut -c1-512 | emit_untrusted >&2 || :
+      canary_diagnostics
       die "control $label failed (exit $rc)"
     fi
+    if [ -s "$out" ]; then head -c 512 "$out" | cut -c1-256 | emit_untrusted || :; fi
   else
     [ "$rc" -ne 0 ] || die "negative control $label passed, so the check cannot fail"
     if ! grep -Fq -- "$expect" "$out"; then
@@ -460,9 +476,10 @@ controls() {
     "$IMAGE" node /stage/check-boundary.cjs probe-tcp "$GATEWAY" "$CANARY_PORT" 4
   [ "$(count_lines "$CANARY_LOG")" = "$tcp1" ] || die "TCP canary received a connection from the no-network probe"
 
-  # UDP reachability, shown separately from TCP. The positive control receives a reply from the UDP canary.
-  # The bridge negative datagram must complete a send ("udp send succeeded") and must record a UDP hit.
-  # The no-network positive must fail with an unreachable error and record nothing.
+  # UDP reachability, shown separately from TCP. Each control is judged by the host canary's UDP hit count,
+  # not by a reply: the bridge positive must record one datagram arrival, the bridge negative must print
+  # "udp send succeeded" and record one arrival, and the no-network positive must fail as unreachable and
+  # record none. A canary reply, when it returns, is printed only as a diagnostic.
   udp0=$(count_lines "$CANARY_UDP_LOG")
   name=$(ctl_name reach-udp); build_base ro "$name"
   control pass reach-udp-canary - -- "${BASE[@]}" --network bridge \

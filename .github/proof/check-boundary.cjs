@@ -148,22 +148,32 @@ function reachTcp(gateway, port) {
   });
 }
 
-// The UDP canary echoes a fixed reply to the sender. Receiving it proves the datagram reached the host.
+// Sends one datagram. The containment fact is that the datagram reaches the host, and the host proves that by
+// counting CANARY_UDP_LOG lines. A reply from the canary is logged here as a diagnostic only: its absence
+// neither passes nor fails the control, so a missing return path cannot be mistaken for a passing reach check.
 function reachUdp(gateway, port) {
   assert.ok(net.isIPv4(gateway), 'gateway must be IPv4');
   assert.match(port, /^\d+$/);
   return new Promise((resolve, reject) => {
     const s = dgram.createSocket('udp4');
-    const timer = setTimeout(() => { s.close(); reject(new Error('udp canary reply timed out')); }, REQUEST_CAP_MS);
-    s.once('error', e => { clearTimeout(timer); s.close(); reject(new Error(`udp canary: ${e.code}`)); });
-    s.once('message', msg => {
+    let timer = null;
+    const finish = err => {
       clearTimeout(timer);
       s.close();
-      if (msg.toString('utf8') === UDP_REPLY) resolve();
-      else reject(new Error(`udp canary reply: ${JSON.stringify(msg.toString('utf8'))}`));
+      if (err) reject(err);
+      else resolve();
+    };
+    timer = setTimeout(() => {
+      console.log(`udp reply: not observed within ${REQUEST_CAP_MS} ms (arrival is checked on the host)`);
+      finish();
+    }, REQUEST_CAP_MS);
+    s.once('error', e => finish(new Error(`udp send: ${e.code}`)));
+    s.once('message', msg => {
+      console.log(msg.toString('utf8') === UDP_REPLY ? 'udp reply: observed' : 'udp reply: unexpected payload');
+      finish();
     });
     s.send(Buffer.from('nsmcp-probe'), Number(port), gateway, err => {
-      if (err) { clearTimeout(timer); s.close(); reject(new Error(`udp canary send: ${err.code}`)); }
+      if (err) finish(new Error(`udp send: ${err.code}`));
     });
   });
 }
