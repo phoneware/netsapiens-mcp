@@ -10,7 +10,7 @@ const workflows = {
 };
 
 // Fail closed on unfamiliar YAML layouts rather than overlooking a checkout.
-const checkoutPattern = /^      - uses: actions\/checkout@v4[ \t]*\n([\s\S]*?)(?=^      - |^  [\w-]+:|(?![\s\S]))/gm;
+const checkoutPattern = /^      - uses: actions\/checkout@(?:v4|11d5960a326750d5838078e36cf38b85af677262)[ \t]*\n([\s\S]*?)(?=^      - |^  [\w-]+:|(?![\s\S]))/gm;
 
 function checkWorkflow(source: string): void {
   const beforeJobs = source.split(/^jobs:[ \t]*$/m);
@@ -55,4 +55,28 @@ describe('workflow checkout credential boundaries', () => {
       }
     });
   }
+});
+
+describe('isolated proof dispatch routing', () => {
+  const jobs = ['test', 'consumer', 'consumer-firestore', 'docker', 'windows'];
+  const ordinary = "${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}";
+  const aggregate = "${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.isolated_proof) }}";
+  const isolated = "${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof }}";
+  const jobBody = (source: string, job: string) => source.match(new RegExp(`^  ${job}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|$(?![\\s\\S]))`, 'm'))?.[1];
+  function checkRouting(source: string) {
+    for (const job of jobs) expect(jobBody(source, job)).toContain(`    if: ${ordinary}\n`);
+    expect(jobBody(source, 'ci')).toContain(`    if: ${aggregate}\n`);
+    expect(jobBody(source, 'isolated-proof')).toContain(`    if: ${isolated}\n`);
+  }
+  it('keeps the ordinary jobs and isolated proof mutually exclusive on proof dispatch', () => {
+    checkRouting(workflows.ci);
+  });
+  it('rejects a missing gate on each job', () => {
+    for (const job of [...jobs, 'ci', 'isolated-proof']) {
+      const body = jobBody(workflows.ci, job)!;
+      const mutated = body.replace(/^    if:.*\n/m, '');
+      expect(mutated).not.toBe(body);
+      expect(() => checkRouting(workflows.ci.replace(body, mutated))).toThrow();
+    }
+  });
 });

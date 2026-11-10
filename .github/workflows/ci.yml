@@ -5,12 +5,20 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      isolated_proof:
+        type: boolean
+        default: false
+      candidate_sha:
+        type: string
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   test:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
     runs-on: ubicloud-standard-4
     strategy:
       fail-fast: false
@@ -61,6 +69,7 @@ jobs:
           if git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep -q '^spec/v2/observations/'; then if [ -f scripts/availability-diff.ts ]; then npx tsx scripts/availability-diff.ts "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"; fi; fi
 
   consumer:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
     runs-on: ubicloud-standard-2
     strategy:
       fail-fast: false
@@ -85,6 +94,7 @@ jobs:
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL"
 
   consumer-firestore:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
     runs-on: ubicloud-standard-2
     strategy:
       fail-fast: false
@@ -119,6 +129,7 @@ jobs:
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major ${{ matrix.firestore }}
 
   docker:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -131,6 +142,7 @@ jobs:
         run: node scripts/docker-e2e.mjs
 
   windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -150,7 +162,7 @@ jobs:
   ci:
     needs: [test, consumer, consumer-firestore, docker, windows]
     runs-on: ubicloud-standard-2
-    if: always()
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.isolated_proof) }}
     steps:
       - name: Aggregate job results
         run: |
@@ -165,3 +177,17 @@ jobs:
             exit 1
           fi
           echo "All CI jobs succeeded."
+
+  isolated-proof:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Run isolated migration and consumer proof
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: bash .github/proof/stage.sh all
