@@ -160,6 +160,8 @@ jobs:
       - run: npx vitest run src/store/__tests__/sqlite.test.ts src/__tests__/config-store.test.ts --testTimeout=120000 --hookTimeout=120000
 
   ci:
+    # A skipped job can satisfy a required check. Keep proof dispatches from reporting a check named ci.
+    name: ${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof && 'isolated-proof-aggregate' || 'ci' }}
     needs: [test, consumer, consumer-firestore, docker, windows]
     runs-on: ubicloud-standard-2
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.isolated_proof) }}

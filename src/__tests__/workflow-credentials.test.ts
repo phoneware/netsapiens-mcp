@@ -61,11 +61,14 @@ describe('isolated proof dispatch routing', () => {
   const jobs = ['test', 'consumer', 'consumer-firestore', 'docker', 'windows'];
   const ordinary = "${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}";
   const aggregate = "${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.isolated_proof) }}";
+  const aggregateName = "${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof && 'isolated-proof-aggregate' || 'ci' }}";
   const isolated = "${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof }}";
   const jobBody = (source: string, job: string) => source.match(new RegExp(`^  ${job}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|$(?![\\s\\S]))`, 'm'))?.[1];
   function checkRouting(source: string) {
     for (const job of jobs) expect(jobBody(source, job)).toContain(`    if: ${ordinary}\n`);
     expect(jobBody(source, 'ci')).toContain(`    if: ${aggregate}\n`);
+    expect(jobBody(source, 'ci')).toContain(`    name: ${aggregateName}\n`);
+    expect(source.match(/^    name:/gm)).toHaveLength(1);
     expect(jobBody(source, 'isolated-proof')).toContain(`    if: ${isolated}\n`);
   }
   it('keeps the ordinary jobs and isolated proof mutually exclusive on proof dispatch', () => {
@@ -78,5 +81,16 @@ describe('isolated proof dispatch routing', () => {
       expect(mutated).not.toBe(body);
       expect(() => checkRouting(workflows.ci.replace(body, mutated))).toThrow();
     }
+  });
+  it('rejects a check that can report as ci on proof dispatch', () => {
+    const body = jobBody(workflows.ci, 'ci')!;
+    const line = `    name: ${aggregateName}\n`;
+    for (const replacement of ['', '    name: ci\n', line.replace("'isolated-proof-aggregate'", "'ci'")]) {
+      const mutated = body.replace(line, replacement);
+      expect(mutated).not.toBe(body);
+      expect(() => checkRouting(workflows.ci.replace(body, mutated))).toThrow();
+    }
+    const proof = jobBody(workflows.ci, 'isolated-proof')!;
+    expect(() => checkRouting(workflows.ci.replace(proof, `    name: ci\n${proof}`))).toThrow();
   });
 });
