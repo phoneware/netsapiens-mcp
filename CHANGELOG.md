@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Fixes
 
 - Build prepared Firestore migration commitments in the same canonical candidate order as their plan.
+- Clean up resources created by the Docker proof when an assertion fails.
 
 ## 3.0.0
 
