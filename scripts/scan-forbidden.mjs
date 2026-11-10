@@ -39,7 +39,7 @@ try {
     const MAX_OBJECT_BYTES = 64 * 1024 * 1024;
     const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' };
     delete env.FORBIDDEN_CONTENT_PATTERNS;
-    const git = (args, options = {}) => execFileSync('git', args, { env, maxBuffer: 2 * MAX_OBJECT_BYTES, ...options });
+    const git = (args, options = {}) => execFileSync('git', args, { env, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 2 * MAX_OBJECT_BYTES, ...options });
     const format = git(['rev-parse', '--show-object-format']).toString('ascii').trim();
     const length = format === 'sha1' ? 40 : format === 'sha256' ? 64 : 0;
     if (input.length !== length || !/^[0-9a-f]+$/i.test(input)) throw new Error('Invalid commit');

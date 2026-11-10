@@ -423,6 +423,7 @@ describe('commit content scanner', () => {
         '#!/bin/sh',
         `printf '%s\\n' "$*" >> '${log}'`,
         `if env | grep -q '^FORBIDDEN_CONTENT_PATTERNS='; then echo leak >> '${log}'; fi`,
+        'echo stderr-sentinel >&2',
         `exec '${realGit}' "$@"`,
       ].join('\n') + '\n');
       chmodSync(join(fakeDir, 'git'), 0o755);
@@ -449,6 +450,19 @@ describe('commit content scanner', () => {
       const large = invocations(withFiles(60));
       expect(small).toBeLessThanOrEqual(5);
       expect(large).toBe(small);
+    });
+    it('captures git stderr so successful git calls never reach the caller', () => {
+      const probe = spawnSync(join(fakeDir, 'git'), ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' });
+      expect(probe.stderr).toContain('stderr-sentinel');
+      const result = commitScan(['--commit', gitIn('rev-parse', 'HEAD')], fakeEnv);
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).not.toContain('stderr-sentinel');
+    });
+
+    it('control: a default execFileSync forwards child stderr to its parent', () => {
+      const script = "require('node:child_process').execFileSync('sh', ['-c', 'echo stderr-sentinel >&2'])";
+      const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+      expect(child.stderr).toContain('stderr-sentinel');
     });
   });
 
