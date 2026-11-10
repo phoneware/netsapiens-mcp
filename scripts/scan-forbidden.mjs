@@ -56,9 +56,8 @@ try {
       return { type: header[2], oid: header[3], path: line.slice(tab + 1) };
     });
     const oids = [...new Set(entries.map(entry => entry.oid))];
-    const rows = git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { input: `${oids.join('\n')}\n` })
-      .toString('ascii').split('\n');
-    rows.pop();
+    // An empty tree has no objects to inspect; batch-check would read the blank input line as a missing object.
+    const rows = oids.length ? git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { input: `${oids.join('\n')}\n` }).toString('ascii').split('\n').slice(0, -1) : [];
     if (rows.length !== oids.length) throw new Error('Object inspection failed');
     const objects = new Map();
     rows.forEach((row, index) => {

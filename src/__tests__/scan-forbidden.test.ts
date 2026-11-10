@@ -452,6 +452,13 @@ describe('commit content scanner', () => {
     });
   });
 
+  it('accepts an empty commit tree without inspecting objects', () => {
+    const result = commitScan(['--commit', commitOf(rawTree([]))]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
   it('fails closed on git errors without disclosing stderr', () => {
     const id = gitIn('rev-parse', 'HEAD');
     const result = commitScan(['--commit', id], {}, root);
