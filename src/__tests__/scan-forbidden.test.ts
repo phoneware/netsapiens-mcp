@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -248,5 +248,106 @@ describe('forbidden content scanner', () => {
   });
   it('requires patterns', () => {
     expect(scan(['--tree'], '').status).toBe(2);
+  });
+});
+
+describe('commit content scanner', () => {
+  let root: string;
+  let repo: string;
+  const gitIn = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
+  const commitScan = (args: string[], cwd = repo) => spawnSync(process.execPath, [scanner, ...args], {
+    cwd, encoding: 'utf8', env: { ...process.env, FORBIDDEN_CONTENT_PATTERNS: marker },
+  });
+  const commitAll = () => {
+    gitIn('add', '-A');
+    gitIn('commit', '-m', 'fixture');
+    return gitIn('rev-parse', 'HEAD');
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'commit-scan-'));
+    repo = join(root, 'repo');
+    mkdirSync(repo);
+    gitIn('init');
+    gitIn('config', 'user.email', 'test@example.invalid');
+    gitIn('config', 'user.name', 'Test');
+    writeFileSync(join(repo, 'clean.txt'), 'clean');
+    mkdirSync(join(repo, 'spec'));
+    writeFileSync(join(repo, 'spec', 'excluded.txt'), marker);
+    commitAll();
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('scans the exact commit rather than dirty or later checkout content', () => {
+    const clean = gitIn('rev-parse', 'HEAD');
+    writeFileSync(join(repo, 'clean.txt'), marker);
+    expect(commitScan(['--commit', clean]).status).toBe(0);
+    const dirtyCommit = commitAll();
+    writeFileSync(join(repo, 'clean.txt'), 'clean again');
+    const result = commitScan(['--commit', dirtyCommit]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('MATCH clean.txt');
+    expect(result.stdout + result.stderr).not.toContain(marker);
+    expect(commitScan(['--commit', clean]).status).toBe(0);
+  });
+
+  it('redacts matching paths, including paths under spec', () => {
+    writeFileSync(join(repo, marker), 'clean');
+    writeFileSync(join(repo, 'spec', marker), 'clean');
+    const result = commitScan(['--commit', commitAll()]);
+    expect(result.status).toBe(1);
+    expect(result.stdout.match(/MATCH \[redacted\]/g)).toHaveLength(2);
+    expect(result.stdout + result.stderr).not.toContain(marker);
+  });
+
+  it('reads symlink blob text without following an outside target', () => {
+    writeFileSync(join(root, 'sentinel'), marker);
+    symlinkSync('../sentinel', join(repo, 'link'));
+    const outsideLink = commitAll();
+    expect(commitScan(['--commit', outsideLink]).status).toBe(0);
+    rmSync(join(repo, 'link'));
+    symlinkSync(marker, join(repo, 'link'));
+    const result = commitScan(['--commit', commitAll()]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('MATCH link');
+    expect(result.stdout + result.stderr).not.toContain(marker);
+  });
+
+  it('rejects submodules even inside excluded spec', () => {
+    const target = gitIn('rev-parse', 'HEAD');
+    gitIn('update-index', '--add', '--cacheinfo', `160000,${target},spec/submodule`);
+    gitIn('commit', '-m', 'submodule');
+    expect(commitScan(['--commit', gitIn('rev-parse', 'HEAD')]).status).toBe(2);
+  });
+
+  it('rejects missing, abbreviated, non-commit, and injection-like arguments', () => {
+    const id = gitIn('rev-parse', 'HEAD');
+    const blob = gitIn('rev-parse', 'HEAD:clean.txt');
+    for (const args of [
+      ['--commit'], ['--commit', id.slice(0, 12)], ['--commit', 'HEAD'],
+      ['--commit', `${id};touch injected`], ['--commit', id, 'extra'],
+      ['--commit', blob], ['--commit', '0'.repeat(id.length)],
+    ]) {
+      expect(commitScan(args).status).toBe(2);
+    }
+  });
+
+  it('bounds reports while continuing to scan the commit', () => {
+    for (let index = 0; index < 105; index++) {
+      writeFileSync(join(repo, `item-${index}.txt`), marker);
+    }
+    const result = commitScan(['--commit', commitAll()]);
+    expect(result.status).toBe(1);
+    expect(result.stdout.split('\n').filter(Boolean)).toHaveLength(101);
+    expect(result.stdout).toContain('MATCH [additional results omitted]');
+    expect(result.stdout + result.stderr).not.toContain(marker);
+  });
+
+  it('fails closed on git errors without disclosing stderr', () => {
+    const id = gitIn('rev-parse', 'HEAD');
+    const result = commitScan(['--commit', id], root);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Content scan failed');
+    expect(result.stdout + result.stderr).not.toContain(root);
   });
 });

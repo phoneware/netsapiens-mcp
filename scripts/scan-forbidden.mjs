@@ -30,6 +30,37 @@ try {
       if (matches(file)) report('[redacted]');
       if (!file.startsWith('spec/') && matches(readFileSync(file).toString('utf8'))) report(file);
     }
+  } else if (mode === '--commit' && process.argv.length === 4) {
+    const input = process.argv[3];
+    const git = (...args) => execFileSync('git', args, {
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' },
+    });
+    const format = git('rev-parse', '--show-object-format').toString('ascii').trim();
+    const length = format === 'sha1' ? 40 : format === 'sha256' ? 64 : 0;
+    if (input.length !== length || !/^[0-9a-f]+$/i.test(input)) throw new Error('Invalid commit');
+    const commit = input.toLowerCase();
+    if (git('cat-file', '-t', commit).toString('ascii').trim() !== 'commit') throw new Error('Not a commit');
+    const entries = git('ls-tree', '-r', '-z', '--full-tree', commit).toString('utf8').split('\0').filter(Boolean);
+    let reports = 0;
+    const reportCommit = location => {
+      found = true;
+      if (reports++ >= 100) return;
+      const display = safe(location).replace(/[\x00-\x1f\x7f]/g, '?').slice(0, 1024);
+      console.log(`MATCH ${display}`);
+    };
+    for (const entry of entries) {
+      const tab = entry.indexOf('\t');
+      if (tab < 0) throw new Error('Invalid tree entry');
+      const header = entry.slice(0, tab).match(/^(\d{6}) (blob|commit) ([0-9a-f]+)$/);
+      if (!header || header[2] !== 'blob' || !['100644', '100755', '120000'].includes(header[1]) ||
+          header[3].length !== length) throw new Error('Unsupported tree entry');
+      const file = entry.slice(tab + 1);
+      if (matches(file)) reportCommit('[redacted]');
+      if (!file.startsWith('spec/') && matches(git('cat-file', 'blob', header[3]).toString('utf8'))) reportCommit(file);
+    }
+    if (reports > 100) console.log('MATCH [additional results omitted]');
   } else if (mode === '--pack' && process.argv.length === 4) {
     const archive = process.argv[3];
     const files = run('tar', ['-tzf', archive]).toString().split('\n').filter(name => name && !name.endsWith('/'));
@@ -149,7 +180,7 @@ try {
       if (matches(ref.name) || matchingObjects([ref]).size) console.log(`PENDING ${safe(ref.name)}`);
     }
   } else {
-    console.error('Usage: scan-forbidden.mjs --tree | --pack <tgz> | --history <git-dir>');
+    console.error('Usage: scan-forbidden.mjs --tree | --commit <sha> | --pack <tgz> | --history <git-dir>');
     process.exit(2);
   }
 } catch {
