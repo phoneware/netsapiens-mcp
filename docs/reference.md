@@ -1,0 +1,146 @@
+# Reference
+
+Role tiers, supported NetSapiens versions, storage, security limits, every environment variable, and library usage. Back to the [README](https://github.com/phoneware/netsapiens-mcp#readme).
+
+## Role Tiers
+
+Tools are filtered by the authenticated user's NetSapiens role tier:
+
+<!-- facts:roles -->
+| Role Tier | Priority | NetSapiens User Scopes |
+|---|---|---|
+| `system_admin` | 4 | Super User, System Admin |
+| `reseller` | 3 | Reseller |
+| `domain_admin` | 2 | Office Manager, Site Manager, Domain Admin, Call Center Supervisor |
+| `user` | 1 | Call Center Agent, Advanced User, Basic User, Simple User, No Portal |
+<!-- /facts:roles -->
+
+## Supported NetSapiens Versions
+
+The server detects each connected host's API version via `GET /ns-api/v2/version` and serves tools documented for that release.
+
+<!-- facts:version-matrix -->
+| Host line | Documentation used | Observed on a live host | Read tools | Write tools |
+|---|---|---|---|---|
+| 44.3 | 44.3 (retrieved 2026-10-29) | not yet | 132 | 198 |
+| 44.4 | 44.4 (retrieved 2026-10-29) | 44.4.10 (maintainer), 44.5.2 (maintainer) | 139 | 199 |
+| 45.0 | 45.0 (retrieved 2026-10-29) | not yet | 207 | 247 |
+| 46.0 | 46.0 (retrieved 2026-10-29) | not yet | 568 | 548 |
+| newer than 46 | 46.0 (newer than documented) | not yet | 568 | 548 |
+<!-- /facts:version-matrix -->
+
+## Storage & Persistence
+
+The server supports three storage engines for session and token persistence:
+
+<!-- facts:backends -->
+| Backend | Persistent | Multi-instance | Concurrency / Locking | Expiry Mechanism |
+|---|---|---|---|---|
+| `sqlite` (default) | Yes | No (single process) | Exclusive SQLite lock (`StoreLockedError`) | In-process sweep on interval |
+| `firestore` (optional) | Yes | Yes (distributed) | Atomic document CAS & refresh lease | Cloud Firestore TTL policy |
+| `memory` (test/ephemeral) | No | No (single process) | In-process Map/Set memory isolation | In-process sweep on interval |
+<!-- /facts:backends -->
+
+### Firestore Collections & TTL Fields
+
+When configured with `MCP_PERSISTENCE=firestore`, the following collection layout is created under `MCP_STORE_NAMESPACE`:
+
+<!-- facts:firestore-collections -->
+| Collection Name | Document Contents | TTL Field | Lifecycle / Retention |
+|---|---|---|---|
+| `<namespace>_sessions` | Encrypted access tokens & family bindings | `ttlAt` | Cleaned up after 30 days access retention |
+| `<namespace>_refresh` | Refresh token pointers & successor states | None | Permanent until explicit revocation or replay |
+| `<namespace>_refresh_families` | Refresh family generation & client bindings | None | Permanent until explicit revocation or replay |
+| `<namespace>_upstream` | Encrypted NetSapiens credentials & leases | None | Permanent until explicit revocation |
+| `<namespace>_retired_refresh` | Bounded retired refresh token replay index | None | Permanent until replay detection |
+| `<namespace>_meta` | Migration census and durable adoption marker | None | Persistent operational metadata |
+| `<namespace>_auth_codes` | PKCE authorization codes | `ttlAt` | Single-use, expires in 5 minutes |
+| `<namespace>_resume_tokens` | MCP resumption nonces | `ttlAt` | Single-use, expires in 2 hours |
+| `<namespace>_oauth_clients` | Registered OAuth clients | None | Persistent client configurations |
+| `<namespace>_usage` | User rate-limiting counters | None | Persistent call count telemetry |
+<!-- /facts:firestore-collections -->
+
+### Runtime & Node Support
+
+Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and prints a warning when the default store opens; Node 24.15 and later mark it a release candidate. The Docker image uses Node 24.
+
+## Security & Architecture Limits
+
+- **Local Storage Isolation:** SQLite database files are initialized with mode 0600 permissions on POSIX systems.
+- **Windows SQLite ACLs:** On Windows systems, POSIX permission bits are not supported by the underlying operating system. The SQLite database, WAL, and journal files inherit access controls from their parent directory. Operators running on Windows should ensure the directory containing the SQLite database is restricted to the desired service account.
+- **Credential Protection at Rest:** In HTTP mode, session tokens, refresh tokens, and credentials are encrypted using AES-256-GCM before storage. Dynamic Client Registration records (`oauth_clients`) are unencrypted metadata containing client names and redirect URIs.
+- **Stdio Token Cache:** In stdio mode, tokens are cached unencrypted in `~/.netsapiens-mcp-tokens.json` (mode 0600 on POSIX).
+- **Secret Invalidation:** Rotating `MCP_SESSION_SECRET` immediately terminates and invalidates all existing HTTP sessions. `MCP_SESSION_SECRET` is required in HTTP mode; stdio mode uses an ephemeral in-memory key and ignores this variable.
+- **Usage Retention:** In-store rate limiting telemetry counters do not expire automatically.
+- **Permanent Refresh Credentials:** Refresh tokens belong to permanent refresh families that persist until explicit revocation, detection of token replay outside the 30-second retry grace window, or definitive upstream rejection. Access tokens carry a 30-day retention window after expiry for audit records before being purged, while refresh families have no calendar expiration.
+- **Plaintext Token Non-Migration:** Plaintext 2.x `http-tokens*.json` files are not migrated and must be re-authenticated.
+
+## Configuration Reference
+
+<!-- facts:env-table -->
+| Variable | Transports | Required | Default | Description |
+|---|---|---|---|---|
+| `NETSAPIENS_API_URL` | http, stdio | Yes | None | NetSapiens host origin. |
+| `NETSAPIENS_PLATFORMS` | http | No | None | JSON object of allowed platforms; ignored in stdio mode. |
+| `NETSAPIENS_VERSION_TTL_SECONDS` | http, stdio | No | `3600` | Version cache TTL in seconds; positive integer or exit 1. |
+| `MCP_PLATFORMS` | http, stdio | No | None | Removed in 3.0.0; use NETSAPIENS_PLATFORMS. |
+| `MCP_PERSISTENCE` | http | No | `sqlite` | sqlite, firestore or memory; any other value exits 1. file exits 1 with ConfigError: MCP_PERSISTENCE=file was removed in 3.0.0; the default store is sqlite (see MCP_STORE_PATH). Unset with GOOGLE_CLOUD_PROJECT exits 1 with ConfigError: MCP_PERSISTENCE is not set. 2.x chose Firestore because GOOGLE_CLOUD_PROJECT is set; 3.0.0 never infers the store. Set MCP_PERSISTENCE=firestore or MCP_PERSISTENCE=sqlite. Firestore without its package exits 1 with ConfigError: MCP_PERSISTENCE=firestore needs @google-cloud/firestore: npm install @google-cloud/firestore. Memory logs warn: memory store: every sign-in is lost on restart; one process only. |
+| `MCP_STORE_NAMESPACE` | http | No | `mcp, or readonly_mcp when MCP_READ_ONLY=true` | Must match ^[a-z][a-z0-9_]{0,30}$ or exit 1. Firestore collection prefix and SQLite default filename; the SQLite file records it and refuses any other. |
+| `MCP_STORE_PATH` | http | No | `<os.homedir()>/.netsapiens-mcp/<namespace>.sqlite` | SQLite only; a relative path or setting it with another backend exits 1. |
+| `MCP_SESSION_SECRET` | http | Yes | None | At least 32 characters or exit 1 with ConfigError: MCP_SESSION_SECRET must be at least 32 characters. Signs and seals login state and derives the store key; changing it signs everyone out. |
+| `GOOGLE_CLOUD_PROJECT` | http | No | None | Does not select a store. With MCP_PERSISTENCE=firestore, the Google client library reads it as usual. |
+| `MCP_TOKEN_STORE_PATH` | http | No | None | ConfigError: MCP_TOKEN_STORE_PATH was removed in 3.0.0; use MCP_STORE_PATH |
+| `FIRESTORE_AUTH_CODES_COLLECTION` | http | No | None | ConfigError: FIRESTORE_AUTH_CODES_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE |
+| `FIRESTORE_RESUME_TOKENS_COLLECTION` | http | No | None | ConfigError: FIRESTORE_RESUME_TOKENS_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE |
+| `NETSAPIENS_API_TOKEN` | stdio | No | None | Static API token, or provide all four OAuth credentials. |
+| `NETSAPIENS_OAUTH_CLIENT_ID` | http, stdio | No | None | OAuth client ID; required in HTTP mode or for stdio OAuth. |
+| `NETSAPIENS_OAUTH_CLIENT_SECRET` | http, stdio | No | None | OAuth client secret; required in HTTP mode or for stdio OAuth. |
+| `NETSAPIENS_OAUTH_USERNAME` | stdio | No | None | OAuth username for stdio. |
+| `NETSAPIENS_OAUTH_PASSWORD` | stdio | No | None | OAuth password for stdio. |
+| `MCP_TRANSPORT` | http, stdio | No | `stdio` | Transport selection. |
+| `DEBUG` | http, stdio | No | `false` | Enable debug output. |
+| `LOG_LEVEL` | http, stdio | No | None | Logging level. |
+| `MCP_BASE_URL` | http | No | None | Public server base URL. |
+| `MCP_PORT` | http | No | `3000` | HTTP listening port. |
+| `MCP_HOST` | http | No | `0.0.0.0` | HTTP listening address. |
+| `MCP_CORS_ORIGIN` | http | No | `*` | CORS origin. |
+| `MCP_ICON_URL` | http, stdio | No | None | Server icon URL. |
+| `MCP_LOGIN_HEADER` | http | No | None | Login page heading. |
+| `MCP_LOGIN_LOGO_URL` | http | No | None | Login page logo URL. |
+| `MCP_SERVER_TITLE` | http, stdio | No | None | Server title. |
+| `MCP_WEBSITE_URL` | http, stdio | No | None | Server website URL. |
+| `MCP_STATELESS` | http | No | None | Control HTTP session mode. |
+| `MCP_TOKEN_LIFETIME_HOURS` | http | No | `168` | Issued token lifetime in hours. |
+| `MCP_READ_ONLY` | http, stdio | No | `false` | Disable modifying tools. |
+| `MCP_TOOL_MODE` | http, stdio | No | None | Select tool catalog. |
+| `MCP_TOOLS_PAGE_SIZE` | http, stdio | No | None | Tool list page size. |
+| `MCP_DISABLED_TOOLS` | http, stdio | No | None | Tool name patterns to disable. |
+| `MCP_DISABLED_ACTIONS` | http, stdio | No | None | Actions to disable. |
+| `MCP_DISABLE_DESTRUCTIVE` | http, stdio | No | `false` | Disable destructive tools. |
+| `MCP_DISABLE_ROLE_FILTER` | http, stdio | No | `false` | Disable role filtering. |
+| `MCP_CONFIRM_DESTRUCTIVE` | http, stdio | No | `false` | Request confirmation for destructive operations. |
+| `MCP_CONFIRM_FALLBACK` | http, stdio | No | None | Confirmation fallback policy. |
+| `MCP_DISABLE_PROMOTION` | http, stdio | No | `false` | Disable tool promotion. |
+| `MCP_PROMOTE_THRESHOLD` | http, stdio | No | None | Tool promotion threshold. |
+| `MCP_PROMOTE_WINDOW_DAYS` | http, stdio | No | None | Tool promotion window. |
+| `MCP_SYNCHRONOUS_WRITES` | http, stdio | No | None | Control synchronous upstream writes. |
+<!-- /facts:env-table -->
+
+## Library Usage
+
+`netsapiens-mcp` exposes its core auth, storage, and client primitives as an importable library for custom servers:
+
+```typescript
+import {
+  NetSapiensClient,
+  NetSapiensAuthProvider,
+  createStore,
+  createSqliteStore,
+  createFirestoreStore,
+  createMemoryStore,
+} from 'netsapiens-mcp/lib';
+```
+
+Standalone legacy fence operations require an explicit `identityKey`. Derive it with `deriveStoreKey` from the namespace's existing `MCP_SESSION_SECRET`, and use the same pinned secret version for every writer in that namespace. Pass the key to `withLegacyOperation`, direct upstream claim and reconciliation calls, and `getCutoverOperationDocRef`. Missing or mismatched keys are refused; existing raw-ID operation records require an explicit upgrade.
+
+Caller-supplied operation IDs remain unchanged in `ctx.id`. The separate `ctx.storageId` identifies the keyed durable record; do not treat an ID's prefix as evidence that it is already encoded.
