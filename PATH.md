@@ -6,12 +6,19 @@ An operator installs the published netsapiens-mcp package, starts it with an exp
 
 Before release (using packed tarball):
 ```bash
-node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.0.0.tgz>
+node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.0.1.tgz>
 ```
 
 After release (from registry):
 ```bash
-node scripts/consumer-e2e.mjs --registry 3.0.0
+node scripts/consumer-e2e.mjs --registry 3.0.1
+```
+
+The default command covers the install, config, SQLite, memory, version, and library legs.
+Run the Firestore leg separately against a disposable Firestore emulator:
+
+```bash
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP_REQUIRE_FIRESTORE_EMULATOR=1 node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.0.1.tgz> --legs firestore --firestore-major 8
 ```
 
 ## Transport & Verification

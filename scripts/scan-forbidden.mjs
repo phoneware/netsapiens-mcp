@@ -30,6 +30,66 @@ try {
       if (matches(file)) report('[redacted]');
       if (!file.startsWith('spec/') && matches(readFileSync(file).toString('utf8'))) report(file);
     }
+  } else if (mode === '--commit' && process.argv.length === 4) {
+    // Scans one commit's tree only: not history, commit messages, headers or tags. Entries under the root spec/
+    // directory are excluded from content matching; their paths and object types are still checked.
+    const input = process.argv[3];
+    const MAX_ENTRIES = 50_000;
+    const MAX_LISTING_BYTES = 32 * 1024 * 1024;
+    const MAX_OBJECT_BYTES = 64 * 1024 * 1024;
+    const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' };
+    delete env.FORBIDDEN_CONTENT_PATTERNS;
+    const git = (args, options = {}) => execFileSync('git', args, { env, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 2 * MAX_OBJECT_BYTES, ...options });
+    const format = git(['rev-parse', '--show-object-format']).toString('ascii').trim();
+    const length = format === 'sha1' ? 40 : format === 'sha256' ? 64 : 0;
+    if (input.length !== length || !/^[0-9a-f]+$/i.test(input)) throw new Error('Invalid commit');
+    const commit = input.toLowerCase();
+    if (git(['cat-file', '-t', commit]).toString('ascii').trim() !== 'commit') throw new Error('Not a commit');
+    const listing = git(['ls-tree', '-r', '-t', '-z', '--full-tree', commit], { maxBuffer: MAX_LISTING_BYTES })
+      .toString('utf8').split('\0').filter(Boolean);
+    if (listing.length > MAX_ENTRIES) throw new Error('Too many entries');
+    const kinds = { '040000': 'tree', '100644': 'blob', '100755': 'blob', '120000': 'blob' };
+    const entries = listing.map(line => {
+      const tab = line.indexOf('\t');
+      const header = tab < 0 ? null : line.slice(0, tab).match(/^(\d{6}) (tree|blob|commit) ([0-9a-f]+)$/);
+      if (!header || kinds[header[1]] !== header[2] || header[3].length !== length) throw new Error('Unsupported tree entry');
+      return { type: header[2], oid: header[3], path: line.slice(tab + 1) };
+    });
+    const oids = [...new Set(entries.map(entry => entry.oid))];
+    // An empty tree has no objects to inspect; batch-check would read the blank input line as a missing object.
+    const rows = oids.length ? git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { input: `${oids.join('\n')}\n` }).toString('ascii').split('\n').slice(0, -1) : [];
+    if (rows.length !== oids.length) throw new Error('Object inspection failed');
+    const objects = new Map();
+    rows.forEach((row, index) => {
+      const [oid, type, size, extra] = row.split(' ');
+      if (oid !== oids[index] || extra !== undefined || !/^\d+$/.test(size ?? '')) throw new Error('Missing object');
+      objects.set(oid, { type, size: Number(size) });
+    });
+    let bytes = 0;
+    for (const { size } of objects.values()) bytes += size;
+    if (bytes > MAX_OBJECT_BYTES) throw new Error('Too many object bytes');
+    if (entries.some(entry => objects.get(entry.oid).type !== entry.type)) throw new Error('Object type mismatch');
+    let verdict = entries.some(entry => matches(entry.path));
+    const wanted = [...new Set(entries.filter(entry => entry.type === 'blob' && !entry.path.startsWith('spec/')).map(entry => entry.oid))];
+    if (wanted.length) {
+      const out = git(['cat-file', '--batch'], { input: `${wanted.join('\n')}\n` });
+      let offset = 0;
+      for (const oid of wanted) {
+        const end = out.indexOf(0x0a, offset);
+        if (end < 0) throw new Error('Unexpected object output');
+        const [name, type, size] = out.toString('ascii', offset, end).split(' ');
+        const start = end + 1;
+        const next = start + Number(size) + 1;
+        if (name !== oid || type !== 'blob' || Number(size) !== objects.get(oid).size || out[next - 1] !== 0x0a) throw new Error('Unexpected object output');
+        verdict = verdict || matches(out.toString('utf8', start, next - 1));
+        offset = next;
+      }
+      if (offset !== out.length) throw new Error('Unexpected object output');
+    }
+    if (verdict) {
+      found = true;
+      console.log('MATCH [redacted]');
+    }
   } else if (mode === '--pack' && process.argv.length === 4) {
     const archive = process.argv[3];
     const files = run('tar', ['-tzf', archive]).toString().split('\n').filter(name => name && !name.endsWith('/'));
@@ -149,7 +209,7 @@ try {
       if (matches(ref.name) || matchingObjects([ref]).size) console.log(`PENDING ${safe(ref.name)}`);
     }
   } else {
-    console.error('Usage: scan-forbidden.mjs --tree | --pack <tgz> | --history <git-dir>');
+    console.error('Usage: scan-forbidden.mjs --tree | --commit <sha> | --pack <tgz> | --history <git-dir>');
     process.exit(2);
   }
 } catch {

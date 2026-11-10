@@ -6512,7 +6512,6 @@ function extractCandidatesAndPlan(params) {
     }
   }
   const candidates = [];
-  const candidateCommitments = [];
   const claimedAccessIds = /* @__PURE__ */ new Set();
   const claimedRefreshIds = /* @__PURE__ */ new Set();
   const claimedRetiredFingerprints = /* @__PURE__ */ new Set();
@@ -6774,7 +6773,6 @@ function extractCandidatesAndPlan(params) {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest
     };
-    candidateCommitments.push(candCommitment);
     claimedRefreshDocIds.add(curRefEntry.doc.id);
     if (prevRefEntry) claimedRefreshDocIds.add(prevRefEntry.doc.id);
     if (accessEntry) claimedTokenDocIds.add(accessEntry.doc.id);
@@ -6924,7 +6922,6 @@ function extractCandidatesAndPlan(params) {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest
     };
-    candidateCommitments.push(candCommitment);
     claimedTokenDocIds.add(tokEntry.doc.id);
     if (baseRefEntry) claimedRefreshDocIds.add(baseRefEntry.doc.id);
     candidates.push({
@@ -7021,7 +7018,6 @@ function extractCandidatesAndPlan(params) {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest
     };
-    candidateCommitments.push(candCommitment);
     candidates.push({
       id: candidateId,
       kind: "authCodes",
@@ -7084,7 +7080,6 @@ function extractCandidatesAndPlan(params) {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest
     };
-    candidateCommitments.push(candCommitment);
     candidates.push({
       id: candidateId,
       kind: "resumeTokens",
@@ -7183,7 +7178,6 @@ function extractCandidatesAndPlan(params) {
       targets: candTargets.map((t) => ({ collection: t.collection, id: t.id })),
       logicalDigest
     };
-    candidateCommitments.push(candCommitment);
     candidates.push({
       id: candidateId,
       kind: "clients",
@@ -7217,8 +7211,8 @@ function extractCandidatesAndPlan(params) {
   if (candidateById.size !== candidates.length) {
     throw new CutoverFenceError("Duplicate candidateId detected in candidate extraction");
   }
-  const sortedCommitments = candidates.map((c) => c.commitment);
-  const sourceLogicalItems = sortedCommitments.map((c) => [c.id, c.logicalDigest]);
+  const candidateCommitments = candidates.map((candidate) => candidate.commitment);
+  const sourceLogicalItems = candidateCommitments.map((c) => [c.id, c.logicalDigest]);
   const sourceLogicalDigest = computeLogicalInventoryDigest(storeKey, namespace, epoch, sourceLogicalItems);
   const allSourceDescriptors = [];
   for (const [colKey, docs] of sourceDocsByKey.entries()) {
@@ -7243,7 +7237,7 @@ function extractCandidatesAndPlan(params) {
     assemblyDigest,
     indexSchemaDigest,
     encoderVersion: 1,
-    candidates: sortedCommitments.map((c) => {
+    candidates: candidateCommitments.map((c) => {
       const executionCand = candidateById.get(c.id);
       if (!executionCand) throw new CutoverFenceError(`Candidate ${sanitizeId(c.id)} missing from execution candidates`);
       return {

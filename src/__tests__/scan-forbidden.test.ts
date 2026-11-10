@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -248,5 +248,236 @@ describe('forbidden content scanner', () => {
   });
   it('requires patterns', () => {
     expect(scan(['--tree'], '').status).toBe(2);
+  });
+});
+
+describe('commit content scanner', () => {
+  const maxEntries = 50_000; // Mirrors MAX_ENTRIES in scripts/scan-forbidden.mjs.
+  const maxObjectBytes = 64 * 1024 * 1024; // Mirrors MAX_OBJECT_BYTES in scripts/scan-forbidden.mjs.
+  const verdict = 'MATCH [redacted]\n';
+  let root: string;
+  let repo: string;
+  const gitIn = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
+  const gitWith = (input: Buffer | string, ...args: string[]) => execFileSync('git', args, { cwd: repo, input, stdio: 'pipe' }).toString().trim();
+  const blob = (content: Buffer | string) => gitWith(content, 'hash-object', '-w', '--stdin');
+  const rawTree = (entries: [string, string, string][]) => gitWith(
+    Buffer.concat(entries.map(([mode, name, oid]) => Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, 'hex')]))),
+    'hash-object', '-t', 'tree', '--literally', '-w', '--stdin',
+  );
+  // Root tree holding one leaf at `path`, with a nested tree for each directory above it.
+  const nested = (path: string, oid: string, mode = '100644'): string => {
+    const [head, ...rest] = path.split('/');
+    return rest.length ? rawTree([['40000', head, nested(rest.join('/'), oid, mode)]]) : rawTree([[mode, head, oid]]);
+  };
+  const commitOf = (tree: string) => gitIn('commit-tree', tree, '-m', 'fixture');
+  const commitScan = (args: string[], extra: NodeJS.ProcessEnv = {}, cwd = repo) => spawnSync(process.execPath, [scanner, ...args], {
+    cwd, encoding: 'utf8', env: { ...process.env, FORBIDDEN_CONTENT_PATTERNS: marker, ...extra },
+  });
+  const commitAll = () => {
+    gitIn('add', '-A');
+    gitIn('commit', '-m', 'fixture');
+    return gitIn('rev-parse', 'HEAD');
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'commit-scan-'));
+    repo = join(root, 'repo');
+    mkdirSync(repo);
+    gitIn('init');
+    gitIn('config', 'user.email', 'test@example.invalid');
+    gitIn('config', 'user.name', 'Test');
+    writeFileSync(join(repo, 'clean.txt'), 'clean');
+    mkdirSync(join(repo, 'spec'));
+    writeFileSync(join(repo, 'spec', 'excluded.txt'), marker);
+    commitAll();
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('scans the named commit, ignoring dirty and later checkout content', () => {
+    const clean = gitIn('rev-parse', 'HEAD');
+    writeFileSync(join(repo, 'clean.txt'), marker);
+    expect(commitScan(['--commit', clean]).status).toBe(0);
+    const dirty = commitAll();
+    writeFileSync(join(repo, 'clean.txt'), 'clean again');
+    const result = commitScan(['--commit', dirty]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(verdict);
+    expect(commitScan(['--commit', clean]).status).toBe(0);
+  });
+
+  it('excludes root spec/ content from matching', () => {
+    expect(commitScan(['--commit', commitOf(nested('spec/excluded.txt', blob(marker)))]).status).toBe(0);
+  });
+
+  it.each(['spec', 'spec.txt', 'specs/x.txt', 'a/spec/x.txt', 'Spec/x.txt'])('content-scans the near-miss path %s', path => {
+    const result = commitScan(['--commit', commitOf(nested(path, blob(marker)))]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(verdict);
+  });
+
+  it('emits only a fixed verdict, never a path or matched text', () => {
+    const tree = rawTree([['100644', marker, blob(marker)], ['100644', 'clean.txt', blob('clean')]]);
+    const result = commitScan(['--commit', commitOf(tree)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(verdict);
+    expect(result.stderr).toBe('');
+  });
+
+  it('emits one verdict for many matches and still exits 1', () => {
+    const match = blob(marker);
+    const tree = rawTree(Array.from({ length: 105 }, (_, i) => ['100644', `m${i}.txt`, match] as [string, string, string]));
+    const result = commitScan(['--commit', commitOf(tree)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(verdict);
+  });
+
+  it('keeps scanning after a match and fails on a later submodule entry', () => {
+    const head = gitIn('rev-parse', 'HEAD');
+    const tree = rawTree([['100644', 'a.txt', blob(marker)], ['160000', 'z', head]]);
+    expect(commitScan(['--commit', commitOf(tree)]).status).toBe(2);
+  });
+
+  it('rejects submodules even inside excluded spec', () => {
+    const head = gitIn('rev-parse', 'HEAD');
+    expect(commitScan(['--commit', commitOf(nested('spec/submodule', head, '160000'))]).status).toBe(2);
+  });
+
+  it.each(['f.txt', 'spec/excluded.txt'])('rejects non-blob objects behind file modes at %s', path => {
+    const head = gitIn('rev-parse', 'HEAD');
+    gitIn('tag', '-a', 'fixture-tag', '-m', 'tag message', head);
+    const tag = gitIn('rev-parse', 'refs/tags/fixture-tag');
+    const others = [tag, head, gitIn('rev-parse', 'HEAD^{tree}'), '1'.repeat(head.length)];
+    for (const oid of others) expect(commitScan(['--commit', commitOf(nested(path, oid))]).status).toBe(2);
+  });
+
+  it('rejects a directory mode that points at a blob', () => {
+    expect(commitScan(['--commit', commitOf(rawTree([['40000', 'd', blob('clean')]]))]).status).toBe(2);
+  });
+
+  it('checks directory names, including empty directories', () => {
+    const empty = rawTree([]);
+    const clean = blob('clean');
+    const matching = commitScan(['--commit', commitOf(rawTree([['40000', marker, empty], ['100644', 'clean.txt', clean]]))]);
+    expect(matching.status).toBe(1);
+    expect(matching.stdout).toBe(verdict);
+    expect(commitScan(['--commit', commitOf(rawTree([['40000', 'empty', empty]]))]).status).toBe(0);
+  });
+
+  it('reads symlink blobs as target text and never follows them', () => {
+    writeFileSync(join(root, 'sentinel'), marker);
+    expect(commitScan(['--commit', commitOf(nested('link', blob('../sentinel'), '120000'))]).status).toBe(0);
+    expect(commitScan(['--commit', commitOf(nested('link', blob(marker), '120000'))]).status).toBe(1);
+  });
+
+  it('content-scans executable files', () => {
+    expect(commitScan(['--commit', commitOf(nested('run.sh', blob(marker), '100755'))]).status).toBe(1);
+    expect(commitScan(['--commit', commitOf(nested('run.sh', blob('clean'), '100755'))]).status).toBe(0);
+  });
+
+  it('accepts uppercase full hex ids', () => {
+    const clean = gitIn('rev-parse', 'HEAD');
+    expect(commitScan(['--commit', clean.toUpperCase()]).status).toBe(0);
+  });
+
+  it('rejects missing, abbreviated, non-commit, and injection-like arguments', () => {
+    const id = gitIn('rev-parse', 'HEAD');
+    const blobId = gitIn('rev-parse', 'HEAD:clean.txt');
+    for (const args of [
+      ['--commit'], ['--commit', id.slice(0, 12)], ['--commit', 'HEAD'],
+      ['--commit', `${id};touch injected`], ['--commit', id, 'extra'],
+      ['--commit', blobId], ['--commit', '0'.repeat(id.length)],
+    ]) {
+      expect(commitScan(args).status).toBe(2);
+    }
+  });
+
+  it('accepts exactly the entry limit and rejects one more', () => {
+    const clean = blob('clean');
+    const flat = (count: number) => commitOf(rawTree(Array.from({ length: count }, (_, i) => ['100644', `f${i}`, clean] as [string, string, string])));
+    expect(commitScan(['--commit', flat(maxEntries)]).status).toBe(0);
+    expect(commitScan(['--commit', flat(maxEntries + 1)]).status).toBe(2);
+  });
+
+  it('rejects a total object budget overrun', () => {
+    expect(commitScan(['--commit', commitOf(nested('big.bin', blob(Buffer.alloc(maxObjectBytes + 1))))]).status).toBe(2);
+  });
+
+  it('counts a shared object once against the byte budget', () => {
+    const shared = blob(Buffer.concat([Buffer.from(marker), Buffer.alloc(1024 * 1024, 0x61)]));
+    const tree = rawTree(Array.from({ length: 100 }, (_, i) => ['100644', `ref-${i}.txt`, shared] as [string, string, string]));
+    const result = commitScan(['--commit', commitOf(tree)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(verdict);
+  });
+
+  describe('git children', () => {
+    let fakeDir: string;
+    let log: string;
+    let fakeEnv: NodeJS.ProcessEnv;
+    beforeEach(() => {
+      const realGit = execFileSync('which', ['git'], { stdio: 'pipe' }).toString().trim();
+      fakeDir = mkdtempSync(join(root, 'bin-'));
+      log = join(root, 'git.log');
+      writeFileSync(log, '');
+      writeFileSync(join(fakeDir, 'git'), [
+        '#!/bin/sh',
+        `printf '%s\\n' "$*" >> '${log}'`,
+        `if env | grep -q '^FORBIDDEN_CONTENT_PATTERNS='; then echo leak >> '${log}'; fi`,
+        'echo stderr-sentinel >&2',
+        `exec '${realGit}' "$@"`,
+      ].join('\n') + '\n');
+      chmodSync(join(fakeDir, 'git'), 0o755);
+      fakeEnv = { PATH: `${fakeDir}:${process.env.PATH}` };
+    });
+
+    it('keeps the pattern variable out of git children, unlike the tree mode', () => {
+      commitScan(['--tree'], fakeEnv);
+      expect(readFileSync(log, 'utf8')).toContain('leak');
+      writeFileSync(log, '');
+      expect(commitScan(['--commit', gitIn('rev-parse', 'HEAD')], fakeEnv).status).toBe(0);
+      expect(readFileSync(log, 'utf8')).toContain('cat-file');
+      expect(readFileSync(log, 'utf8')).not.toContain('leak');
+    });
+
+    it('uses a fixed number of git processes regardless of commit size', () => {
+      const withFiles = (count: number) => commitOf(rawTree(Array.from({ length: count }, (_, i) => ['100644', `f${i}.txt`, blob(`clean ${i}`)] as [string, string, string])));
+      const invocations = (commit: string) => {
+        writeFileSync(log, '');
+        expect(commitScan(['--commit', commit], fakeEnv).status).toBe(0);
+        return readFileSync(log, 'utf8').trim().split('\n').length;
+      };
+      const small = invocations(withFiles(3));
+      const large = invocations(withFiles(60));
+      expect(small).toBeLessThanOrEqual(5);
+      expect(large).toBe(small);
+    });
+    it('captures git stderr so successful git calls never reach the caller', () => {
+      const probe = spawnSync(join(fakeDir, 'git'), ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' });
+      expect(probe.stderr).toContain('stderr-sentinel');
+      const result = commitScan(['--commit', gitIn('rev-parse', 'HEAD')], fakeEnv);
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).not.toContain('stderr-sentinel');
+    });
+
+    it('control: a default execFileSync forwards child stderr to its parent', () => {
+      const script = "require('node:child_process').execFileSync('sh', ['-c', 'echo stderr-sentinel >&2'])";
+      const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+      expect(child.stderr).toContain('stderr-sentinel');
+    });
+  });
+
+  it('accepts an empty commit tree without inspecting objects', () => {
+    const result = commitScan(['--commit', commitOf(rawTree([]))]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  it('fails closed on git errors without disclosing stderr', () => {
+    const id = gitIn('rev-parse', 'HEAD');
+    const result = commitScan(['--commit', id], {}, root);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Content scan failed');
+    expect(result.stdout + result.stderr).not.toContain(root);
   });
 });

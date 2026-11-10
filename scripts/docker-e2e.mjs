@@ -51,9 +51,11 @@ function pass(assertion) {
   console.log(`PASS docker ${assertion}`);
 }
 
+class DockerAssertionFailure extends Error {}
+
 function fail(assertion, reason) {
   console.error(`FAIL docker ${assertion}: ${reason}`);
-  process.exit(1);
+  throw new DockerAssertionFailure();
 }
 
 async function main() {
@@ -168,6 +170,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('FAIL docker unexpected-error:', err);
-  process.exit(1);
+  if (!(err instanceof DockerAssertionFailure)) {
+    console.error('FAIL docker unexpected-error:', err);
+  }
+  process.exitCode = 1;
 });
