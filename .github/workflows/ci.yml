@@ -182,12 +182,16 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.isolated_proof }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 2
           persist-credentials: false
+      - name: Check proof source
+        run: bash .github/proof/stage.sh preflight
+      - name: Stage proof inputs
+        run: bash .github/proof/stage.sh stage
       - name: Run isolated migration and consumer proof
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-        run: bash .github/proof/stage.sh all
+        run: bash .github/proof/stage.sh run
