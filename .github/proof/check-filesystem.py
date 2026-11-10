@@ -33,7 +33,9 @@ SAFE_DEVICES = {
 }
 # /proc is a private view; /dev/pts is a devpts mount with its own namespace rules.
 SKIP_DESCEND = {'/proc', '/dev/pts'}
-DOCKER_INIT = '/sbin/docker-init'
+# Docker's --init binary is bind-mounted read-only at one of these paths, depending on the runner image
+# (observed: /usr/sbin on ubuntu-24.04 hosted runners). Either is accepted, and only when it is read-only.
+DOCKER_INIT_PATHS = frozenset({'/sbin/docker-init', '/usr/sbin/docker-init'})
 REQUIRED_MOUNTS = {
     '/': None,
     '/stage': None,
@@ -44,7 +46,7 @@ REQUIRED_MOUNTS = {
 }
 OPTIONAL_MOUNTS = {'/etc/hosts', '/etc/resolv.conf', '/etc/hostname'}
 # Bind mounts the proof itself adds, or that Docker adds for --init; each must be read-only.
-RO_BINDS = {'/etc/passwd', '/etc/group', DOCKER_INIT}
+RO_BINDS = frozenset({'/etc/passwd', '/etc/group'}) | DOCKER_INIT_PATHS
 ALLOWED_BINDS = OPTIONAL_MOUNTS | RO_BINDS
 RO_REQUIRED = ('/', '/stage')
 PREFIX_MOUNTS = ('/proc', '/sys', '/dev')
