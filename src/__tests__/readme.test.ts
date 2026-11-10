@@ -18,7 +18,8 @@ describe('README and documentation facts', () => {
   const changelog = readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
   const security = readFileSync(path.join(repoRoot, 'SECURITY.md'), 'utf8');
   const contributing = readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8');
-  const allDocs = [readme, changelog, security, contributing];
+  const reference = readFileSync(path.join(repoRoot, 'docs/reference.md'), 'utf8');
+  const allDocs = [readme, reference, changelog, security, contributing];
 
   it('contains no em-dashes or en-dashes', () => {
     const dashRegex = /[\u2013\u2014]/;
@@ -30,6 +31,7 @@ describe('README and documentation facts', () => {
   it('mentions phoneware only in github.com/phoneware repository URLs', () => {
     for (const [filename, content] of [
       ['README.md', readme],
+      ['docs/reference.md', reference],
       ['CHANGELOG.md', changelog],
       ['SECURITY.md', security],
       ['CONTRIBUTING.md', contributing],
@@ -51,27 +53,27 @@ describe('README and documentation facts', () => {
     const facts = generateReadmeFacts();
 
     // Version matrix block
-    const vmBlock = readme.match(/<!-- facts:version-matrix -->([\s\S]*?)<!-- \/facts:version-matrix -->/);
+    const vmBlock = reference.match(/<!-- facts:version-matrix -->([\s\S]*?)<!-- \/facts:version-matrix -->/);
     expect(vmBlock).toBeTruthy();
     expect(vmBlock![1].trim()).toBe(facts.versionMatrix.trim());
 
     // Backends table block
-    const beBlock = readme.match(/<!-- facts:backends -->([\s\S]*?)<!-- \/facts:backends -->/);
+    const beBlock = reference.match(/<!-- facts:backends -->([\s\S]*?)<!-- \/facts:backends -->/);
     expect(beBlock).toBeTruthy();
     expect(beBlock![1].trim()).toBe(facts.backendsTable.trim());
 
     // Firestore collections block
-    const fcBlock = readme.match(/<!-- facts:firestore-collections -->([\s\S]*?)<!-- \/facts:firestore-collections -->/);
+    const fcBlock = reference.match(/<!-- facts:firestore-collections -->([\s\S]*?)<!-- \/facts:firestore-collections -->/);
     expect(fcBlock).toBeTruthy();
     expect(fcBlock![1].trim()).toBe(facts.firestoreCollectionsTable.trim());
 
     // Roles hierarchy block
-    const roleBlock = readme.match(/<!-- facts:roles -->([\s\S]*?)<!-- \/facts:roles -->/);
+    const roleBlock = reference.match(/<!-- facts:roles -->([\s\S]*?)<!-- \/facts:roles -->/);
     expect(roleBlock).toBeTruthy();
     expect(roleBlock![1].trim()).toBe(facts.rolesTable.trim());
 
     // Full env table block
-    const seBlock = readme.match(/<!-- facts:env-table -->([\s\S]*?)<!-- \/facts:env-table -->/);
+    const seBlock = reference.match(/<!-- facts:env-table -->([\s\S]*?)<!-- \/facts:env-table -->/);
     expect(seBlock).toBeTruthy();
     expect(seBlock![1].trim()).toBe(facts.envTable.trim());
   });
