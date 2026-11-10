@@ -4,39 +4,49 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to rehearse. A dispatch never publishes.'
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  build:
+    # Candidate code runs here. No secret and no OIDC token are available.
     runs-on: ubicloud-standard-2
-    environment: npm-publish
-    permissions:
-      contents: write
-      attestations: write
-      id-token: write
+    permissions: { contents: read, checks: read }
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tarball: ${{ steps.freeze.outputs.tarball }}
+      sha256: ${{ steps.freeze.outputs.sha256 }}
+      sha512: ${{ steps.freeze.outputs.sha512 }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          cache: npm
-          registry-url: 'https://registry.npmjs.org'
-      - name: Verify npm version
-        run: |
-          node -e '
-            import { execSync } from "node:child_process";
-            const version = execSync("npm --version", { encoding: "utf8" }).trim();
-            const [major, minor, patch] = version.split(".").map(Number);
-            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
-              console.error("npm >= 11.5.1 required for trusted publishing, got " + version);
-              process.exit(1);
-            }
-            console.log("npm version " + version + " satisfies >= 11.5.1");
-          '
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: node scripts/release-gate.mjs version --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --input "$INPUT_VERSION" --package package.json | tee -a "$GITHUB_OUTPUT"
+      - name: Check main CI for source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-gate.mjs source --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
       - run: npm ci
-      # The Firestore store tests skip without an emulator; a release must run them.
       - name: Start Firestore emulator
         run: |
           docker run -d --name fs-emu -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
@@ -50,39 +60,288 @@ jobs:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
       - run: npm run build
-      - name: Pack package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL="netsapiens-mcp-${VERSION}.tgz"
-          npm pack
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
-      - name: Verify package contents
-        run: node scripts/verify-pack.mjs "$TARBALL"
-      - name: Scan package
+      - name: Freeze package
+        id: freeze
         env:
-          FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
-        run: node scripts/scan-forbidden.mjs --pack "$TARBALL"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npm pack
+          TARBALL="netsapiens-mcp-${VERSION}.tgz"; test -f "$TARBALL"
+          printf 'VERSION=%s\nTARBALL=%s\n' "$VERSION" "$TARBALL" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/release-tarball"; install -m 0444 "$TARBALL" "$RUNNER_TEMP/release-tarball/$TARBALL"
+          frozen="$RUNNER_TEMP/release-tarball/$TARBALL"
+          { echo "tarball=$TARBALL"; echo "sha256=$(sha256sum "$frozen" | cut -d' ' -f1)"; echo "sha512=$(sha512sum "$frozen" | cut -d' ' -f1)"; } | tee -a "$GITHUB_OUTPUT"
+      - name: Upload frozen tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-tarball
+          path: '${{ runner.temp }}/release-tarball/'
+          if-no-files-found: error
+          overwrite: true
+      - name: Verify package contents
+        run: node scripts/verify-pack.mjs "$RUNNER_TEMP/release-tarball/$TARBALL"
+      - name: Check frozen artifact
+        env:
+          SHA256: ${{ steps.freeze.outputs.sha256 }}
+          SHA512: ${{ steps.freeze.outputs.sha512 }}
+        run: node scripts/release-gate.mjs artifact --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --version "$VERSION" --sha256 "$SHA256" --sha512 "$SHA512"
       - name: Run consumer e2e
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8080
           GOOGLE_CLOUD_PROJECT: firestore-test
           NSMCP_REQUIRE_FIRESTORE_EMULATOR: '1'
         run: |
-          node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs install,config,sqlite,memory,version
-          node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs firestore --firestore-major 8
-      - name: Attest release tarball provenance
-        uses: actions/attest-build-provenance@v2
+          node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs install,config,sqlite,memory,version
+          node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs firestore --firestore-major 8
+      - name: Verify frozen artifact after consumers
+        env:
+          SHA256: ${{ steps.freeze.outputs.sha256 }}
+          SHA512: ${{ steps.freeze.outputs.sha512 }}
+        run: |
+          frozen="$RUNNER_TEMP/release-tarball/$TARBALL"
+          test "$(sha256sum "$frozen" | cut -d' ' -f1)" = "$SHA256"
+          test "$(sha512sum "$frozen" | cut -d' ' -f1)" = "$SHA512"
+      - name: Prepare release notes
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-notes"
+          node scripts/changelog-section.mjs "$VERSION" > "$RUNNER_TEMP/release-notes/notes.md"; test -s "$RUNNER_TEMP/release-notes/notes.md"
+      - name: Upload release notes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          subject-path: ${{ env.TARBALL }}
+          name: release-notes
+          path: '${{ runner.temp }}/release-notes/'
+          if-no-files-found: error
+          overwrite: true
+
+  scan:
+    # Fresh read-only job. The tarball is data here, and the scanner secret is only on its step.
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TARBALL: ${{ needs.build.outputs.tarball }}
+      SHA256: ${{ needs.build.outputs.sha256 }}
+      SHA512: ${{ needs.build.outputs.sha512 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/release-gate.mjs
+            scripts/scan-forbidden.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-tarball
+          path: '${{ runner.temp }}/dist'
+      - name: Check artifact before scanning
+        run: node scripts/release-gate.mjs artifact --tarball "$RUNNER_TEMP/dist/$TARBALL" --version "$VERSION" --sha256 "$SHA256" --sha512 "$SHA512"
+      - name: Scan package
+        env:
+          FORBIDDEN_CONTENT_PATTERNS: ${{ secrets.FORBIDDEN_CONTENT_PATTERNS }}
+        run: |
+          test -n "$FORBIDDEN_CONTENT_PATTERNS"
+          node scripts/scan-forbidden.mjs --pack "$RUNNER_TEMP/dist/$TARBALL"
+
+  publish:
+    # The only job with registry OIDC authority. It runs the reviewed gate script and never candidate code.
+    needs: [build, scan]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: npm-publish
+    permissions: { contents: read, checks: read, id-token: write, attestations: write }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TARBALL: ${{ needs.build.outputs.tarball }}
+      SHA256: ${{ needs.build.outputs.sha256 }}
+      SHA512: ${{ needs.build.outputs.sha512 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release-gate.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - name: Verify npm version
+        run: |
+          node -e '
+            import { execSync } from "node:child_process";
+            const version = execSync("npm --version", { encoding: "utf8" }).trim();
+            const [major, minor, patch] = version.split(".").map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              console.error("npm >= 11.5.1 required for trusted publishing, got " + version);
+              process.exit(1);
+            }
+            console.log("npm version " + version + " satisfies >= 11.5.1");
+          '
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-tarball
+          path: '${{ runner.temp }}/dist'
+      - name: Check tarball name before gate
+        run: test "$TARBALL" = "netsapiens-mcp-$VERSION.tgz"
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REF" = "refs/tags/v$VERSION"
+          node scripts/release-gate.mjs source --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+          node scripts/release-gate.mjs artifact --tarball "$RUNNER_TEMP/dist/$TARBALL" --version "$VERSION" --sha256 "$SHA256" --sha512 "$SHA512"
+          node scripts/release-gate.mjs registry --name netsapiens-mcp --version "$VERSION" --sha512 "$SHA512" | tee -a "$GITHUB_OUTPUT"
+      - name: Attest release tarball provenance
+        if: steps.gate.outputs.action == 'publish'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: '${{ runner.temp }}/dist/${{ env.TARBALL }}'
       - name: Publish to npm
+        if: steps.gate.outputs.action == 'publish'
         run: |
           case "$VERSION" in
-            *-*) npm publish "$TARBALL" --access public --tag next --provenance ;;
-            *) npm publish "$TARBALL" --access public --provenance ;;
+            *-*) npm publish "$RUNNER_TEMP/dist/$TARBALL" --registry https://registry.npmjs.org/ --ignore-scripts --access public --tag next --provenance ;;
+            *) npm publish "$RUNNER_TEMP/dist/$TARBALL" --registry https://registry.npmjs.org/ --ignore-scripts --access public --provenance ;;
           esac
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read back registry and provenance
+        run: node scripts/release-gate.mjs readback --repo "$GITHUB_REPOSITORY" --name netsapiens-mcp --version "$VERSION" --sha512 "$SHA512" --sha "$GITHUB_SHA" --ref "$GITHUB_REF"
+
+  verify-registry:
+    # Installs the published package with install scripts off. It holds no token.
+    needs: [build, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      SHA512: ${{ needs.build.outputs.sha512 }}
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Verify published registry bytes
         run: |
-          gh release create "$GITHUB_REF_NAME" "$TARBALL" --title "$GITHUB_REF_NAME" --notes-file <(node scripts/changelog-section.mjs "$VERSION")
+          work="$(mktemp -d)"; export npm_config_cache="$work/cache" npm_config_userconfig="$work/npmrc" npm_config_ignore_scripts=true
+          : > "$npm_config_userconfig"; cd "$work"; npm init -y > /dev/null
+          npm install --no-audit --no-fund "netsapiens-mcp@$VERSION"
+          test "$(node -p 'require("./node_modules/netsapiens-mcp/package.json").version')" = "$VERSION"
+          npm pack "netsapiens-mcp@$VERSION" --pack-destination "$work" > /dev/null
+          test "$(sha512sum "$work/netsapiens-mcp-$VERSION.tgz" | cut -d' ' -f1)" = "$SHA512"
+          npm audit signatures
+
+  github-release:
+    # Release creation is separate from attestation and readback. It holds no registry authority.
+    needs: [build, publish, verify-registry]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TARBALL: ${{ needs.build.outputs.tarball }}
+      SHA256: ${{ needs.build.outputs.sha256 }}
+      SHA512: ${{ needs.build.outputs.sha512 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-tarball
+          path: '${{ runner.temp }}/dist'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-notes
+          path: '${{ runner.temp }}/notes'
+      - name: Create GitHub Release
+        run: |
+          file="$RUNNER_TEMP/dist/$TARBALL"; tag="v$VERSION"
+          test "$(sha256sum "$file" | cut -d' ' -f1)" = "$SHA256"; test "$(sha512sum "$file" | cut -d' ' -f1)" = "$SHA512"
+          raw="$RUNNER_TEMP/rel.raw"
+          set +e
+          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$raw" 2> "$RUNNER_TEMP/rel.err"
+          api_rc=$?
+          set -e
+          code="$(sed -n '1s/^HTTP[^ ]* \([0-9][0-9][0-9]\).*/\1/p' "$raw")"
+          case "$code" in
+            200)
+              test "$api_rc" = 0
+              awk 'found { print } /^\r?$/ && !found { found = 1 }' "$raw" > "$RUNNER_TEMP/rel.json"
+              test "$(jq -r --arg n "$TARBALL" '.assets[] | select(.name == $n) | .digest' "$RUNNER_TEMP/rel.json")" = "sha256:$SHA256"
+              exit 0 ;;
+            404)
+              gh release create "$tag" "$file" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$tag" --notes-file "$RUNNER_TEMP/notes/notes.md" ;;
+            *)
+              echo "::error::release lookup returned HTTP status '${code:-none}' (gh exit $api_rc); refusing to create or trust the release" >&2
+              exit 1 ;;
+          esac
+
+  rehearse:
+    # Dispatch only. It checks every gate and dry-runs the publish. It never uploads.
+    needs: [build, scan]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, checks: read }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TARBALL: ${{ needs.build.outputs.tarball }}
+      SHA256: ${{ needs.build.outputs.sha256 }}
+      SHA512: ${{ needs.build.outputs.sha512 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release-gate.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - name: Verify npm version
+        run: |
+          node -e '
+            import { execSync } from "node:child_process";
+            const version = execSync("npm --version", { encoding: "utf8" }).trim();
+            const [major, minor, patch] = version.split(".").map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              console.error("npm >= 11.5.1 required for trusted publishing, got " + version);
+              process.exit(1);
+            }
+            console.log("npm version " + version + " satisfies >= 11.5.1");
+          '
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-tarball
+          path: '${{ runner.temp }}/dist'
+      - name: Check tarball name before gate
+        run: test "$TARBALL" = "netsapiens-mcp-$VERSION.tgz"
+      - name: Check gates without publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-gate.mjs source --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+          node scripts/release-gate.mjs artifact --tarball "$RUNNER_TEMP/dist/$TARBALL" --version "$VERSION" --sha256 "$SHA256" --sha512 "$SHA512"
+          node scripts/release-gate.mjs registry --name netsapiens-mcp --version "$VERSION" --sha512 "$SHA512" --expect publish
+      - name: Dry-run npm publish
+        run: |
+          case "$VERSION" in
+            *-*) npm publish "$RUNNER_TEMP/dist/$TARBALL" --registry https://registry.npmjs.org/ --ignore-scripts --access public --tag next --dry-run ;;
+            *) npm publish "$RUNNER_TEMP/dist/$TARBALL" --registry https://registry.npmjs.org/ --ignore-scripts --access public --dry-run ;;
+          esac
