@@ -1,13 +1,19 @@
 'use strict';
 // Containment, emulator and protected-result checks for the isolated proof.
-//   boundary <gateway-ipv4> <port>  no network device or route beyond lo; TCP and UDP to
-//                                   external and canary addresses unreachable; loopback usable
-//   reach <gateway-ipv4> <port>     positive control: the host canary answers this container
-//   env                             environment holds only allowlisted names
-//   status                          default seccomp filter, no_new_privs, empty capability sets
-//   emulator <pid>                  the pid owns 127.0.0.1:8080 and the protected projects behave
-//   identity <pid>                  stable pid:start-time:inode identity of that listener
-//   results <vitest.json> <src>     protected files exist with exact case counts, all passed
+//   boundary <gateway-ipv4> <port>            no network device or route beyond lo; TCP and UDP to
+//                                             external and canary addresses unreachable; loopback usable
+//   probe-unreachable <ip> <port> <family>    TCP and UDP to ip:port must be unreachable; a reachable
+//                                             target fails with "unexpected connection"
+//   reach <gateway-ipv4> <port>               positive control: the host canary answers this container
+//   env [file]                                environment names and values in file (NUL-separated, e.g.
+//                                             /proc/1/environ, which is the container's own env, not a
+//                                             shell's exports); without a file, this process's env
+//   status                                    default seccomp filter, docker-default AppArmor, no_new_privs,
+//                                             empty capability sets
+//   emulator <pid>                            the pid owns 127.0.0.1:8080 and the protected projects behave
+//   identity <pid>                            stable pid:start-time:inode identity of that listener
+//   results <vitest.json> <expected> <root>   <expected> is the archive-derived suite inventory; protected
+//                                             files exist with exact case counts, all passed
 const fs = require('node:fs');
 const net = require('node:net');
 const dgram = require('node:dgram');
@@ -38,6 +44,9 @@ const PROTECTED = [
   ['__tests__/pr56-adoption-e2e.test.ts', 10],
   ['__tests__/pr56-retired-replay.test.ts', 1],
 ];
+// Emulator readiness budget: 480 polls at 250 ms, so 120 s, matching CI.
+const EMULATOR_POLLS = 480;
+const DOCKER_DEFAULT_APPARMOR = 'docker-default (enforce)';
 
 function readOptional(file) {
   try {
@@ -102,6 +111,16 @@ async function boundary(gateway, port) {
   await loopbackChild();
 }
 
+// probe-unreachable is the single-target probe used by negative controls: it must fail with
+// "unexpected connection" when the target is reachable, and pass when it is not.
+async function probeUnreachable(host, port, family) {
+  assert.ok(net.isIP(host), 'target must be an IP literal');
+  assert.match(port, /^\d+$/);
+  assert.ok(family === '4' || family === '6', 'family must be 4 or 6');
+  await connectExpect(host, Number(port), Number(family), UNREACHABLE);
+  await udpExpect(host, Number(port), Number(family));
+}
+
 function reach(gateway, port) {
   assert.ok(net.isIPv4(gateway), 'gateway must be IPv4');
   assert.match(port, /^\d+$/);
@@ -115,14 +134,28 @@ function reach(gateway, port) {
   });
 }
 
-function checkEnv() {
-  const names = Object.keys(process.env);
+// Reads NAME=value pairs from a NUL-separated environment file, or from this process when no file is given.
+function environment(file) {
+  if (!file) return { ...process.env };
+  const pairs = {};
+  for (const entry of fs.readFileSync(file, 'latin1').split('\0')) {
+    if (!entry) continue;
+    const i = entry.indexOf('=');
+    assert.ok(i > 0, 'malformed environment entry');
+    pairs[entry.slice(0, i)] = entry.slice(i + 1);
+  }
+  return pairs;
+}
+
+function checkEnv(file) {
+  const env = environment(file);
+  const names = Object.keys(env);
   const denied = names.filter(n => DENIED_ENV.some(r => r.test(n)));
   assert.deepEqual(denied, [], `denied environment names: ${denied.join(',')}`);
   const unknown = names.filter(n => !ALLOWED_ENV.has(n));
   assert.deepEqual(unknown, [], `unlisted environment names: ${unknown.join(',')}`);
-  assert.equal(process.env.HOME, '/work/home');
-  assert.equal(process.env.LANG, 'C');
+  assert.equal(env.HOME, '/work/home', 'HOME is not /work/home');
+  assert.equal(env.LANG, 'C', 'LANG is not C');
 }
 
 function checkStatus() {
@@ -137,6 +170,9 @@ function checkStatus() {
   for (const k of ['CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb']) {
     assert.match(get(k), /^0+$/, `${k} is not empty`);
   }
+  // Seccomp: 2 says a filter is loaded, not which one. The AppArmor label names Docker's default profile.
+  assert.equal(readOptional('/proc/self/attr/current').trim(), DOCKER_DEFAULT_APPARMOR,
+    'AppArmor profile is not docker-default');
 }
 
 function ownerOf8080(pid) {
@@ -178,14 +214,14 @@ async function emulator(pid) {
   assert.match(pid, /^\d+$/);
   await probe8081();
   let ready = false;
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < EMULATOR_POLLS; i++) {
     if (!fs.existsSync(`/proc/${pid}`)) throw new Error('emulator exited before becoming ready');
     if (ownerOf8080(pid)) {
       try { const r = await request('http://127.0.0.1:8080/'); await r.text(); ready = true; break; } catch {}
     }
     await sleep(250);
   }
-  assert(ready, 'emulator not ready, or the process does not own port 8080');
+  assert(ready, 'emulator not ready within 120 s, or the process does not own port 8080');
   for (const project of ['firestore-test', 'demo-netsapiens-cutover']) {
     const root = `http://127.0.0.1:8080/v1/projects/${project}/databases/(default)/documents`;
     const reset = `http://127.0.0.1:8080/emulator/v1/projects/${project}/databases/(default)/documents`;
@@ -213,7 +249,7 @@ async function emulator(pid) {
   await probe8081();
 }
 
-function results(file, root) {
+function results(file, expectedFile, root) {
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(data.success, true, 'Vitest reported failure');
   assert.equal(data.numFailedTests, 0, 'failed test aggregate');
@@ -222,15 +258,9 @@ function results(file, root) {
   if (data.errors !== undefined) assert(Array.isArray(data.errors) && data.errors.length === 0, 'unhandled errors');
   assert(Array.isArray(data.testResults), 'missing testResults');
 
-  const expected = [];
-  (function collect(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (['node_modules', 'build', '.claude', '.git'].includes(entry.name)) continue;
-      const p = path.join(dir, entry.name);
-      if (entry.isDirectory()) collect(p);
-      else if (entry.isFile() && /\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) expected.push(path.resolve(p));
-    }
-  })(root);
+  // The expected inventory comes from the digest-pinned archive list, never from walking the working tree.
+  const expected = fs.readFileSync(expectedFile, 'utf8').split('\n').filter(Boolean)
+    .map(rel => path.resolve(root, rel));
   assert(expected.length > 0, 'empty suite inventory');
   const actual = data.testResults.map(x => path.resolve(x.name));
   assert.equal(new Set(actual).size, actual.length, 'duplicate suite result');
@@ -239,6 +269,7 @@ function results(file, root) {
   const assertions = data.testResults.flatMap(x => x.assertionResults || []);
   assert.equal(data.numTotalTests, assertions.length, 'test count mismatch');
   assert.equal(data.numPassedTests, assertions.filter(x => x.status === 'passed').length, 'passed test count mismatch');
+  assert.equal(data.numPendingTests, assertions.filter(x => ['pending', 'skipped', 'todo'].includes(x.status)).length, 'pending test count mismatch');
   assert.equal(assertions.filter(x => x.status === 'failed').length, 0, 'failed test cases');
 
   for (const [suffix, count] of PROTECTED) {
@@ -256,14 +287,15 @@ function results(file, root) {
 }
 
 (async () => {
-  const [mode, a, b] = process.argv.slice(2);
+  const [mode, a, b, c] = process.argv.slice(2);
   if (mode === 'boundary') await boundary(a, b);
+  else if (mode === 'probe-unreachable') await probeUnreachable(a, b, c);
   else if (mode === 'reach') await reach(a, b);
-  else if (mode === 'env') checkEnv();
+  else if (mode === 'env') checkEnv(a);
   else if (mode === 'status') checkStatus();
   else if (mode === 'emulator') await emulator(a);
   else if (mode === 'identity') { console.log(emulatorIdentity(a)); return; }
-  else if (mode === 'results') results(a, b);
+  else if (mode === 'results') results(a, b, c);
   else throw new Error('unknown mode');
   console.log(`${mode}: passed`);
 })().catch(e => {

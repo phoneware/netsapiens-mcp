@@ -4,11 +4,16 @@
 Usage: check-filesystem.py [all|devices|mounts|writes] [writable-dir ...]
   devices  stdout/stderr are write-only pipes or files; no visible socket;
            no usable device outside the allowlist
-  mounts   only the mount points the proof expects; root and /stage read-only
+  mounts   only the mount points the proof expects; root and /stage read-only; the
+           bind mounts the proof itself adds must be read-only
   writes   root, /stage and /proc/sys are not writable; any extra directory
            given on the command line must also refuse a probe file
-The proof runs `all`. Controls run single modes so each negative fails for its
-own reason. Unreadable directories are counted and listed, never treated as clean.
+The proof runs `all`. Controls run single modes so each negative fails for its own reason.
+Failures print one message beginning "filesystem boundary:" and exit non-zero.
+Unreadable directories are counted and listed, never treated as clean.
+
+Known blind spots, stated rather than hidden: /proc, /sys and /dev are not walked for mounts;
+Docker's own /etc/hosts, /etc/resolv.conf and /etc/hostname are accepted without an ro requirement.
 """
 import errno
 import fcntl
@@ -26,8 +31,9 @@ SAFE_DEVICES = {
     '/dev/console': (5, 1),
     '/dev/ptmx': (5, 2),
 }
-# /proc is a private view; /dev/pts is a devpts mount whose mount point is checked below.
+# /proc is a private view; /dev/pts is a devpts mount with its own namespace rules.
 SKIP_DESCEND = {'/proc', '/dev/pts'}
+DOCKER_INIT = '/sbin/docker-init'
 REQUIRED_MOUNTS = {
     '/': None,
     '/stage': None,
@@ -37,6 +43,9 @@ REQUIRED_MOUNTS = {
     '/work': 'tmpfs',
 }
 OPTIONAL_MOUNTS = {'/etc/hosts', '/etc/resolv.conf', '/etc/hostname'}
+# Bind mounts the proof itself adds, or that Docker adds for --init; each must be read-only.
+RO_BINDS = {'/etc/passwd', '/etc/group', DOCKER_INIT}
+ALLOWED_BINDS = OPTIONAL_MOUNTS | RO_BINDS
 RO_REQUIRED = ('/', '/stage')
 PREFIX_MOUNTS = ('/proc', '/sys', '/dev')
 WRITE_PROBES = (
@@ -146,12 +155,12 @@ def check_mounts():
             continue
         if mountpoint in REQUIRED_MOUNTS:
             expected = REQUIRED_MOUNTS[mountpoint]
-        elif mountpoint in OPTIONAL_MOUNTS:
-            expected = None
-        else:
+            if expected is not None and fstype != expected:
+                fail(f'{mountpoint} is {fstype}, expected {expected}')
+        elif mountpoint not in ALLOWED_BINDS:
             fail(f'unexpected mount: {mountpoint}')
-        if expected is not None and fstype != expected:
-            fail(f'{mountpoint} is {fstype}, expected {expected}')
+        if mountpoint in RO_BINDS and 'ro' not in options:
+            fail(f'{mountpoint} is writable')
         seen[mountpoint] = options
     for mountpoint in REQUIRED_MOUNTS:
         if mountpoint not in seen:
