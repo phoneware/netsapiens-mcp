@@ -1,38 +1,39 @@
 #!/usr/bin/env node
 /**
- * NetSapiens MCP Server
- * Model Context Protocol server for NetSapiens platform integration
+ * Entry point for the NetSapiens MCP server.
  *
- * This server provides AI agents with access to NetSapiens VoIP platform
- * functionality including user management, call records, and system information.
+ * Reads configuration from the environment, builds an MCP server around a
+ * NetSapiensClient, and serves it over stdio or HTTP depending on
+ * MCP_TRANSPORT.
  */
 import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { createMemoryStore } from './store/memory.js';
-import { setUsageStore } from './tools/promotion/usage-store.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { NetSapiensClient } from './netsapiens-client.js';
-import { MCPServerConfig } from './types/config.js';
-import { SERVER_INSTRUCTIONS, serverCapabilities, serverImplementation } from './server-info.js';
-import { logger } from './utils/logger.js';
-import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
-import { createRequire } from 'node:module';
 import { normalizePlatformUrl } from './auth/platforms.js';
 import type { UserRole } from './auth/roles.js';
-import type { AvailabilityContext } from './netsapiens/availability.js';
 import { createAvailabilityContext } from './netsapiens/availability.js';
-import { getVersionInfo } from './netsapiens/version.js';
+import type { AvailabilityContext } from './netsapiens/availability.js';
 import { createGuardedClient } from './netsapiens/guarded-client.js';
+import { getVersionInfo } from './netsapiens/version.js';
+import { NetSapiensClient } from './netsapiens-client.js';
+import { SERVER_INSTRUCTIONS, serverCapabilities, serverImplementation } from './server-info.js';
+import { createMemoryStore } from './store/memory.js';
+import { getAllToolDefinitions, registerAllTools } from './tools/index.js';
+import { setUsageStore } from './tools/promotion/usage-store.js';
+import type { MCPServerConfig, NetSapiensConfig } from './types/config.js';
+import { logger } from './utils/logger.js';
 
 const packageMetadata: unknown = createRequire(import.meta.url)('../package.json');
 if (!packageMetadata || typeof packageMetadata !== 'object' || !('version' in packageMetadata) || typeof packageMetadata.version !== 'string') {
  throw new Error('Invalid package version');
 }
 const packageVersion = packageMetadata.version;
+const REQUEST_TIMEOUT_MS = 30_000;
 
-// Configuration - these would typically come from environment variables
+/** Reads the process environment into a server configuration, or throws a ConfigError. */
 export const loadConfig = (): MCPServerConfig => {
  const rawApiUrl = process.env.NETSAPIENS_API_URL;
  if (!rawApiUrl) throw new Error('ConfigError: NETSAPIENS_API_URL is required (your NetSapiens host, for example https://netsapiens.example.com)');
@@ -72,33 +73,30 @@ export const loadConfig = (): MCPServerConfig => {
   );
  }
 
- // Build NetSapiens config
- const netsapiensConfig: any = {
-  apiUrl,
-  timeout: 30000,
-  rateLimit: {
-   requests: 100,
-   perMilliseconds: 60000 // 100 requests per minute
+ // When both are present, OAuth credentials win over the static token.
+ const auth: Pick<NetSapiensConfig, 'oauth' | 'apiToken'> = hasOAuth
+  ? {
+   oauth: {
+    clientId: process.env.NETSAPIENS_OAUTH_CLIENT_ID!,
+    clientSecret: process.env.NETSAPIENS_OAUTH_CLIENT_SECRET!,
+    username: process.env.NETSAPIENS_OAUTH_USERNAME!,
+    password: process.env.NETSAPIENS_OAUTH_PASSWORD!,
+   },
   }
- };
-
- // Add OAuth config if provided (takes precedence over API token)
- if (hasOAuth) {
-  netsapiensConfig.oauth = {
-   clientId: process.env.NETSAPIENS_OAUTH_CLIENT_ID!,
-   clientSecret: process.env.NETSAPIENS_OAUTH_CLIENT_SECRET!,
-   username: process.env.NETSAPIENS_OAUTH_USERNAME!,
-   password: process.env.NETSAPIENS_OAUTH_PASSWORD!
-  };
- } else if (hasApiToken) {
-  netsapiensConfig.apiToken = process.env.NETSAPIENS_API_TOKEN!;
- }
+  : hasApiToken
+   ? { apiToken: process.env.NETSAPIENS_API_TOKEN! }
+   : {};
 
  return {
   name: 'netsapiens-mcp',
   version: packageVersion,
-  netsapiens: netsapiensConfig,
-  debug: process.env.DEBUG === 'true'
+  netsapiens: {
+   apiUrl,
+   timeout: REQUEST_TIMEOUT_MS,
+   rateLimit: { requests: 100, perMilliseconds: 60_000 },
+   ...auth,
+  },
+  debug: process.env.DEBUG === 'true',
  };
 };
 
@@ -111,68 +109,22 @@ export function getToolDefinitions() {
 }
 
 /**
- * Registers tool handlers on a Server instance, wired to the given NetSapiensClient.
- * Delegates to the modular tools system in src/tools/.
+ * Registers every tool handler on `server`, bound to `client`. The tool
+ * system itself lives in src/tools/.
  */
 export function registerTools(
  server: Server,
- netsapiensClient: NetSapiensClient,
+ client: NetSapiensClient,
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
 ): void {
- registerAllTools(server, netsapiensClient, userRole, userIdentity, availabilityContext);
-}
-
-// ---------------------------------------------------------------------------
-// NetSapiensMCPServer class (retained for backward compatibility)
-// ---------------------------------------------------------------------------
-
-export class NetSapiensMCPServer {
- private server: Server;
- private netsapiensClient: NetSapiensClient;
-
- constructor(config: MCPServerConfig, context?: AvailabilityContext) {
-  this.server = new Server(
-   serverImplementation(config),
-   {
-    capabilities: serverCapabilities(),
-    instructions: SERVER_INSTRUCTIONS,
-   }
-  );
-
-  const rawClient = new NetSapiensClient(config.netsapiens);
-  const guardedClient = context ? createGuardedClient(rawClient, context) : rawClient;
-  this.netsapiensClient = guardedClient;
-  registerTools(this.server, guardedClient, undefined, undefined, context);
-  this.setupErrorHandling();
- }
-
- private setupErrorHandling(): void {
-  this.server.onerror = (error) => {
-   logger.error('[MCP Error]', { error: String(error) });
-  };
-
-  process.on('SIGINT', async () => {
-   await this.server.close();
-   process.exit(0);
-  });
- }
-
- async run(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await this.server.connect(transport);
-
-  const config = loadConfig();
-  if (config.debug) {
-   logger.debug('NetSapiens MCP Server started successfully', { nsApiUrl: config.netsapiens.apiUrl });
-  }
- }
+ registerAllTools(server, client, userRole, userIdentity, availabilityContext);
 }
 
 /**
- * Creates a configured MCP Server + NetSapiensClient pair without connecting a transport.
- * Used by both the stdio and HTTP code paths.
+ * Builds an MCP Server and the NetSapiensClient behind it, without attaching
+ * a transport. The stdio and HTTP paths both start here.
  */
 export function createMcpServer(
  config: MCPServerConfig,
@@ -180,17 +132,45 @@ export function createMcpServer(
 ): { server: Server; client: NetSapiensClient } {
  const server = new Server(
   serverImplementation(config),
-  { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS }
+  { capabilities: serverCapabilities(), instructions: SERVER_INSTRUCTIONS },
  );
  const rawClient = new NetSapiensClient(config.netsapiens);
- const guardedClient = context ? createGuardedClient(rawClient, context) : rawClient;
- registerTools(server, guardedClient, undefined, undefined, context);
+ const client = context ? createGuardedClient(rawClient, context) : rawClient;
+ registerTools(server, client, undefined, undefined, context);
 
  server.onerror = (error) => {
   logger.error('[MCP Error]', { error: String(error) });
  };
 
- return { server, client: guardedClient };
+ return { server, client };
+}
+
+/** Stdio server wrapper. Kept for callers that import the class directly. */
+export class NetSapiensMCPServer {
+ private server: Server;
+ private netsapiensClient: NetSapiensClient;
+
+ constructor(config: MCPServerConfig, context?: AvailabilityContext) {
+  const built = createMcpServer(config, context);
+  this.server = built.server;
+  this.netsapiensClient = built.client;
+
+  const shutdown = async (): Promise<void> => {
+   await this.server.close();
+   process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+ }
+
+ /** Connects over stdio and, in debug mode, logs the upstream host. */
+ async run(): Promise<void> {
+  await this.server.connect(new StdioServerTransport());
+
+  const config = loadConfig();
+  if (config.debug) {
+   logger.debug('NetSapiens MCP Server started successfully', { nsApiUrl: config.netsapiens.apiUrl });
+  }
+ }
 }
 
 export async function main(): Promise<void> {

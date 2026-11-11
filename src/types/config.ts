@@ -1,188 +1,214 @@
 /**
- * Configuration types for NetSapiens MCP Server
+ * Configuration and response types.
+ *
+ * The resource shapes below follow the field names in the NetSapiens v2
+ * OpenAPI documents under spec/v2. Each lists the fields callers most often
+ * read and keeps an index signature, because a host returns more than is
+ * declared here and which extras it returns depends on its release.
  */
 
+/** Credentials for the OAuth password grant against a NetSapiens host. */
 export interface NetSapiensOAuthConfig {
-  /** OAuth Client ID */
   clientId: string;
-  /** OAuth Client Secret */
   clientSecret: string;
-  /** NetSapiens username */
+  /** NetSapiens login of the user the server acts as. */
   username: string;
-  /** NetSapiens password */
   password: string;
 }
 
+/** How the client reaches one NetSapiens host. Set `apiToken` or `oauth`, not both. */
 export interface NetSapiensConfig {
-  /** NetSapiens API server base URL */
+  /** Origin of the NetSapiens host, without the /ns-api path. */
   apiUrl: string;
-  /** API authentication token (mutually exclusive with oauth) */
+  /** Static bearer token. */
   apiToken?: string;
-  /** OAuth configuration (mutually exclusive with apiToken) */
+  /** OAuth password-grant credentials, used instead of a static token. */
   oauth?: NetSapiensOAuthConfig;
-  /** Optional timeout for API requests (milliseconds) */
+  /** Per-request timeout in milliseconds. */
   timeout?: number;
-  /** Optional rate limiting configuration */
   rateLimit?: {
     requests: number;
     perMilliseconds: number;
   };
-  /** Optional callback invoked on upstream 401 Unauthorized */
+  /** Called when the host answers 401, so the owner can install a fresh token. */
   onUnauthorized?: (err: unknown) => Promise<void> | void;
 }
 
+/** Everything the MCP server needs to start. */
 export interface MCPServerConfig {
-  /** Server name */
   name: string;
-  /** Server version */
   version: string;
-  /** NetSapiens configuration */
   netsapiens: NetSapiensConfig;
-  /** Debug mode */
   debug?: boolean;
 }
 
-export interface NetSapiensApiResponse<T = any> {
+/** Uniform envelope the client returns instead of throwing. */
+export interface NetSapiensApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
   message?: string;
 }
 
+/** GET /domains/{domain}/users/{user} */
 export interface NetSapiensUser {
-  user: string;
   domain: string;
-  first_name?: string;
-  last_name?: string;
+  user: string;
+  'name-first-name'?: string;
+  'name-last-name'?: string;
+  'login-username'?: string;
   email?: string;
-  phone?: string;
-  status?: string;
-  subscriber_id?: string;
-  caller_id?: string;
-  extension?: string;
-  forward?: string;
-  voicemail?: boolean;
-  timezone?: string;
+  'user-scope'?: string;
+  department?: string;
+  site?: string;
+  'time-zone'?: string;
+  'dial-plan'?: string;
+  'dial-policy'?: string;
+  'voicemail-enabled'?: string;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain} */
 export interface NetSapiensDomain {
   domain: string;
+  reseller?: string;
   description?: string;
-  customer?: string;
-  status?: string;
-  subscription?: string;
-  territory?: string;
-  timezone?: string;
+  'domain-type'?: string;
+  'dial-plan'?: string;
+  'dial-policy'?: string;
+  'time-zone'?: string;
+  'area-code'?: number;
+  'caller-id-name'?: string;
+  'caller-id-number'?: string;
+  [field: string]: unknown;
 }
 
+/**
+ * A call detail record. The call ids are the only fields this server reads
+ * itself; the rest varies by host release.
+ */
 export interface NetSapiensCDR {
-  call_id?: string;
-  caller?: string;
-  callee?: string;
-  start_time?: string;
-  end_time?: string;
-  duration?: number;
-  disposition?: string;
-  direction?: string;
-  realm?: string;
-  customer?: string;
+  id?: string;
+  'call-orig-call-id'?: string;
+  'call-term-call-id'?: string;
+  'call-parent-call-id'?: string;
+  'call-through-call-id'?: string;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/users/{user}/devices/{device} */
 export interface NetSapiensDevice {
-  object: string;
-  mac?: string;
-  template?: string;
+  device: string;
   user?: string;
   domain?: string;
-  status?: string;
-  model?: string;
+  'device-sip-registration-uri'?: string;
+  'device-sip-registration-state'?: string;
+  'device-sip-registration-contact'?: string;
+  'device-sip-registration-expires-datetime'?: string;
+  'core-server'?: string;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/phonenumbers/{phonenumber} */
 export interface NetSapiensPhoneNumber {
   phonenumber: string;
   domain?: string;
-  user?: string;
-  object?: string;
-  description?: string;
-  status?: string;
-  routing?: string;
+  enabled?: string;
+  'dial-rule-application'?: string;
+  'dial-rule-parameter'?: string;
+  'dial-rule-translation-destination-user'?: string;
+  'dial-rule-description'?: string;
+  'sms-enabled'?: boolean;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/callqueues/{callqueue} */
 export interface NetSapiensCallQueue {
-  object: string;
+  callqueue: string;
   domain: string;
-  name?: string;
   description?: string;
-  status?: string;
-  max_wait_time?: number;
-  strategy?: string;
-  music_on_hold?: string;
+  'callqueue-dispatch-type'?: string;
+  'callqueue-count-agents-available'?: number;
+  'callqueue-count-agents-total'?: number;
+  'active-queued-calls-total-current'?: number;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/callqueues/{callqueue}/agents */
 export interface NetSapiensAgent {
-  object: string;
-  agent?: string;
+  'callqueue-agent-id': string;
+  callqueue?: string;
   domain?: string;
-  user?: string;
-  status?: string;
-  skills?: string[];
-  login_status?: string;
+  'login-username'?: string;
+  'name-full-name'?: string;
+  'callqueue-agent-availability-type'?: string;
+  'callqueue-agent-availability-for-dispatch'?: string;
+  'active-calls-total-current'?: number;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/autoattendants */
 export interface NetSapiensAutoAttendant {
-  object: string;
-  domain: string;
-  name?: string;
-  prompt?: string;
-  timeout?: number;
-  options?: any;
+  'attendant-name': string;
+  user?: string;
+  'starting-prompt'?: string;
+  'read-path'?: string;
+  timeframes?: unknown;
+  [field: string]: unknown;
 }
 
+/** GET /domains/{domain}/users/{user}/answerrules/{timeframe} */
 export interface NetSapiensAnswerRule {
-  object: string;
-  timeframe: string;
+  domain?: string;
   user?: string;
-  domain?: string;
-  forward?: string;
-  voicemail?: boolean;
-  status?: string;
+  'time-frame': string;
+  enabled?: string;
+  'is-active'?: boolean;
+  'ordinal-priority'?: number;
+  'forward-always'?: unknown;
+  'forward-on-busy'?: unknown;
+  'forward-no-answer'?: unknown;
+  'do-not-disturb'?: unknown;
+  [field: string]: unknown;
 }
 
-export interface NetSapiensGreeting {
-  object: string;
-  index: number;
-  user?: string;
-  domain?: string;
-  type?: string;
-  filename?: string;
-  duration?: number;
+/** An audio file entry: a greeting, a hold message, or music on hold. */
+export interface NetSapiensAudioFile {
+  filename: string;
+  'ordinal-order'?: number | string;
+  'file-duration-seconds'?: number;
+  'file-size-kilobytes'?: string;
+  'created-datetime'?: string;
+  'file-access-url'?: string;
+  'file-source'?: string;
+  [field: string]: unknown;
 }
 
-export interface NetSapiensVoicemail {
-  object: string;
-  user?: string;
-  domain?: string;
-  caller?: string;
-  timestamp?: string;
-  duration?: number;
-  status?: string;
+/** GET /domains/{domain}/users/{user}/greetings/{index} */
+export type NetSapiensGreeting = NetSapiensAudioFile;
+
+/** GET /domains/{domain}/moh/{index} */
+export type NetSapiensMusicOnHold = NetSapiensAudioFile;
+
+/** GET /domains/{domain}/users/{user}/voicemails/{folder} */
+export interface NetSapiensVoicemail extends NetSapiensAudioFile {
+  'voicemail-from-name'?: string;
+  'voicemail-from-user'?: string;
+  'voicemail-from-caller-id-number'?: string;
+  'recorded-datetime'?: string;
+  'file-transcript-text'?: string;
 }
 
-export interface NetSapiensMusicOnHold {
-  object: string;
-  index: number;
-  domain?: string;
-  filename?: string;
-  description?: string;
-  duration?: number;
-}
-
+/** GET /domains/{domain}/billing */
 export interface NetSapiensBilling {
   domain: string;
-  period?: string;
-  charges?: number;
-  usage?: any;
-  details?: any;
+  description?: string;
+  reseller?: string;
+  'count-users-total'?: number;
+  'count-call-queues'?: number;
+  'count-phone-numbers'?: number;
+  'count-devices-total'?: number;
+  [field: string]: unknown;
 }
 
 // ==================== NEW TYPES ====================
