@@ -1,85 +1,125 @@
 /**
- * NetSapiens API Client for NetSapiens MCP Server
- * Handles all interactions with the NetSapiens platform
+ * HTTP client for the NetSapiens v1 and v2 REST APIs.
+ *
+ * Owns authentication (a static bearer or the OAuth password grant), request
+ * logging, and a single retry after an upstream 401.
  */
 
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios from 'axios';
+import type {
+  AxiosInstance,
+  AxiosRequestConfig,
+  AxiosResponse,
+  InternalAxiosRequestConfig,
+} from 'axios';
 import { logger } from './utils/logger.js';
-import {
-  NetSapiensConfig,
-  NetSapiensApiResponse,
-  NetSapiensUser,
-  NetSapiensDomain,
-  NetSapiensCDR,
-  NetSapiensDevice,
-  NetSapiensPhoneNumber,
-  NetSapiensCallQueue,
-  NetSapiensAgent,
-  NetSapiensAutoAttendant,
-  NetSapiensAnswerRule,
-  NetSapiensGreeting,
-  NetSapiensVoicemail,
-  NetSapiensMusicOnHold,
-  NetSapiensBilling,
-  NetSapiensReseller,
-  NetSapiensConference,
-  NetSapiensConferenceParticipant,
-  NetSapiensRoute,
-  NetSapiensRouteConnection,
-  NetSapiensConnection,
-  NetSapiensContact,
-  NetSapiensSite,
-  NetSapiensTimeframe,
-  NetSapiensSubscription,
-  NetSapiensDialPlan,
-  NetSapiensDialRule,
-  NetSapiensDialPolicy,
-  NetSapiensDialPermission,
+import { OAuthManager } from './oauth-manager.js';
+import type {
+  NetSapiensActiveCall,
   NetSapiensAddress,
   NetSapiensAddressEndpoint,
+  NetSapiensAgent,
+  NetSapiensAnswerRule,
+  NetSapiensApiKeyInfo,
+  NetSapiensApiResponse,
+  NetSapiensAutoAttendant,
+  NetSapiensBilling,
+  NetSapiensCallQueue,
+  NetSapiensCallQueueReport,
+  NetSapiensCDR,
   NetSapiensCertificate,
+  NetSapiensChart,
+  NetSapiensConference,
+  NetSapiensConferenceParticipant,
+  NetSapiensConfig,
+  NetSapiensConfigDefinition,
+  NetSapiensConfiguration,
+  NetSapiensConnection,
+  NetSapiensContact,
+  NetSapiensDashboard,
+  NetSapiensDepartment,
+  NetSapiensDevice,
+  NetSapiensDeviceProfile,
+  NetSapiensDialPermission,
+  NetSapiensDialPlan,
+  NetSapiensDialPolicy,
+  NetSapiensDialRule,
+  NetSapiensDomain,
+  NetSapiensFirebaseAccount,
+  NetSapiensGreeting,
+  NetSapiensHoldMessage,
+  NetSapiensHoliday,
   NetSapiensImageFile,
-  NetSapiensTemplate,
+  NetSapiensInsight,
+  NetSapiensJwtInfo,
+  NetSapiensMeeting,
+  NetSapiensMeetingLog,
+  NetSapiensMessage,
+  NetSapiensMessageSession,
+  NetSapiensMusicOnHold,
+  NetSapiensNumberFilter,
   NetSapiensPhoneConfig,
-  NetSapiensPhoneTemplate,
   NetSapiensPhoneMac,
   NetSapiensPhoneModel,
-  NetSapiensDeviceProfile,
-  NetSapiensHoldMessage,
-  NetSapiensNumberFilter,
-  NetSapiensRecording,
-  NetSapiensTranscription,
-  NetSapiensMessageSession,
-  NetSapiensMessage,
-  NetSapiensSmsNumber,
-  NetSapiensSmsBlock,
-  NetSapiensVoicemailReminder,
-  NetSapiensApiKeyInfo,
-  NetSapiensJwtInfo,
-  NetSapiensActiveCall,
+  NetSapiensPhoneNumber,
+  NetSapiensPhoneServer,
+  NetSapiensPhoneTemplate,
+  NetSapiensPresence,
   NetSapiensQueuedCall,
   NetSapiensQuota,
-  NetSapiensDashboard,
-  NetSapiensChart,
-  NetSapiensHoliday,
+  NetSapiensRecording,
+  NetSapiensReseller,
+  NetSapiensRoute,
+  NetSapiensRouteConnection,
+  NetSapiensSipFlow,
+  NetSapiensSite,
+  NetSapiensSmsBlock,
+  NetSapiensSmsNumber,
+  NetSapiensSubscription,
+  NetSapiensTemplate,
+  NetSapiensTimeframe,
+  NetSapiensTranscription,
+  NetSapiensUser,
   NetSapiensVideoCompany,
   NetSapiensVideoHost,
   NetSapiensVideoProduct,
   NetSapiensVideoSubscription,
-  NetSapiensMeeting,
-  NetSapiensMeetingLog,
   NetSapiensVoice,
-  NetSapiensFirebaseAccount,
-  NetSapiensSipFlow,
-  NetSapiensDepartment,
-  NetSapiensPresence,
-  NetSapiensConfigDefinition,
-  NetSapiensConfiguration,
-  NetSapiensInsight,
-  NetSapiensCallQueueReport,
-  NetSapiensPhoneServer
+  NetSapiensVoicemail,
+  NetSapiensVoicemailReminder,
 } from './types/config.js';
-import { OAuthManager } from './oauth-manager.js';
+
+const V2_BASE_PATH = '/ns-api/v2';
+const DEFAULT_TIMEOUT_MS = 30_000;
+const USER_AGENT = 'NetSapiens-MCP/1.1.1';
+
+/** The bits of an axios request config this client reads or tags onto it. */
+interface TrackedRequest {
+  url?: string;
+  method?: string;
+  pathTemplate?: string;
+  metadata?: { startTime?: number; pathTemplate?: string };
+}
+
+type RetryableRequest = TrackedRequest & {
+  headers?: Record<string, string>;
+  _retry?: boolean;
+};
+
+/** Elapsed time and the logical path for a request, for log lines. */
+function describeRequest(cfg: TrackedRequest | undefined): { durationMs: number; pathTemplate?: string } {
+  const meta = cfg?.metadata;
+  return {
+    durationMs: meta?.startTime ? Date.now() - meta.startTime : 0,
+    pathTemplate: cfg?.pathTemplate ?? meta?.pathTemplate ?? cfg?.url,
+  };
+}
+
+/** Message from a thrown value, or the fallback when it carries none. */
+function failureText(err: unknown, fallback: string): string {
+  const message = err && typeof err === 'object' && 'message' in err ? err.message : undefined;
+  return (typeof message === 'string' && message) || fallback;
+}
 
 export class NetSapiensClient {
   private client: AxiosInstance;
@@ -87,113 +127,106 @@ export class NetSapiensClient {
   private oauthManager?: OAuthManager;
 
   constructor(config: NetSapiensConfig) {
-    // Own copy — setApiToken must never mutate a config object shared with
-    // other clients (e.g. the operator-level config.netsapiens).
+    // Keep a private copy: setApiToken must never mutate a config object that
+    // other clients share (the operator-level config.netsapiens, for one).
     this.config = { ...config };
 
-    // Initialize OAuth manager if OAuth config is provided
     if (config.oauth) {
-      this.oauthManager = new OAuthManager({
-        apiUrl: config.apiUrl,
-        clientId: config.oauth.clientId,
-        clientSecret: config.oauth.clientSecret,
-        username: config.oauth.username,
-        password: config.oauth.password
-      });
+      const { clientId, clientSecret, username, password } = config.oauth;
+      this.oauthManager = new OAuthManager({ apiUrl: config.apiUrl, clientId, clientSecret, username, password });
     }
 
     this.client = axios.create({
-      baseURL: `${config.apiUrl}/ns-api/v2`,
-      timeout: config.timeout || 30000,
+      baseURL: `${config.apiUrl}${V2_BASE_PATH}`,
+      timeout: config.timeout || DEFAULT_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'NetSapiens-MCP/1.1.1'
-      }
+        Accept: 'application/json',
+        'User-Agent': USER_AGENT,
+      },
     });
 
-    // Add request interceptor to handle OAuth tokens
     this.client.interceptors.request.use(
-      async (config) => {
-        (config as any).metadata = {
-          startTime: Date.now(),
-          pathTemplate: (config as any).pathTemplate ?? config.url,
-        };
-        if (this.oauthManager) {
-          // Get fresh OAuth token
-          const token = await this.oauthManager.getAccessToken();
-          config.headers.Authorization = `Bearer ${token}`;
-        } else if (this.config.apiToken) {
-          // Use static API token
-          config.headers.Authorization = `Bearer ${this.config.apiToken}`;
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
+      (req) => this.prepareRequest(req),
+      (error) => Promise.reject(error),
     );
-
-    // Add response interceptor for error handling
     this.client.interceptors.response.use(
-      (response) => {
-        const metadata = (response.config as any)?.metadata;
-        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
-        const pathTemplate = (response.config as any)?.pathTemplate ?? metadata?.pathTemplate ?? response.config?.url;
-        logger.info('NetSapiens API request', {
-          method: response.config?.method?.toUpperCase(),
-          pathTemplate,
-          status: response.status,
-          durationMs,
-        });
-        return response;
-      },
-      async (error: unknown) => {
-        const err = error as {
-          response?: { status?: number; data?: unknown };
-          config?: { url?: string; method?: string; metadata?: { startTime?: number; pathTemplate?: string }; pathTemplate?: string };
-        };
-        // NS error bodies are { code, message }; the message is what names the
-        // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
-        const data = err.response?.data as { message?: unknown } | undefined;
-        const nsMessage = typeof data?.message === 'string' ? data.message : undefined;
-        // A 401 "Invalid Scope" is NS refusing one resource to this user's role,
-        // not a dead token. Invalidating the bearer on it signs the user out of
-        // every tool because one call asked for something above their tier.
-        if (err.response?.status === 401 && !/invalid scope/i.test(nsMessage ?? '') && this.config.onUnauthorized) {
-          const reqConfig = err.config as (typeof err.config & { headers?: Record<string, string>; _retry?: boolean }) | undefined;
-          if (!reqConfig?._retry) {
-            if (reqConfig) {
-              reqConfig._retry = true;
-            }
-          try {
-            await this.config.onUnauthorized(error);
-              if (reqConfig) {
-                if (this.config.apiToken) {
-                  reqConfig.headers = {
-                    ...reqConfig.headers,
-                    Authorization: `Bearer ${this.config.apiToken}`,
-                  };
-                }
-                return await this.client.request(reqConfig as unknown as import('axios').AxiosRequestConfig);
-              }
-          } catch {
-            // Ignore onUnauthorized callback errors
-            }
-          }
-        }
-        const metadata = err.config?.metadata;
-        const durationMs = metadata?.startTime ? Date.now() - metadata.startTime : 0;
-        const pathTemplate = err.config?.pathTemplate ?? metadata?.pathTemplate ?? err.config?.url;
-        logger.warn('NetSapiens API request', {
-          method: err.config?.method?.toUpperCase(),
-          pathTemplate,
-          url: err.config?.url,
-          status: err.response?.status,
-          error: nsMessage,
-          durationMs,
-        });
-        return Promise.reject(error);
-      }
+      (res) => this.logSuccess(res),
+      (error: unknown) => this.handleFailure(error),
     );
+  }
+
+  /** Stamp timing onto the request and attach the current bearer. */
+  private async prepareRequest(req: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> {
+    const tracked = req as InternalAxiosRequestConfig & TrackedRequest;
+    tracked.metadata = { startTime: Date.now(), pathTemplate: tracked.pathTemplate ?? req.url };
+
+    if (this.oauthManager) {
+      const token = await this.oauthManager.getAccessToken();
+      req.headers.Authorization = `Bearer ${token}`;
+    } else if (this.config.apiToken) {
+      req.headers.Authorization = `Bearer ${this.config.apiToken}`;
+    }
+    return req;
+  }
+
+  private logSuccess(res: AxiosResponse): AxiosResponse {
+    const cfg = res.config as TrackedRequest | undefined;
+    logger.info('NetSapiens API request', {
+      method: cfg?.method?.toUpperCase(),
+      status: res.status,
+      ...describeRequest(cfg),
+    });
+    return res;
+  }
+
+  private async handleFailure(error: unknown): Promise<AxiosResponse> {
+    const err = error as {
+      response?: { status?: number; data?: unknown };
+      config?: RetryableRequest;
+    };
+    const status = err.response?.status;
+    // NS error bodies are { code, message }. The message is what names the
+    // failure ("Invalid Scope [APP001]", "No Route Found [92]"), so log it.
+    const body = err.response?.data as { message?: unknown } | undefined;
+    const nsMessage = typeof body?.message === 'string' ? body.message : undefined;
+
+    // A 401 "Invalid Scope" is NS refusing one resource to this user's role,
+    // not a dead token. Invalidating the bearer on it would sign the user out
+    // of every tool because a single call reached above their tier.
+    if (status === 401 && this.config.onUnauthorized && !/invalid scope/i.test(nsMessage ?? '')) {
+      const retried = await this.retryOnce(error, err.config);
+      if (retried) return retried;
+    }
+
+    logger.warn('NetSapiens API request', {
+      method: err.config?.method?.toUpperCase(),
+      url: err.config?.url,
+      status,
+      error: nsMessage,
+      ...describeRequest(err.config),
+    });
+    return Promise.reject(error);
+  }
+
+  /**
+   * Tell the owner the bearer was rejected, then replay the request once with
+   * whatever token it installed. A failing callback or a failing replay falls
+   * back to the original error.
+   */
+  private async retryOnce(error: unknown, req: RetryableRequest | undefined): Promise<AxiosResponse | undefined> {
+    if (req?._retry) return undefined;
+    if (req) req._retry = true;
+    try {
+      await this.config.onUnauthorized!(error);
+      if (!req) return undefined;
+      if (this.config.apiToken) {
+        req.headers = { ...req.headers, Authorization: `Bearer ${this.config.apiToken}` };
+      }
+      return await this.client.request(req as unknown as AxiosRequestConfig);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -206,13 +239,13 @@ export class NetSapiensClient {
     this.config.apiToken = token;
   }
 
- /**
-  * Update the base API URL used for NS API calls.
-  */
- setApiUrl(url: string): void {
-  this.config.apiUrl = url;
-  this.client.defaults.baseURL = `${url}/ns-api/v2`;
- }
+  /**
+   * Update the base API URL used for NS API calls.
+   */
+  setApiUrl(url: string): void {
+    this.config.apiUrl = url;
+    this.client.defaults.baseURL = `${url}/ns-api/v2`;
+  }
   /**
    * v1 RPC-style call — POST /ns-api/?object=X&action=Y with form-urlencoded body.
    * Used by generated tools under src/generated/v1/.
@@ -339,500 +372,166 @@ export class NetSapiensClient {
     }
   }
 
-  /**
-   * Search for users across all domains in NetSapiens
-   */
-  async searchUsers(query: string, domain?: string, limit: number = 20): Promise<NetSapiensApiResponse<NetSapiensUser[]>> {
+  // Typed reads and agent actions for the common resources. The MCP tools go
+  // through request(); these remain for consumers of the library entry point.
+
+  /** GET a collection. A lone object is wrapped so callers always get an array. */
+  private async fetchMany<T>(
+    path: string,
+    fallback: string,
+    params?: Record<string, unknown>,
+  ): Promise<NetSapiensApiResponse<T[]>> {
     try {
-      let endpoint = '/domains/~/users/~';
-      if (domain) {
-        endpoint = `/domains/${domain}/users`;
-      }
-
-      const response: AxiosResponse = await this.client.get(endpoint, {
-        params: {
-          user: query,
-          limit
-        }
-      });
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to search users',
-        data: []
-      };
+      const res: AxiosResponse = params
+        ? await this.client.get(path, { params })
+        : await this.client.get(path);
+      return { success: true, data: Array.isArray(res.data) ? res.data : [res.data] };
+    } catch (err: unknown) {
+      return { success: false, error: failureText(err, fallback), data: [] };
     }
   }
 
-  /**
-   * Get user details by user ID and domain
-   */
-  async getUser(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensUser>> {
+  /** GET one resource and hand back its body unchanged. */
+  private async fetchOne<T>(path: string, fallback: string): Promise<NetSapiensApiResponse<T>> {
     try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get user',
-        data: undefined
-      };
+      const res: AxiosResponse = await this.client.get(path);
+      return { success: true, data: res.data };
+    } catch (err: unknown) {
+      return { success: false, error: failureText(err, fallback), data: undefined };
     }
   }
 
-  /**
-   * Get call detail records (CDR)
-   */
-  async getCDRRecords(params: {
+  /** PATCH an agent state endpoint such as login or logout. */
+  private async patchAgentState(path: string, done: string, fallback: string): Promise<NetSapiensApiResponse<unknown>> {
+    try {
+      const res: AxiosResponse = await this.client.patch(path);
+      return { success: true, data: res.data, message: done };
+    } catch (err: unknown) {
+      return { success: false, error: failureText(err, fallback), data: undefined };
+    }
+  }
+
+  /** Search users in one domain, or in every domain the caller can see. */
+  searchUsers(query: string, domain?: string, limit: number = 20): Promise<NetSapiensApiResponse<NetSapiensUser[]>> {
+    const path = domain ? `/domains/${domain}/users` : '/domains/~/users/~';
+    return this.fetchMany<NetSapiensUser>(path, 'Failed to search users', { user: query, limit });
+  }
+
+  getUser(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensUser>> {
+    return this.fetchOne<NetSapiensUser>(`/domains/${domain}/users/${userId}`, 'Failed to get user');
+  }
+
+  /** Call detail records, narrowed to a user, a domain, or neither. */
+  getCDRRecords(params: {
     startDate?: string;
     endDate?: string;
     user?: string;
     domain?: string;
     limit?: number;
   }): Promise<NetSapiensApiResponse<NetSapiensCDR[]>> {
-    try {
-      let endpoint = '/cdrs';
-      
-      // If specific user and domain provided, use user-specific endpoint
-      if (params.user && params.domain) {
-        endpoint = `/domains/${params.domain}/users/${params.user}/cdrs`;
-      } else if (params.domain) {
-        endpoint = `/domains/${params.domain}/cdrs`;
-      }
-
-      const response: AxiosResponse = await this.client.get(endpoint, {
-        params: {
-          start_time: params.startDate,
-          end_time: params.endDate,
-          limit: params.limit || 100
-        }
-      });
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get CDR records',
-        data: []
-      };
-    }
+    const { domain, user } = params;
+    let path = '/cdrs';
+    if (domain) path = user ? `/domains/${domain}/users/${user}/cdrs` : `/domains/${domain}/cdrs`;
+    return this.fetchMany<NetSapiensCDR>(path, 'Failed to get CDR records', {
+      start_time: params.startDate,
+      end_time: params.endDate,
+      limit: params.limit || 100,
+    });
   }
 
-  /**
-   * Get domain information
-   */
-  async getDomains(): Promise<NetSapiensApiResponse<NetSapiensDomain[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get('/domains');
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get domains',
-        data: []
-      };
-    }
+  getDomains(): Promise<NetSapiensApiResponse<NetSapiensDomain[]>> {
+    return this.fetchMany<NetSapiensDomain>('/domains', 'Failed to get domains');
   }
 
-  /**
-   * Get specific domain information
-   */
-  async getDomain(domain: string): Promise<NetSapiensApiResponse<NetSapiensDomain>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get domain',
-        data: undefined
-      };
-    }
+  getDomain(domain: string): Promise<NetSapiensApiResponse<NetSapiensDomain>> {
+    return this.fetchOne<NetSapiensDomain>(`/domains/${domain}`, 'Failed to get domain');
   }
 
-  /**
-   * Get user devices
-   */
-  async getUserDevices(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensDevice[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}/devices`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get user devices',
-        data: []
-      };
-    }
+  getUserDevices(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensDevice[]>> {
+    return this.fetchMany<NetSapiensDevice>(`/domains/${domain}/users/${userId}/devices`, 'Failed to get user devices');
   }
 
-  // ==================== PHONE NUMBER MANAGEMENT ====================
-  
-  /**
-   * Get phone numbers for a domain
-   */
-  async getPhoneNumbers(domain: string, limit?: number): Promise<NetSapiensApiResponse<NetSapiensPhoneNumber[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/phonenumbers`, {
-        params: { limit }
-      });
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get phone numbers',
-        data: []
-      };
-    }
+  getPhoneNumbers(domain: string, limit?: number): Promise<NetSapiensApiResponse<NetSapiensPhoneNumber[]>> {
+    return this.fetchMany<NetSapiensPhoneNumber>(`/domains/${domain}/phonenumbers`, 'Failed to get phone numbers', { limit });
   }
 
-  /**
-   * Get specific phone number details
-   */
-  async getPhoneNumber(domain: string, phoneNumber: string): Promise<NetSapiensApiResponse<NetSapiensPhoneNumber>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/phonenumbers/${phoneNumber}`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get phone number',
-        data: undefined
-      };
-    }
+  getPhoneNumber(domain: string, phoneNumber: string): Promise<NetSapiensApiResponse<NetSapiensPhoneNumber>> {
+    return this.fetchOne<NetSapiensPhoneNumber>(`/domains/${domain}/phonenumbers/${phoneNumber}`, 'Failed to get phone number');
   }
 
-  // ==================== CALL QUEUE MANAGEMENT ====================
-  
-  /**
-   * Get call queues for a domain
-   */
-  async getCallQueues(domain: string): Promise<NetSapiensApiResponse<NetSapiensCallQueue[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/callqueues`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get call queues',
-        data: []
-      };
-    }
+  getCallQueues(domain: string): Promise<NetSapiensApiResponse<NetSapiensCallQueue[]>> {
+    return this.fetchMany<NetSapiensCallQueue>(`/domains/${domain}/callqueues`, 'Failed to get call queues');
   }
 
-  /**
-   * Get specific call queue details
-   */
-  async getCallQueue(domain: string, queueId: string): Promise<NetSapiensApiResponse<NetSapiensCallQueue>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/callqueues/${queueId}`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get call queue',
-        data: undefined
-      };
-    }
+  getCallQueue(domain: string, queueId: string): Promise<NetSapiensApiResponse<NetSapiensCallQueue>> {
+    return this.fetchOne<NetSapiensCallQueue>(`/domains/${domain}/callqueues/${queueId}`, 'Failed to get call queue');
   }
 
-  /**
-   * Get agents for a call queue
-   */
-  async getCallQueueAgents(domain: string, queueId: string): Promise<NetSapiensApiResponse<NetSapiensAgent[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/callqueues/${queueId}/agents`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get call queue agents',
-        data: []
-      };
-    }
+  getCallQueueAgents(domain: string, queueId: string): Promise<NetSapiensApiResponse<NetSapiensAgent[]>> {
+    return this.fetchMany<NetSapiensAgent>(`/domains/${domain}/callqueues/${queueId}/agents`, 'Failed to get call queue agents');
   }
 
-  // ==================== AGENT MANAGEMENT ====================
-  
-  /**
-   * Get agents for a domain
-   */
-  async getAgents(domain: string): Promise<NetSapiensApiResponse<NetSapiensAgent[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/agents`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get agents',
-        data: []
-      };
-    }
+  getAgents(domain: string): Promise<NetSapiensApiResponse<NetSapiensAgent[]>> {
+    return this.fetchMany<NetSapiensAgent>(`/domains/${domain}/agents`, 'Failed to get agents');
   }
 
-  /**
-   * Login an agent to a call queue
-   */
-  async loginAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<any>> {
-    try {
-      const response: AxiosResponse = await this.client.patch(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/login`);
-
-      return {
-        success: true,
-        data: response.data,
-        message: 'Agent logged in successfully'
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to login agent',
-        data: undefined
-      };
-    }
+  loginAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<unknown>> {
+    return this.patchAgentState(
+      `/domains/${domain}/callqueues/${queueId}/agents/${agentId}/login`,
+      'Agent logged in successfully',
+      'Failed to login agent',
+    );
   }
 
-  /**
-   * Logout an agent from a call queue
-   */
-  async logoutAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<any>> {
-    try {
-      const response: AxiosResponse = await this.client.patch(`/domains/${domain}/callqueues/${queueId}/agents/${agentId}/logout`);
-
-      return {
-        success: true,
-        data: response.data,
-        message: 'Agent logged out successfully'
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to logout agent',
-        data: undefined
-      };
-    }
+  logoutAgent(domain: string, queueId: string, agentId: string): Promise<NetSapiensApiResponse<unknown>> {
+    return this.patchAgentState(
+      `/domains/${domain}/callqueues/${queueId}/agents/${agentId}/logout`,
+      'Agent logged out successfully',
+      'Failed to logout agent',
+    );
   }
 
-  // ==================== AUTO ATTENDANT ====================
-  
-  /**
-   * Get auto attendants for a domain
-   */
-  async getAutoAttendants(domain: string): Promise<NetSapiensApiResponse<NetSapiensAutoAttendant[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/autoattendants`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get auto attendants',
-        data: []
-      };
-    }
+  getAutoAttendants(domain: string): Promise<NetSapiensApiResponse<NetSapiensAutoAttendant[]>> {
+    return this.fetchMany<NetSapiensAutoAttendant>(`/domains/${domain}/autoattendants`, 'Failed to get auto attendants');
   }
 
-  // ==================== ANSWER RULES ====================
-  
-  /**
-   * Get answer rules for a user
-   */
-  async getUserAnswerRules(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensAnswerRule[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}/answerrules`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get answer rules',
-        data: []
-      };
-    }
+  getUserAnswerRules(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensAnswerRule[]>> {
+    return this.fetchMany<NetSapiensAnswerRule>(`/domains/${domain}/users/${userId}/answerrules`, 'Failed to get answer rules');
   }
 
-  /**
-   * Get specific answer rule for a user
-   */
-  async getUserAnswerRule(userId: string, domain: string, timeframe: string): Promise<NetSapiensApiResponse<NetSapiensAnswerRule>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}/answerrules/${timeframe}`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get answer rule',
-        data: undefined
-      };
-    }
+  getUserAnswerRule(userId: string, domain: string, timeframe: string): Promise<NetSapiensApiResponse<NetSapiensAnswerRule>> {
+    return this.fetchOne<NetSapiensAnswerRule>(`/domains/${domain}/users/${userId}/answerrules/${timeframe}`, 'Failed to get answer rule');
   }
 
-  // ==================== GREETINGS & VOICEMAIL ====================
-  
-  /**
-   * Get user greetings
-   */
-  async getUserGreetings(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensGreeting[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}/greetings`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get user greetings',
-        data: []
-      };
-    }
+  getUserGreetings(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensGreeting[]>> {
+    return this.fetchMany<NetSapiensGreeting>(`/domains/${domain}/users/${userId}/greetings`, 'Failed to get user greetings');
   }
 
-  /**
-   * Get user voicemails
-   */
-  async getUserVoicemails(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensVoicemail[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/users/${userId}/voicemail`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get user voicemails',
-        data: []
-      };
-    }
+  getUserVoicemails(userId: string, domain: string): Promise<NetSapiensApiResponse<NetSapiensVoicemail[]>> {
+    return this.fetchMany<NetSapiensVoicemail>(`/domains/${domain}/users/${userId}/voicemail`, 'Failed to get user voicemails');
   }
 
-  // ==================== MUSIC ON HOLD ====================
-  
-  /**
-   * Get music on hold files for a domain
-   */
-  async getMusicOnHold(domain: string): Promise<NetSapiensApiResponse<NetSapiensMusicOnHold[]>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/moh`);
-
-      return {
-        success: true,
-        data: Array.isArray(response.data) ? response.data : [response.data]
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get music on hold',
-        data: []
-      };
-    }
+  getMusicOnHold(domain: string): Promise<NetSapiensApiResponse<NetSapiensMusicOnHold[]>> {
+    return this.fetchMany<NetSapiensMusicOnHold>(`/domains/${domain}/moh`, 'Failed to get music on hold');
   }
 
-  // ==================== BILLING ====================
-  
-  /**
-   * Get billing information for a domain
-   */
-  async getBilling(domain: string): Promise<NetSapiensApiResponse<NetSapiensBilling>> {
-    try {
-      const response: AxiosResponse = await this.client.get(`/domains/${domain}/billing`);
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get billing information',
-        data: undefined
-      };
-    }
+  getBilling(domain: string): Promise<NetSapiensApiResponse<NetSapiensBilling>> {
+    return this.fetchOne<NetSapiensBilling>(`/domains/${domain}/billing`, 'Failed to get billing information');
   }
 
-  // ==================== STATISTICS ====================
-  
-  /**
-   * Get agent statistics
-   */
-  async getAgentStatistics(domain: string, agentId?: string): Promise<NetSapiensApiResponse<any>> {
-    try {
-      const endpoint = agentId 
-        ? `/domains/${domain}/statistics/agent/${agentId}`
-        : `/domains/${domain}/statistics/agent`;
-      
-      const response: AxiosResponse = await this.client.get(endpoint);
+  /** Statistics for every agent in a domain, or for a single agent. */
+  getAgentStatistics(domain: string, agentId?: string): Promise<NetSapiensApiResponse<unknown>> {
+    const base = `/domains/${domain}/statistics/agent`;
+    return this.fetchOne<unknown>(agentId ? `${base}/${agentId}` : base, 'Failed to get agent statistics');
+  }
 
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Failed to get agent statistics',
-        data: undefined
-      };
+  /** Cheap reachability probe: one-row domain listing. */
+  async testConnection(): Promise<NetSapiensApiResponse<boolean>> {
+    try {
+      await this.client.get('/domains', { params: { limit: 1 } });
+      return { success: true, data: true, message: 'Connection successful' };
+    } catch (err: unknown) {
+      return { success: false, error: failureText(err, 'Connection failed'), data: false };
     }
   }
 
@@ -5345,29 +5044,4 @@ export class NetSapiensClient {
   updateVoicemailReminders(domain: string, userId: string, data: any) { return this.updateUserVoicemailReminders(domain, userId, data); }
   deleteVoicemailReminders(domain: string, userId: string) { return this.deleteUserVoicemailReminders(domain, userId); }
   countVoicemailReminders(domain: string, userId: string) { return this.countUserVoicemailReminders(domain, userId); }
-
-  /**
-   * Test API connectivity
-   */
-  async testConnection(): Promise<NetSapiensApiResponse<boolean>> {
-    try {
-      const response = await this.client.get('/domains', {
-        params: {
-          limit: 1
-        }
-      });
-
-      return {
-        success: true,
-        data: true,
-        message: 'Connection successful'
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error: error.message || 'Connection failed',
-        data: false
-      };
-    }
-  }
 }

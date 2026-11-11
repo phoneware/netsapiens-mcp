@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- The copyright notice in `LICENSE` and the `author` field in `package.json` now name the current copyright holder. The license is still MIT. The last code carried over from the project this was forked from has been rewritten, so the earlier notice is gone.
+- Library types: `NetSapiensUser`, `NetSapiensDomain`, `NetSapiensCDR`, `NetSapiensDevice`, `NetSapiensPhoneNumber`, `NetSapiensCallQueue`, `NetSapiensAgent`, `NetSapiensAutoAttendant`, `NetSapiensAnswerRule`, `NetSapiensGreeting`, `NetSapiensVoicemail`, `NetSapiensMusicOnHold` and `NetSapiensBilling` now use the field names in the NetSapiens v2 API documents (for example `name-first-name`, not `first_name`) and keep an index signature for fields a host adds. Code that read the old guessed field names must switch.
+- `NetSapiensApiResponse` defaults its type parameter to `unknown`. `loginAgent`, `logoutAgent` and `getAgentStatistics` return `NetSapiensApiResponse<unknown>`.
+
 ## 3.0.1
 
 ### Fixes

@@ -150,4 +150,4 @@ For web and team workspaces:
 
 ## 📄 License
 
-MIT License. Copyright (c) 2024 OITVOIP.
+MIT License. See [LICENSE](LICENSE).
