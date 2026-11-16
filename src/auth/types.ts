@@ -40,6 +40,7 @@ export interface RenderPagesOptions {
     error?: string;
     authState?: string;
     initialTab?: 'password' | 'token';
+    tokenOnly?: boolean;
   }): string;
   mfa?(props: {
     mfaUrl: string;

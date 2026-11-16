@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `NETSAPIENS_AUTH_MODE=token`: run the HTTP server without a NetSapiens OAuth client. The login page shows only the API key form, and each user pastes a key or token for their own NetSapiens user. The server holds no upstream credential, password and MFA sign-in are refused, and `NETSAPIENS_OAUTH_CLIENT_ID` and `NETSAPIENS_OAUTH_CLIENT_SECRET` are ignored. When an MCP client refreshes its session, the server checks that NetSapiens still accepts the key and ends the session if it does not. `oauth` stays the default and still requires the client. `/health` reports `authMode`.
+- Library: `NetSapiensAuthProvider` takes `authMode`, and `nsClientId` and `nsClientSecret` are optional unless it is `oauth`. `RenderPagesOptions.login` receives `tokenOnly`.
+
 ### Changed
 
 - The copyright notice in `LICENSE` and the `author` field in `package.json` now name the current copyright holder. The license is still MIT. The last code carried over from the project this was forked from has been rewritten, so the earlier notice is gone.
