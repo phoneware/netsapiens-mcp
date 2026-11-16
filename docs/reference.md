@@ -93,8 +93,9 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 | `FIRESTORE_AUTH_CODES_COLLECTION` | http | No | None | ConfigError: FIRESTORE_AUTH_CODES_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE |
 | `FIRESTORE_RESUME_TOKENS_COLLECTION` | http | No | None | ConfigError: FIRESTORE_RESUME_TOKENS_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE |
 | `NETSAPIENS_API_TOKEN` | stdio | No | None | Static API token, or provide all four OAuth credentials. |
-| `NETSAPIENS_OAUTH_CLIENT_ID` | http, stdio | No | None | OAuth client ID; required in HTTP mode or for stdio OAuth. |
-| `NETSAPIENS_OAUTH_CLIENT_SECRET` | http, stdio | No | None | OAuth client secret; required in HTTP mode or for stdio OAuth. |
+| `NETSAPIENS_AUTH_MODE` | http | No | `oauth` | oauth or token, otherwise exit 1. token needs no OAuth client: users paste a NetSapiens API key or token for their own user, the server holds no upstream credential and never refreshes, and password sign-in is off. oauth requires NETSAPIENS_OAUTH_CLIENT_ID and NETSAPIENS_OAUTH_CLIENT_SECRET. |
+| `NETSAPIENS_OAUTH_CLIENT_ID` | http, stdio | No | None | OAuth client ID; required in HTTP mode when NETSAPIENS_AUTH_MODE is oauth, or for stdio OAuth. Ignored when NETSAPIENS_AUTH_MODE is token. |
+| `NETSAPIENS_OAUTH_CLIENT_SECRET` | http, stdio | No | None | OAuth client secret; required in HTTP mode when NETSAPIENS_AUTH_MODE is oauth, or for stdio OAuth. Ignored when NETSAPIENS_AUTH_MODE is token. |
 | `NETSAPIENS_OAUTH_USERNAME` | stdio | No | None | OAuth username for stdio. |
 | `NETSAPIENS_OAUTH_PASSWORD` | stdio | No | None | OAuth password for stdio. |
 | `MCP_TRANSPORT` | http, stdio | No | `stdio` | Transport selection. |

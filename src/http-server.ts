@@ -23,6 +23,7 @@ import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
+import { parseAuthMode } from './auth/auth-mode.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import {
@@ -132,13 +133,15 @@ export async function createApp(options?: {
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
 
+ const authMode = parseAuthMode(process.env.NETSAPIENS_AUTH_MODE);
  const nsClientId = process.env.NETSAPIENS_OAUTH_CLIENT_ID;
  const nsClientSecret = process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
- if (!nsClientId || !nsClientSecret) {
+ if (authMode === 'oauth' && (!nsClientId || !nsClientSecret)) {
   throw new Error(
    'HTTP transport requires NETSAPIENS_OAUTH_CLIENT_ID and NETSAPIENS_OAUTH_CLIENT_SECRET ' +
-   'to be set (these are the operator-level OAuth credentials for the upstream NS API).',
+   'to be set (these are the operator-level OAuth credentials for the upstream NS API). ' +
+   'Set NETSAPIENS_AUTH_MODE=token to run without an OAuth client: users then paste a NetSapiens API key or token.',
   );
  }
 
@@ -155,8 +158,9 @@ export async function createApp(options?: {
  const authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
   nsApiUrl: config.netsapiens.apiUrl,
   platforms,
-  nsClientId,
-  nsClientSecret,
+  authMode,
+  nsClientId: authMode === 'oauth' ? nsClientId : undefined,
+  nsClientSecret: authMode === 'oauth' ? nsClientSecret : undefined,
   tokenLifetimeSec,
   serverBaseUrl: baseUrl.origin,
   store,
@@ -368,6 +372,7 @@ function wireApp(
    mode: isStatelessMode() ? 'stateless' : 'session',
    activeSessions: sessions.size,
    version: config.version,
+   authMode: authProvider.authMode,
    store: {
     backend: store.backend,
     namespace: store.namespace,

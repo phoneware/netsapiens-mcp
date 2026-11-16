@@ -45,6 +45,7 @@ import type {
  NsUserSnapshot,
 } from './types.js';
 import { resolvePlatform, isPlatformAllowed, type NetSapiensPlatform } from './platforms.js';
+import type { AuthMode } from './auth-mode.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
 
@@ -264,6 +265,7 @@ function loginPageHtml(
  error?: string,
  authState?: string,
  initialTab: 'password' | 'token' = 'password',
+ tokenOnly = false,
 ): string {
  const errorHtml = error
   ? `<div class="error">${escapeHtml(error)}</div>`
@@ -313,6 +315,7 @@ function loginPageHtml(
     .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
              border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; }
     .footer { text-align: center; margin-top: 1rem; font-size: 0.75rem; color: #888; }
+    .hint { font-size: 0.85rem; color: #555; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
@@ -320,7 +323,7 @@ function loginPageHtml(
     ${logoHtml()}
     <h1>${safeHeading}</h1>
     ${errorHtml}
-    <div class="tabs">
+    ${tokenOnly ? '' : `<div class="tabs">
       <button type="button" class="tab-btn ${initialTab === 'password' ? 'active' : ''}" onclick="switchTab('password')">Password</button>
       <button type="button" class="tab-btn ${initialTab === 'token' ? 'active' : ''}" onclick="switchTab('token')">Sign in with a NetSapiens token</button>
     </div>
@@ -331,15 +334,16 @@ function loginPageHtml(
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required autocomplete="current-password">
       <button type="submit">Sign In</button>
-    </form>
-    <form method="POST" action="${escapeHtml(authorizeUrl)}" id="token-form" class="auth-form ${initialTab === 'token' ? 'active' : ''}">
+    </form>`}
+    <form method="POST" action="${escapeHtml(authorizeUrl)}" id="token-form" class="auth-form ${tokenOnly || initialTab === 'token' ? 'active' : ''}">
       ${stateHtml}
+      ${tokenOnly ? '<p class="hint">Paste a NetSapiens API key or token for your own user. It is sent to this server and never to the AI.</p>' : ''}
       <label for="platform">Platform</label>
       <select id="platform" name="platform" required>
         ${platforms.map((p) => `<option value="${escapeHtml(p.apiUrl)}">${escapeHtml(p.label)} (${escapeHtml(new URL(p.apiUrl).hostname)})</option>`).join('\n        ')}
       </select>
       <label for="token">NetSapiens Token or API Key</label>
-      <input type="password" id="token" name="token" required placeholder="Paste your API key or token" autocomplete="off" ${initialTab === 'token' ? 'autofocus' : ''}>
+      <input type="password" id="token" name="token" required placeholder="Paste your API key or token" autocomplete="off" ${tokenOnly || initialTab === 'token' ? 'autofocus' : ''}>
       <button type="submit">Sign In with Token</button>
     </form>
     <script>
@@ -446,10 +450,12 @@ export interface NetSapiensAuthProviderOptions {
  /** Upstream NetSapiens API URL. */
  nsApiUrl: string;
  platforms: readonly NetSapiensPlatform[];
- /** NS OAuth client_id (operator-provisioned) */
- nsClientId: string;
- /** NS OAuth client_secret (operator-provisioned) */
- nsClientSecret: string;
+ /** Sign-in mode. Defaults to oauth. In token mode no OAuth client is needed and password sign-in is off. */
+ authMode?: AuthMode;
+ /** NS OAuth client_id (operator-provisioned). Required when authMode is oauth. */
+ nsClientId?: string;
+ /** NS OAuth client_secret (operator-provisioned). Required when authMode is oauth. */
+ nsClientSecret?: string;
  /** Token lifetime in seconds (default 3600) */
  tokenLifetimeSec?: number;
  /** Storage backend instance */
@@ -502,8 +508,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private renderPages?: RenderPagesOptions;
  private nsApiUrl: string;
  private platforms: readonly NetSapiensPlatform[];
- private nsClientId: string;
- private nsClientSecret: string;
+ readonly authMode: AuthMode;
+ private nsClientId?: string;
+ private nsClientSecret?: string;
  private subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
  private tokenLifetimeSec: number;
  private serverBaseUrl?: string;
@@ -515,6 +522,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (!options.platforms?.length) throw new Error('platforms must contain at least one platform');
   if (!isPlatformAllowed(options.platforms, options.nsApiUrl)) throw new Error('nsApiUrl must be in platforms');
   this.platforms = options.platforms;
+  this.authMode = options.authMode ?? 'oauth';
   this.nsClientId = options.nsClientId;
   this.nsClientSecret = options.nsClientSecret;
   this.tokenLifetimeSec = options.tokenLifetimeSec ?? 3600;
@@ -543,9 +551,9 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   initialTab: 'password' | 'token' = 'password',
  ): string {
   if (this.renderPages?.login) {
-   return this.renderPages.login({ authorizeUrl, error, authState, initialTab });
+   return this.renderPages.login({ authorizeUrl, error, authState, initialTab, tokenOnly: this.authMode === 'token' });
   }
-  return loginPageHtml(this.platforms, authorizeUrl, error, authState, initialTab);
+  return loginPageHtml(this.platforms, authorizeUrl, error, authState, initialTab, this.authMode === 'token');
  }
 
  private renderMfaPage(
@@ -564,7 +572,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.renderPages?.error) {
    return this.renderPages.error({ message, status });
   }
-  return loginPageHtml(this.platforms, '/login', message);
+  return loginPageHtml(this.platforms, '/login', message, undefined, this.authMode === 'token' ? 'token' : 'password', this.authMode === 'token');
  }
  get activeTokenCount(): number {
   return 0;
@@ -648,6 +656,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   // Re-mint the state so a retry on this page (wrong password, MFA bounce)
   // starts a fresh window instead of inheriting the original deadline.
   const refreshedState = signValue(pending, PENDING_AUTH_TTL_SEC);
+
+  if (this.authMode === 'token') {
+   logger.warn('Password sign-in refused: server runs in token mode');
+   sendPage(res, 200, this.renderLoginPage('/login', 'Password sign-in is not enabled on this server. Paste a NetSapiens API key or token instead.', refreshedState, 'token'));
+   return;
+  }
 
   // Run NS password grant: may return final tokens OR an MFA challenge
   let grantResult: NsGrantResult;
@@ -813,6 +827,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   * Called by our custom POST /mfa route after the user submits the passcode.
   */
  async handleMfa(req: Request, res: Response, passcode: string): Promise<void> {
+  if (this.authMode === 'token') {
+   sendPage(res, 440, this.renderErrorPage('MFA sign-in is not enabled on this server. Close this tab and reconnect from your MCP client, then paste a NetSapiens API key or token.', 440));
+   return;
+  }
   if (isCrossSitePost(req)) {
    logger.warn('Rejected cross-site MFA POST');
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
@@ -1169,6 +1187,25 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      });
      throw new TemporarilyUnavailableError('Upstream token refresh temporarily unavailable, please retry');
     }
+   } else if (this.authMode === 'token') {
+    // No upstream refresh exists in token mode: the user's key is the credential. Renew
+    // the MCP session only while NetSapiens still accepts that key, so a revoked or
+    // expired key ends the session at the next refresh instead of lingering.
+    if (session.nsExpiresAt && now > session.nsExpiresAt) {
+     throw new InvalidGrantError('NetSapiens token expired. Please re-authenticate.');
+    }
+    try {
+     await this.validateNsToken(session.nsApiUrl ?? this.nsApiUrl, session.nsAccessToken);
+    } catch (err: unknown) {
+     const message = err instanceof Error ? err.message : String(err);
+     if (message.includes('401')) {
+      await this.store.sessions.revokeFamily(familyId);
+      throw new InvalidGrantError('NetSapiens no longer accepts this key. Please re-authenticate.');
+     }
+     logger.warn('Token-mode refresh could not validate the NetSapiens key', { username: session.nsUsername, error: message });
+     throw new TemporarilyUnavailableError('Could not reach NetSapiens to confirm the key, please retry');
+    }
+    refreshedSession = session;
    } else {
     logger.warn('MCP refresh attempted but no upstream NS refresh token on file', {
      username: session.nsUsername,
@@ -1453,6 +1490,14 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   };
  }
 
+ /** The operator's NetSapiens OAuth client. Only oauth mode has one. */
+ private oauthClient(): { client_id: string; client_secret: string } {
+  if (this.authMode !== 'oauth' || !this.nsClientId || !this.nsClientSecret) {
+   throw new Error('NetSapiens OAuth client is not configured');
+  }
+  return { client_id: this.nsClientId, client_secret: this.nsClientSecret };
+ }
+
  private async nsPasswordGrant(username: string, password: string): Promise<NsGrantResult> {
   const tokenUrl = `${this.nsApiUrl}/ns-api/v2/tokens`;
   try {
@@ -1460,8 +1505,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     tokenUrl,
     {
      grant_type: 'password',
-     client_id: this.nsClientId,
-     client_secret: this.nsClientSecret,
+     ...this.oauthClient(),
      username,
      password,
     },
@@ -1515,8 +1559,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     tokenUrl,
     {
      grant_type: 'mfa',
-     client_id: this.nsClientId,
-     client_secret: this.nsClientSecret,
+     ...this.oauthClient(),
      username: challenge.username,
      password: challenge.password,
      mfa_type: challenge.mfaType,
@@ -1633,8 +1676,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     `${url}/ns-api/v2/tokens`,
     {
      grant_type: 'refresh_token',
-     client_id: this.nsClientId,
-     client_secret: this.nsClientSecret,
+     ...this.oauthClient(),
      refresh_token: nsRefreshToken,
     },
     {
