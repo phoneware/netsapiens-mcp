@@ -90,12 +90,17 @@ Deploy the multi-user HTTP service with SQLite persistence:
 ```sh
 # Copy sample configuration and set your secret
 cp .env.example .env
-# Edit .env with your NETSAPIENS_API_URL and a random 32+ character MCP_SESSION_SECRET
+# Edit .env with NETSAPIENS_API_URL, a random 32+ character MCP_SESSION_SECRET,
+# and a stable unique MCP_MFA_REPLAY_AUDIENCE for this persistent store.
 
 docker compose up -d
 ```
 
 The service will listen on port 3000 at `http://localhost:3000/mcp`.
+
+The unauthenticated `/health` endpoint reports available sign-in methods, effective MFA configuration readiness, and the MFA attempt limit in `signIn`, without exposing credentials. Process health remains independent of MFA readiness.
+For a direct listener, forwarded IP headers are ignored. Set `MCP_TRUST_PROXY_HOPS=1` only when every request reaches the server through one trusted proxy that controls those headers.
+Sign-in attempts share a store-backed limit across server instances. If the store cannot count an attempt, sign-in returns 503. Configure Firestore TTL on `<namespace>_rate_limits.ttlAt`; SQLite upgrades its database to schema 4, which older releases cannot open. Before upgrading SQLite, take and verify a SQLite-aware backup with writes quiesced. Roll back with a schema-4-compatible binary or restore that backup, accepting that writes made after the backup are lost.
 
 ## 🔌 Connecting MCP Clients
 

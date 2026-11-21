@@ -340,6 +340,7 @@ describe.skipIf(!gateOpen)('PR56 Firestore Adoption E2E: TTL-deleted access doc 
       nsClientId: 'test-client',
       nsClientSecret: 'test-secret',
       serverBaseUrl: 'http://localhost:3000',
+      replayAudience: 'adoption-test-store',
       store,
     } as any);
     await expect(provider.verifyAccessToken(legacyAccessToken)).rejects.toThrow(/Access token expired/);

@@ -255,6 +255,32 @@ export function runStoreConformance(target: ConformanceTarget): void {
       expect(await store.resumeTokens.consume(expired)).toBe(true);
     });
 
+    it('rate limits atomically without storing client keys or writing refusals', async () => {
+      const { store, handle, namespace } = await open();
+      const client = `client-${secret()}`;
+      const policy = { limit: 3, windowMs: 60_000 };
+      const outcomes = await Promise.allSettled(Array.from({ length: 6 }, () => store.rateLimits.hit('signin', client, policy)));
+      const totals = outcomes.flatMap(result => result.status === 'fulfilled' ? [result.value.totalHits] : []);
+      const allowed = totals.filter(n => n <= 3).sort();
+      expect(allowed).toEqual(Array.from({ length: allowed.length }, (_, i) => i + 1));
+      expect(allowed.length).toBeLessThanOrEqual(3);
+      expect(totals.filter(n => n > 3).every(n => n === 4)).toBe(true);
+      while ((await store.rateLimits.hit('signin', client, policy)).totalHits < 4) { /* fill any contention gaps */ }
+      expect((await store.rateLimits.hit('signin', client, { ...policy, limit: 4 })).totalHits).toBe(4);
+      expect((await store.rateLimits.hit('signin', secret(), policy)).totalHits).toBe(1);
+      const directId = randomBytes(32).toString('hex');
+      const now = Date.now();
+      expect((await handle.hitRateLimit({ id: directId, now, ...policy })).count).toBe(1);
+      expect((await handle.hitRateLimit({ id: directId, now: now + policy.windowMs + 1, ...policy })).count).toBe(1);
+      expect(await target.dumpRaw(handle)).not.toContain(client);
+      if (target.capabilities.multiInstance) {
+        const second = await open(namespace);
+        const shared = secret();
+        const results = await Promise.all(Array.from({ length: 6 }, (_, i) => (i % 2 ? second.store : store).rateLimits.hit('signin', shared, policy)));
+        expect(results.filter(result => result.totalHits <= 3)).toHaveLength(3);
+      }
+    });
+
     it('usage counts concurrent calls by user', async () => {
       const { store } = await open();
       const user = secret();

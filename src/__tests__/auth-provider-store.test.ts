@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { type Response } from 'express';
 import request from 'supertest';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
@@ -30,6 +30,7 @@ function makeProvider(options: {
     nsClientId: 'cid',
     nsClientSecret: 'csec',
     serverBaseUrl: options.serverBaseUrl || 'http://localhost:3000',
+    replayAudience: 'auth-provider-store-test',
     store: options.store,
   });
 }
@@ -62,6 +63,10 @@ function makeApp(provider: NetSapiensAuthProvider) {
 }
 
 describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
+  beforeEach(() => {
+    vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unmocked upstream GET refused'));
+  });
+  afterEach(() => vi.restoreAllMocks());
   it('throws when constructed without store', () => {
     expect(() => new NetSapiensAuthProvider({
       platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
@@ -70,6 +75,21 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
       nsClientSecret: 'csec',
       store: undefined as unknown as McpStore,
     })).toThrow('store is required');
+  });
+
+  it('accepts a missing replay audience for compatibility but rejects invalid configured identities', async () => {
+    const memory = createMemoryStore({ namespace: 'audience_test', key });
+    const store = { ...memory, capabilities: { ...memory.capabilities, persistent: true } };
+    const options = {
+      platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
+      nsApiUrl: 'https://netsapiens.example.com', store,
+    };
+    expect(() => new NetSapiensAuthProvider(options)).not.toThrow();
+    for (const replayAudience of ['', ' ', 'store/a', 'a'.repeat(257)]) {
+      expect(() => new NetSapiensAuthProvider({ ...options, replayAudience })).toThrow('replayAudience must be a stable replay-store identity');
+    }
+    expect(() => new NetSapiensAuthProvider({ ...options, replayAudience: 'store-a' })).not.toThrow();
+    await memory.close();
   });
 
   describe.each([
@@ -307,12 +327,12 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-test', codeChallenge: 'chal-12345', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-tok', refresh_token: 'ns-ref-tok', username: 'alice@domain.com', expires_in: 3600 },
         'alice@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
-        { extraKey: 'extraVal' },
       );
 
       const code = new URL(redirectUrl).searchParams.get('code');
@@ -368,10 +388,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c1', codeChallenge: 'chal-c1', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c1-tok', refresh_token: 'ns-c1-ref', username: 'c1@domain.com', expires_in: 3600 },
         'c1@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -417,10 +438,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c2-owner', codeChallenge: 'chal-c2', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c2-tok', refresh_token: 'ns-c2-ref', username: 'c2@domain.com', expires_in: 3600 },
         'c2@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -447,10 +469,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c4', codeChallenge: 'chal-c4', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c4-tok', refresh_token: 'ns-c4-ref', username: 'c4@domain.com', expires_in: 3600 },
         'c4@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -482,10 +505,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c4-def', codeChallenge: 'chal-c4-def', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c4-tok', refresh_token: 'ns-c4-ref', username: 'c4def@domain.com', expires_in: 3600 },
         'c4def@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -548,10 +572,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as import('express').Response;
 
-      await (provider1 as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider1.completeSignIn(
         { clientId: 'client-multi', codeChallenge: 'chal-multi', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-tok-multi', username: 'multi@domain.com', expires_in: 3600 },
         'multi@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 

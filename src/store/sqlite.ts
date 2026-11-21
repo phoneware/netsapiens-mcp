@@ -10,6 +10,7 @@ import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
 import { logger } from '../utils/logger.js';
 import { CutoverRefusedError } from './errors.js';
 import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
+import { nextRateLimitWindow } from './rate-limit.js';
 import type {
   AccessRow,
   AuthCodeRow,
@@ -32,7 +33,7 @@ type Statement = { run(...values: SqlValue[]): { changes: number | bigint }; get
 type Database = { exec(sql: string): void; prepare(sql: string): Statement; close(): void };
 // Current on-disk schema version, stored in PRAGMA user_version. Version 2 is the
 // sessions and token layout; version 3 adds family_subject_refs and guard_documents.
-const SQLITE_SCHEMA_VERSION = 3;
+const SQLITE_SCHEMA_VERSION = 4;
 const capabilities: StoreCapabilities = { persistent: true, multiInstance: false, subjectGuards: true, exclusive: true, expiry: 'sweep' };
 
 function accessRow(row: Record<string, SqlValue> | undefined): AccessRow | undefined {
@@ -119,6 +120,7 @@ export class SqliteBackend implements StoreBackend {
   getAuthCode!: StoreBackend['getAuthCode'];
   takeAuthCode!: StoreBackend['takeAuthCode'];
   insertResumeIfAbsent!: StoreBackend['insertResumeIfAbsent'];
+  hitRateLimit!: StoreBackend['hitRateLimit'];
   incrementUsage!: StoreBackend['incrementUsage'];
   listUsage!: StoreBackend['listUsage'];
   getClient!: StoreBackend['getClient'];
@@ -171,6 +173,7 @@ export class SqliteBackend implements StoreBackend {
       n += Number(db.prepare('DELETE FROM sessions WHERE retain_until <= ?').run(now).changes);
       n += Number(db.prepare('DELETE FROM auth_codes WHERE expires_at <= ?').run(now).changes);
       n += Number(db.prepare('DELETE FROM resume_tokens WHERE expires_at <= ?').run(now).changes);
+      n += Number(db.prepare('DELETE FROM rate_limits WHERE window_ends_at <= ?').run(now).changes);
       db.prepare('UPDATE refresh_tokens SET successor_sealed=NULL WHERE consumed_at IS NOT NULL AND consumed_at <= ? AND successor_sealed IS NOT NULL').run(now - REFRESH_RETRY_WINDOW_MS);
       return n;
     });
@@ -180,6 +183,12 @@ export class SqliteBackend implements StoreBackend {
       const versionRow = db.prepare('PRAGMA user_version').get();
       const version = (versionRow?.user_version as number) ?? 0;
       if (version > SQLITE_SCHEMA_VERSION) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
+
+      // Existing namespace must be checked before any irreversible schema upgrade.
+      if (version > 0) {
+        const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
+        if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
+      }
 
       if (version === 1) {
         // v1 -> v2 migration inside transaction BEFORE sweep
@@ -290,6 +299,7 @@ export class SqliteBackend implements StoreBackend {
             CREATE TABLE usage (user_hash TEXT NOT NULL CHECK(length(user_hash)=64), tool_name TEXT NOT NULL, count INTEGER NOT NULL, last_used INTEGER NOT NULL, PRIMARY KEY(user_hash, tool_name)) STRICT;
             CREATE TABLE family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
             CREATE TABLE guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
+            CREATE TABLE rate_limits (id TEXT PRIMARY KEY CHECK(length(id)=64), count INTEGER NOT NULL CHECK(count >= 1), window_ends_at INTEGER NOT NULL) STRICT;
           `);
           db.exec(`PRAGMA user_version=${SQLITE_SCHEMA_VERSION}`);
         });
@@ -305,7 +315,12 @@ export class SqliteBackend implements StoreBackend {
             CREATE TABLE family_subject_refs (ref TEXT NOT NULL CHECK(length(ref)=64), family_id TEXT NOT NULL, PRIMARY KEY(ref, family_id)) STRICT;
             CREATE TABLE guard_documents (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(collection, id)) STRICT;
           `);
-          db.exec(`PRAGMA user_version=${SQLITE_SCHEMA_VERSION}`);
+          db.exec('PRAGMA user_version=3');
+        });
+      }
+      if (version >= 1 && version <= 3) {
+        transaction(() => {
+          db.exec('CREATE TABLE rate_limits (id TEXT PRIMARY KEY CHECK(length(id)=64), count INTEGER NOT NULL CHECK(count >= 1), window_ends_at INTEGER NOT NULL) STRICT; PRAGMA user_version=4;');
         });
       }
       const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
@@ -579,6 +594,15 @@ export class SqliteBackend implements StoreBackend {
         });
       },
       async insertResumeIfAbsent(row: ResumeRow, now) { return transaction(() => { db.prepare('DELETE FROM resume_tokens WHERE id=? AND expires_at<=?').run(row.id, now); return Number(db.prepare('INSERT INTO resume_tokens(id,consumed_at,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(row.id, row.consumedAt, row.expiresAt).changes) === 1; }); },
+      async hitRateLimit(params) {
+        return transaction(() => {
+          const row = db.prepare('SELECT count,window_ends_at FROM rate_limits WHERE id=?').get(params.id);
+          const current = row ? { count: Number(row.count), windowEndsAt: Number(row.window_ends_at) } : undefined;
+          const decision = nextRateLimitWindow(current, params);
+          if (decision.write) db.prepare('INSERT INTO rate_limits(id,count,window_ends_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET count=excluded.count,window_ends_at=excluded.window_ends_at').run(params.id, decision.write.count, decision.write.windowEndsAt);
+          return decision.result;
+        });
+      },
       async incrementUsage(userHash, toolName, now) { db.prepare('INSERT INTO usage(user_hash,tool_name,count,last_used) VALUES(?,?,1,?) ON CONFLICT(user_hash,tool_name) DO UPDATE SET count=count+1,last_used=excluded.last_used').run(userHash, toolName, now); },
       async listUsage(userHash) { return db.prepare('SELECT tool_name,count,last_used FROM usage WHERE user_hash=?').all(userHash).map(row => ({ toolName: row.tool_name as string, count: row.count as number, lastUsed: row.last_used as number })); },
       async getClient(id) { const row = db.prepare('SELECT value FROM oauth_clients WHERE id=?').get(id); return row ? JSON.parse(row.value as string) as OAuthClientInformationFull : undefined; },

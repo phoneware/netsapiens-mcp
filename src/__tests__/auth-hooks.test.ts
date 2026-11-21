@@ -5,6 +5,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
+import type { NetSapiensAuthProviderOptions } from '../auth/netsapiens-auth-provider.js';
 import type { StoredToken, AuthHooks, RenderPagesOptions } from '../auth/types.js';
 import { createMemoryStore } from '../store/memory.js';
 import { deriveStoreKey } from '../store/codec.js';
@@ -20,6 +21,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
   function createProvider(options: {
     hooks?: AuthHooks;
     renderPages?: RenderPagesOptions;
+    subjectForIssuance?: NetSapiensAuthProviderOptions['subjectForIssuance'];
   } = {}) {
     const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
     return new NetSapiensAuthProvider({
@@ -31,6 +33,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       store,
       hooks: options.hooks,
       renderPages: options.renderPages,
+      subjectForIssuance: options.subjectForIssuance,
     });
   }
 
@@ -60,8 +63,12 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     return res;
   }
 
-  it('no hooks: login and verify behaviour is unchanged', async () => {
-    const provider = createProvider();
+  it('detaches assurance from the subject resolver and preserves it in both issued records', async () => {
+    let mutationAccepted: boolean | undefined;
+    const provider = createProvider({ subjectForIssuance(input) {
+      mutationAccepted = Reflect.set(input.extra!, 'authNsTotp', 'true');
+      return undefined;
+    } });
 
     (provider as unknown as { nsPasswordGrant: unknown }).nsPasswordGrant = vi.fn().mockResolvedValue({
       kind: 'tokens',
@@ -113,6 +120,9 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       code,
     );
     expect(tokens.access_token).toBeTruthy();
+    expect(mutationAccepted).toBe(false);
+    expect((await provider.store.sessions.get(tokens.access_token))?.extra?.authNsTotp).toBe('false');
+    expect((await provider.store.sessions.getByRefreshToken(tokens.refresh_token!))?.extra?.authNsTotp).toBe('false');
 
     // 3. Verify access token returns auth info without governance
     const authInfo = await provider.verifyAccessToken(tokens.access_token);
@@ -180,12 +190,19 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
   it('onLogin continue: persists tokenExtra onto StoredToken.extra', async () => {
     const provider = createProvider({
       hooks: {
-        async onLogin() {
+        async onLogin(input) {
+          expect(input.assurance).toMatchObject({ method: 'password', nsTotp: false, nsGrantKind: 'oauth' });
           return {
             kind: 'continue',
             tokenExtra: {
               seatId: 'seat-456',
               domainPolicy: 'active',
+              authMethod: 'sso_google',
+              authNsTotp: 'true',
+              authAt: 'forged',
+              authProviderSubjectHash: 'forged',
+              authProviderTenant: 'forged',
+              nsGrantKind: 'jwt',
             },
           };
         },
@@ -234,6 +251,10 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     expect(stored?.extra).toEqual({
       seatId: 'seat-456',
       domainPolicy: 'active',
+      authMethod: 'password',
+      authNsTotp: 'false',
+      authAt: expect.any(String),
+      nsGrantKind: 'oauth',
     });
   });
 
@@ -312,7 +333,42 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       code,
     );
     const stored = await provider.store.sessions.get(tokens.access_token);
-    expect(stored.extra).toEqual({ enrolledVia: 'self' });
+    expect(stored.extra).toEqual({ enrolledVia: 'self', authMethod: 'password', authNsTotp: 'false', authAt: expect.any(String), nsGrantKind: 'oauth' });
+  });
+
+  it('treats a legacy session without authMethod as having no verified NS TOTP', async () => {
+    const onVerify = vi.fn(async (_stored: StoredToken) => ({}));
+    const provider = createProvider({ hooks: { onLogin: async () => ({ kind: 'continue', tokenExtra: {} }), onVerify } });
+    await provider.store.sessions.create({ accessToken: 'legacy-access', refreshToken: 'legacy-refresh' }, {
+      clientId: 'test-client', expiresAt: Date.now() + 3600_000, nsAccessToken: 'ns-token', nsRefreshToken: 'ns-refresh',
+      nsUsername: 'alice@example.com', nsUserRole: 'user', serverBaseUrl: 'http://localhost:3000',
+      extra: { authNsTotp: 'true', authAt: 'forged', authProviderTenant: 'forged', unrelated: 'keep' },
+    });
+    const info = await provider.verifyAccessToken('legacy-access');
+    expect(info.extra?.authMethod).toBeUndefined();
+    expect(info.extra?.authNsTotp).toBe('false');
+    expect(onVerify.mock.calls[0][0].extra).toEqual({ unrelated: 'keep', authNsTotp: 'false' });
+    (provider as unknown as { nsRefreshGrant: unknown }).nsRefreshGrant = vi.fn().mockResolvedValue({ access_token: 'ns-new', refresh_token: 'ns-refresh-new', expires_in: 3600 });
+    const rotated = await provider.exchangeRefreshToken(dummyClient as never, 'legacy-refresh');
+    expect(onVerify.mock.calls[1][0].extra).toEqual({ unrelated: 'keep', authNsTotp: 'false' });
+    expect((await provider.store.sessions.get(rotated.access_token))?.extra).toEqual({ unrelated: 'keep', authNsTotp: 'false' });
+    expect((await provider.store.sessions.getByRefreshToken(rotated.refresh_token!))?.extra).toEqual({ unrelated: 'keep', authNsTotp: 'false' });
+    await provider.store.close();
+  });
+
+  it('does not trust unrecognized assurance methods in verification hooks', async () => {
+    const onVerify = vi.fn(async (_stored: StoredToken) => ({}));
+    const provider = createProvider({ hooks: { onLogin: async () => ({ kind: 'continue', tokenExtra: {} }), onVerify } });
+    await provider.store.sessions.create({ accessToken: 'unknown-method', refreshToken: 'unknown-method-refresh' }, {
+      clientId: 'test-client', expiresAt: Date.now() + 3600_000, nsAccessToken: 'ns-token',
+      nsUsername: 'alice@example.com', serverBaseUrl: 'http://localhost:3000',
+      extra: { authMethod: 'unknown', authNsTotp: 'true', nsGrantKind: 'oauth' },
+    });
+    const info = await provider.verifyAccessToken('unknown-method');
+    expect(info.extra?.authMethod).toBeUndefined();
+    expect(info.extra?.authNsTotp).toBe('false');
+    expect(onVerify.mock.calls[0][0].extra).toEqual({ authNsTotp: 'false' });
+    await provider.store.close();
   });
 
   it('onVerify throwing gives 401 with WWW-Authenticate header via bearerAuth middleware', async () => {
@@ -505,8 +561,36 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       expect(refreshGrantMock).toHaveBeenCalledTimes(1);
 
       const newStored = await store.sessions.getByRefreshToken(res.body.refresh_token);
-      expect(newStored?.extra).toEqual({ seatId: 'seat-123' });
+      expect(newStored?.extra).toEqual({ seatId: 'seat-123', authNsTotp: 'false' });
       expect(await store.sessions.getByRefreshToken('ref-2')).toBeUndefined();
+    });
+
+    it('does not let onVerify mutate assurance during verification or refresh', async () => {
+      const provider = createProvider({
+        hooks: {
+          async onVerify(stored) {
+            if (stored.extra) {
+              stored.extra.authMethod = 'sso_google';
+              stored.extra.authNsTotp = 'true';
+              stored.extra.nsGrantKind = 'jwt';
+            }
+            return {};
+          },
+        },
+      });
+      const refreshGrantMock = vi.fn().mockResolvedValue({ access_token: 'ns-new', refresh_token: 'ns-ref-new', expires_in: 3600 });
+      (provider as unknown as { nsRefreshGrant: unknown }).nsRefreshGrant = refreshGrantMock;
+      const client = await provider.store.clients.registerClient(dummyClient);
+      const extra = { authMethod: 'password', authNsTotp: 'false', authAt: '2026-01-01T00:00:00.000Z', nsGrantKind: 'oauth' };
+      await provider.store.sessions.create({ accessToken: 'assurance-access', refreshToken: 'assurance-refresh' }, {
+        ...initialSession, clientId: client.client_id, extra,
+      });
+      const info = await provider.verifyAccessToken('assurance-access');
+      expect(info.extra).toMatchObject(extra);
+      expect((await provider.store.sessions.get('assurance-access'))?.extra).toEqual(extra);
+      const rotated = await provider.exchangeRefreshToken(client, 'assurance-refresh');
+      expect((await provider.store.sessions.get(rotated.access_token))?.extra).toEqual(extra);
+      expect((await provider.store.sessions.getByRefreshToken(rotated.refresh_token!))?.extra).toEqual(extra);
     });
 
     it('Hook throws plain Error: 400 temporarily_unavailable, 0 upstream calls, session kept in store', async () => {

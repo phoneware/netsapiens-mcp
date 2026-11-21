@@ -69,6 +69,18 @@ describe('Firestore Cutover Fence: Uninitialized Production Negative Cases & Emu
   const namespace = 'mcp';
   const key = deriveStoreKey('test secret with at least thirty two characters');
 
+  it('counts sign-in attempts without creating or changing the credential fence', async () => {
+    const db = new MockFirestore();
+    const backend = createFirestoreBackend({ db, namespace, key });
+    const params = { id: 'a'.repeat(64), now: 100_000, limit: 2, windowMs: 60_000 };
+    expect(await backend.hitRateLimit(params)).toEqual({ count: 1, windowEndsAt: 160_000 });
+    expect(await backend.hitRateLimit(params)).toEqual({ count: 2, windowEndsAt: 160_000 });
+    expect(await backend.hitRateLimit(params)).toEqual({ count: 3, windowEndsAt: 160_000 });
+    expect((await db.collection(`${namespace}_meta`).doc('cutover_fence').get()).exists).toBe(false);
+    const record = (await db.collection(`${namespace}_rate_limits`).doc(params.id).get()).data();
+    expect(record).toMatchObject({ count: 2, windowEndsAt: 160_000, ttlAt: new Date(160_000) });
+  });
+
   it('negative: uninitialized database rejects client registration with CutoverFenceError', async () => {
     const db = new MockFirestore();
     const clients = new FirestoreClientsStore({ db, collection: `${namespace}_oauth_clients`, namespace });

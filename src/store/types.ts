@@ -140,10 +140,19 @@ export interface AuthCodeStore {
 }
 export interface ResumeTokenStore { consume(resumeId: string): Promise<boolean>; }
 export interface UsageStore { recordCall(userKey: string, toolName: string): Promise<void>; getUserUsage(userKey: string): Promise<Map<string, UsageRecord>>; }
+export type RateLimitBucket = 'signin';
+export interface RateLimitPolicy { limit: number; windowMs: number; }
+export interface RateLimitDecision { totalHits: number; resetAt: number; }
+export interface RateLimitStore {
+  hit(bucket: RateLimitBucket, clientKey: string, policy: RateLimitPolicy): Promise<RateLimitDecision>;
+}
+export interface RateLimitHitParams { id: string; now: number; limit: number; windowMs: number; }
+export interface RateLimitWindow { count: number; windowEndsAt: number; }
 export interface McpStore {
   readonly backend: string; readonly namespace: string; readonly capabilities: StoreCapabilities;
   readonly sessions: SessionStore; readonly clients: OAuthRegisteredClientsStore;
   readonly authCodes: AuthCodeStore; readonly resumeTokens: ResumeTokenStore; readonly usage: UsageStore;
+  readonly rateLimits: RateLimitStore;
   sweep?(now: number): Promise<number>;
   revokeSubject(extraKey: string, value: string, options: { limit: number }): Promise<{ revoked: number; more: boolean }>;
   putGuardDocument(collection: string, id: string, data: Record<string, unknown>): Promise<void>;
@@ -154,6 +163,7 @@ export type { AccessRow, AccessSealedData, AuthCodeRow, FamilyRow, FamilySealedD
 export interface StoreBackend {
   readonly name: string;
   readonly capabilities: StoreCapabilities;
+  hitRateLimit(params: RateLimitHitParams): Promise<RateLimitWindow>;
 
   getAccess(id: string, rawToken?: string): Promise<AccessRow | undefined>;
   putAccess(row: AccessRow): Promise<void>;

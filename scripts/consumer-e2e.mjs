@@ -14,6 +14,7 @@
  *   - memory: proves bearer is lost (401 invalid_token) after server restart in memory mode.
  *   - version: checks tool lists differ across versions, 46.0 tool refused on 44.4 with 0 requests, /health info, 500 origin handling.
  *   - firestore: installs @google-cloud/firestore, proves multi-instance bearer sharing, runs exported store conformance against emulator.
+ *   - mfa: exercises password challenge, single-use retries and MCP connection against a fake NetSapiens.
  *   - library: tsc --noEmit on consumer TS file importing from 'netsapiens-mcp/lib'.
  */
 
@@ -71,7 +72,7 @@ function parseArgs() {
 
   const selectedLegs = coldRegistry ? ['sqlite'] : legs
     ? legs.split(',').map((s) => s.trim().toLowerCase())
-    : ['install', 'config', 'sqlite', 'memory', 'version', 'library'];
+    : ['install', 'config', 'sqlite', 'memory', 'version', 'library', 'mfa'];
 
   if (selectedLegs.includes('cutover-interop') && (!tarball || !bridgeTarball || !canonicalTarball)) {
     throw new Error('cutover-interop requires --tarball, --bridge-tarball, and --canonical-tarball');
@@ -334,6 +335,115 @@ async function main() {
     execSync('npm init -y', { cwd: tempDir, stdio: 'pipe' });
       const install = await runCommand('npm', ['install', '--legacy-peer-deps', targetPkg], { cwd: tempDir });
       if (install.status !== 0) throw new Error(`Consumer install failed:\n${install.stdout}\n${install.stderr}`);
+    }
+
+    if (opts.legs.includes('mfa')) {
+      const fake = await startFakeNetSapiens({
+        tokens: { 'mfa-final': { user: 'alice', domain: 'example.com', login: 'alice@example.com', 'user-scope': 'Basic User' } },
+        routeModules: [{
+          method: 'POST', path: '/tokens', unauthenticated: true,
+          handler: ({ body }) => body.grant_type === 'password'
+            ? { body: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' } }
+            : body.grant_type === 'mfa' && body.passcode === '123456'
+              ? { body: { access_token: 'mfa-final', refresh_token: 'mfa-refresh', expires_in: 3600 } }
+              : { status: 401, body: { message: 'Invalid passcode' } },
+        }],
+      });
+      const port = await getAvailablePort();
+      const mfaEnv = {
+        ...process.env, MCP_TRANSPORT: 'http', MCP_PORT: String(port), MCP_HOST: '127.0.0.1',
+        MCP_BASE_URL: `http://127.0.0.1:${port}`, NETSAPIENS_API_URL: fake.origin,
+        NETSAPIENS_OAUTH_CLIENT_ID: 'test-client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'test-secret',
+        MCP_TRUST_PROXY_HOPS: '1',
+        MCP_SESSION_SECRET: sessionSecret, MCP_PERSISTENCE: 'sqlite', MCP_STORE_PATH: path.join(tempDir, 'mfa.sqlite'), MCP_STATELESS: 'false',
+        MCP_MFA_REPLAY_AUDIENCE: 'consumer-mfa-sqlite',
+      };
+      let srv = await startMcpServerProcess(tempDir, mfaEnv);
+      const base = `http://127.0.0.1:${port}`;
+      const field = (html, name) => html.match(new RegExp(`name="${name}"\\s+value="([^"]+)"`))?.[1];
+      const post = (route, body, ip) => fetch(`${base}${route}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': ip },
+        body: new URLSearchParams(body), redirect: 'manual',
+      });
+      try {
+        await waitForHealth(port);
+        const health = await (await fetch(`${base}/health`)).json();
+        if (JSON.stringify(health.signIn) !== JSON.stringify({ password: true, token: true, sso: [], ssoVisible: false, mfaAttemptLimit: 5, mfaReady: true, secondFactorPolicy: null })) fail('mfa', 'health', JSON.stringify(health.signIn));
+        pass('mfa', 'health');
+        const register = await fetch(`${base}/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://localhost/callback'], client_name: 'mfa-e2e', token_endpoint_auth_method: 'none' }) });
+        if (register.status !== 201) fail('mfa', 'register', String(register.status));
+        const { client_id: clientId } = await register.json();
+        async function begin(ip) {
+          const verifier = randomBytes(32).toString('base64url');
+          const challenge = createHash('sha256').update(verifier).digest('base64url');
+          const auth = await fetch(`${base}/authorize?${new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: 'http://localhost/callback', code_challenge: challenge, code_challenge_method: 'S256' })}`);
+          const authState = field(await auth.text(), 'auth_state');
+          if (!authState) fail('mfa', 'authorize', String(auth.status));
+          const login = await post('/login', { username: 'alice', password: 'secret', auth_state: authState }, ip);
+          const state = field(await login.text(), 'mfa_state');
+          if (!state) fail('mfa', 'challenge', String(login.status));
+          return { verifier, state };
+        }
+        const good = await begin('198.51.100.1');
+        const success = await post('/mfa', { passcode: '123456', mfa_state: good.state }, '198.51.100.1');
+        if (success.status !== 302) fail('mfa', 'correct-code', String(success.status));
+        const code = new URL(success.headers.get('location')).searchParams.get('code');
+        const exchange = await post('/token', { grant_type: 'authorization_code', code, client_id: clientId, redirect_uri: 'http://localhost/callback', code_verifier: good.verifier }, '198.51.100.1');
+        if (exchange.status !== 200) fail('mfa', 'exchange', await exchange.text());
+        const bearer = (await exchange.json()).access_token;
+        const init = await sendMcpRequest(port, bearer, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mfa-e2e', version: '1' } });
+        if (init.status !== 200 || !init.json?.result) fail('mfa', 'connect', init.rawText);
+        pass('mfa', 'correct-code-connects');
+        const bad = await begin('198.51.100.2');
+        let state = bad.state;
+        const before = fake.requests.filter(r => r.body?.grant_type === 'mfa').length;
+        for (let n = 1; n <= 5; n++) {
+          const result = await post('/mfa', { passcode: '000000', mfa_state: state }, '198.51.100.2');
+          const html = await result.text();
+          if (result.status !== (n === 5 ? 440 : 200)) fail('mfa', 'attempt-limit', `attempt ${n}: ${result.status}`);
+          if (n < 5) {
+            const next = field(html, 'mfa_state');
+            if (!next || next === state) fail('mfa', 'new-challenge', `attempt ${n}`);
+            state = next;
+          } else if (!/reconnect/i.test(html)) fail('mfa', 'restart', html);
+        }
+        const count = () => fake.requests.filter(r => r.body?.grant_type === 'mfa').length;
+        if (count() - before !== 5) fail('mfa', 'five-grants', String(count() - before));
+        const replay = await post('/mfa', { passcode: '123456', mfa_state: bad.state }, '198.51.100.2');
+        if (replay.status !== 440 || !/reconnect/i.test(await replay.text()) || count() - before !== 5) fail('mfa', 'replay', String(replay.status));
+        pass('mfa', 'five-grants-and-replay');
+        for (let n = 1; n <= 11; n++) {
+          const result = await post('/mfa', { passcode: '123456', mfa_state: 'invalid' }, '198.51.100.3');
+          if (result.status !== (n === 11 ? 429 : 440)) fail('mfa', 'rate-limit', `attempt ${n}: ${result.status}`);
+        }
+        pass('mfa', 'rate-limit');
+
+        // A missing audience preserves existing sessions but must not issue or accept MFA.
+        await srv.stop();
+        await waitForHealthDown(port);
+        const noAudienceEnv = { ...mfaEnv };
+        delete noAudienceEnv.MCP_MFA_REPLAY_AUDIENCE;
+        srv = await startMcpServerProcess(tempDir, noAudienceEnv);
+        const noAudienceHealth = await waitForHealth(port);
+        if (noAudienceHealth.signIn?.mfaReady !== false) fail('mfa', 'missing-audience-readiness', JSON.stringify(noAudienceHealth.signIn));
+        const resumed = await sendMcpRequest(port, bearer, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mfa-e2e', version: '1' } });
+        if (resumed.status !== 200 || !resumed.json?.result) fail('mfa', 'missing-audience-bearer', resumed.rawText);
+        const grantsBefore = count();
+        const refused = await post('/mfa', { passcode: '123456', mfa_state: good.state }, '198.51.100.4');
+        if (refused.status !== 503 || !refused.headers.get('cache-control')?.includes('no-store') || count() !== grantsBefore) fail('mfa', 'missing-audience-submission', String(refused.status));
+        const verifier = randomBytes(32).toString('base64url');
+        const challenge = createHash('sha256').update(verifier).digest('base64url');
+        const auth = await fetch(`${base}/authorize?${new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: 'http://localhost/callback', code_challenge: challenge, code_challenge_method: 'S256' })}`);
+        const authState = field(await auth.text(), 'auth_state');
+        if (!authState) fail('mfa', 'missing-audience-authorize', String(auth.status));
+        const noPrompt = await post('/login', { username: 'alice', password: 'secret', auth_state: authState }, '198.51.100.4');
+        const noPromptBody = await noPrompt.text();
+        if (noPrompt.status !== 503 || !noPrompt.headers.get('cache-control')?.includes('no-store') || field(noPromptBody, 'mfa_state') || count() !== grantsBefore) fail('mfa', 'missing-audience-issuance', String(noPrompt.status));
+        pass('mfa', 'missing-audience-fails-closed-with-existing-bearer');
+      } finally {
+        await srv.stop();
+        await fake.close();
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -969,10 +1079,12 @@ async function main() {
         ...process.env,
         MCP_TRANSPORT: 'http',
         MCP_PERSISTENCE: 'firestore',
+        MCP_TRUST_PROXY_HOPS: '1',
         MCP_STORE_NAMESPACE: 'mcp',
         GOOGLE_CLOUD_PROJECT: gcpProject,
         FIRESTORE_EMULATOR_HOST: emuHost,
         MCP_SESSION_SECRET: sessionSecret,
+        MCP_MFA_REPLAY_AUDIENCE: 'consumer-firestore-shared',
         MCP_BASE_URL: sharedBaseUrl,
         NETSAPIENS_API_URL: fake.origin,
         NETSAPIENS_OAUTH_CLIENT_ID: 'op-client',
@@ -1089,6 +1201,20 @@ await db.terminate();
 
         try {
           await waitForHealth(port2);
+          for (let n = 0; n < 12; n++) {
+            const port = n % 2 ? port2 : port1;
+            const result = await fetch(`http://127.0.0.1:${port}/mfa`, {
+              method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': '203.0.113.10' },
+              body: new URLSearchParams({ passcode: '123456', mfa_state: 'invalid' }),
+            });
+            if (result.status !== (n < 10 ? 440 : 429)) fail('firestore', 'shared-signin-rate-limit', `attempt ${n + 1}: ${result.status}`);
+          }
+          const another = await fetch(`http://127.0.0.1:${port2}/mfa`, {
+            method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': '203.0.113.11' },
+            body: new URLSearchParams({ passcode: '123456', mfa_state: 'invalid' }),
+          });
+          if (another.status !== 440) fail('firestore', 'shared-signin-rate-limit', `other address: ${another.status}`);
+          pass('firestore', 'shared-signin-rate-limit');
 
           // Verify bearer issued by Server 1 works on Server 2
           const srv2Init = await sendMcpRequest(port2, tokens1.accessToken, 'initialize', {

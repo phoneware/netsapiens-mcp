@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,17 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createRequire } from 'node:module';
+import { createSqliteStore } from '../store/sqlite.js';
+import { deriveStoreKey } from '../store/codec.js';
+import { startHttpServer } from '../http-server.js';
+import * as http from 'node:http';
+import * as storeConfig from '../config/store.js';
+import * as version from '../netsapiens/version.js';
+
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
+  DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { get(): { user_version: number } }; close(): void };
+};
 
 const testHome = mkdtempSync(join(tmpdir(), 'nsmcp-config-store-test-'));
 afterAll(() => rmSync(testHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
@@ -22,6 +33,7 @@ const baseEnv = {
   NETSAPIENS_OAUTH_CLIENT_ID: 'client',
   NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
   MCP_SESSION_SECRET: 'a'.repeat(32),
+  MCP_MFA_REPLAY_AUDIENCE: 'config-store-test',
 };
 
 function startup(env: Record<string, string | undefined>) {
@@ -78,6 +90,172 @@ describe('config-store', () => {
     expect(res.stderr).toContain(expectedMsg);
   });
 
+  it('does not upgrade an existing SQLite database when provider or proxy preflight fails', async () => {
+    const path = join(testHome, 'preflight.sqlite');
+    const store = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+    await store.close();
+    const db = new DatabaseSync(path);
+    try {
+      db.exec('DROP TABLE rate_limits; PRAGMA user_version=3;');
+      for (const [override, message] of [
+        [{ MCP_MFA_REPLAY_AUDIENCE: 'bad audience' }, 'replayAudience must be a stable replay-store identity'],
+        [{ MCP_TRUST_PROXY_HOPS: '2' }, 'MCP_TRUST_PROXY_HOPS must be 0 or 1'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com/?private=do-not-log' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com/#private-fragment' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '65536' }, 'MCP_PORT must be an integer from 0 to 65535'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '-1' }, 'MCP_PORT must be an integer from 0 to 65535'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '12invalid' }, 'MCP_PORT must be an integer from 0 to 65535'],
+      ] as const) {
+        const result = startup({ MCP_STORE_PATH: path, ...override });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(message);
+        expect(db.prepare('PRAGMA user_version').get().user_version).toBe(3);
+        expect(db.prepare("SELECT count(*) AS user_version FROM sqlite_master WHERE type='table' AND name='rate_limits'").get().user_version).toBe(0);
+      }
+    } finally { db.close(); }
+  });
+
+  it('rejects an occupied port without upgrading a schema-3 database or installing signal handlers', async () => {
+    const socket = createServer();
+    socket.listen(0, '127.0.0.1');
+    await once(socket, 'listening');
+    const address = socket.address();
+    if (!address || typeof address === 'string') throw new Error('No port');
+    const path = join(testHome, 'occupied.sqlite');
+    const original = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+    await original.close();
+    const fixture = new DatabaseSync(path);
+    fixture.exec('DROP TABLE rate_limits; PRAGMA user_version=3;');
+    fixture.close();
+    const keys = ['MCP_TRANSPORT', 'MCP_PORT', 'MCP_HOST', 'MCP_BASE_URL', 'MCP_PERSISTENCE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'MCP_MFA_REPLAY_AUDIENCE', 'NETSAPIENS_API_URL', 'NETSAPIENS_OAUTH_CLIENT_ID', 'NETSAPIENS_OAUTH_CLIENT_SECRET'] as const;
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const sigint = process.listeners('SIGINT');
+    const sigterm = process.listeners('SIGTERM');
+    const output = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      Object.assign(process.env, {
+        MCP_TRANSPORT: 'http', MCP_PORT: String(address.port), MCP_HOST: '127.0.0.1', MCP_BASE_URL: 'http://localhost',
+        MCP_PERSISTENCE: 'sqlite', MCP_STORE_PATH: path, MCP_SESSION_SECRET: 'a'.repeat(32),
+        MCP_MFA_REPLAY_AUDIENCE: 'occupied-test', NETSAPIENS_API_URL: 'https://netsapiens.example.com',
+        NETSAPIENS_OAUTH_CLIENT_ID: 'client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
+      });
+      await expect(startHttpServer()).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(process.listeners('SIGINT')).toEqual(sigint);
+      expect(process.listeners('SIGTERM')).toEqual(sigterm);
+      expect(JSON.stringify(output.mock.calls)).not.toContain('NetSapiens MCP HTTP server started');
+      const unchanged = new DatabaseSync(path);
+      try {
+        expect(unchanged.prepare('PRAGMA user_version').get().user_version).toBe(3);
+        expect(unchanged.prepare("SELECT count(*) AS user_version FROM sqlite_master WHERE type='table' AND name='rate_limits'").get().user_version).toBe(0);
+      } finally { unchanged.close(); }
+    } finally {
+      output.mockRestore();
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+      socket.close();
+      await once(socket, 'close');
+    }
+  });
+
+  it('holds the real port but drops requests until initialization completes, then closes its store', async () => {
+    const path = join(testHome, 'startup-gated.sqlite');
+    const keys = ['MCP_TRANSPORT', 'MCP_PORT', 'MCP_HOST', 'MCP_BASE_URL', 'MCP_PERSISTENCE', 'MCP_STORE_NAMESPACE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'MCP_MFA_REPLAY_AUDIENCE', 'NETSAPIENS_API_URL', 'NETSAPIENS_OAUTH_CLIENT_ID', 'NETSAPIENS_OAUTH_CLIENT_SECRET'] as const;
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const sigint = process.listeners('SIGINT');
+    const sigterm = process.listeners('SIGTERM');
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const originalFactory = storeConfig.createStoreFromEnv;
+    let listener: http.Server | undefined;
+    const originalListen = http.Server.prototype.listen;
+    const listenSpy = vi.spyOn(http.Server.prototype, 'listen').mockImplementation(function (this: http.Server, port: number, host: string) {
+      listener = this;
+      return originalListen.call(this, port, host);
+    });
+    const factory = vi.spyOn(storeConfig, 'createStoreFromEnv').mockImplementation(async env => {
+      entered.resolve();
+      await gate.promise;
+      return originalFactory(env);
+    });
+    const warm = vi.spyOn(version, 'warmVersionCache').mockResolvedValue();
+    let running: http.Server | undefined;
+    let starting: Promise<http.Server> | undefined;
+    try {
+      Object.assign(process.env, {
+        MCP_TRANSPORT: 'http', MCP_PORT: '0', MCP_HOST: '127.0.0.1', MCP_BASE_URL: 'http://localhost',
+        MCP_PERSISTENCE: 'sqlite', MCP_STORE_PATH: path, MCP_SESSION_SECRET: 'a'.repeat(32),
+        MCP_MFA_REPLAY_AUDIENCE: 'gated-test', NETSAPIENS_API_URL: 'https://netsapiens.example.com',
+        NETSAPIENS_OAUTH_CLIENT_ID: 'client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
+      });
+      delete process.env.MCP_STORE_NAMESPACE;
+      starting = startHttpServer();
+      await entered.promise;
+      process.env.MCP_STORE_NAMESPACE = 'changed_after_preflight';
+      process.env.MCP_STORE_PATH = join(testHome, 'changed-after-preflight.sqlite');
+      const address = listener!.address();
+      if (!address || typeof address === 'string') throw new Error('No listening address');
+      const probe = createServer();
+      const conflict = new Promise<string | undefined>(resolve => {
+        probe.once('error', (error: NodeJS.ErrnoException) => resolve(error.code));
+        probe.listen(address.port, '127.0.0.1', () => { probe.close(); resolve(undefined); });
+      });
+      expect(await conflict).toBe('EADDRINUSE');
+      await expect(new Promise<void>((resolve, reject) => {
+        const req = http.get(`http://127.0.0.1:${address.port}/health`, () => resolve());
+        req.once('error', reject);
+      })).rejects.toMatchObject({ code: 'ECONNRESET' });
+      gate.resolve();
+      running = await starting;
+      starting = undefined;
+      expect(running).toBe(listener);
+      const health = await fetch(`http://127.0.0.1:${address.port}/health`);
+      expect(health.status).toBe(200);
+      expect((await health.json() as { store: { namespace: string } }).store.namespace).toBe('mcp');
+      await new Promise<void>(resolve => running!.close(() => resolve()));
+      running = undefined;
+      expect(process.listeners('SIGINT')).toEqual(sigint);
+      expect(process.listeners('SIGTERM')).toEqual(sigterm);
+      const reopened = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+      await reopened.close();
+      delete process.env.MCP_STORE_NAMESPACE;
+
+      const failedPath = join(testHome, 'startup-failed.sqlite');
+      process.env.MCP_STORE_PATH = failedPath;
+      let failedPort = 0;
+      factory.mockImplementation(async env => {
+        const result = await originalFactory(env);
+        const current = listener!.address();
+        if (!current || typeof current === 'string') throw new Error('No listening address');
+        failedPort = current.port;
+        return { ...result, store: { ...result.store, rateLimits: undefined as unknown as typeof result.store.rateLimits } };
+      });
+      await expect(startHttpServer()).rejects.toThrow('ConfigError: the store does not implement rateLimits.hit');
+      const rebound = createServer();
+      await new Promise<void>((resolve, reject) => {
+        rebound.once('error', reject);
+        rebound.listen(failedPort, '127.0.0.1', resolve);
+      });
+      await new Promise<void>(resolve => rebound.close(() => resolve()));
+      const afterFailure = createSqliteStore({ path: failedPath, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+      await afterFailure.close();
+      expect(process.listeners('SIGINT')).toEqual(sigint);
+      expect(process.listeners('SIGTERM')).toEqual(sigterm);
+    } finally {
+      gate.resolve();
+      if (!running && starting) running = await starting.catch(() => undefined);
+      if (running) await new Promise<void>(resolve => running!.close(() => resolve()));
+      listenSpy.mockRestore();
+      factory.mockRestore();
+      warm.mockRestore();
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  });
+
   it('asserts default /health.store output and sqlite startup log', async () => {
     const socket = createServer();
     socket.listen(0, '127.0.0.1');
@@ -89,7 +267,7 @@ describe('config-store', () => {
     await once(socket, 'close');
 
     const server = spawn(process.execPath, args, {
-      env: { ...baseEnv, MCP_PORT: String(port), MCP_HOST: '127.0.0.1' },
+      env: { ...baseEnv, MCP_MFA_REPLAY_AUDIENCE: undefined, MCP_PORT: String(port), MCP_HOST: '127.0.0.1' },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 
@@ -104,19 +282,23 @@ describe('config-store', () => {
         try { response = await fetch(`${url}/health`); break; } catch { await delay(50); }
       }
       expect(response?.status).toBe(200);
-      const data = await response!.json() as { store: Record<string, unknown> };
+      const data = await response!.json() as { store: Record<string, unknown>; signIn: { mfaReady: boolean } };
       expect(data.store).toEqual({
         backend: 'sqlite',
         namespace: 'mcp',
         persistent: true,
         multiInstance: false,
       });
+      expect(data.signIn.mfaReady).toBe(false);
       const expectedDbPath = join(testHome, '.netsapiens-mcp', 'mcp.sqlite');
       expect(stderr).toContain(`store: sqlite ${expectedDbPath} (namespace mcp)`);
+      expect(stderr).toContain('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE');
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 
@@ -161,9 +343,11 @@ describe('config-store', () => {
       const expectedDbPath = join(testHome, '.netsapiens-mcp', 'readonly_mcp.sqlite');
       expect(stderr).toContain(`store: sqlite ${expectedDbPath} (namespace readonly_mcp)`);
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 
@@ -200,9 +384,11 @@ describe('config-store', () => {
         `warn: ${legacyPath} is a 2.x token file. 3.0.0 does not read it, and it holds plaintext tokens. Delete it: rm ${legacyPath}`,
       );
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 

@@ -22,6 +22,7 @@ const baseEnv = {
  NETSAPIENS_OAUTH_CLIENT_ID: 'client',
  NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
  MCP_SESSION_SECRET: 'a'.repeat(32),
+ MCP_MFA_REPLAY_AUDIENCE: 'config-contract-test-store',
 };
 
 function startup(env: Record<string, string | undefined>) {
@@ -36,6 +37,7 @@ describe('configuration contract', () => {
   [{ NETSAPIENS_PLATFORMS: 'Label=https://example.com' }, 'ConfigError: NETSAPIENS_PLATFORMS must be a JSON object'],
   [{ MCP_SESSION_SECRET: undefined }, 'ConfigError: MCP_SESSION_SECRET must be at least 32 characters'],
   [{ MCP_SESSION_SECRET: 'x'.repeat(31) }, 'ConfigError: MCP_SESSION_SECRET must be at least 32 characters'],
+  [{ MCP_MFA_REPLAY_AUDIENCE: 'invalid audience' }, 'ConfigError: replayAudience must be a stable replay-store identity'],
  ])('rejects invalid startup configuration', (env, message) => {
   const result = startup(env);
   expect(result.status).toBe(1);
@@ -87,9 +89,11 @@ describe('configuration contract', () => {
    expect(login.status).toBe(200);
    expect(await login.text()).toContain('West office');
   } finally {
-   const exited = once(server, 'exit');
-   server.kill();
-   await exited;
+   if (server.exitCode === null && server.signalCode === null) {
+    const exited = once(server, 'exit');
+    server.kill();
+    await exited;
+   }
   }
  });
 });

@@ -43,6 +43,7 @@ import type {
  AuthHooks,
  RenderPagesOptions,
  NsUserSnapshot,
+ SignInAssurance,
 } from './types.js';
 import { resolvePlatform, isPlatformAllowed, type NetSapiensPlatform } from './platforms.js';
 import type { AuthMode } from './auth-mode.js';
@@ -106,6 +107,37 @@ const MFA_STATE_FIELD = 'mfa_state';
 const PENDING_AUTH_TTL_SEC = 2 * 60 * 60;
 /** How long after a passcode prompt we still accept the code. */
 const MFA_CHALLENGE_TTL_SEC = 10 * 60;
+export const MFA_ATTEMPT_LIMIT = 5;
+const memoryStoreEpochs = new WeakMap<McpStore, string>();
+
+function memoryStoreEpoch(store: McpStore): string | undefined {
+ if (store.capabilities.persistent) return undefined;
+ let epoch = memoryStoreEpochs.get(store);
+ if (!epoch) {
+  epoch = randomBytes(16).toString('hex');
+  memoryStoreEpochs.set(store, epoch);
+ }
+ return epoch;
+}
+export function validateReplayAudience(value: string | undefined): void {
+ if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value)) {
+  throw new Error('ConfigError: replayAudience must be a stable replay-store identity');
+ }
+}
+
+function normalizeAssurance(extra: Record<string, string> | undefined): Record<string, string> {
+ const normalized = { ...extra };
+ if (!['password', 'ns_token', 'sso_google', 'sso_office'].includes(normalized.authMethod)) {
+  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind']) delete normalized[key];
+  normalized.authNsTotp = 'false';
+ }
+ return normalized;
+}
+
+
+function hookSnapshot<T extends StoredToken>(stored: T): T {
+ return { ...stored, extra: stored.extra ? { ...stored.extra } : undefined };
+}
 
 export function signValue<T>(payload: T, ttlSec: number): string {
  const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
@@ -460,6 +492,8 @@ export interface NetSapiensAuthProviderOptions {
  tokenLifetimeSec?: number;
  /** Storage backend instance */
  store: McpStore;
+ /** Stable non-secret identity unique to a physical replay store and shared by its replicas. */
+ replayAudience?: string;
  /** MCP Server base URL for cross-server token isolation */
  serverBaseUrl?: string;
  /** Optional auth hooks for enrollment, access-token verification, and refresh authorization */
@@ -499,6 +533,11 @@ interface MfaChallenge {
  mfaType: string;
  mfaVendor: string;
  nsIdType: string;
+ challengeId: string;
+ attempt: number;
+ expiresAt: number;
+ storeEpoch?: string;
+ audience: string;
 }
 
 export class NetSapiensAuthProvider implements OAuthServerProvider {
@@ -514,9 +553,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
  private tokenLifetimeSec: number;
  private serverBaseUrl?: string;
+ private replayAudience?: string;
+
+ private challengeAudience(): string {
+  return JSON.stringify([this.store.backend, this.store.namespace, this.serverBaseUrl?.toLowerCase() ?? '', this.replayAudience]);
+ }
+
+ get mfaReady(): boolean {
+  return this.authMode === 'oauth' && (!this.store.capabilities.persistent || !!this.replayAudience);
+ }
 
  constructor(options: NetSapiensAuthProviderOptions) {
   if (!options.store) throw new Error('store is required');
+  validateReplayAudience(options.replayAudience);
+  if (options.store.capabilities.persistent && !options.replayAudience) {
+   logger.error('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE for the persistent replay store');
+  }
+  this.replayAudience = options.replayAudience;
   this.store = options.store;
   this.nsApiUrl = options.nsApiUrl;
   if (!options.platforms?.length) throw new Error('platforms must contain at least one platform');
@@ -676,6 +729,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
 
   if (grantResult.kind === 'mfa_required') {
+   if (this.store.capabilities.persistent && !this.replayAudience) {
+    res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+    return;
+   }
    const challenge: MfaChallenge = {
     pending,
     username,
@@ -684,13 +741,18 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     mfaType: grantResult.mfaType,
     mfaVendor: grantResult.mfaVendor,
     nsIdType: grantResult.nsIdType,
+    challengeId: randomBytes(16).toString('hex'),
+    attempt: 0,
+    expiresAt: Date.now() + MFA_CHALLENGE_TTL_SEC * 1000,
+    storeEpoch: memoryStoreEpoch(this.store),
+    audience: this.challengeAudience(),
    };
    const sealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
    sendPage(res, 200, this.renderMfaPage('/mfa', grantResult.mfaVendor, undefined, sealed));
    return;
   }
 
-  await this.completeLogin(pending, { ...grantResult.tokens, nsApiUrl: this.nsApiUrl }, username, res);
+  await this.completeSignIn(pending, { ...grantResult.tokens, nsApiUrl: this.nsApiUrl }, username, { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
  }
 
  /**
@@ -742,7 +804,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    nsApiUrl: resolvedPlatform.apiUrl,
   };
 
-  await this.completeLogin(pending, nsTokens, validated.username, res);
+  await this.completeSignIn(pending, nsTokens, validated.username, { method: 'ns_token', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
  }
 
  /**
@@ -836,11 +898,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
+  if (this.store.capabilities.persistent && !this.replayAudience) {
+   res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+   return;
+  }
+
 
   const formState = (req.body as Record<string, unknown> | undefined)?.[MFA_STATE_FIELD];
   const sealed = typeof formState === 'string' ? formState : undefined;
   const challenge = sealed ? openSealed<MfaChallenge>(sealed) : null;
-  if (!challenge) {
+  if (!challenge || !/^[a-f0-9]{32}$/.test(challenge.challengeId) || !Number.isInteger(challenge.attempt) || challenge.attempt < 0 || challenge.attempt >= MFA_ATTEMPT_LIMIT || !Number.isFinite(challenge.expiresAt) || Date.now() >= challenge.expiresAt || challenge.storeEpoch !== memoryStoreEpoch(this.store) || challenge.audience !== this.challengeAudience()) {
    // Stale or missing MFA state: show a sign-in failure page; the OAuth
    // client will retry from the start.
    logger.warn('MFA rejected: no usable challenge state', {
@@ -849,30 +916,67 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
+  const marker = createHash('sha256').update(`mfa:${challenge.challengeId}`).digest('hex');
+  let consumed: boolean;
+  try {
+   consumed = await this.store.resumeTokens.consume(marker);
+  } catch {
+   logger.warn('MFA replay store unavailable');
+   res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+   return;
+  }
+  if (!consumed) {
+   sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
+   return;
+  }
+  if (Date.now() >= challenge.expiresAt) {
+   sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
+   return;
+  }
+
 
   let nsTokens: NsTokenResponse;
   try {
    nsTokens = await this.nsMfaGrant(challenge, passcode);
-  } catch (err: any) {
-   const msg = err.message?.includes('401') || err.message?.toLowerCase().includes('passcode') || err.message?.toLowerCase().includes('invalid')
+  } catch (err: unknown) {
+   const msg = err instanceof Error && err.message === 'invalid_passcode'
     ? 'Invalid or expired passcode. Try again.'
-    : `MFA failed: ${err.message}`;
-   // Re-seal so "try again" has state to work with.
-   const resealed = sealValue(challenge, MFA_CHALLENGE_TTL_SEC);
+    : 'MFA verification is temporarily unavailable. Try again.';
+   const remaining = challenge.expiresAt - Date.now();
+   if (challenge.attempt + 1 >= MFA_ATTEMPT_LIMIT || remaining <= 0) {
+    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
+    return;
+   }
+   const resealed = sealValue({ ...challenge, attempt: challenge.attempt + 1, challengeId: randomBytes(16).toString('hex') }, Math.ceil(remaining / 1000));
    sendPage(res, 200, this.renderMfaPage('/mfa', challenge.mfaVendor, msg, resealed));
    return;
   }
 
-  await this.completeLogin(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, res);
+  if (Date.now() >= challenge.expiresAt) {
+   sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
+   return;
+  }
+  await this.completeSignIn(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, { method: 'password', nsTotp: true, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
  }
 
  /**
   * Shared finalization: detect role, issue auth code, redirect back to MCP client.
   */
- private async completeLogin(
+ async completeSignIn(
   pending: PendingAuthorization,
   nsTokens: NsTokenResponse,
   username: string,
+  assurance: SignInAssurance,
+  res: Response,
+ ): Promise<void> {
+  return this.finishSignIn(pending, nsTokens, username, assurance, res);
+ }
+
+ private async finishSignIn(
+  pending: PendingAuthorization,
+  nsTokens: NsTokenResponse,
+  username: string,
+  assurance: SignInAssurance,
   res: Response,
   tokenExtra?: Record<string, string>,
   skipHooks = false,
@@ -923,6 +1027,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      username,
      who,
      tier,
+     assurance,
     },
     PENDING_AUTH_TTL_SEC,
    );
@@ -930,6 +1035,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const decision = await this.hooks.onLogin({
     who,
     tier,
+    assurance: { ...assurance },
     clientId: pending.clientId,
     nsAccessToken: nsTokens.access_token,
     nsApiUrl: nsTokens.nsApiUrl || this.nsApiUrl,
@@ -949,12 +1055,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     tokenExtra = { ...tokenExtra, ...decision.tokenExtra };
    }
   }
+  const safeExtra = { ...tokenExtra };
+  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind']) delete safeExtra[key];
+  Object.assign(safeExtra, {
+   authMethod: assurance.method,
+   authNsTotp: String(assurance.nsTotp),
+   authAt: assurance.authAt,
+   nsGrantKind: assurance.nsGrantKind,
+  });
+  if (assurance.providerSubjectHash !== undefined) safeExtra.authProviderSubjectHash = assurance.providerSubjectHash;
+  if (assurance.providerTenant !== undefined) safeExtra.authProviderTenant = assurance.providerTenant;
+
 
   const code = randomBytes(32).toString('hex');
   const authCodeData: AuthCodeData = {
    pending,
    nsTokens: { ...nsTokens, username, nsUserRole },
-   extra: tokenExtra,
+   extra: safeExtra,
    serverBaseUrl: this.serverBaseUrl,
    clientId: pending.clientId,
   };
@@ -984,9 +1101,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    username: string;
    who: NsUserSnapshot;
    tier: UserRole;
+   assurance?: SignInAssurance;
   }>(resumeToken);
 
-  if (!payload) {
+  if (!payload || !payload.assurance) {
    sendPage(res, 440, this.renderErrorPage('Your sign-in session has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
@@ -1005,10 +1123,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
 
-  await this.completeLogin(
+  await this.finishSignIn(
    payload.pending,
    payload.nsTokens,
    payload.username,
+   payload.assurance,
    res,
    extra,
    true,
@@ -1078,7 +1197,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const subject = this.subjectForIssuance?.({
     clientId: preview.data.pending.clientId,
     username,
-    extra: preview.data.extra,
+    extra: preview.data.extra ? Object.freeze({ ...preview.data.extra }) : undefined,
    });
    const redeemed = await this.store.authCodes.redeemAndIssue(
     authorizationCode,
@@ -1126,11 +1245,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     throw new InvalidGrantError('Invalid refresh token');
    }
 
-   const { familyId, generation, session } = lookup;
+   const { familyId, generation } = lookup;
+   const session = { ...lookup.session, extra: normalizeAssurance(lookup.session.extra) };
 
    if (this.hooks?.onVerify) {
     try {
-     await this.hooks.onVerify(session);
+     await this.hooks.onVerify(hookSnapshot(session));
     } catch (err: unknown) {
      if (err instanceof InvalidTokenError) {
       await this.store.sessions.revokeFamily(familyId);
@@ -1382,6 +1502,8 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     throw new InvalidTokenError('Upstream access token expired');
    }
   }
+  stored = { ...stored, extra: normalizeAssurance(stored.extra) };
+
 
   const authInfo: AuthInfo = {
    token,
@@ -1399,7 +1521,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
   if (this.hooks?.onVerify) {
    try {
-    const governance = await this.hooks.onVerify(stored);
+    const governance = await this.hooks.onVerify(hookSnapshot(stored));
     if (authInfo.extra) {
      authInfo.extra.governance = governance;
     }
@@ -1570,6 +1692,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     },
     { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
    );
+   if (typeof response.data?.access_token !== 'string' || !response.data.access_token || response.data.mfa_type || response.data.mfa_vendor || response.data.scope === 'mfa_required') {
+    throw new Error('MFA grant did not return a completed token');
+   }
+
 
    return {
     access_token: response.data.access_token,
@@ -1577,20 +1703,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     expires_in: response.data.expires_in,
     username: challenge.username,
    };
-  } catch (err: any) {
-   const status = err.response?.status;
-   const data = err.response?.data;
-   logger.warn('NS MFA grant failed', {
-    tokenUrl,
-    username: challenge.username,
-    status,
-    nsResponse: data,
-   });
-   const nsMessage = (typeof data === 'object' && data)
-    ? (data.error_description || data.error || data.message)
-    : (typeof data === 'string' ? data : undefined);
-   const detail = nsMessage ? `${status}: ${nsMessage}` : err.message;
-   throw new Error(detail);
+  } catch (err: unknown) {
+   const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+   logger.warn('NS MFA grant failed', { status, category: status === 401 ? 'invalid_passcode' : 'upstream_failure' });
+   throw new Error(status === 401 ? 'invalid_passcode' : 'upstream_failure');
   }
  }
 
