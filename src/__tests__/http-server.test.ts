@@ -51,6 +51,11 @@ vi.mock('../netsapiens-client.js', () => ({
   }),
 }));
 
+vi.mock('../netsapiens/version.js', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, warmVersionCache: vi.fn().mockResolvedValue(undefined) };
+});
+
 // Mock StreamableHTTPServerTransport
 const mockHandleRequest = vi.fn();
 const mockTransportClose = vi.fn();
@@ -153,63 +158,41 @@ const ENV_KEYS = [
   'MCP_STATELESS',
 ] as const;
 
-/** Make a simple HTTP request to localhost with transient retry */
+/** Make one HTTP request to the bound local listener. */
 async function request(
   port: number,
   method: string,
   path: string,
   options: { headers?: Record<string, string>; body?: unknown } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const { promise, resolve, reject } = Promise.withResolvers<{
-        status: number;
-        headers: http.IncomingHttpHeaders;
-        body: string;
-      }>();
-      const reqHeaders: Record<string, string> = {
-        connection: 'close',
-        ...options.headers,
-      };
-      let bodyStr: string | undefined;
-      if (options.body) {
-        bodyStr = JSON.stringify(options.body);
-        reqHeaders['content-type'] = 'application/json';
-        reqHeaders['accept'] = 'application/json, text/event-stream';
-      }
-
-      const req = http.request(
-        { hostname: '127.0.0.1', port, path, method, headers: reqHeaders, agent: false },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk) => chunks.push(chunk));
-          res.on('end', () => {
-            resolve({
-              status: res.statusCode!,
-              headers: res.headers,
-              body: Buffer.concat(chunks).toString(),
-            });
-          });
-        },
-      );
-      req.on('error', reject);
-      if (bodyStr) req.write(bodyStr);
-      req.end();
-      return await promise;
-    } catch (err: unknown) {
-      const isErrno = err && typeof err === 'object' && 'code' in err;
-      const code = isErrno && typeof err.code === 'string' ? err.code : undefined;
-      if (code === 'ECONNREFUSED' && attempt < 9) {
-        // Kernel loopback socket unbinding delay requires brief real-clock yield before retry
-        const { promise: delayPromise, resolve: delayResolve } = Promise.withResolvers<void>();
-        setTimeout(delayResolve, 100);
-        await delayPromise;
-        continue;
-      }
-      throw err;
-    }
+  const { promise, resolve, reject } = Promise.withResolvers<{
+    status: number;
+    headers: http.IncomingHttpHeaders;
+    body: string;
+  }>();
+  const reqHeaders: Record<string, string> = { connection: 'close', ...options.headers };
+  let bodyStr: string | undefined;
+  if (options.body) {
+    bodyStr = JSON.stringify(options.body);
+    reqHeaders['content-type'] = 'application/json';
+    reqHeaders['accept'] = 'application/json, text/event-stream';
   }
-  throw new Error('request unreachable');
+  const req = http.request(
+    { hostname: '127.0.0.1', port, path, method, headers: reqHeaders, agent: false },
+    (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({
+        status: res.statusCode!,
+        headers: res.headers,
+        body: Buffer.concat(chunks).toString(),
+      }));
+    },
+  );
+  req.on('error', reject);
+  if (bodyStr) req.write(bodyStr);
+  req.end();
+  return promise;
 }
 
 /**
@@ -227,13 +210,21 @@ async function closeServers(servers: http.Server[]): Promise<void> {
   );
 }
 
+async function startFixture(servers: http.Server[]): Promise<number> {
+  const server = await startHttpServer();
+  servers.push(server);
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Listener has no TCP address');
+  return address.port;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('startHttpServer()', () => {
   let savedEnv: Record<string, string | undefined>;
-  // Use a different port per test to avoid EADDRINUSE
+  // Each server binds port 0 and reports the OS-assigned port.
   let testPort: number;
   const servers: http.Server[] = [];
 
@@ -254,9 +245,7 @@ describe('startHttpServer()', () => {
     delete process.env.MCP_HOST;
     delete process.env.MCP_BASE_URL;
 
-    // Pick a random high port for each test
-    testPort = 30000 + Math.floor(Math.random() * 10000);
-    process.env.MCP_PORT = String(testPort);
+    process.env.MCP_PORT = '0';
 
     // These cases cover the session-based transport. Stateless is the default
     // now, so opt each one back into sessions explicitly; the stateless
@@ -278,7 +267,7 @@ describe('startHttpServer()', () => {
   it('starts the HTTP server and responds to /health', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'GET', '/health');
     expect(res.status).toBe(200);
@@ -298,7 +287,7 @@ describe('startHttpServer()', () => {
   it('returns 401 or routes through bearerAuth on POST /mcp', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     // Our mock bearerAuth always passes, so we should get to the MCP handler.
     // With an initialize request, it should create a session.
@@ -316,7 +305,7 @@ describe('startHttpServer()', () => {
   it('rejects POST /mcp without session ID for non-initialize requests', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'POST', '/mcp', {
       body: { method: 'tools/list', jsonrpc: '2.0', id: 2 },
@@ -330,7 +319,7 @@ describe('startHttpServer()', () => {
   it('returns 404 for an unknown session ID so clients re-initialize', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     for (const method of ['POST', 'GET', 'DELETE'] as const) {
       const res = await request(testPort, method, '/mcp', {
@@ -346,7 +335,7 @@ describe('startHttpServer()', () => {
   it('rejects GET /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'GET', '/mcp', {
       headers: { authorization: 'Bearer test-token' },
@@ -358,7 +347,7 @@ describe('startHttpServer()', () => {
   it('rejects DELETE /mcp without valid session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'DELETE', '/mcp', {
       headers: { authorization: 'Bearer test-token' },
@@ -370,7 +359,7 @@ describe('startHttpServer()', () => {
   it('allows CORS preflight for the MCP protocol version header', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'OPTIONS', '/mcp', {
       headers: { origin: 'https://example.test' },
@@ -422,8 +411,7 @@ describe('stateless MCP transport', () => {
     delete process.env.MCP_BASE_URL;
     delete process.env.MCP_STATELESS; // stateless is the default
 
-    testPort = 30000 + Math.floor(Math.random() * 10000);
-    process.env.MCP_PORT = String(testPort);
+    process.env.MCP_PORT = '0';
   });
 
   afterEach(async () => {
@@ -436,7 +424,7 @@ describe('stateless MCP transport', () => {
 
   it('reports stateless mode on /health', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'GET', '/health');
     expect(JSON.parse(res.body).mode).toBe('stateless');
@@ -444,7 +432,7 @@ describe('stateless MCP transport', () => {
 
   it('serves a non-initialize POST with no session ID', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'POST', '/mcp', {
       body: { method: 'tools/list', jsonrpc: '2.0', id: 2 },
@@ -459,7 +447,7 @@ describe('stateless MCP transport', () => {
 
   it('builds a fresh transport with session IDs disabled on every request', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     for (const body of [
       { method: 'initialize', jsonrpc: '2.0', id: 1 },
@@ -479,7 +467,7 @@ describe('stateless MCP transport', () => {
 
   it('answers 405 on GET /mcp because no SSE stream is offered', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'GET', '/mcp', {
       headers: { authorization: 'Bearer test-token' },
@@ -491,7 +479,7 @@ describe('stateless MCP transport', () => {
 
   it('answers 405 on DELETE /mcp because there is no session to terminate', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    servers.push(await startHttpServer());
+    testPort = await startFixture(servers);
 
     const res = await request(testPort, 'DELETE', '/mcp', {
       headers: { authorization: 'Bearer test-token', 'mcp-session-id': 'whatever' },
@@ -504,7 +492,7 @@ describe('stateless MCP transport', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     process.env.MCP_CONFIRM_DESTRUCTIVE = 'true';
     try {
-      servers.push(await startHttpServer());
+      testPort = await startFixture(servers);
       const res = await request(testPort, 'GET', '/health');
       expect(JSON.parse(res.body).mode).toBe('session');
     } finally {
