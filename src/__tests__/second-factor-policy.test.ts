@@ -65,6 +65,7 @@ describe('second factor policy', () => {
  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
  it('rejects malformed environment configuration before opening a store', async () => {
   vi.stubEnv('NETSAPIENS_API_URL', primary);
+  vi.stubEnv('MCP_TRANSPORT', 'http');
   vi.stubEnv('MCP_SECOND_FACTOR_POLICY', '{}');
   await expect(createApp()).rejects.toThrow('ConfigError: MCP_SECOND_FACTOR_POLICY');
  });
