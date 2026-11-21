@@ -231,7 +231,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
     );
 
     const stored = await provider.store.sessions.get(tokens.access_token);
-    expect(stored?.extra).toEqual({
+    expect(stored?.extra).toMatchObject({
       seatId: 'seat-456',
       domainPolicy: 'active',
     });
@@ -312,7 +312,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       code,
     );
     const stored = await provider.store.sessions.get(tokens.access_token);
-    expect(stored.extra).toEqual({ enrolledVia: 'self' });
+    expect(stored.extra).toMatchObject({ enrolledVia: 'self' });
   });
 
   it('onVerify throwing gives 401 with WWW-Authenticate header via bearerAuth middleware', async () => {

@@ -13,6 +13,8 @@ export {
   UpstreamUnavailableError,
 } from './auth/netsapiens-auth-provider.js';
 export { parsePlatforms } from './auth/platforms.js';
+export { parseSecondFactorPolicy } from './auth/second-factor-policy.js';
+export type { SecondFactorPolicy } from './auth/second-factor-policy.js';
 export type { NetSapiensPlatform } from './auth/platforms.js';
 export { LoopbackTolerantClientsStore } from './auth/loopback-redirect.js';
 export { negotiateProtocolVersion } from './http/protocol-version.js';

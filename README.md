@@ -97,6 +97,22 @@ docker compose up -d
 
 The service will listen on port 3000 at `http://localhost:3000/mcp`.
 
+### Optional sign-in policy
+
+HTTP operators may set `MCP_SECOND_FACTOR_POLICY` to a JSON object:
+
+```json
+{"tiers":["domain_admin","reseller","system_admin"],"acceptProviderSignIn":true,"acceptPastedToken":false,"applyToExistingSessions":true}
+```
+
+The setting is disabled when absent and rejects malformed configuration at startup. It applies only to the primary `NETSAPIENS_API_URL` platform. For this policy, `domain_admin` selects the exact Office Manager scope, not Site Manager, Domain Admin, or Call Center Supervisor. `reseller` and `system_admin` select Reseller and Super User, respectively. The `user` tier selects recognized non-administrative user scopes.
+
+Password sign-in for a selected scope requires a successful NetSapiens authenticator challenge. Pasted tokens are accepted for selected scopes only when `acceptPastedToken` is true. `acceptProviderSignIn` accepts a separately implemented trusted Google or Microsoft sign-in method; it does not establish that the provider performed MFA. This policy does not implement provider sign-in.
+
+When `applyToExistingSessions` is true, each access and refresh checks the current upstream identity and scope. Missing or invalid server-authored assurance requires the affected privileged user to reconnect. If the upstream identity or scope cannot be verified, the request fails temporarily without revoking the session. Turning this option off leaves existing sessions unchanged.
+
+Assurance is server-authored, signed with `MCP_SESSION_SECRET`, and bound to the verified NetSapiens identity and platform. Hooks cannot supply it. A provider integration must pass its authenticated method to the same server-owned issuance path and signer after upstream identity verification; it must not set NetSapiens authenticator assurance for provider sign-in. Rotating `MCP_SESSION_SECRET` invalidates signed assurance along with existing sign-in state.
+
 ## 🔌 Connecting MCP Clients
 
 ### Claude Desktop

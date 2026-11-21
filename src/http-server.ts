@@ -24,6 +24,7 @@ import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostErr
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { parseAuthMode } from './auth/auth-mode.js';
+import { parseSecondFactorPolicy } from './auth/second-factor-policy.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import {
@@ -134,6 +135,10 @@ export async function createApp(options?: {
  const mcpUrl = new URL('/mcp', baseUrl);
 
  const authMode = parseAuthMode(process.env.NETSAPIENS_AUTH_MODE);
+ const secondFactorPolicy = parseSecondFactorPolicy(process.env.MCP_SECOND_FACTOR_POLICY);
+ if (secondFactorPolicy && options?.authProvider) {
+  throw new Error('ConfigError: MCP_SECOND_FACTOR_POLICY cannot be combined with a custom authProvider; configure the provider directly');
+ }
  const nsClientId = process.env.NETSAPIENS_OAUTH_CLIENT_ID;
  const nsClientSecret = process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
@@ -165,6 +170,7 @@ export async function createApp(options?: {
   serverBaseUrl: baseUrl.origin,
   store,
   hooks: options?.hooks,
+  secondFactorPolicy,
  });
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms);
  return { app, authProvider, baseUrl, mcpUrl, store, platforms };
