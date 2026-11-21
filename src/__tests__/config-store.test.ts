@@ -96,11 +96,14 @@ describe('config-store', () => {
       for (const [override, message] of [
         [{ MCP_MFA_REPLAY_AUDIENCE: 'bad audience' }, 'replayAudience must be a stable replay-store identity'],
         [{ MCP_TRUST_PROXY_HOPS: '2' }, 'MCP_TRUST_PROXY_HOPS must be 0 or 1'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com/?private=do-not-log' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com/#private-fragment' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
       ] as const) {
         const result = startup({ MCP_STORE_PATH: path, ...override });
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(message);
         expect(db.prepare('PRAGMA user_version').get().user_version).toBe(3);
+        expect(db.prepare("SELECT count(*) AS user_version FROM sqlite_master WHERE type='table' AND name='rate_limits'").get().user_version).toBe(0);
       }
     } finally { db.close(); }
   });

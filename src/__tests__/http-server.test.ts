@@ -89,6 +89,7 @@ vi.mock('@modelcontextprotocol/sdk/types.js', async (importOriginal) => {
 
 // Mock the auth router and bearer auth middleware so we don't need real OAuth
 vi.mock('@modelcontextprotocol/sdk/server/auth/router.js', () => ({
+  createOAuthMetadata: vi.fn(),
   mcpAuthRouter: vi.fn(() => {
     // Return a no-op middleware
     return (_req: any, _res: any, next: any) => next();

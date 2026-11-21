@@ -606,6 +606,17 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
    return { app, store, state: hiddenField(page.text, 'mfa_state')! };
   }
 
+  it('does not consume a valid challenge or call upstream for a non-string passcode', async () => {
+   const { app, store, state } = await startMfa();
+   const consume = vi.spyOn(store.resumeTokens, 'consume');
+   await request(app).post('/mfa').send({ passcode: { code: '123456' }, mfa_state: state }).expect(400);
+   expect(consume).not.toHaveBeenCalled();
+   expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+   await request(app).post('/mfa').send({ passcode: '000000', mfa_state: state }).expect(200);
+   expect(consume).toHaveBeenCalledTimes(1);
+   expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+  });
+
   it('consumes each challenge, rejects replays and stops after five wrong grants', async () => {
    const { app, state: first } = await startMfa();
    let state = first;

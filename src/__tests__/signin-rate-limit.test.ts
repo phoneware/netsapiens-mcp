@@ -76,6 +76,56 @@ describe('shared sign-in limiter', () => {
     expect(JSON.stringify(logs.mock.calls)).not.toContain('TypeError');
   });
 
+  it('counts and sanitizes malformed sign-in bodies before either handler runs', async () => {
+    const app = await createApp({ store });
+    const hit = vi.spyOn(store.rateLimits, 'hit');
+    const login = vi.spyOn(app.authProvider, 'handleLogin');
+    const mfa = vi.spyOn(app.authProvider, 'handleMfa');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const secret = 'private-parser-credential';
+    const oversizedForm = Array.from({ length: 1001 }, (_, n) => `p${n}=${secret}`).join('&');
+    for (let n = 0; n < 11; n++) {
+      const route = n % 2 ? '/mfa' : '/login';
+      const response = await request(app.app).post(route).set('X-Forwarded-For', '198.51.100.91')
+        .set('Content-Type', n % 2 ? 'application/x-www-form-urlencoded' : 'application/json')
+        .send(n % 2 ? oversizedForm : `{"password":"${secret}"`)
+        .expect(n < 10 ? 400 : 429);
+      expect(response.text).not.toContain(secret);
+      if (n < 10) {
+        expect(response.body).toEqual({ error: 'invalid_request' });
+        expect(response.headers['cache-control']).toContain('no-store');
+      }
+    }
+    expect(hit).toHaveBeenCalledTimes(11);
+    expect(login).not.toHaveBeenCalled();
+    expect(mfa).not.toHaveBeenCalled();
+    expect(JSON.stringify(stderr.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(secret);
+  });
+
+  it('rejects non-string credential fields before calling authentication providers', async () => {
+    const app = await createApp({ store });
+    const login = vi.spyOn(app.authProvider, 'handleLogin');
+    const token = vi.spyOn(app.authProvider, 'handleTokenLogin');
+    const mfa = vi.spyOn(app.authProvider, 'handleMfa');
+    const invalid = [null, 0, false, [], {}, { toString: null }];
+    for (const value of invalid) {
+      for (const body of [
+        { username: value, password: 'pw' }, { username: 'alice', password: value },
+        { token: value, platform: 'default' }, { token: 'secret', platform: value },
+      ]) {
+        const response = await request(app.app).post('/login').set('X-Forwarded-For', `198.51.100.${10 + invalid.indexOf(value)}`).send(body).expect(400);
+        expect(response.body).toEqual({ error: 'invalid_request' });
+      }
+      const response = await request(app.app).post('/mfa').set('X-Forwarded-For', `203.0.113.${10 + invalid.indexOf(value)}`).send({ passcode: value, mfa_state: 'state' }).expect(400);
+      expect(response.body).toEqual({ error: 'invalid_request' });
+    }
+    expect(login).not.toHaveBeenCalled();
+    expect(token).not.toHaveBeenCalled();
+    expect(mfa).not.toHaveBeenCalled();
+  });
+
   it('fails closed on malformed decisions and falsy rejections', async () => {
     const app = await createApp({ store });
     const hit = vi.spyOn(store.rateLimits, 'hit');

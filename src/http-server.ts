@@ -13,7 +13,7 @@ import rateLimit from 'express-rate-limit';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { createOAuthMetadata, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
@@ -133,6 +133,13 @@ export async function createApp(options?: {
  const port = parseInt(process.env.MCP_PORT || '3000', 10);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
+ // Reuse the SDK's issuer validation before opening or upgrading the store.
+ try {
+  const provider = { clientsStore: {} } as Parameters<typeof createOAuthMetadata>[0]['provider'];
+  createOAuthMetadata({ issuerUrl: baseUrl, provider });
+ } catch {
+  throw new Error('ConfigError: MCP_BASE_URL is not a valid OAuth issuer');
+ }
 
  const authMode = parseAuthMode(process.env.NETSAPIENS_AUTH_MODE);
  const nsClientId = process.env.NETSAPIENS_OAUTH_CLIENT_ID;
@@ -300,16 +307,23 @@ function wireApp(
   res.set('Cache-Control', 'no-store').status(440).json({ error: 'invalid_request' });
  });
 
+ const loginLimiter = createSigninRateLimit(store);
+ const urlencodedParser = express.urlencoded({ extended: false });
+ const jsonParser = express.json();
+ const signinParseError: express.ErrorRequestHandler = (_error, _req, res, _next) => {
+  res.set('Cache-Control', 'no-store').status(400).json({ error: 'invalid_request' });
+ };
+ app.post(['/login', '/mfa'], loginLimiter, urlencodedParser, jsonParser, signinParseError);
+
  // Body parsing for the login form (URL-encoded) and JSON (MCP / token)
- app.use(express.urlencoded({ extended: false }));
- app.use(express.json());
+ app.use(urlencodedParser);
+ app.use(jsonParser);
 
  // -----------------------------------------------------------------------
  // Rate limiters
  // -----------------------------------------------------------------------
 
  const rateLimitMessage = RATE_LIMIT_MESSAGE;
- const loginLimiter = createSigninRateLimit(store);
 
  const tokenLimiter = rateLimit({
   windowMs: 60_000,
@@ -462,40 +476,40 @@ function wireApp(
  });
 
  // Login form submission: the authorize() method shows the page, this handles POST
- app.post('/login', loginLimiter, async (req, res) => {
+ app.post('/login', async (req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
    res.status(400).json({ error: 'invalid_request' });
    return;
   }
   const { token, platform, username, password } = req.body;
 
-  if (token) {
-   if (!platform) {
-    res.status(400).json({ error: 'Missing platform' });
+  if (token !== undefined) {
+   if (typeof token !== 'string' || !token || typeof platform !== 'string' || !platform) {
+    res.status(400).json({ error: 'invalid_request' });
     return;
    }
-   await authProvider.handleTokenLogin(req, res, String(platform), String(token));
+   await authProvider.handleTokenLogin(req, res, platform, token);
    return;
   }
 
-  if (!username || !password) {
-   res.status(400).json({ error: 'Missing username or password' });
+  if (typeof username !== 'string' || !username || typeof password !== 'string' || !password) {
+   res.status(400).json({ error: 'invalid_request' });
    return;
   }
 
-  await authProvider.handleLogin(req, res, String(username), String(password));
+  await authProvider.handleLogin(req, res, username, password);
  });
 
  // MFA passcode submission (second step when NS requires MFA)
- app.post('/mfa', loginLimiter, async (req, res) => {
+ app.post('/mfa', async (req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
    res.status(400).json({ error: 'invalid_request' });
    return;
   }
   const { passcode } = req.body;
 
-  if (!passcode) {
-   res.status(400).json({ error: 'Missing passcode' });
+  if (typeof passcode !== 'string' || !passcode) {
+   res.status(400).json({ error: 'invalid_request' });
    return;
   }
 
