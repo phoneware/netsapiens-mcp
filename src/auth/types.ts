@@ -8,6 +8,15 @@ export interface NsUserSnapshot {
   displayName: string;
   email: string;
 }
+export interface SignInAssurance {
+  method: 'password' | 'ns_token' | 'sso_google' | 'sso_office';
+  nsTotp: boolean;
+  authAt: string;
+  providerSubjectHash?: string;
+  providerTenant?: string;
+  nsGrantKind: 'oauth' | 'jwt';
+}
+
 
 export type LoginDecision =
   | { kind: 'continue'; tokenExtra: Record<string, string> }
@@ -18,6 +27,7 @@ export interface AuthHooks {
   onLogin(input: {
     who: NsUserSnapshot;
     tier: UserRole;
+    assurance: SignInAssurance;
     clientId: string;
     nsAccessToken: string;
     nsApiUrl: string;

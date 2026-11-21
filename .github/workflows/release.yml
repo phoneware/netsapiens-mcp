@@ -91,7 +91,7 @@ jobs:
           GOOGLE_CLOUD_PROJECT: firestore-test
           NSMCP_REQUIRE_FIRESTORE_EMULATOR: '1'
         run: |
-          node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs install,config,sqlite,memory,version
+          node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs install,config,sqlite,memory,version,mfa
           node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs firestore --firestore-major 8
       - name: Verify frozen artifact after consumers
         env:

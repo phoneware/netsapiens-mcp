@@ -62,7 +62,7 @@ export type {
 export type { GenericApiClient } from './generated/types.js';
 export type { CuratedTool, CuratedResult } from './tools/curated/types.js';
 export type { UserRole } from './auth/roles.js';
-export type { NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot } from './auth/types.js';
+export type { NetSapiensAuthProviderOptions, AuthHooks, LoginDecision, NsUserSnapshot, SignInAssurance } from './auth/types.js';
 export type {
   StoredToken,
   StoredSession,
@@ -83,6 +83,12 @@ export type {
   SessionRow,
   AuthCodeRow,
   ResumeRow,
+  RateLimitBucket,
+  RateLimitPolicy,
+  RateLimitDecision,
+  RateLimitStore,
+  RateLimitHitParams,
+  RateLimitWindow,
 } from './store/types.js';
 export type { ContentKind, FieldClass, FieldRule, OutputDeclaration, ToolTargets, NsResourceName } from './governance/types.js';
 export type { SelfIdentity, QueueAgentResolution } from './tools/curated/queue-agent.js';

@@ -37,8 +37,8 @@ describe('SQLite schema versioning', () => {
     const path = freshPath();
     const store = createSqliteStore({ path, namespace: 'mcp', key });
     await store.close();
-    expect(version(path)).toBe(3);
-    expect(tables(path)).toEqual(expect.arrayContaining(['family_subject_refs', 'guard_documents']));
+    expect(version(path)).toBe(4);
+    expect(tables(path)).toEqual(expect.arrayContaining(['family_subject_refs', 'guard_documents', 'rate_limits']));
   });
 
   it('upgrades a version-2 file in place, keeping its data', async () => {
@@ -47,11 +47,11 @@ describe('SQLite schema versioning', () => {
     await first.putGuardDocument('seats', 'seat-keep', { state: 'active' });
     await first.close();
 
-    edit(path, 'DROP TABLE family_subject_refs; DROP TABLE guard_documents; PRAGMA user_version=2;');
+    edit(path, 'DROP TABLE family_subject_refs; DROP TABLE guard_documents; DROP TABLE rate_limits; PRAGMA user_version=2;');
 
     const upgraded = createSqliteStore({ path, namespace: 'mcp', key });
     await upgraded.close();
-    expect(version(path)).toBe(3);
+    expect(version(path)).toBe(4);
     expect(tables(path)).toEqual(expect.arrayContaining(['family_subject_refs', 'guard_documents']));
   });
 
@@ -61,7 +61,7 @@ describe('SQLite schema versioning', () => {
     await created.close();
     edit(path, 'DROP TABLE guard_documents;');
 
-    // At version 3 an open must not recreate a missing table on its own.
+    // At the current version an open must not recreate a missing table on its own.
     const store = createSqliteStore({ path, namespace: 'mcp', key });
     await store.close();
     expect(tables(path)).not.toContain('guard_documents');
@@ -79,11 +79,44 @@ describe('SQLite schema versioning', () => {
     expect(version(path)).toBe(2);
   });
 
+  it('upgrades a version-3 file and retains its data', async () => {
+    const path = freshPath();
+    const first = createSqliteStore({ path, namespace: 'mcp', key });
+    await first.putGuardDocument('seats', 'kept', { state: 'active' });
+    await first.close();
+    edit(path, 'DROP TABLE rate_limits; PRAGMA user_version=3;');
+    const upgraded = createSqliteStore({ path, namespace: 'mcp', key });
+    expect((await upgraded.rateLimits.hit('signin', 'client', { limit: 1, windowMs: 1000 })).totalHits).toBe(1);
+    await upgraded.close();
+    expect(version(path)).toBe(4);
+    expect(tables(path)).toContain('guard_documents');
+  });
+
+  it('leaves version 3 unchanged when its upgrade fails', async () => {
+    const path = freshPath();
+    const first = createSqliteStore({ path, namespace: 'mcp', key });
+    await first.close();
+    edit(path, 'PRAGMA user_version=3;');
+    expect(() => createSqliteStore({ path, namespace: 'mcp', key })).toThrow();
+    expect(version(path)).toBe(3);
+  });
+
+  it('sweeps expired rate limit windows', async () => {
+    const path = freshPath();
+    const store = createSqliteStore({ path, namespace: 'mcp', key });
+    const hit = await store.rateLimits.hit('signin', 'client', { limit: 1, windowMs: 1000 });
+    expect(await store.sweep!(hit.resetAt)).toBe(1);
+    await store.close();
+    const db = new DatabaseSync(path);
+    try { expect(db.prepare('SELECT count(*) AS count FROM rate_limits').get().count).toBe(0); }
+    finally { db.close(); }
+  });
+
   it('refuses a file from a newer schema version', async () => {
     const path = freshPath();
     const created = createSqliteStore({ path, namespace: 'mcp', key });
     await created.close();
-    edit(path, 'PRAGMA user_version=4');
-    expect(() => createSqliteStore({ path, namespace: 'mcp', key })).toThrow('Unsupported SQLite schema version 4');
+    edit(path, 'PRAGMA user_version=5');
+    expect(() => createSqliteStore({ path, namespace: 'mcp', key })).toThrow('Unsupported SQLite schema version 5');
   });
 });

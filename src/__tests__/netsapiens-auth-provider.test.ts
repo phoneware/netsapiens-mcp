@@ -25,7 +25,7 @@ mockedAxios.create = vi.fn(() => ({
  get: vi.fn(),
  post: vi.fn(),
 })) as unknown as typeof mockedAxios.create;
-mockedAxios.isAxiosError = () => false;
+mockedAxios.isAxiosError = (err) => !!err && typeof err === 'object' && 'response' in err;
 
 const NS_TOKEN_URL = 'https://ns.example.com/ns-api/v2/tokens';
 const NS_USER_URL = 'https://ns.example.com/ns-api/v2/domains/~/users/~';
@@ -42,7 +42,7 @@ function hiddenField(html: string, name: string): string | undefined {
  return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
-async function importApp() {
+async function importApp(trustProxy = '1') {
  // Re-import after env vars are set so loadConfig picks them up.
  vi.resetModules();
  process.env.MCP_TRANSPORT = 'http';
@@ -52,6 +52,7 @@ async function importApp() {
  process.env.NETSAPIENS_OAUTH_CLIENT_SECRET = 'op-client-secret';
  process.env.MCP_SESSION_SECRET = '0123456789abcdef0123456789abcdef';
  process.env.MCP_PERSISTENCE = 'memory';
+ process.env.MCP_TRUST_PROXY_HOPS = trustProxy;
  const mod = await import('../http-server.js');
  const created = await mod.createApp();
  // supertest binds and closes an ephemeral server for every request when
@@ -470,7 +471,7 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
 
  describe('MFA flow', () => {
   it('renders MFA page when NS returns mfa_type, then completes via grant_type=mfa', async () => {
-   const { app } = await importApp();
+   const { app, store } = await importApp();
    const reg = await request(app)
     .post('/register')
     .send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-test' })
@@ -523,6 +524,13 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     .expect(302);
 
    expect(finalize.headers.location).toContain('http://localhost/cb?code=');
+   const code = new URL(finalize.headers.location as string).searchParams.get('code')!;
+   const token = await request(app).post('/token').type('form').send({
+    grant_type: 'authorization_code', code, code_verifier: verifier, client_id: reg.body.client_id,
+    client_secret: reg.body.client_secret, redirect_uri: 'http://localhost/cb',
+   }).expect(200);
+   const session = await store.sessions.get(token.body.access_token);
+   expect(session.extra).toMatchObject({ authMethod: 'password', authNsTotp: 'true', nsGrantKind: 'oauth' });
 
    // Verify the second NS call used grant_type=mfa with the partial token
    const mfaCall = (mockedAxios.post as ReturnType<typeof vi.fn>).mock.calls[1];
@@ -577,6 +585,112 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     .send({ passcode: '000000', mfa_state: mfaState })
     .expect(200);
    expect(bad.text).toMatch(/Invalid|expired|passcode/i);
+  });
+
+  async function startMfa() {
+   const { app, store } = await importApp();
+   const reg = await request(app).post('/register').send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-limits' }).expect(201);
+   const auth = await request(app).get('/authorize').query({
+    response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
+    code_challenge: pkceChallenge(randomBytes(32).toString('base64url')), code_challenge_method: 'S256',
+   }).expect(200);
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({ data: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' } })
+    .mockRejectedValue({ response: { status: 401, data: { message: 'Invalid passcode' } } });
+   const page = await request(app).post('/login').type('form').send({
+    username: 'alice', password: 'pw', auth_state: hiddenField(auth.text, 'auth_state'),
+   }).expect(200);
+   return { app, store, state: hiddenField(page.text, 'mfa_state')! };
+  }
+
+  it('consumes each challenge, rejects replays and stops after five wrong grants', async () => {
+   const { app, state: first } = await startMfa();
+   let state = first;
+   for (let attempt = 1; attempt <= 5; attempt++) {
+    const result = await request(app).post('/mfa').type('form').send({ passcode: '000000', mfa_state: state }).expect(attempt === 5 ? 440 : 200);
+    if (attempt < 5) {
+     const next = hiddenField(result.text, 'mfa_state')!;
+     expect(next).toBeTruthy();
+     expect(next).not.toBe(state);
+     state = next;
+    } else {
+     expect(result.text).toMatch(/reconnect/i);
+     expect(hiddenField(result.text, 'mfa_state')).toBeUndefined();
+    }
+   }
+   expect(mockedAxios.post.mock.calls.filter(([, body]: [unknown, { grant_type?: string }]) => body.grant_type === 'mfa')).toHaveLength(5);
+   const replay = await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: first }).expect(440);
+   expect(replay.text).toMatch(/reconnect/i);
+   expect(mockedAxios.post.mock.calls.filter(([, body]: [unknown, { grant_type?: string }]) => body.grant_type === 'mfa')).toHaveLength(5);
+  });
+
+  it('keeps the first prompt deadline through retries', async () => {
+   const { app, state } = await startMfa();
+   const { openSealed } = await import('../auth/netsapiens-auth-provider.js');
+   const original = openSealed<{ expiresAt: number; challengeId: string }>(state)!;
+   expect(original.expiresAt - Date.now()).toBeLessThanOrEqual(600_000);
+   const result = await request(app).post('/mfa').type('form').send({ passcode: '000000', mfa_state: state }).expect(200);
+   const next = openSealed<{ expiresAt: number; challengeId: string }>(hiddenField(result.text, 'mfa_state')!)!;
+   expect(next.expiresAt).toBe(original.expiresAt);
+   expect(next.challengeId).not.toBe(original.challengeId);
+   vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt);
+   try {
+    await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: hiddenField(result.text, 'mfa_state') }).expect(440);
+    expect(mockedAxios.post.mock.calls.filter(([, body]: [unknown, { grant_type?: string }]) => body.grant_type === 'mfa')).toHaveLength(1);
+   } finally { vi.restoreAllMocks(); }
+  });
+
+  it('refuses an attempt that expires while its replay marker is consumed', async () => {
+   const { app, store, state } = await startMfa();
+   const { openSealed } = await import('../auth/netsapiens-auth-provider.js');
+   const deadline = openSealed<{ expiresAt: number }>(state)!.expiresAt;
+   const consume = store.resumeTokens.consume.bind(store.resumeTokens);
+   vi.spyOn(store.resumeTokens, 'consume').mockImplementation(async (id) => {
+    const result = await consume(id);
+    vi.spyOn(Date, 'now').mockReturnValue(deadline);
+    return result;
+   });
+   try {
+    await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(440);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+   } finally { vi.restoreAllMocks(); }
+  });
+
+  it('rejects an outstanding memory challenge after the replay store is replaced', async () => {
+   const { app, state } = await startMfa();
+   await request(app).post('/mfa').type('form').send({ passcode: '000000', mfa_state: state }).expect(200);
+   const fresh = await importApp();
+   await request(fresh.app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(440);
+   expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not disclose upstream MFA error details', async () => {
+   const { app, state } = await startMfa();
+   const secret = 'private-upstream-diagnostic';
+   mockedAxios.post.mockRejectedValueOnce({ response: { status: 503, data: { message: secret } } });
+   const output = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+   try {
+    const result = await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(200);
+    expect(result.text).not.toContain(secret);
+    expect(JSON.stringify(output.mock.calls)).not.toContain(secret);
+   } finally { output.mockRestore(); }
+  });
+
+  it('ignores forwarded IP addresses for a direct listener', async () => {
+   const { app } = await importApp('0');
+   for (let n = 1; n <= 11; n++) {
+    await request(app).post('/mfa').set('X-Forwarded-For', `198.51.100.${n}`).type('form')
+     .send({ passcode: '123456', mfa_state: 'invalid' }).expect(n === 11 ? 429 : 440);
+   }
+  });
+
+  it('rate limits the eleventh MFA POST by forwarded client IP', async () => {
+   const { app } = await importApp();
+   for (let n = 1; n <= 11; n++) {
+    await request(app).post('/mfa').set('X-Forwarded-For', '198.51.100.7').type('form')
+     .send({ passcode: '123456', mfa_state: 'invalid' }).expect(n === 11 ? 429 : 440);
+   }
+   await request(app).post('/mfa').set('X-Forwarded-For', '198.51.100.8').type('form')
+    .send({ passcode: '123456', mfa_state: 'invalid' }).expect(440);
   });
  });
 

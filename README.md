@@ -97,6 +97,10 @@ docker compose up -d
 
 The service will listen on port 3000 at `http://localhost:3000/mcp`.
 
+The unauthenticated `/health` endpoint reports available sign-in methods and the MFA attempt limit in `signIn`, without exposing credentials.
+For a direct listener, forwarded IP headers are ignored. Set `MCP_TRUST_PROXY_HOPS=1` only when every request reaches the server through one trusted proxy that controls those headers.
+Sign-in attempts share a store-backed limit across server instances. If the store cannot count an attempt, sign-in returns 503. Configure Firestore TTL on `<namespace>_rate_limits.ttlAt`; SQLite upgrades its database to schema 4, which older releases cannot open.
+
 ## 🔌 Connecting MCP Clients
 
 ### Claude Desktop

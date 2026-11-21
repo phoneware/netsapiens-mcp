@@ -16,6 +16,8 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createRegisteredClient, createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
 import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from './subject-guard.js';
+import { nextRateLimitWindow } from './rate-limit.js';
+import { StoreUnavailableError } from './errors.js';
 import type {
   AccessRow,
   AuthCodeRow,
@@ -46,6 +48,7 @@ export interface FirestoreCollections {
   authCodes: string;
   resumeTokens: string;
   usage: string;
+  rateLimits: string;
 }
 
 export function firestoreCollections(namespace: string): FirestoreCollections {
@@ -60,6 +63,7 @@ export function firestoreCollections(namespace: string): FirestoreCollections {
     authCodes: `${namespace}_auth_codes`,
     resumeTokens: `${namespace}_resume_tokens`,
     usage: `${namespace}_usage`,
+    rateLimits: `${namespace}_rate_limits`,
   };
 }
 
@@ -174,6 +178,7 @@ export class FirestoreBackend implements StoreBackend {
   takeAuthCode!: StoreBackend['takeAuthCode'];
   atomicRedeemCodeAndIssue!: NonNullable<StoreBackend['atomicRedeemCodeAndIssue']>;
   insertResumeIfAbsent!: StoreBackend['insertResumeIfAbsent'];
+  hitRateLimit!: StoreBackend['hitRateLimit'];
   incrementUsage!: StoreBackend['incrementUsage'];
   listUsage!: StoreBackend['listUsage'];
   getClient!: StoreBackend['getClient'];
@@ -192,6 +197,7 @@ export class FirestoreBackend implements StoreBackend {
     const codes = db.collection(names.authCodes);
     const resumes = db.collection(names.resumeTokens);
     const usage = db.collection(names.usage);
+    const rateLimits = db.collection(names.rateLimits);
     const clients = db.collection(names.oauthClients);
     const retiredTokens = db.collection(names.retiredRefreshTokens);
 
@@ -702,6 +708,18 @@ export class FirestoreBackend implements StoreBackend {
 
           tx.set(ref, resumeData(row));
           return true;
+        });
+      },
+      async hitRateLimit(params) {
+        const ref = rateLimits.doc(params.id);
+        return db.runTransaction(async tx => {
+          const snap = await tx.get(ref);
+          const data = snap.exists ? snap.data() : undefined;
+          if (snap.exists && (!data || typeof data.count !== 'number' || typeof data.windowEndsAt !== 'number')) throw new StoreUnavailableError('Malformed rate limit record');
+          const current = data ? { count: data.count as number, windowEndsAt: data.windowEndsAt as number } : undefined;
+          const decision = nextRateLimitWindow(current, params);
+          if (decision.write) tx.set(ref, { ...decision.write, ttlAt: new Date(decision.write.windowEndsAt) });
+          return decision.result;
         });
       },
       async incrementUsage(userHash, toolName, now) {

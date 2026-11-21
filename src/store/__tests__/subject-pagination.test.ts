@@ -9,7 +9,7 @@ import { createSqliteStore } from '../sqlite.js';
 import type { SubjectDescriptor } from '../subject-descriptor.js';
 import type { AuthCodeData, McpStore, StoredToken } from '../types.js';
 
-// Bounded subject revocation past one page, and repeated SQLite reopens of a version-3 file.
+// Bounded subject revocation past one page, and repeated SQLite reopens.
 // The store is constructed with the bound flat descriptor, as the runtime does.
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
@@ -80,15 +80,15 @@ describe('subject revocation past one page on sqlite store', () => {
   });
 });
 
-describe('sqlite version-3 file across repeated reopens', () => {
-  it('keeps version 3 and its subject data over several opens, and revokes once', async () => {
+describe('sqlite current file across repeated reopens', () => {
+  it('keeps its schema version and subject data over several opens, and revokes once', async () => {
     const path = freshPath();
     const first = createSqliteStore({ path, namespace: 'mcp', key, subjectDescriptor: descriptor });
     await first.putGuardDocument('seats', 'seat-r', { state: 'active' });
     await issue(first, 'seat-r', 1);
     await first.close();
 
-    expect(version(path)).toBe(3);
+    expect(version(path)).toBe(4);
     for (let open = 0; open < 3; open++) {
       const store = createSqliteStore({ path, namespace: 'mcp', key, subjectDescriptor: descriptor });
       try {
@@ -97,7 +97,7 @@ describe('sqlite version-3 file across repeated reopens', () => {
       } finally {
         await store.close();
       }
-      expect(version(path)).toBe(3);
+      expect(version(path)).toBe(4);
     }
   });
 });

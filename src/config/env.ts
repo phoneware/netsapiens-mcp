@@ -31,6 +31,7 @@ export const ENV_VARS: readonly EnvVar[] = [
  { name: 'MCP_BASE_URL', transports: ['http'], required: false, default: null, effect: 'Public server base URL.' },
  { name: 'MCP_PORT', transports: ['http'], required: false, default: '3000', effect: 'HTTP listening port.' },
  { name: 'MCP_HOST', transports: ['http'], required: false, default: '0.0.0.0', effect: 'HTTP listening address.' },
+ { name: 'MCP_TRUST_PROXY_HOPS', transports: ['http'], required: false, default: '0', effect: '0 or 1, otherwise exit 1. Set to 1 only when a trusted proxy controls forwarding headers and is the sole path to the listener.' },
  { name: 'MCP_CORS_ORIGIN', transports: ['http'], required: false, default: '*', effect: 'CORS origin.' },
  { name: 'MCP_ICON_URL', transports: ['http', 'stdio'], required: false, default: null, effect: 'Server icon URL.' },
  { name: 'MCP_LOGIN_HEADER', transports: ['http'], required: false, default: null, effect: 'Login page heading.' },

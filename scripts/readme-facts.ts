@@ -121,7 +121,8 @@ export function generateReadmeFacts(): ReadmeFacts {
     `| \`${collections.authCodes}\` | PKCE authorization codes | \`ttlAt\` | Single-use, expires in 5 minutes |`,
     `| \`${collections.resumeTokens}\` | MCP resumption nonces | \`ttlAt\` | Single-use, expires in 2 hours |`,
     `| \`${collections.oauthClients}\` | Registered OAuth clients | None | Persistent client configurations |`,
-    `| \`${collections.usage}\` | User rate-limiting counters | None | Persistent call count telemetry |`,
+    `| \`${collections.usage}\` | Per-user tool call counts | None | Persistent call count telemetry |`,
+    `| \`${collections.rateLimits}\` | Sign-in attempt counters | \`ttlAt\` | Expired windows removed by Firestore TTL |`,
   ].join('\n');
 
   // 5. Full environment variables table

@@ -4,6 +4,7 @@ import { assertSubjectGuardShape, subjectGuardAllows, type SubjectGuard } from '
 import type { AtomicIssueParams, AtomicRedeemAndIssueParams } from './types.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createStore, REFRESH_RETRY_WINDOW_MS } from './store.js';
+import { nextRateLimitWindow } from './rate-limit.js';
 import type {
   AccessRow,
   AuthCodeRow,
@@ -11,6 +12,8 @@ import type {
   BackendRotateResult,
   FamilyRow,
   RefreshPointerRow,
+  RateLimitHitParams,
+  RateLimitWindow,
   McpStore,
   RevokeCondition,
   ResumeRow,
@@ -32,6 +35,7 @@ export class MemoryBackend implements StoreBackend {
     authCodes: new Map<string, AuthCodeRow>(),
     resumeTokens: new Map<string, ResumeRow>(),
     usage: new Map<string, { userHash: string; toolName: string; count: number; lastUsed: number }>(),
+    rateLimits: new Map<string, { count: number; windowEndsAt: number }>(),
     clients: new Map<string, OAuthClientInformationFull>(),
     sessions: new Map<string, SessionRow>(),
     guardDocuments: new Map<string, Record<string, unknown>>(),
@@ -256,6 +260,18 @@ export class MemoryBackend implements StoreBackend {
     if (current && current.expiresAt > now) return false;
     this.state.resumeTokens.set(row.id, row); return true;
   }
+  async hitRateLimit(params: RateLimitHitParams): Promise<RateLimitWindow> {
+    for (const [id, row] of this.state.rateLimits) {
+      if (row.windowEndsAt > params.now) break;
+      this.state.rateLimits.delete(id);
+    }
+    const decision = nextRateLimitWindow(this.state.rateLimits.get(params.id), params);
+    if (decision.write) {
+      if (decision.fresh) this.state.rateLimits.delete(params.id);
+      this.state.rateLimits.set(params.id, decision.write);
+    }
+    return decision.result;
+  }
   async incrementUsage(userHash: string, toolName: string, now: number): Promise<void> {
     const key = `${userHash}__${toolName}`;
     const current = this.state.usage.get(key);
@@ -286,6 +302,9 @@ export class MemoryBackend implements StoreBackend {
         this.state.resumeTokens.delete(id);
         count++;
       }
+    }
+    for (const [id, row] of this.state.rateLimits) {
+      if (row.windowEndsAt <= now) { this.state.rateLimits.delete(id); count++; }
     }
     for (const [id, row] of this.state.sessions) {
       if (row.retainUntil <= now) {

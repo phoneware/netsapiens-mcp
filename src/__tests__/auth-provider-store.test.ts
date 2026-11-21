@@ -307,12 +307,12 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-test', codeChallenge: 'chal-12345', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-tok', refresh_token: 'ns-ref-tok', username: 'alice@domain.com', expires_in: 3600 },
         'alice@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
-        { extraKey: 'extraVal' },
       );
 
       const code = new URL(redirectUrl).searchParams.get('code');
@@ -368,10 +368,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c1', codeChallenge: 'chal-c1', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c1-tok', refresh_token: 'ns-c1-ref', username: 'c1@domain.com', expires_in: 3600 },
         'c1@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -417,10 +418,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c2-owner', codeChallenge: 'chal-c2', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c2-tok', refresh_token: 'ns-c2-ref', username: 'c2@domain.com', expires_in: 3600 },
         'c2@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -447,10 +449,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c4', codeChallenge: 'chal-c4', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c4-tok', refresh_token: 'ns-c4-ref', username: 'c4@domain.com', expires_in: 3600 },
         'c4@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -482,10 +485,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as Response;
 
-      await (provider as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider.completeSignIn(
         { clientId: 'client-c4-def', codeChallenge: 'chal-c4-def', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-c4-tok', refresh_token: 'ns-c4-ref', username: 'c4def@domain.com', expires_in: 3600 },
         'c4def@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 
@@ -548,10 +552,11 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
         redirect: (url: string) => { redirectUrl = url; },
       } as unknown as import('express').Response;
 
-      await (provider1 as unknown as { completeLogin: (...args: unknown[]) => Promise<void> }).completeLogin(
+      await provider1.completeSignIn(
         { clientId: 'client-multi', codeChallenge: 'chal-multi', redirectUri: 'http://localhost/callback', createdAt: Date.now() },
         { access_token: 'ns-tok-multi', username: 'multi@domain.com', expires_in: 3600 },
         'multi@domain.com',
+        { method: 'password', nsTotp: false, authAt: new Date().toISOString(), nsGrantKind: 'oauth' },
         mockRes,
       );
 

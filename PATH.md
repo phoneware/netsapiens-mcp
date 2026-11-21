@@ -14,7 +14,7 @@ After release (from registry):
 node scripts/consumer-e2e.mjs --registry 3.1.0
 ```
 
-The default command covers the install, config, SQLite, memory, version, and library legs.
+The default command covers the install, config, SQLite, memory, version, library, and MFA legs.
 Run the Firestore leg separately against a disposable Firestore emulator:
 
 ```bash
@@ -30,4 +30,5 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP
 - Proves SQLite store file permissions (0600), process lock exclusion, and zero plaintext token leakage at rest.
 - Proves session persistence across server restart for SQLite, and 401 invalid_token refusal on memory store restart.
 - Proves Firestore multi-instance bearer sharing and exported store conformance.
+- Proves the sign-in attempt budget across Firestore instances. Configure the trusted proxy and Firestore TTL policy before production use.
 - Proves TypeScript consumer compilation against `netsapiens-mcp/lib` exports.

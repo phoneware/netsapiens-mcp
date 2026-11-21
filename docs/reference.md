@@ -57,7 +57,8 @@ When configured with `MCP_PERSISTENCE=firestore`, the following collection layou
 | `<namespace>_auth_codes` | PKCE authorization codes | `ttlAt` | Single-use, expires in 5 minutes |
 | `<namespace>_resume_tokens` | MCP resumption nonces | `ttlAt` | Single-use, expires in 2 hours |
 | `<namespace>_oauth_clients` | Registered OAuth clients | None | Persistent client configurations |
-| `<namespace>_usage` | User rate-limiting counters | None | Persistent call count telemetry |
+| `<namespace>_usage` | Per-user tool call counts | None | Persistent call count telemetry |
+| `<namespace>_rate_limits` | Sign-in attempt counters | `ttlAt` | Expired windows removed by Firestore TTL |
 <!-- /facts:firestore-collections -->
 
 ### Runtime & Node Support
@@ -71,7 +72,7 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 - **Credential Protection at Rest:** In HTTP mode, session tokens, refresh tokens, and credentials are encrypted using AES-256-GCM before storage. Dynamic Client Registration records (`oauth_clients`) are unencrypted metadata containing client names and redirect URIs.
 - **Stdio Token Cache:** In stdio mode, tokens are cached unencrypted in `~/.netsapiens-mcp-tokens.json` (mode 0600 on POSIX).
 - **Secret Invalidation:** Rotating `MCP_SESSION_SECRET` immediately terminates and invalidates all existing HTTP sessions. `MCP_SESSION_SECRET` is required in HTTP mode; stdio mode uses an ephemeral in-memory key and ignores this variable.
-- **Usage Retention:** In-store rate limiting telemetry counters do not expire automatically.
+- **Usage Retention:** Per-user tool call counters do not expire automatically.
 - **Permanent Refresh Credentials:** Refresh tokens belong to permanent refresh families that persist until explicit revocation, detection of token replay outside the 30-second retry grace window, or definitive upstream rejection. Access tokens carry a 30-day retention window after expiry for audit records before being purged, while refresh families have no calendar expiration.
 - **Plaintext Token Non-Migration:** Plaintext 2.x `http-tokens*.json` files are not migrated and must be re-authenticated.
 
@@ -104,6 +105,7 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 | `MCP_BASE_URL` | http | No | None | Public server base URL. |
 | `MCP_PORT` | http | No | `3000` | HTTP listening port. |
 | `MCP_HOST` | http | No | `0.0.0.0` | HTTP listening address. |
+| `MCP_TRUST_PROXY_HOPS` | http | No | `0` | 0 or 1, otherwise exit 1. Set to 1 only when a trusted proxy controls forwarding headers and is the sole path to the listener. |
 | `MCP_CORS_ORIGIN` | http | No | `*` | CORS origin. |
 | `MCP_ICON_URL` | http, stdio | No | None | Server icon URL. |
 | `MCP_LOGIN_HEADER` | http | No | None | Login page heading. |

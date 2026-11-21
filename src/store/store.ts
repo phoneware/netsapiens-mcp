@@ -6,6 +6,8 @@ import type { PendingAuthorization } from '../auth/types.js';
 import { createCodec, type Codec, LeaseLostError, RetryableRefreshError } from './codec.js';
 import { CutoverRefusedError } from './errors.js';
 import { subjectRefFor, type SubjectGuard } from './subject-guard.js';
+import { StoreConfigError, StoreUnavailableError } from './errors.js';
+import { createRateLimitId } from './rate-limit.js';
 import type {
   AccessRow,
   AtomicIssueParams,
@@ -151,6 +153,8 @@ export function createStore(
   backend: StoreBackend,
   { namespace, key, subjectDescriptor = null }: { namespace: string; key: Uint8Array; subjectDescriptor?: SubjectDescriptor | null },
 ): McpStore {
+  if (typeof backend.hitRateLimit !== 'function') throw new StoreConfigError('Store backend does not implement hitRateLimit');
+  const rateLimitId = createRateLimitId(key);
   const codec = createCodec(key);
 
   const decodeCode = (row: AuthCodeRow | undefined, expected: { serverBaseUrl?: string; clientId?: string }): AuthCodeData | undefined => {
@@ -782,6 +786,23 @@ export function createStore(
         return backend.insertResumeIfAbsent(row as any, now);
       },
     },
+    rateLimits: {
+      async hit(bucket, clientKey, policy) {
+        if (bucket !== 'signin') throw new TypeError('Invalid rate limit bucket');
+        if (typeof clientKey !== 'string' || clientKey.length < 1 || clientKey.length > 128) throw new TypeError('Invalid rate limit client key');
+        const now = Date.now();
+        let result;
+        try {
+          result = await backend.hitRateLimit({ id: rateLimitId(bucket, clientKey), now, limit: policy.limit, windowMs: policy.windowMs });
+        } catch (error) {
+          if (error instanceof RangeError || error instanceof StoreUnavailableError) throw error;
+          throw new StoreUnavailableError('Rate limit store unavailable', { cause: error });
+        }
+        if (!result || !Number.isSafeInteger(result.count) || result.count < 1 || result.count > policy.limit + 1 || !Number.isSafeInteger(result.windowEndsAt) || result.windowEndsAt <= now) throw new StoreUnavailableError('Malformed rate limit result');
+        return { totalHits: result.count, resetAt: result.windowEndsAt };
+      },
+    },
+
 
     usage: {
       async recordCall(userKey: string, toolName: string): Promise<void> {

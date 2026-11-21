@@ -18,7 +18,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
-import { NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
 import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
@@ -26,6 +26,7 @@ import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { parseAuthMode } from './auth/auth-mode.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
+import { createSigninRateLimit, RATE_LIMIT_MESSAGE } from './http/signin-rate-limit.js';
 import {
  SERVER_INSTRUCTIONS,
  isStatelessMode,
@@ -255,8 +256,11 @@ function wireApp(
 
  const app = express();
 
- // Trust proxy for rate limiting behind reverse proxies
- app.set('trust proxy', 1);
+ // A directly exposed listener must ignore forwarding headers. Only opt in
+ // when a trusted proxy is the sole path to this server.
+ const proxyHops = process.env.MCP_TRUST_PROXY_HOPS ?? '0';
+ if (proxyHops !== '0' && proxyHops !== '1') throw new Error('ConfigError: MCP_TRUST_PROXY_HOPS must be 0 or 1');
+ app.set('trust proxy', Number(proxyHops));
 
  // CORS middleware
  const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
@@ -287,15 +291,8 @@ function wireApp(
  // Rate limiters
  // -----------------------------------------------------------------------
 
- const rateLimitMessage = { error: 'Too many requests, please try again later' };
-
- const loginLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: rateLimitMessage,
- });
+ const rateLimitMessage = RATE_LIMIT_MESSAGE;
+ const loginLimiter = createSigninRateLimit(store);
 
  const tokenLimiter = rateLimit({
   windowMs: 60_000,
@@ -315,6 +312,7 @@ function wireApp(
 
  // Apply rate limiters to specific paths (before route handlers)
  app.use('/login', loginLimiter);
+ app.use('/mfa', loginLimiter);
  app.use('/token', tokenLimiter);
  app.use('/register', tokenLimiter);
  app.use('/mcp', (req, _res, next) => {
@@ -373,6 +371,7 @@ function wireApp(
    activeSessions: sessions.size,
    version: config.version,
    authMode: authProvider.authMode,
+   signIn: { password: authProvider.authMode === 'oauth', token: true, sso: [], ssoVisible: false, mfaAttemptLimit: MFA_ATTEMPT_LIMIT, secondFactorPolicy: null },
    store: {
     backend: store.backend,
     namespace: store.namespace,
