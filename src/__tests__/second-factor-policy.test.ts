@@ -214,7 +214,7 @@ describe('second factor policy', () => {
  });
  it('ignores hook attempts to forge reserved assurance keys', async () => {
   const { instance, store } = provider();
-  (instance as unknown as TestInternals).hooks = { onLogin: async () => ({ kind: 'continue', tokenExtra: { authMethod: 'sso_google', authNsTotp: 'true', authProviderTenant: 'fake', authAssuranceSig: 'forged', seat: 'allowed' } }), onVerify: async () => ({}) };
+  (instance as unknown as TestInternals).hooks = { onLogin: async () => ({ kind: 'continue', tokenExtra: { authMethod: 'sso_google', authNsTotp: 'true', authProviderTenant: 'fake', authAssuranceSig: 'forged', nsUsername: 'intruder', nsApiUrl: other, nsAccessToken: 'forged', nsRefreshFamilyId: 'forged', seat: 'allowed' } }), onVerify: async () => ({}) };
   vi.spyOn(instance, 'validateNsToken').mockResolvedValue({ username: 'alice@example.com', userRole: 'user', scope: 'Basic User' });
   vi.spyOn(instance as unknown as TestInternals, 'detectNsUserInfo').mockResolvedValue(identity('Basic User'));
   const res = response();
@@ -225,6 +225,9 @@ describe('second factor policy', () => {
   expect(extra.authProviderTenant).toBeUndefined();
   expect(extra.authAssuranceSig).not.toBe('forged');
   expect(hasServerAssurance(extra, 'alice@example.com', primary, '0123456789abcdef0123456789abcdef')).toBe(true);
+  const stored = (await store.sessions.get(tokens.access_token))!;
+  const verified = await instance.verifyAccessToken(tokens.access_token);
+  expect(verified.extra).toMatchObject({ nsUsername: 'alice@example.com', nsAccessToken: 'pasted', nsApiUrl: primary, nsRefreshFamilyId: stored.refreshFamilyId });
  });
 
  async function existing(scope: string, extra?: Record<string, string>, config = policy, signed = true) {
@@ -289,8 +292,54 @@ describe('second factor policy', () => {
   await expect(instance.verifyAccessToken('access')).rejects.toBeInstanceOf(ServerError);
   await expect(instance.exchangeRefreshToken(client, 'refresh')).rejects.toBeInstanceOf(TemporarilyUnavailableError);
   expect(await store.sessions.getByRefreshToken('refresh')).toBeDefined();
-  lookup.mockResolvedValue({ data: { user: 'other', domain: 'example.com', 'user-scope': 'Office Manager' } });
-  await expect(instance.verifyAccessToken('access')).rejects.toBeInstanceOf(ServerError);
+ });
+ it.each(['access', 'refresh'])('requires reconnect when legacy identity differs on %s', async (path) => {
+  const { instance, store, lookup } = await existing('Basic User');
+  lookup.mockResolvedValue({ data: { user: 'other', domain: 'example.com', 'user-scope': 'Basic User' } });
+  if (path === 'access') await expect(instance.verifyAccessToken('access')).rejects.toBeInstanceOf(InvalidTokenError);
+  else await expect(instance.exchangeRefreshToken(client, 'refresh')).rejects.toBeInstanceOf(InvalidGrantError);
+  expect(await store.sessions.getByRefreshToken('refresh')).toBeUndefined();
+ });
+ it('does not return a newly refreshed upstream bearer if its scope is now protected', async () => {
+  const { instance, store, lookup } = await existing('Basic User', { authMethod: 'ns_token', authNsTotp: 'false' });
+  const session = (await store.sessions.get('access'))!;
+  vi.spyOn(store.sessions, 'refreshUpstream').mockResolvedValue({ ...session, nsAccessToken: 'renewed' });
+  lookup.mockResolvedValue({ data: { user: 'alice', domain: 'example.com', 'user-scope': 'Office Manager' } });
+  await expect(instance.forceRefreshUpstream('access')).resolves.toBeUndefined();
+  expect(await store.sessions.getByRefreshToken('refresh')).toBeUndefined();
+ });
+ it('does not return a refreshed bearer from a different family or principal', async () => {
+  const { instance, store } = await existing('Basic User');
+  const session = (await store.sessions.get('access'))!;
+  const refresh = vi.spyOn(store.sessions, 'refreshUpstream');
+  refresh.mockResolvedValue({ ...session, nsAccessToken: 'renewed', refreshFamilyId: 'other-family' });
+  await expect(instance.forceRefreshUpstream('access')).resolves.toBeUndefined();
+  refresh.mockResolvedValue({ ...session, nsAccessToken: 'renewed', nsUsername: 'other@example.com' });
+  await expect(instance.forceRefreshUpstream('access')).resolves.toBeUndefined();
+  expect(await store.sessions.getByRefreshToken('refresh')).toBeDefined();
+ });
+ it('keeps the family when verification of a refreshed bearer is temporarily unavailable', async () => {
+  const { instance, store, lookup } = await existing('Basic User');
+  const session = (await store.sessions.get('access'))!;
+  vi.spyOn(store.sessions, 'refreshUpstream').mockResolvedValue({ ...session, nsAccessToken: 'renewed' });
+  lookup.mockRejectedValue(new Error('upstream unavailable'));
+  await expect(instance.forceRefreshUpstream('access')).resolves.toBeUndefined();
+  expect(await store.sessions.getByRefreshToken('refresh')).toBeDefined();
+ });
+ it.each(['access', 'refresh'])('reconnects a rejected primary key on %s', async (path) => {
+  const store = createMemoryStore({ namespace: 'policy-key', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
+  const instance = new NetSapiensAuthProvider({ nsApiUrl: primary, platforms: [{ id: 'default', label: 'Primary', apiUrl: primary }], authMode: 'token', store, secondFactorPolicy: policy });
+  await store.sessions.create({ accessToken: 'access', refreshToken: 'refresh' }, { clientId: client.client_id, expiresAt: Date.now() + 60000, nsAccessToken: 'revoked', nsUsername: 'alice@example.com', nsApiUrl: primary });
+  vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 401, data: { message: 'Invalid token' } } });
+  if (path === 'access') await expect(instance.verifyAccessToken('access')).rejects.toBeInstanceOf(InvalidTokenError);
+  else await expect(instance.exchangeRefreshToken(client, 'refresh')).rejects.toBeInstanceOf(InvalidGrantError);
+  expect(await store.sessions.getByRefreshToken('refresh')).toBeUndefined();
+ });
+ it('does not revoke a key when NetSapiens reports invalid scope rather than invalid credentials', async () => {
+  const store = createMemoryStore({ namespace: 'policy-scope', key: deriveStoreKey('0123456789abcdef0123456789abcdef') });
+  const instance = new NetSapiensAuthProvider({ nsApiUrl: primary, platforms: [{ id: 'default', label: 'Primary', apiUrl: primary }], authMode: 'token', store, secondFactorPolicy: policy });
+  await store.sessions.create({ accessToken: 'access', refreshToken: 'refresh' }, { clientId: client.client_id, expiresAt: Date.now() + 60000, nsAccessToken: 'key', nsUsername: 'alice@example.com', nsApiUrl: primary });
+  vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 401, data: { message: 'Invalid Scope' } } });
   await expect(instance.exchangeRefreshToken(client, 'refresh')).rejects.toBeInstanceOf(TemporarilyUnavailableError);
   expect(await store.sessions.getByRefreshToken('refresh')).toBeDefined();
  });

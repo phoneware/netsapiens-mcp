@@ -24,7 +24,7 @@ import { isCrossSitePost, MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider, validateRep
 import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
-import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
+import { normalizePlatformUrl, parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { parseAuthMode, type AuthMode } from './auth/auth-mode.js';
 import { parseSecondFactorPolicy } from './auth/second-factor-policy.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
@@ -56,6 +56,36 @@ interface AuthenticatedRequest extends IncomingMessage {
  body?: unknown;
 }
 
+interface SessionIdentity {
+ clientId: string;
+ principal: string;
+ platform: string;
+ familyId: string;
+}
+
+interface RecoveryCredential {
+ bearerToken?: string;
+}
+
+function sessionIdentity(req: AuthenticatedRequest): SessionIdentity | undefined {
+ const extra = req.auth?.extra;
+ if (!req.auth?.token || !req.auth.clientId || typeof extra?.nsUsername !== 'string' ||
+     !extra.nsUsername || typeof extra.nsApiUrl !== 'string' ||
+     typeof extra.nsRefreshFamilyId !== 'string' || !extra.nsRefreshFamilyId) return undefined;
+ try {
+  return { clientId: req.auth.clientId, principal: extra.nsUsername, platform: normalizePlatformUrl(extra.nsApiUrl), familyId: extra.nsRefreshFamilyId };
+ } catch {
+  return undefined;
+ }
+}
+
+function ownsSession(session: McpSession, req: AuthenticatedRequest): boolean {
+ const current = sessionIdentity(req);
+ return !!current && current.clientId === session.identity.clientId &&
+  current.principal === session.identity.principal && current.platform === session.identity.platform &&
+  current.familyId === session.identity.familyId;
+}
+
 interface McpSession {
  transport: StreamableHTTPServerTransport;
  server: Server;
@@ -63,6 +93,8 @@ interface McpSession {
  availabilityContext?: AvailabilityContext;
  nsApiUrl?: string;
  lastVersionInfo?: VersionInfo;
+ identity: SessionIdentity;
+ recovery: RecoveryCredential;
 }
 
 /**
@@ -79,6 +111,7 @@ function syncSessionNsToken(session: McpSession, req: AuthenticatedRequest): voi
  const nsApiUrl = extra?.nsApiUrl as string | undefined;
  if (nsAccessToken) session.client.setApiToken(nsAccessToken);
  if (nsApiUrl) session.client.setApiUrl(nsApiUrl);
+ session.recovery.bearerToken = req.auth?.token;
 }
 
 /**
@@ -521,7 +554,7 @@ function wireApp(
    activeSessions: sessions.size,
    version: config.version,
    authMode: authProvider.authMode,
-   signIn: { password: authProvider.authMode === 'oauth', token: true, sso: [], ssoVisible: false, mfaAttemptLimit: MFA_ATTEMPT_LIMIT, mfaReady: authProvider.mfaReady, secondFactorPolicy: null },
+   signIn: { password: authProvider.authMode === 'oauth', token: true, sso: [], ssoVisible: false, mfaAttemptLimit: MFA_ATTEMPT_LIMIT, mfaReady: authProvider.mfaReady, secondFactorPolicy: authProvider.effectiveSecondFactorPolicy ?? null },
    store: {
     backend: store.backend,
     namespace: store.namespace,
@@ -667,14 +700,20 @@ function wireApp(
 
   if (isInitializeRequest(body)) {
    // Create a server + client using the authenticated user's NS token, role, and identity.
-   const { server, client, availabilityContext, versionInfo } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
+   const identity = sessionIdentity(req);
+   if (!identity) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Authenticated session identity unavailable' }));
+    return;
+   }
+   const { server, client, availabilityContext, versionInfo, recovery } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
    const extra = req.auth?.extra as Record<string, unknown> | undefined;
    const nsApiUrl = (extra?.nsApiUrl as string | undefined) || config.netsapiens.apiUrl;
 
    const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sid: string) => {
-     sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo });
+     sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo, identity, recovery });
      ensureSessionWatcher(sessions);
     },
    });
@@ -700,6 +739,10 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
+  if (!ownsSession(session, req)) {
+   respondSessionNotFound(res);
+   return;
+  }
   syncSessionNsToken(session, req);
   if (session.nsApiUrl && session.lastVersionInfo) {
    try {
@@ -723,7 +766,7 @@ function wireApp(
  });
 
  // GET /mcp: SSE stream for server-initiated messages
- app.get('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.get('/mcp', mcpAuthMiddleware, async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
   if (isStatelessMode()) {
@@ -742,12 +785,16 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
+  if (!ownsSession(session, req)) {
+   respondSessionNotFound(res);
+   return;
+  }
   syncSessionNsToken(session, req);
   await session.transport.handleRequest(req, res);
  });
 
  // DELETE /mcp: session termination
- app.delete('/mcp', bearerAuth, async (req: AuthenticatedRequest, res: ServerResponse) => {
+ app.delete('/mcp', mcpAuthMiddleware, async (req: AuthenticatedRequest, res: ServerResponse) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
   if (isStatelessMode()) {
@@ -766,6 +813,10 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
+  if (!ownsSession(session, req)) {
+   respondSessionNotFound(res);
+   return;
+  }
   await session.transport.close();
   sessions.delete(sessionId);
 
@@ -828,7 +879,7 @@ async function createAuthenticatedMcpServer(
  userIdentity?: string,
  nsApiUrl?: string,
  authProvider?: NetSapiensAuthProvider,
- bearerToken?: string,
+ recovery: RecoveryCredential = {},
 ) {
  const server = new Server(
   serverImplementation(config),
@@ -848,12 +899,10 @@ async function createAuthenticatedMcpServer(
    apiToken: nsAccessToken,
    timeout: config.netsapiens.timeout,
    onUnauthorized: async () => {
-    if (authProvider && bearerToken) {
-     const refreshed = await authProvider.forceRefreshUpstream(bearerToken);
-     if (refreshed?.nsAccessToken) {
-      client.setApiToken(refreshed.nsAccessToken);
-     }
-    }
+    if (!authProvider || !recovery.bearerToken) throw new Error('No authenticated refresh context');
+    const refreshed = await authProvider.forceRefreshUpstream(recovery.bearerToken);
+    if (!refreshed?.nsAccessToken) throw new Error('Upstream refresh was not authorized');
+    client.setApiToken(refreshed.nsAccessToken);
    },
   }
   : { ...config.netsapiens, apiUrl: targetApiUrl };
@@ -866,7 +915,7 @@ async function createAuthenticatedMcpServer(
   logger.error('[MCP Error]', { error: String(error) });
  };
 
- return { server, client: guardedClient, availabilityContext, versionInfo };
+ return { server, client: guardedClient, availabilityContext, versionInfo, recovery };
 }
 
 async function createAuthenticatedMcpServerForRequest(
@@ -882,6 +931,6 @@ async function createAuthenticatedMcpServerForRequest(
   extra?.nsUsername as string | undefined,
   extra?.nsApiUrl as string | undefined,
   authProvider,
-  req.auth?.token,
+  { bearerToken: req.auth?.token },
  );
 }

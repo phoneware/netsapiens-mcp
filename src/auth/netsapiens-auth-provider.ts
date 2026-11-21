@@ -76,6 +76,9 @@ export class UpstreamUnavailableError extends Error {
  }
 }
 
+/** A verified identity mismatch or credential rejection requires a fresh login. */
+class PolicyReconnectRequired extends Error {}
+
 // ---------------------------------------------------------------------------
 // Signed state helpers.
 //
@@ -567,6 +570,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  get mfaReady(): boolean {
   return this.authMode === 'oauth' && (!this.store.capabilities.persistent || !!this.replayAudience);
+ }
+
+ get effectiveSecondFactorPolicy(): SecondFactorPolicy | null {
+  return this.secondFactorPolicy ? { ...this.secondFactorPolicy, tiers: [...this.secondFactorPolicy.tiers] } : null;
  }
 
  constructor(options: NetSapiensAuthProviderOptions) {
@@ -1443,7 +1450,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (!session.nsRefreshToken) return undefined;
 
   try {
-   return await this.store.sessions.refreshUpstream(
+   const refreshed = await this.store.sessions.refreshUpstream(
     session.refreshFamilyId ?? bearerToken,
     async (current) => {
      const refreshed = await this.nsRefreshGrant(current.nsRefreshToken!, current.nsApiUrl);
@@ -1455,6 +1462,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     },
     { force: true },
    );
+   if (refreshed.refreshFamilyId !== session.refreshFamilyId || refreshed.clientId !== session.clientId ||
+       refreshed.nsUsername !== session.nsUsername ||
+       normalizePlatformUrl(refreshed.nsApiUrl ?? this.nsApiUrl) !== normalizePlatformUrl(session.nsApiUrl ?? this.nsApiUrl)) {
+    throw new Error('Refreshed grant identity does not match the original session');
+   }
+   await this.enforceRefreshPolicy(refreshed, session.refreshFamilyId);
+   return refreshed;
   } catch (err: unknown) {
    if (err instanceof UpstreamGrantRejectedError) {
     logger.warn('Upstream NS refresh grant rejected definitively during forced refresh', {
@@ -1548,7 +1562,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (this.secondFactorPolicy?.applyToExistingSessions && this.policyAppliesToPlatform(stored.nsApiUrl)) {
    let allowed: boolean;
    try { allowed = await this.sessionSatisfiesPolicy(stored); }
-   catch { throw new ServerError('Account role verification temporarily unavailable'); }
+   catch (err) {
+    if (err instanceof PolicyReconnectRequired) {
+     await this.store.sessions.revokeFamily(stored.refreshFamilyId);
+     throw new InvalidTokenError('Account identity changed or credentials were rejected. Sign in again.');
+    }
+    throw new ServerError('Account role verification temporarily unavailable');
+   }
    if (!allowed) {
     if (stored.refreshFamilyId) await this.store.sessions.revokeFamily(stored.refreshFamilyId);
     else await this.store.sessions.delete(token);
@@ -1563,11 +1583,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    scopes: [],
    expiresAt: Math.floor(stored.expiresAt / 1000),
    extra: {
+    ...stored.extra,
     nsAccessToken: stored.nsAccessToken,
     nsUsername: stored.nsUsername,
     nsUserRole: stored.nsUserRole,
-    nsApiUrl: stored.nsApiUrl,
-    ...stored.extra,
+    nsApiUrl: stored.nsApiUrl ?? this.nsApiUrl,
+    nsRefreshFamilyId: stored.refreshFamilyId,
    },
   };
 
@@ -1628,9 +1649,23 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  }
 
  private async sessionSatisfiesPolicy(session: StoredSession): Promise<boolean> {
-  const info = await this.detectNsUserInfo(session.nsAccessToken, session.nsApiUrl, session.nsUsername, true);
-  if (!info.verifiedIdentity || `${info.user}@${info.domain}` !== session.nsUsername || !knownScope(info.scope)) {
-   throw new Error('Unable to verify upstream identity or role');
+  let info: { user: string; domain: string; scope: string; verifiedIdentity: boolean };
+  try {
+   info = await this.detectNsUserInfo(session.nsAccessToken, session.nsApiUrl, session.nsUsername, true);
+  } catch (err) {
+   if (this.authMode === 'token' && !session.nsRefreshToken && err && typeof err === 'object' && 'response' in err) {
+    const response = err.response;
+    if (response && typeof response === 'object' && 'status' in response && response.status === 401) {
+     const data = 'data' in response ? response.data : undefined;
+     const message = data && typeof data === 'object' && 'message' in data && typeof data.message === 'string' ? data.message : '';
+     if (!/invalid scope/i.test(message)) throw new PolicyReconnectRequired('NetSapiens rejected the key');
+    }
+   }
+   throw err;
+  }
+  if (!info.verifiedIdentity || !knownScope(info.scope)) throw new Error('Unable to verify upstream identity or role');
+  if (`${info.user}@${info.domain}` !== session.nsUsername) {
+   throw new PolicyReconnectRequired('Stored identity cannot be verified; reconnect');
   }
   return !scopeRequiresSecondFactor(this.secondFactorPolicy!, info.scope) ||
    (hasServerAssurance(session.extra, session.nsUsername, normalizePlatformUrl(session.nsApiUrl ?? this.nsApiUrl), getSessionSecret()) &&
@@ -1641,7 +1676,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   if (!this.secondFactorPolicy?.applyToExistingSessions || !this.policyAppliesToPlatform(session.nsApiUrl)) return;
   let allowed: boolean;
   try { allowed = await this.sessionSatisfiesPolicy(session); }
-  catch { throw new TemporarilyUnavailableError('Account role verification temporarily unavailable'); }
+  catch (err) {
+   if (err instanceof PolicyReconnectRequired) {
+    await this.store.sessions.revokeFamily(familyId);
+    throw new InvalidGrantError('Account identity changed or credentials were rejected. Sign in again.');
+   }
+   throw new TemporarilyUnavailableError('Account role verification temporarily unavailable');
+  }
   if (!allowed) {
    await this.store.sessions.revokeFamily(familyId);
    throw new InvalidGrantError('Sign in again using an approved sign-in method');
