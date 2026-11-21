@@ -26,7 +26,7 @@ import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { parseAuthMode } from './auth/auth-mode.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
-import { createSigninRateLimit, RATE_LIMIT_MESSAGE } from './http/signin-rate-limit.js';
+import { createSigninRateLimitOptions, signinLimitError, RATE_LIMIT_MESSAGE } from './http/signin-rate-limit.js';
 import {
  SERVER_INSTRUCTIONS,
  isStatelessMode,
@@ -130,7 +130,7 @@ export async function createApp(options?: {
 }> {
  const config = loadConfig();
  const platforms = parsePlatforms(process.env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
- const port = parseInt(process.env.MCP_PORT || '3000', 10);
+ const port = parseHttpPort(process.env.MCP_PORT);
  const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
  // Reuse the SDK's issuer validation before opening or upgrading the store.
@@ -199,7 +199,7 @@ export async function createApp(options?: {
 export async function startHttpServer(): Promise<HttpServer> {
  const { app, baseUrl, mcpUrl, store, platforms } = await createApp();
  const config = loadConfig();
- const port = parseInt(process.env.MCP_PORT || '3000', 10);
+ const port = parseHttpPort(process.env.MCP_PORT);
  const host = process.env.MCP_HOST || '0.0.0.0';
 
  const onShutdown = async () => {
@@ -210,11 +210,16 @@ export async function startHttpServer(): Promise<HttpServer> {
   }
   process.exit(0);
  };
- process.once('SIGINT', onShutdown);
- process.once('SIGTERM', onShutdown);
 
- return new Promise((resolve, reject) => {
-  const httpServer = app.listen(port, host, () => {
+ try {
+  return await new Promise((resolve, reject) => {
+   const httpServer = app.listen(port, host);
+   const onStartError = (error: Error) => reject(error);
+   httpServer.once('error', onStartError);
+   httpServer.once('listening', () => {
+    httpServer.removeListener('error', onStartError);
+    process.once('SIGINT', onShutdown);
+    process.once('SIGTERM', onShutdown);
    logger.info('NetSapiens MCP HTTP server started', {
     host,
     port,
@@ -240,13 +245,31 @@ export async function startHttpServer(): Promise<HttpServer> {
    resolve(httpServer);
   });
 
-  httpServer.once('error', reject);
-
+ 
   httpServer.on('close', () => {
    process.removeListener('SIGINT', onShutdown);
    process.removeListener('SIGTERM', onShutdown);
   });
- });
+  });
+ } catch (error) {
+  process.removeListener('SIGINT', onShutdown);
+  process.removeListener('SIGTERM', onShutdown);
+  try {
+   await store.close();
+  } catch {
+   logger.error('Error closing store after listener startup failure');
+  }
+  throw error;
+ }
+}
+
+function parseHttpPort(raw: string | undefined): number {
+ if (raw === undefined || raw === '') return 3000;
+ const port = Number(raw);
+ if (!/^\d+$/.test(raw) || !Number.isInteger(port) || port < 0 || port > 65535) {
+  throw new Error('ConfigError: MCP_PORT must be an integer from 0 to 65535');
+ }
+ return port;
 }
 
 /**
@@ -307,13 +330,52 @@ function wireApp(
   res.set('Cache-Control', 'no-store').status(440).json({ error: 'invalid_request' });
  });
 
- const loginLimiter = createSigninRateLimit(store);
+ const loginLimiter = rateLimit(createSigninRateLimitOptions(store));
  const urlencodedParser = express.urlencoded({ extended: false });
  const jsonParser = express.json();
  const signinParseError: express.ErrorRequestHandler = (_error, _req, res, _next) => {
   res.set('Cache-Control', 'no-store').status(400).json({ error: 'invalid_request' });
  };
- app.post(['/login', '/mfa'], loginLimiter, urlencodedParser, jsonParser, signinParseError);
+ // Login form submission: the authorize() method shows the page, this handles POST
+ app.post('/login', loginLimiter, signinLimitError, urlencodedParser, jsonParser, signinParseError, async (req: express.Request, res: express.Response) => {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
+  const { token, platform, username, password } = req.body;
+
+  if (token !== undefined) {
+   if (typeof token !== 'string' || !token || typeof platform !== 'string' || !platform) {
+    res.status(400).json({ error: 'invalid_request' });
+    return;
+   }
+   await authProvider.handleTokenLogin(req, res, platform, token);
+   return;
+  }
+
+  if (typeof username !== 'string' || !username || typeof password !== 'string' || !password) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
+
+  await authProvider.handleLogin(req, res, username, password);
+ });
+
+ // MFA passcode submission (second step when NS requires MFA)
+ app.post('/mfa', loginLimiter, signinLimitError, urlencodedParser, jsonParser, signinParseError, async (req: express.Request, res: express.Response) => {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
+  const { passcode } = req.body;
+
+  if (typeof passcode !== 'string' || !passcode) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
+
+  await authProvider.handleMfa(req, res, passcode);
+ });
 
  // Body parsing for the login form (URL-encoded) and JSON (MCP / token)
  app.use(urlencodedParser);
@@ -475,46 +537,6 @@ function wireApp(
   });
  });
 
- // Login form submission: the authorize() method shows the page, this handles POST
- app.post('/login', async (req, res) => {
-  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
-   res.status(400).json({ error: 'invalid_request' });
-   return;
-  }
-  const { token, platform, username, password } = req.body;
-
-  if (token !== undefined) {
-   if (typeof token !== 'string' || !token || typeof platform !== 'string' || !platform) {
-    res.status(400).json({ error: 'invalid_request' });
-    return;
-   }
-   await authProvider.handleTokenLogin(req, res, platform, token);
-   return;
-  }
-
-  if (typeof username !== 'string' || !username || typeof password !== 'string' || !password) {
-   res.status(400).json({ error: 'invalid_request' });
-   return;
-  }
-
-  await authProvider.handleLogin(req, res, username, password);
- });
-
- // MFA passcode submission (second step when NS requires MFA)
- app.post('/mfa', async (req, res) => {
-  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
-   res.status(400).json({ error: 'invalid_request' });
-   return;
-  }
-  const { passcode } = req.body;
-
-  if (typeof passcode !== 'string' || !passcode) {
-   res.status(400).json({ error: 'invalid_request' });
-   return;
-  }
-
-  await authProvider.handleMfa(req, res, passcode);
- });
 
  // -----------------------------------------------------------------------
  // MCP transport: all routes require bearer auth

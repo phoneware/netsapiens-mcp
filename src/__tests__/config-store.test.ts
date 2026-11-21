@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createSqliteStore } from '../store/sqlite.js';
 import { deriveStoreKey } from '../store/codec.js';
+import { startHttpServer } from '../http-server.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
   DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { get(): { user_version: number } }; close(): void };
@@ -98,6 +99,9 @@ describe('config-store', () => {
         [{ MCP_TRUST_PROXY_HOPS: '2' }, 'MCP_TRUST_PROXY_HOPS must be 0 or 1'],
         [{ MCP_BASE_URL: 'https://mcp.example.com/?private=do-not-log' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
         [{ MCP_BASE_URL: 'https://mcp.example.com/#private-fragment' }, 'MCP_BASE_URL is not a valid OAuth issuer'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '65536' }, 'MCP_PORT must be an integer from 0 to 65535'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '-1' }, 'MCP_PORT must be an integer from 0 to 65535'],
+        [{ MCP_BASE_URL: 'https://mcp.example.com', MCP_PORT: '12invalid' }, 'MCP_PORT must be an integer from 0 to 65535'],
       ] as const) {
         const result = startup({ MCP_STORE_PATH: path, ...override });
         expect(result.status).toBe(1);
@@ -106,6 +110,42 @@ describe('config-store', () => {
         expect(db.prepare("SELECT count(*) AS user_version FROM sqlite_master WHERE type='table' AND name='rate_limits'").get().user_version).toBe(0);
       }
     } finally { db.close(); }
+  });
+
+  it('rejects an occupied port, closes the owned SQLite store and removes startup signal handlers', async () => {
+    const socket = createServer();
+    socket.listen(0, '127.0.0.1');
+    await once(socket, 'listening');
+    const address = socket.address();
+    if (!address || typeof address === 'string') throw new Error('No port');
+    const path = join(testHome, 'occupied.sqlite');
+    const keys = ['MCP_TRANSPORT', 'MCP_PORT', 'MCP_HOST', 'MCP_BASE_URL', 'MCP_PERSISTENCE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'MCP_MFA_REPLAY_AUDIENCE', 'NETSAPIENS_API_URL', 'NETSAPIENS_OAUTH_CLIENT_ID', 'NETSAPIENS_OAUTH_CLIENT_SECRET'] as const;
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const sigint = process.listeners('SIGINT');
+    const sigterm = process.listeners('SIGTERM');
+    const output = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      Object.assign(process.env, {
+        MCP_TRANSPORT: 'http', MCP_PORT: String(address.port), MCP_HOST: '127.0.0.1', MCP_BASE_URL: 'http://localhost',
+        MCP_PERSISTENCE: 'sqlite', MCP_STORE_PATH: path, MCP_SESSION_SECRET: 'a'.repeat(32),
+        MCP_MFA_REPLAY_AUDIENCE: 'occupied-test', NETSAPIENS_API_URL: 'https://netsapiens.example.com',
+        NETSAPIENS_OAUTH_CLIENT_ID: 'client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
+      });
+      await expect(startHttpServer()).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(process.listeners('SIGINT')).toEqual(sigint);
+      expect(process.listeners('SIGTERM')).toEqual(sigterm);
+      expect(JSON.stringify(output.mock.calls)).not.toContain('NetSapiens MCP HTTP server started');
+      const reopened = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+      await reopened.close();
+    } finally {
+      output.mockRestore();
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+      socket.close();
+      await once(socket, 'close');
+    }
   });
 
   it('asserts default /health.store output and sqlite startup log', async () => {
