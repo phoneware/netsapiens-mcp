@@ -26,6 +26,7 @@ import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostErr
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
 import { parseAuthMode, type AuthMode } from './auth/auth-mode.js';
+import { parseSecondFactorPolicy } from './auth/second-factor-policy.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import { createSigninRateLimitOptions, signinLimitError, RATE_LIMIT_MESSAGE } from './http/signin-rate-limit.js';
@@ -158,6 +159,7 @@ function prepareHttpConfig(options?: HttpAppOptions): PreparedHttpConfig {
   MCP_TRUST_PROXY_HOPS: process.env.MCP_TRUST_PROXY_HOPS,
   MCP_TOKEN_LIFETIME_HOURS: process.env.MCP_TOKEN_LIFETIME_HOURS,
   MCP_MFA_REPLAY_AUDIENCE: process.env.MCP_MFA_REPLAY_AUDIENCE,
+  MCP_SECOND_FACTOR_POLICY: process.env.MCP_SECOND_FACTOR_POLICY,
   MCP_CONFIRM_DESTRUCTIVE: process.env.MCP_CONFIRM_DESTRUCTIVE,
   MCP_TOKEN_STORE_PATH: process.env.MCP_TOKEN_STORE_PATH,
   FIRESTORE_AUTH_CODES_COLLECTION: process.env.FIRESTORE_AUTH_CODES_COLLECTION,
@@ -183,6 +185,10 @@ function prepareHttpConfig(options?: HttpAppOptions): PreparedHttpConfig {
  }
 
  const authMode = parseAuthMode(env.NETSAPIENS_AUTH_MODE);
+ const secondFactorPolicy = parseSecondFactorPolicy(env.MCP_SECOND_FACTOR_POLICY);
+ if (secondFactorPolicy && options?.authProvider) {
+  throw new Error('ConfigError: MCP_SECOND_FACTOR_POLICY cannot be combined with a custom authProvider; configure the provider directly');
+ }
  const nsClientId = env.NETSAPIENS_OAUTH_CLIENT_ID;
  const nsClientSecret = env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
@@ -230,6 +236,7 @@ async function createAppWithConfig(options: HttpAppOptions | undefined, prepared
    replayAudience: env.MCP_MFA_REPLAY_AUDIENCE,
    store,
    hooks: options?.hooks,
+   secondFactorPolicy: parseSecondFactorPolicy(env.MCP_SECOND_FACTOR_POLICY),
   });
   const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops));
   setUsageStore(store.usage);

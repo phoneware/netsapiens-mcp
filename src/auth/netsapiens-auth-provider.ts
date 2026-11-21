@@ -47,6 +47,8 @@ import type {
 } from './types.js';
 import { resolvePlatform, isPlatformAllowed, type NetSapiensPlatform } from './platforms.js';
 import type { AuthMode } from './auth-mode.js';
+import { normalizePlatformUrl } from './platforms.js';
+import { hasServerAssurance, knownScope, parseSecondFactorPolicy, satisfiesSecondFactorPolicy, scopeRequiresSecondFactor, signServerAssurance, type SecondFactorPolicy } from './second-factor-policy.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
 
@@ -500,6 +502,8 @@ export interface NetSapiensAuthProviderOptions {
  hooks?: AuthHooks;
  /** Optional custom HTML page renderers */
  renderPages?: RenderPagesOptions;
+ /** Optional exact-scope sign-in policy for the primary platform. */
+ secondFactorPolicy?: SecondFactorPolicy;
  /** Optional clients store override */
  clientsStore?: OAuthRegisteredClientsStore;
  /**
@@ -531,6 +535,7 @@ interface MfaChallenge {
  password: string;
  partialAccessToken: string;
  mfaType: string;
+ verifiedAuthenticator?: boolean;
  mfaVendor: string;
  nsIdType: string;
  challengeId: string;
@@ -554,6 +559,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private tokenLifetimeSec: number;
  private serverBaseUrl?: string;
  private replayAudience?: string;
+ private secondFactorPolicy?: SecondFactorPolicy;
 
  private challengeAudience(): string {
   return JSON.stringify([this.store.backend, this.store.namespace, this.serverBaseUrl?.toLowerCase() ?? '', this.replayAudience]);
@@ -565,6 +571,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  constructor(options: NetSapiensAuthProviderOptions) {
   if (!options.store) throw new Error('store is required');
+  this.secondFactorPolicy = options.secondFactorPolicy === undefined ? undefined : parseSecondFactorPolicy(JSON.stringify(options.secondFactorPolicy));
   validateReplayAudience(options.replayAudience);
   if (options.store.capabilities.persistent && !options.replayAudience) {
    logger.error('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE for the persistent replay store');
@@ -739,6 +746,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     password,
     partialAccessToken: grantResult.partialAccessToken,
     mfaType: grantResult.mfaType,
+    verifiedAuthenticator: grantResult.verifiedAuthenticator,
     mfaVendor: grantResult.mfaVendor,
     nsIdType: grantResult.nsIdType,
     challengeId: randomBytes(16).toString('hex'),
@@ -956,7 +964,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
-  await this.completeSignIn(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, { method: 'password', nsTotp: true, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
+  await this.completeSignIn(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, { method: 'password', nsTotp: challenge.verifiedAuthenticator === true, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
  }
 
  /**
@@ -981,23 +989,38 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   tokenExtra?: Record<string, string>,
   skipHooks = false,
  ): Promise<void> {
+  // A provider identity is a trusted sign-in method, not evidence of NS TOTP.
+  if (assurance.method !== 'password') assurance = { ...assurance, nsTotp: false };
   let nsUserRole = nsTokens.nsUserRole;
   let whoUser = username;
   let whoDomain = '';
   let whoScope = nsTokens.scope ?? '';
   let displayName = username;
   let email = '';
+  let verifiedUsername: string | undefined;
 
-  if (!nsUserRole || !whoScope) {
+  if (!nsUserRole || !whoScope || this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
    try {
-    const detected = await this.detectNsUserInfo(nsTokens.access_token, nsTokens.nsApiUrl, username);
-    if (!nsUserRole) nsUserRole = detected.role;
-    if (!whoUser || whoUser === username) whoUser = detected.user;
-    if (!whoDomain) whoDomain = detected.domain;
-    if (!whoScope) whoScope = detected.scope;
+    const detected = await this.detectNsUserInfo(nsTokens.access_token, nsTokens.nsApiUrl, username, this.policyAppliesToPlatform(nsTokens.nsApiUrl));
+    if (detected.verifiedIdentity && this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
+     verifiedUsername = `${detected.user}@${detected.domain}`;
+     whoUser = detected.user;
+     whoDomain = detected.domain;
+     whoScope = detected.scope;
+     nsUserRole = detected.role;
+    } else {
+     if (!nsUserRole) nsUserRole = detected.role;
+     if (!whoUser || whoUser === username) whoUser = detected.user;
+     if (!whoDomain) whoDomain = detected.domain;
+     if (!whoScope) whoScope = detected.scope;
+    }
     if (!displayName || displayName === username) displayName = detected.displayName;
     if (!email) email = detected.email;
    } catch (err) {
+    if (this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
+     sendPage(res, 503, this.renderErrorPage('Unable to verify your account role. Please try again.', 503));
+     return;
+    }
     logger.warn('Failed to detect user role, defaulting to user', { error: String(err) });
    }
   } else {
@@ -1005,6 +1028,18 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     const parts = username.split('@');
     whoUser = parts[0];
     whoDomain = parts[1];
+   }
+  }
+  if (this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
+   if (!verifiedUsername || !knownScope(whoScope)) {
+    sendPage(res, 503, this.renderErrorPage('Unable to verify your account identity and role. Please try again.', 503));
+    return;
+   }
+   username = verifiedUsername;
+   const candidate = { authMethod: assurance.method, authNsTotp: String(assurance.nsTotp) };
+   if (scopeRequiresSecondFactor(this.secondFactorPolicy!, whoScope) && !satisfiesSecondFactorPolicy(this.secondFactorPolicy!, candidate)) {
+    sendPage(res, 403, this.renderErrorPage('This account requires an approved sign-in method.', 403));
+    return;
    }
   }
 
@@ -1056,15 +1091,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    }
   }
   const safeExtra = { ...tokenExtra };
-  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind']) delete safeExtra[key];
+  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind', 'authAssuranceSig']) delete safeExtra[key];
   Object.assign(safeExtra, {
    authMethod: assurance.method,
-   authNsTotp: String(assurance.nsTotp),
+   authNsTotp: String(assurance.method === 'password' && assurance.nsTotp),
    authAt: assurance.authAt,
    nsGrantKind: assurance.nsGrantKind,
   });
   if (assurance.providerSubjectHash !== undefined) safeExtra.authProviderSubjectHash = assurance.providerSubjectHash;
   if (assurance.providerTenant !== undefined) safeExtra.authProviderTenant = assurance.providerTenant;
+  if (verifiedUsername) signServerAssurance(safeExtra, verifiedUsername, normalizePlatformUrl(nsTokens.nsApiUrl ?? this.nsApiUrl), getSessionSecret());
 
 
   const code = randomBytes(32).toString('hex');
@@ -1247,6 +1283,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
    const { familyId, generation } = lookup;
    const session = { ...lookup.session, extra: normalizeAssurance(lookup.session.extra) };
+   // A retry returns an existing successor; never bypass policy on this path.
+   // Refresh an expired upstream bearer before role verification.
+   const checkAfterRefresh = lookup.status !== 'retry' && !!session.nsRefreshToken &&
+    !!session.nsExpiresAt && session.nsExpiresAt <= now + 60_000;
+   if (!checkAfterRefresh) await this.enforceRefreshPolicy(session, familyId);
 
    if (this.hooks?.onVerify) {
     try {
@@ -1332,6 +1373,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     });
     throw new InvalidGrantError('No upstream refresh token available. Please re-authenticate.');
    }
+   await this.enforceRefreshPolicy({ ...refreshedSession, extra: session.extra }, familyId);
 
    const newAccessToken = randomBytes(32).toString('hex');
    const newRefreshToken = randomBytes(32).toString('hex');
@@ -1503,6 +1545,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    }
   }
   stored = { ...stored, extra: normalizeAssurance(stored.extra) };
+  if (this.secondFactorPolicy?.applyToExistingSessions && this.policyAppliesToPlatform(stored.nsApiUrl)) {
+   let allowed: boolean;
+   try { allowed = await this.sessionSatisfiesPolicy(stored); }
+   catch { throw new ServerError('Account role verification temporarily unavailable'); }
+   if (!allowed) {
+    if (stored.refreshFamilyId) await this.store.sessions.revokeFamily(stored.refreshFamilyId);
+    else await this.store.sessions.delete(token);
+    throw new InvalidTokenError('Sign in again using an approved sign-in method');
+   }
+  }
 
 
   const authInfo: AuthInfo = {
@@ -1571,6 +1623,31 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  // -----------------------------------------------------------------------
  // Private helpers
  // -----------------------------------------------------------------------
+ private policyAppliesToPlatform(apiUrl?: string): boolean {
+  return !!this.secondFactorPolicy && normalizePlatformUrl(apiUrl ?? this.nsApiUrl) === normalizePlatformUrl(this.nsApiUrl);
+ }
+
+ private async sessionSatisfiesPolicy(session: StoredSession): Promise<boolean> {
+  const info = await this.detectNsUserInfo(session.nsAccessToken, session.nsApiUrl, session.nsUsername, true);
+  if (!info.verifiedIdentity || `${info.user}@${info.domain}` !== session.nsUsername || !knownScope(info.scope)) {
+   throw new Error('Unable to verify upstream identity or role');
+  }
+  return !scopeRequiresSecondFactor(this.secondFactorPolicy!, info.scope) ||
+   (hasServerAssurance(session.extra, session.nsUsername, normalizePlatformUrl(session.nsApiUrl ?? this.nsApiUrl), getSessionSecret()) &&
+    satisfiesSecondFactorPolicy(this.secondFactorPolicy!, session.extra));
+ }
+
+ private async enforceRefreshPolicy(session: StoredSession, familyId: string): Promise<void> {
+  if (!this.secondFactorPolicy?.applyToExistingSessions || !this.policyAppliesToPlatform(session.nsApiUrl)) return;
+  let allowed: boolean;
+  try { allowed = await this.sessionSatisfiesPolicy(session); }
+  catch { throw new TemporarilyUnavailableError('Account role verification temporarily unavailable'); }
+  if (!allowed) {
+   await this.store.sessions.revokeFamily(familyId);
+   throw new InvalidGrantError('Sign in again using an approved sign-in method');
+  }
+ }
+
 
  private async issueTokens(
   clientId: string,
@@ -1643,6 +1720,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
      kind: 'mfa_required',
      partialAccessToken: data.access_token,
      mfaType: String(data.mfa_type || 'authenticator'),
+     verifiedAuthenticator: typeof data.mfa_type === 'string' && data.mfa_type.toLowerCase() === 'authenticator',
      mfaVendor: String(data.mfa_vendor || 'google'),
      nsIdType: String(data.ns_id_type || 'subscriber'),
     };
@@ -1714,6 +1792,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   nsAccessToken: string,
   targetApiUrl?: string,
   username?: string,
+  strict = false,
  ): Promise<{
   user: string;
   domain: string;
@@ -1721,6 +1800,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   role: string;
   displayName: string;
   email: string;
+  verifiedIdentity: boolean;
  }> {
   const url = targetApiUrl || this.nsApiUrl;
   const defaultUser = username && username.includes('@') ? username.split('@')[0] : (username ?? 'user');
@@ -1729,27 +1809,32 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   try {
    const response = await axios.get(`${url}/ns-api/v2/domains/~/users/~`, {
     headers: { Authorization: `Bearer ${nsAccessToken}` },
+    timeout: 15000,
    });
    const data = response.data;
    const scope = (data?.['user-scope'] ?? data?.scope ?? data?.type ?? '') as string;
    const role = nsScopeToTier(scope);
    const user = (data?.user as string | undefined) ?? defaultUser;
    const domain = (data?.domain as string | undefined) ?? defaultDomain;
+   const verifiedIdentity = typeof data?.user === 'string' && !!data.user.trim() && typeof data?.domain === 'string' && !!data.domain.trim();
+   if (strict && !verifiedIdentity) throw new Error('Unable to verify account identity');
    const firstName = data?.['name-first-name'] ?? data?.['first-name'];
    const lastName = data?.['name-last-name'] ?? data?.['last-name'];
    const displayName = [firstName, lastName].filter(Boolean).join(' ') || data?.name || data?.description || user;
    const email = (data?.email || data?.['email-address'] || '') as string;
 
    logger.info('Detected NS user role', { scope, role, username: user });
-   return { user, domain, scope, role, displayName, email };
+   return { user, domain, scope, role, displayName, email, verifiedIdentity };
   } catch (err: unknown) {
    const status = (err as { response?: { status?: number } })?.response?.status;
    if (status === 400) {
     try {
      const keyRes = await axios.get(`${url}/ns-api/v2/apikeys/~`, {
       headers: { Authorization: `Bearer ${nsAccessToken}` },
+      timeout: 15000,
      });
      const keyData = keyRes.data;
+     if (strict) throw new Error('API key does not establish a verified user identity');
      const scope = (keyData?.['user-scope'] ?? keyData?.scope ?? '') as string;
      const role = nsScopeToTier(scope);
      return {
@@ -1758,11 +1843,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       scope,
       role,
       displayName: (keyData?.description as string | undefined) ?? defaultUser,
+      verifiedIdentity: false,
       email: '',
      };
-    } catch {
+    } catch (keyError) {
+     if (strict) throw keyError;
      // Ignore
     }
+   } else if (strict) {
+    throw err;
    }
    logger.warn('NS role detection API call failed', { error: String(err) });
    return {
@@ -1772,6 +1861,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     role: 'user',
     displayName: defaultUser,
     email: '',
+    verifiedIdentity: false,
    };
   }
  }
@@ -1841,6 +1931,7 @@ type NsGrantResult =
   kind: 'mfa_required';
   partialAccessToken: string;
   mfaType: string;
+  verifiedAuthenticator?: boolean;
   mfaVendor: string;
   nsIdType: string;
  };
