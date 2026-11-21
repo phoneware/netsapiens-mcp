@@ -1032,7 +1032,10 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     .type('form')
     .send({ username: 'alice', password: 'hunter2', auth_state: authState })
     .expect(440);
-   expect(r.text).toMatch(/session has expired/i);
+   expect(r.body).toEqual({ error: 'invalid_request' });
+   expect(r.headers['cache-control']).toContain('no-store');
+   expect(r.text).not.toContain('hunter2');
+   expect(r.text).not.toContain(authState);
    expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
