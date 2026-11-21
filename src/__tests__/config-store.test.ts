@@ -22,6 +22,7 @@ const baseEnv = {
   NETSAPIENS_OAUTH_CLIENT_ID: 'client',
   NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
   MCP_SESSION_SECRET: 'a'.repeat(32),
+  MCP_MFA_REPLAY_AUDIENCE: 'config-store-test',
 };
 
 function startup(env: Record<string, string | undefined>) {
@@ -89,7 +90,7 @@ describe('config-store', () => {
     await once(socket, 'close');
 
     const server = spawn(process.execPath, args, {
-      env: { ...baseEnv, MCP_PORT: String(port), MCP_HOST: '127.0.0.1' },
+      env: { ...baseEnv, MCP_MFA_REPLAY_AUDIENCE: undefined, MCP_PORT: String(port), MCP_HOST: '127.0.0.1' },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 
@@ -113,10 +114,13 @@ describe('config-store', () => {
       });
       const expectedDbPath = join(testHome, '.netsapiens-mcp', 'mcp.sqlite');
       expect(stderr).toContain(`store: sqlite ${expectedDbPath} (namespace mcp)`);
+      expect(stderr).toContain('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE');
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 
@@ -161,9 +165,11 @@ describe('config-store', () => {
       const expectedDbPath = join(testHome, '.netsapiens-mcp', 'readonly_mcp.sqlite');
       expect(stderr).toContain(`store: sqlite ${expectedDbPath} (namespace readonly_mcp)`);
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 
@@ -200,9 +206,11 @@ describe('config-store', () => {
         `warn: ${legacyPath} is a 2.x token file. 3.0.0 does not read it, and it holds plaintext tokens. Delete it: rm ${legacyPath}`,
       );
     } finally {
-      const exited = once(server, 'exit');
-      server.kill();
-      await exited;
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
     }
   });
 

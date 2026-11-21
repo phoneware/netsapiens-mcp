@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { type Response } from 'express';
 import request from 'supertest';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
@@ -63,6 +63,10 @@ function makeApp(provider: NetSapiensAuthProvider) {
 }
 
 describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
+  beforeEach(() => {
+    vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unmocked upstream GET refused'));
+  });
+  afterEach(() => vi.restoreAllMocks());
   it('throws when constructed without store', () => {
     expect(() => new NetSapiensAuthProvider({
       platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
@@ -73,15 +77,16 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
     })).toThrow('store is required');
   });
 
-  it('requires a valid explicit audience for persistent replay stores', async () => {
+  it('accepts a missing replay audience for compatibility but rejects invalid configured identities', async () => {
     const memory = createMemoryStore({ namespace: 'audience_test', key });
     const store = { ...memory, capabilities: { ...memory.capabilities, persistent: true } };
     const options = {
       platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
       nsApiUrl: 'https://netsapiens.example.com', store,
     };
-    for (const replayAudience of [undefined, '', ' ', 'store/a', 'a'.repeat(257)]) {
-      expect(() => new NetSapiensAuthProvider({ ...options, replayAudience })).toThrow('stable replayAudience is required');
+    expect(() => new NetSapiensAuthProvider(options)).not.toThrow();
+    for (const replayAudience of ['', ' ', 'store/a', 'a'.repeat(257)]) {
+      expect(() => new NetSapiensAuthProvider({ ...options, replayAudience })).toThrow('replayAudience must be a stable replay-store identity');
     }
     expect(() => new NetSapiensAuthProvider({ ...options, replayAudience: 'store-a' })).not.toThrow();
     await memory.close();

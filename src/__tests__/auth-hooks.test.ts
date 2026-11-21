@@ -561,7 +561,7 @@ describe('NetSapiensAuthProvider auth hooks & pages', () => {
       expect(refreshGrantMock).toHaveBeenCalledTimes(1);
 
       const newStored = await store.sessions.getByRefreshToken(res.body.refresh_token);
-      expect(newStored?.extra).toEqual({ seatId: 'seat-123' });
+      expect(newStored?.extra).toEqual({ seatId: 'seat-123', authNsTotp: 'false' });
       expect(await store.sessions.getByRefreshToken('ref-2')).toBeUndefined();
     });
 

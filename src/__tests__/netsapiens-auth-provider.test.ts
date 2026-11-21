@@ -698,6 +698,48 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
    }
   });
 
+  it('keeps non-MFA sign-in available while refusing challenge creation and submission without a replay audience', async () => {
+   const previous = process.env.MCP_MFA_REPLAY_AUDIENCE;
+   process.env.MCP_MFA_REPLAY_AUDIENCE = 'rollout-store';
+   try {
+    const { store, state } = await startMfa(true);
+    delete process.env.MCP_MFA_REPLAY_AUDIENCE;
+    const { createApp } = await import('../http-server.js');
+    const warning = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const { app } = await createApp({ store });
+    expect(JSON.stringify(warning.mock.calls)).toContain('MFA unavailable');
+    const consume = vi.spyOn(store.resumeTokens, 'consume');
+    const before = mockedAxios.post.mock.calls.length;
+    const rejected = await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(503);
+    expect(rejected.headers['cache-control']).toContain('no-store');
+    expect(rejected.text).not.toContain(state);
+    expect(consume).not.toHaveBeenCalled();
+    expect(mockedAxios.post).toHaveBeenCalledTimes(before);
+
+    const reg = await request(app).post('/register').send({ redirect_uris: ['http://localhost/cb'], client_name: 'rollout-test' }).expect(201);
+    const auth = await request(app).get('/authorize').query({
+     response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
+     code_challenge: pkceChallenge(randomBytes(32).toString('base64url')), code_challenge_method: 'S256',
+    }).expect(200);
+    const authState = hiddenField(auth.text, 'auth_state');
+    mockedAxios.post.mockResolvedValueOnce({ data: { access_token: 'sensitive-partial', mfa_type: 'authenticator', mfa_vendor: 'google' } });
+    const prompt = await request(app).post('/login').type('form').send({ username: 'alice', password: 'private-password', auth_state: authState }).expect(503);
+    expect(prompt.headers['cache-control']).toContain('no-store');
+    expect(prompt.text).not.toContain('private-password');
+    expect(prompt.text).not.toContain('sensitive-partial');
+    expect(prompt.text).not.toContain('mfa_state');
+    expect(mockedAxios.post.mock.calls.filter(([, body]: [unknown, { grant_type?: string }]) => body.grant_type === 'mfa')).toHaveLength(0);
+
+    mockedAxios.post.mockResolvedValueOnce({ data: { access_token: 'ns-access', refresh_token: 'ns-refresh', expires_in: 3600 } });
+    mockedAxios.get = vi.fn().mockResolvedValueOnce({ data: { 'user-scope': 'Reseller' } });
+    await request(app).post('/login').type('form').send({ username: 'alice', password: 'private-password', auth_state: authState }).expect(302);
+    warning.mockRestore();
+   } finally {
+    if (previous === undefined) delete process.env.MCP_MFA_REPLAY_AUDIENCE;
+    else process.env.MCP_MFA_REPLAY_AUDIENCE = previous;
+   }
+  });
+
   it('rejects an outstanding memory challenge after the replay store is replaced', async () => {
    const { app, state } = await startMfa();
    await request(app).post('/mfa').type('form').send({ passcode: '000000', mfa_state: state }).expect(200);

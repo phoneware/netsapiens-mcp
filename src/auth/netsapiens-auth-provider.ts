@@ -555,9 +555,12 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
  constructor(options: NetSapiensAuthProviderOptions) {
   if (!options.store) throw new Error('store is required');
-  if (options.store.capabilities.persistent &&
+  if (options.replayAudience !== undefined &&
       (typeof options.replayAudience !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(options.replayAudience))) {
-   throw new Error('ConfigError: a stable replayAudience is required for persistent stores');
+   throw new Error('ConfigError: replayAudience must be a stable replay-store identity');
+  }
+  if (options.store.capabilities.persistent && !options.replayAudience) {
+   logger.error('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE for the persistent replay store');
   }
   this.replayAudience = options.replayAudience;
   this.store = options.store;
@@ -719,6 +722,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
 
   if (grantResult.kind === 'mfa_required') {
+   if (this.store.capabilities.persistent && !this.replayAudience) {
+    res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+    return;
+   }
    const challenge: MfaChallenge = {
     pending,
     username,
@@ -884,6 +891,11 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
+  if (this.store.capabilities.persistent && !this.replayAudience) {
+   res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+   return;
+  }
+
 
   const formState = (req.body as Record<string, unknown> | undefined)?.[MFA_STATE_FIELD];
   const sealed = typeof formState === 'string' ? formState : undefined;
