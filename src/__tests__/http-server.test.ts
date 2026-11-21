@@ -114,8 +114,10 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => 
 // Mock the auth provider
 vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   MFA_ATTEMPT_LIMIT: 5,
+  validateReplayAudience: vi.fn(),
   NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
     this.authMode = 'oauth';
+    this.mfaReady = true;
     this.clientsStore = { getClient: vi.fn() };
     this.handleLogin = vi.fn();
     this.verifyAccessToken = vi.fn().mockResolvedValue({
@@ -281,7 +283,7 @@ describe('startHttpServer()', () => {
     expect(res.status).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.status).toBe('ok');
-    expect(body.signIn).toEqual({ password: true, token: true, sso: [], ssoVisible: false, mfaAttemptLimit: 5, secondFactorPolicy: null });
+    expect(body.signIn).toEqual({ password: true, token: true, sso: [], ssoVisible: false, mfaAttemptLimit: 5, mfaReady: true, secondFactorPolicy: null });
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('activeSessions');
     expect(body).not.toHaveProperty('nsApiUrl');

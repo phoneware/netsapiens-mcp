@@ -184,6 +184,12 @@ export class SqliteBackend implements StoreBackend {
       const version = (versionRow?.user_version as number) ?? 0;
       if (version > SQLITE_SCHEMA_VERSION) throw new StoreConfigError(`Unsupported SQLite schema version ${version}`);
 
+      // Existing namespace must be checked before any irreversible schema upgrade.
+      if (version > 0) {
+        const existing = db.prepare("SELECT value FROM meta WHERE key='namespace'").get();
+        if (existing && existing.value !== namespace) throw new StoreConfigError(`SQLite store namespace mismatch for ${path}`);
+      }
+
       if (version === 1) {
         // v1 -> v2 migration inside transaction BEFORE sweep
         transaction(() => {

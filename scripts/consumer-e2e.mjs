@@ -350,13 +350,15 @@ async function main() {
         }],
       });
       const port = await getAvailablePort();
-      const srv = await startMcpServerProcess(tempDir, {
+      const mfaEnv = {
         ...process.env, MCP_TRANSPORT: 'http', MCP_PORT: String(port), MCP_HOST: '127.0.0.1',
         MCP_BASE_URL: `http://127.0.0.1:${port}`, NETSAPIENS_API_URL: fake.origin,
         NETSAPIENS_OAUTH_CLIENT_ID: 'test-client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'test-secret',
         MCP_TRUST_PROXY_HOPS: '1',
         MCP_SESSION_SECRET: sessionSecret, MCP_PERSISTENCE: 'sqlite', MCP_STORE_PATH: path.join(tempDir, 'mfa.sqlite'), MCP_STATELESS: 'false',
-      });
+        MCP_MFA_REPLAY_AUDIENCE: 'consumer-mfa-sqlite',
+      };
+      let srv = await startMcpServerProcess(tempDir, mfaEnv);
       const base = `http://127.0.0.1:${port}`;
       const field = (html, name) => html.match(new RegExp(`name="${name}"\\s+value="([^"]+)"`))?.[1];
       const post = (route, body, ip) => fetch(`${base}${route}`, {
@@ -366,7 +368,7 @@ async function main() {
       try {
         await waitForHealth(port);
         const health = await (await fetch(`${base}/health`)).json();
-        if (JSON.stringify(health.signIn) !== JSON.stringify({ password: true, token: true, sso: [], ssoVisible: false, mfaAttemptLimit: 5, secondFactorPolicy: null })) fail('mfa', 'health', JSON.stringify(health.signIn));
+        if (JSON.stringify(health.signIn) !== JSON.stringify({ password: true, token: true, sso: [], ssoVisible: false, mfaAttemptLimit: 5, mfaReady: true, secondFactorPolicy: null })) fail('mfa', 'health', JSON.stringify(health.signIn));
         pass('mfa', 'health');
         const register = await fetch(`${base}/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://localhost/callback'], client_name: 'mfa-e2e', token_endpoint_auth_method: 'none' }) });
         if (register.status !== 201) fail('mfa', 'register', String(register.status));
@@ -415,6 +417,29 @@ async function main() {
           if (result.status !== (n === 11 ? 429 : 440)) fail('mfa', 'rate-limit', `attempt ${n}: ${result.status}`);
         }
         pass('mfa', 'rate-limit');
+
+        // A missing audience preserves existing sessions but must not issue or accept MFA.
+        await srv.stop();
+        await waitForHealthDown(port);
+        const noAudienceEnv = { ...mfaEnv };
+        delete noAudienceEnv.MCP_MFA_REPLAY_AUDIENCE;
+        srv = await startMcpServerProcess(tempDir, noAudienceEnv);
+        const noAudienceHealth = await waitForHealth(port);
+        if (noAudienceHealth.signIn?.mfaReady !== false) fail('mfa', 'missing-audience-readiness', JSON.stringify(noAudienceHealth.signIn));
+        const resumed = await sendMcpRequest(port, bearer, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mfa-e2e', version: '1' } });
+        if (resumed.status !== 200 || !resumed.json?.result) fail('mfa', 'missing-audience-bearer', resumed.rawText);
+        const grantsBefore = count();
+        const refused = await post('/mfa', { passcode: '123456', mfa_state: good.state }, '198.51.100.4');
+        if (refused.status !== 503 || !refused.headers.get('cache-control')?.includes('no-store') || count() !== grantsBefore) fail('mfa', 'missing-audience-submission', String(refused.status));
+        const verifier = randomBytes(32).toString('base64url');
+        const challenge = createHash('sha256').update(verifier).digest('base64url');
+        const auth = await fetch(`${base}/authorize?${new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: 'http://localhost/callback', code_challenge: challenge, code_challenge_method: 'S256' })}`);
+        const authState = field(await auth.text(), 'auth_state');
+        if (!authState) fail('mfa', 'missing-audience-authorize', String(auth.status));
+        const noPrompt = await post('/login', { username: 'alice', password: 'secret', auth_state: authState }, '198.51.100.4');
+        const noPromptBody = await noPrompt.text();
+        if (noPrompt.status !== 503 || !noPrompt.headers.get('cache-control')?.includes('no-store') || field(noPromptBody, 'mfa_state') || count() !== grantsBefore) fail('mfa', 'missing-audience-issuance', String(noPrompt.status));
+        pass('mfa', 'missing-audience-fails-closed-with-existing-bearer');
       } finally {
         await srv.stop();
         await fake.close();
@@ -1059,6 +1084,7 @@ async function main() {
         GOOGLE_CLOUD_PROJECT: gcpProject,
         FIRESTORE_EMULATOR_HOST: emuHost,
         MCP_SESSION_SECRET: sessionSecret,
+        MCP_MFA_REPLAY_AUDIENCE: 'consumer-firestore-shared',
         MCP_BASE_URL: sharedBaseUrl,
         NETSAPIENS_API_URL: fake.origin,
         NETSAPIENS_OAUTH_CLIENT_ID: 'op-client',

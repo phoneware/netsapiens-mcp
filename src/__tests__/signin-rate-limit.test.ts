@@ -49,6 +49,33 @@ describe('shared sign-in limiter', () => {
     expect(hit).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects cross-site requests before parsing or reading a body, and handles unsupported bodies', async () => {
+    const app = await createApp({ store });
+    const hit = vi.spyOn(store.rateLimits, 'hit');
+    const login = vi.spyOn(app.authProvider, 'handleLogin');
+    const token = vi.spyOn(app.authProvider, 'handleTokenLogin');
+    const mfa = vi.spyOn(app.authProvider, 'handleMfa');
+    const logs = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    for (const route of ['/login', '/mfa']) {
+      for (const contentType of [undefined, 'text/plain', 'application/json']) {
+        let req = request(app.app).post(route).set('Sec-Fetch-Site', 'cross-site');
+        if (contentType) req = req.set('Content-Type', contentType).send(contentType === 'application/json' ? '{bad-json' : 'bad');
+        const response = await req.expect(440);
+        expect(response.body).toEqual({ error: 'invalid_request' });
+        expect(response.headers['cache-control']).toContain('no-store');
+      }
+    }
+    expect(hit).not.toHaveBeenCalled();
+    for (const route of ['/login', '/mfa']) {
+      const response = await request(app.app).post(route).set('Content-Type', 'text/plain').send('bad').expect(400);
+      expect(response.body).toEqual({ error: 'invalid_request' });
+    }
+    expect(login).not.toHaveBeenCalled();
+    expect(token).not.toHaveBeenCalled();
+    expect(mfa).not.toHaveBeenCalled();
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('TypeError');
+  });
+
   it('fails closed on malformed decisions and falsy rejections', async () => {
     const app = await createApp({ store });
     const hit = vi.spyOn(store.rateLimits, 'hit');

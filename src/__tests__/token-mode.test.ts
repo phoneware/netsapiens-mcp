@@ -212,8 +212,9 @@ describe('token mode startup', () => {
         try { health = await fetch(`${url}/health`); break; } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
       }
       expect(health?.status).toBe(200);
-      const healthBody: { authMode?: unknown } = await health!.json();
+      const healthBody: { authMode?: unknown; signIn: { mfaReady: boolean } } = await health!.json();
       expect(healthBody.authMode).toBe('token');
+      expect(healthBody.signIn.mfaReady).toBe(false);
       const registration = await fetch(`${url}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://localhost/cb'], client_name: 'test', token_endpoint_auth_method: 'none' }) });
       const registered: { client_id: string } = await registration.json();
       const params = new URLSearchParams({ response_type: 'code', client_id: registered.client_id, redirect_uri: 'http://localhost/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' });

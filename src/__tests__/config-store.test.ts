@@ -6,6 +6,13 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createRequire } from 'node:module';
+import { createSqliteStore } from '../store/sqlite.js';
+import { deriveStoreKey } from '../store/codec.js';
+
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
+  DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { get(): { user_version: number } }; close(): void };
+};
 
 const testHome = mkdtempSync(join(tmpdir(), 'nsmcp-config-store-test-'));
 afterAll(() => rmSync(testHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
@@ -79,6 +86,25 @@ describe('config-store', () => {
     expect(res.stderr).toContain(expectedMsg);
   });
 
+  it('does not upgrade an existing SQLite database when provider or proxy preflight fails', async () => {
+    const path = join(testHome, 'preflight.sqlite');
+    const store = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
+    await store.close();
+    const db = new DatabaseSync(path);
+    try {
+      db.exec('DROP TABLE rate_limits; PRAGMA user_version=3;');
+      for (const [override, message] of [
+        [{ MCP_MFA_REPLAY_AUDIENCE: 'bad audience' }, 'replayAudience must be a stable replay-store identity'],
+        [{ MCP_TRUST_PROXY_HOPS: '2' }, 'MCP_TRUST_PROXY_HOPS must be 0 or 1'],
+      ] as const) {
+        const result = startup({ MCP_STORE_PATH: path, ...override });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(message);
+        expect(db.prepare('PRAGMA user_version').get().user_version).toBe(3);
+      }
+    } finally { db.close(); }
+  });
+
   it('asserts default /health.store output and sqlite startup log', async () => {
     const socket = createServer();
     socket.listen(0, '127.0.0.1');
@@ -105,13 +131,14 @@ describe('config-store', () => {
         try { response = await fetch(`${url}/health`); break; } catch { await delay(50); }
       }
       expect(response?.status).toBe(200);
-      const data = await response!.json() as { store: Record<string, unknown> };
+      const data = await response!.json() as { store: Record<string, unknown>; signIn: { mfaReady: boolean } };
       expect(data.store).toEqual({
         backend: 'sqlite',
         namespace: 'mcp',
         persistent: true,
         multiInstance: false,
       });
+      expect(data.signIn.mfaReady).toBe(false);
       const expectedDbPath = join(testHome, '.netsapiens-mcp', 'mcp.sqlite');
       expect(stderr).toContain(`store: sqlite ${expectedDbPath} (namespace mcp)`);
       expect(stderr).toContain('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE');

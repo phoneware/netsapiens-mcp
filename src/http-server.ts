@@ -18,7 +18,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
-import { isCrossSitePost, MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { isCrossSitePost, MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider, validateReplayAudience } from './auth/netsapiens-auth-provider.js';
 import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
@@ -146,6 +146,11 @@ export async function createApp(options?: {
   );
  }
 
+ const proxyHops = process.env.MCP_TRUST_PROXY_HOPS ?? '0';
+ if (proxyHops !== '0' && proxyHops !== '1') throw new Error('ConfigError: MCP_TRUST_PROXY_HOPS must be 0 or 1');
+ const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
+ if (!options?.authProvider) validateReplayAudience(process.env.MCP_MFA_REPLAY_AUDIENCE);
+
  let store: McpStore;
  if (options?.store) {
   store = options.store;
@@ -155,7 +160,7 @@ export async function createApp(options?: {
  }
  setUsageStore(store.usage);
 
- const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
+ 
  let authProvider: NetSapiensAuthProvider;
  try {
   authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
@@ -174,7 +179,7 @@ export async function createApp(options?: {
   if (!options?.store) await store.close();
   throw error;
  }
- const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms);
+ const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops));
  return { app, authProvider, baseUrl, mcpUrl, store, platforms };
 }
 
@@ -255,6 +260,7 @@ function wireApp(
  mcpUrl: URL,
  store: McpStore,
  platforms: readonly NetSapiensPlatform[],
+ proxyHops: number,
 ): { app: express.Express; sessions: Map<string, McpSession> } {
 
  // -----------------------------------------------------------------------
@@ -265,9 +271,7 @@ function wireApp(
 
  // A directly exposed listener must ignore forwarding headers. Only opt in
  // when a trusted proxy is the sole path to this server.
- const proxyHops = process.env.MCP_TRUST_PROXY_HOPS ?? '0';
- if (proxyHops !== '0' && proxyHops !== '1') throw new Error('ConfigError: MCP_TRUST_PROXY_HOPS must be 0 or 1');
- app.set('trust proxy', Number(proxyHops));
+ app.set('trust proxy', proxyHops);
 
  // CORS middleware
  const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
@@ -288,6 +292,12 @@ function wireApp(
    return;
   }
   next();
+ });
+
+ // Reject cross-site sign-in forms before parsing or consuming the shared budget.
+ app.post(['/login', '/mfa'], (req, res, next) => {
+  if (!isCrossSitePost(req)) { next(); return; }
+  res.set('Cache-Control', 'no-store').status(440).json({ error: 'invalid_request' });
  });
 
  // Body parsing for the login form (URL-encoded) and JSON (MCP / token)
@@ -376,7 +386,7 @@ function wireApp(
    activeSessions: sessions.size,
    version: config.version,
    authMode: authProvider.authMode,
-   signIn: { password: authProvider.authMode === 'oauth', token: true, sso: [], ssoVisible: false, mfaAttemptLimit: MFA_ATTEMPT_LIMIT, secondFactorPolicy: null },
+   signIn: { password: authProvider.authMode === 'oauth', token: true, sso: [], ssoVisible: false, mfaAttemptLimit: MFA_ATTEMPT_LIMIT, mfaReady: authProvider.mfaReady, secondFactorPolicy: null },
    store: {
     backend: store.backend,
     namespace: store.namespace,
@@ -452,7 +462,11 @@ function wireApp(
  });
 
  // Login form submission: the authorize() method shows the page, this handles POST
- app.post('/login', (req, res, next) => isCrossSitePost(req) ? next() : loginLimiter(req, res, next), async (req, res) => {
+ app.post('/login', loginLimiter, async (req, res) => {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
   const { token, platform, username, password } = req.body;
 
   if (token) {
@@ -473,7 +487,11 @@ function wireApp(
  });
 
  // MFA passcode submission (second step when NS requires MFA)
- app.post('/mfa', (req, res, next) => isCrossSitePost(req) ? next() : loginLimiter(req, res, next), async (req, res) => {
+ app.post('/mfa', loginLimiter, async (req, res) => {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+   res.status(400).json({ error: 'invalid_request' });
+   return;
+  }
   const { passcode } = req.body;
 
   if (!passcode) {

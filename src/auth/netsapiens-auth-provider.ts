@@ -119,6 +119,12 @@ function memoryStoreEpoch(store: McpStore): string | undefined {
  }
  return epoch;
 }
+export function validateReplayAudience(value: string | undefined): void {
+ if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value)) {
+  throw new Error('ConfigError: replayAudience must be a stable replay-store identity');
+ }
+}
+
 function normalizeAssurance(extra: Record<string, string> | undefined): Record<string, string> {
  const normalized = { ...extra };
  if (!['password', 'ns_token', 'sso_google', 'sso_office'].includes(normalized.authMethod)) {
@@ -553,12 +559,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   return JSON.stringify([this.store.backend, this.store.namespace, this.serverBaseUrl?.toLowerCase() ?? '', this.replayAudience]);
  }
 
+ get mfaReady(): boolean {
+  return this.authMode === 'oauth' && (!this.store.capabilities.persistent || !!this.replayAudience);
+ }
+
  constructor(options: NetSapiensAuthProviderOptions) {
   if (!options.store) throw new Error('store is required');
-  if (options.replayAudience !== undefined &&
-      (typeof options.replayAudience !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(options.replayAudience))) {
-   throw new Error('ConfigError: replayAudience must be a stable replay-store identity');
-  }
+  validateReplayAudience(options.replayAudience);
   if (options.store.capabilities.persistent && !options.replayAudience) {
    logger.error('MFA unavailable: configure MCP_MFA_REPLAY_AUDIENCE for the persistent replay store');
   }

@@ -92,6 +92,16 @@ describe('SQLite schema versioning', () => {
     expect(tables(path)).toContain('guard_documents');
   });
 
+  it('does not migrate an existing file with a different namespace', async () => {
+    const path = freshPath();
+    const first = createSqliteStore({ path, namespace: 'mcp', key });
+    await first.close();
+    edit(path, 'DROP TABLE rate_limits; PRAGMA user_version=3;');
+    expect(() => createSqliteStore({ path, namespace: 'other', key })).toThrow('namespace mismatch');
+    expect(version(path)).toBe(3);
+    expect(tables(path)).not.toContain('rate_limits');
+  });
+
   it('leaves version 3 unchanged when its upgrade fails', async () => {
     const path = freshPath();
     const first = createSqliteStore({ path, namespace: 'mcp', key });
