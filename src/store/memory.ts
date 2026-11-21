@@ -40,6 +40,13 @@ export class MemoryBackend implements StoreBackend {
     sessions: new Map<string, SessionRow>(),
     guardDocuments: new Map<string, Record<string, unknown>>(),
   };
+  private readonly resumeSweep = setInterval(() => {
+    const now = Date.now();
+    for (const [id, row] of this.state.resumeTokens) {
+      if (row.expiresAt <= now) this.state.resumeTokens.delete(id);
+    }
+  }, 60_000).unref();
+
 
   async getAccess(id: string): Promise<AccessRow | undefined> { return this.state.access.get(id); }
   async putAccess(row: AccessRow): Promise<void> { this.state.access.set(row.id, row); }
@@ -321,6 +328,7 @@ export class MemoryBackend implements StoreBackend {
   }
 
   async close(): Promise<void> {
+    clearInterval(this.resumeSweep);
     for (const map of Object.values(this.state)) map.clear();
   }
 }

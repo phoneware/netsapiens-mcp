@@ -30,6 +30,7 @@ function makeProvider(options: {
     nsClientId: 'cid',
     nsClientSecret: 'csec',
     serverBaseUrl: options.serverBaseUrl || 'http://localhost:3000',
+    replayAudience: 'auth-provider-store-test',
     store: options.store,
   });
 }
@@ -70,6 +71,20 @@ describe('NetSapiensAuthProvider store wiring & Contract C1', () => {
       nsClientSecret: 'csec',
       store: undefined as unknown as McpStore,
     })).toThrow('store is required');
+  });
+
+  it('requires a valid explicit audience for persistent replay stores', async () => {
+    const memory = createMemoryStore({ namespace: 'audience_test', key });
+    const store = { ...memory, capabilities: { ...memory.capabilities, persistent: true } };
+    const options = {
+      platforms: [{ id: 'default', label: 'Default', apiUrl: 'https://netsapiens.example.com' }],
+      nsApiUrl: 'https://netsapiens.example.com', store,
+    };
+    for (const replayAudience of [undefined, '', ' ', 'store/a', 'a'.repeat(257)]) {
+      expect(() => new NetSapiensAuthProvider({ ...options, replayAudience })).toThrow('stable replayAudience is required');
+    }
+    expect(() => new NetSapiensAuthProvider({ ...options, replayAudience: 'store-a' })).not.toThrow();
+    await memory.close();
   });
 
   describe.each([

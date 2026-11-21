@@ -42,7 +42,7 @@ function hiddenField(html: string, name: string): string | undefined {
  return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1];
 }
 
-async function importApp(trustProxy = '1') {
+async function importApp(trustProxy = '1', persistent = false) {
  // Re-import after env vars are set so loadConfig picks them up.
  vi.resetModules();
  process.env.MCP_TRANSPORT = 'http';
@@ -54,7 +54,11 @@ async function importApp(trustProxy = '1') {
  process.env.MCP_PERSISTENCE = 'memory';
  process.env.MCP_TRUST_PROXY_HOPS = trustProxy;
  const mod = await import('../http-server.js');
- const created = await mod.createApp();
+ const memory = persistent ? await (await import('../store/memory.js')).createMemoryStore({
+  namespace: 'mfa_persistent_test', key: (await import('../store/codec.js')).deriveStoreKey(process.env.MCP_SESSION_SECRET),
+ }) : undefined;
+ const store = memory ? { ...memory, capabilities: { ...memory.capabilities, persistent: true } } : undefined;
+ const created = await mod.createApp(store ? { store } : undefined);
  // supertest binds and closes an ephemeral server for every request when
  // handed a bare Express app. Under parallel workers that produced sporadic
  // ECONNRESET / "socket hang up" on an arbitrary request. Hand it one real
@@ -587,8 +591,8 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
    expect(bad.text).toMatch(/Invalid|expired|passcode/i);
   });
 
-  async function startMfa() {
-   const { app, store } = await importApp();
+  async function startMfa(persistent = false) {
+   const { app, store } = await importApp('1', persistent);
    const reg = await request(app).post('/register').send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-limits' }).expect(201);
    const auth = await request(app).get('/authorize').query({
     response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
@@ -653,6 +657,45 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(440);
     expect(mockedAxios.post).toHaveBeenCalledTimes(1);
    } finally { vi.restoreAllMocks(); }
+  });
+
+  it('returns a sanitized 503 without an upstream grant or retry state when replay storage fails', async () => {
+   const { app, store, state } = await startMfa();
+   vi.spyOn(store.resumeTokens, 'consume').mockRejectedValueOnce(new Error('private-replay-store-detail'));
+   const output = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+   try {
+    const result = await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(503);
+    expect(result.headers['cache-control']).toContain('no-store');
+    expect(result.text).not.toContain('private-replay-store-detail');
+    expect(result.text).not.toContain('mfa_state');
+    expect(JSON.stringify(output.mock.calls)).not.toContain('private-replay-store-detail');
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+   } finally { output.mockRestore(); }
+  });
+
+  it('binds persistent challenges to service and store namespace', async () => {
+   const previous = process.env.MCP_MFA_REPLAY_AUDIENCE;
+   process.env.MCP_MFA_REPLAY_AUDIENCE = 'replay-store-a';
+   try {
+    const { store, state } = await startMfa(true);
+    const { createApp } = await import('../http-server.js');
+    const { createMemoryStore } = await import('../store/memory.js');
+    const { deriveStoreKey } = await import('../store/codec.js');
+    const independent = createMemoryStore({ namespace: store.namespace, key: deriveStoreKey(process.env.MCP_SESSION_SECRET!) });
+    const otherStore = { ...independent, capabilities: { ...independent.capabilities, persistent: true } };
+    process.env.MCP_MFA_REPLAY_AUDIENCE = 'replay-store-b';
+    const other = await createApp({ store: otherStore });
+    await request(other.app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: state }).expect(440);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    process.env.MCP_MFA_REPLAY_AUDIENCE = 'replay-store-a';
+    const same = await createApp({ store });
+    await request(same.app).post('/mfa').type('form').send({ passcode: '000000', mfa_state: state }).expect(200);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    await independent.close();
+   } finally {
+    if (previous === undefined) delete process.env.MCP_MFA_REPLAY_AUDIENCE;
+    else process.env.MCP_MFA_REPLAY_AUDIENCE = previous;
+   }
   });
 
   it('rejects an outstanding memory challenge after the replay store is replaced', async () => {

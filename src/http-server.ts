@@ -18,7 +18,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { loadConfig, registerTools } from './index.js';
 import { NetSapiensClient } from './netsapiens-client.js';
-import { MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
+import { isCrossSitePost, MFA_ATTEMPT_LIMIT, NetSapiensAuthProvider } from './auth/netsapiens-auth-provider.js';
 import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
@@ -156,17 +156,24 @@ export async function createApp(options?: {
  setUsageStore(store.usage);
 
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
- const authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
-  nsApiUrl: config.netsapiens.apiUrl,
-  platforms,
-  authMode,
-  nsClientId: authMode === 'oauth' ? nsClientId : undefined,
-  nsClientSecret: authMode === 'oauth' ? nsClientSecret : undefined,
-  tokenLifetimeSec,
-  serverBaseUrl: baseUrl.origin,
-  store,
-  hooks: options?.hooks,
- });
+ let authProvider: NetSapiensAuthProvider;
+ try {
+  authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
+   nsApiUrl: config.netsapiens.apiUrl,
+   platforms,
+   authMode,
+   nsClientId: authMode === 'oauth' ? nsClientId : undefined,
+   nsClientSecret: authMode === 'oauth' ? nsClientSecret : undefined,
+   tokenLifetimeSec,
+   serverBaseUrl: baseUrl.origin,
+   replayAudience: process.env.MCP_MFA_REPLAY_AUDIENCE,
+   store,
+   hooks: options?.hooks,
+  });
+ } catch (error) {
+  if (!options?.store) await store.close();
+  throw error;
+ }
  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms);
  return { app, authProvider, baseUrl, mcpUrl, store, platforms };
 }
@@ -311,8 +318,6 @@ function wireApp(
  });
 
  // Apply rate limiters to specific paths (before route handlers)
- app.use('/login', loginLimiter);
- app.use('/mfa', loginLimiter);
  app.use('/token', tokenLimiter);
  app.use('/register', tokenLimiter);
  app.use('/mcp', (req, _res, next) => {
@@ -447,7 +452,7 @@ function wireApp(
  });
 
  // Login form submission: the authorize() method shows the page, this handles POST
- app.post('/login', async (req, res) => {
+ app.post('/login', (req, res, next) => isCrossSitePost(req) ? next() : loginLimiter(req, res, next), async (req, res) => {
   const { token, platform, username, password } = req.body;
 
   if (token) {
@@ -468,7 +473,7 @@ function wireApp(
  });
 
  // MFA passcode submission (second step when NS requires MFA)
- app.post('/mfa', async (req, res) => {
+ app.post('/mfa', (req, res, next) => isCrossSitePost(req) ? next() : loginLimiter(req, res, next), async (req, res) => {
   const { passcode } = req.body;
 
   if (!passcode) {

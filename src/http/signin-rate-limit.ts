@@ -18,8 +18,18 @@ export function createSigninRateLimit(store: McpStore): RequestHandler {
       localKeys: false,
       prefix: 'signin:',
       async increment(key) {
-        const result = await store.rateLimits.hit('signin', key, SIGNIN_RATE_LIMIT);
-        return { totalHits: result.totalHits, resetTime: new Date(result.resetAt) };
+        try {
+          const result = await store.rateLimits.hit('signin', key, SIGNIN_RATE_LIMIT);
+          if (!result || !Number.isSafeInteger(result.totalHits) || result.totalHits < 1 ||
+              result.totalHits > SIGNIN_RATE_LIMIT.limit + 1 ||
+              !Number.isSafeInteger(result.resetAt) || result.resetAt <= Date.now() ||
+              !Number.isFinite(new Date(result.resetAt).getTime())) {
+            throw new Error('Invalid rate limit decision');
+          }
+          return { totalHits: result.totalHits, resetTime: new Date(result.resetAt) };
+        } catch {
+          throw new Error('Sign-in rate limit unavailable');
+        }
       },
       async decrement() { throw new Error('Unsupported rate limit decrement'); },
       async resetKey() { throw new Error('Unsupported rate limit reset'); },

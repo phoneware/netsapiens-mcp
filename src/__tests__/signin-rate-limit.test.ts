@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../http-server.js';
-import { createMemoryStore } from '../store/memory.js';
+import { createMemoryStore, MemoryBackend } from '../store/memory.js';
 import { deriveStoreKey } from '../store/codec.js';
 import type { McpStore } from '../store/types.js';
 
@@ -34,6 +34,50 @@ describe('shared sign-in limiter', () => {
     }
     await request(b.app).post('/mfa').set('X-Forwarded-For', '198.51.100.21').type('form')
       .send({ passcode: '123456', mfa_state: 'invalid' }).expect(440);
+  });
+  it('does not debit for non-POST, subpath or cross-site requests', async () => {
+    const app = await createApp({ store });
+    const hit = vi.spyOn(store.rateLimits, 'hit');
+    for (let n = 0; n < 12; n++) {
+      await request(app.app).get('/login').expect(404);
+      await request(app.app).post('/login/other').type('form').send({ username: 'u', password: 'p' }).expect(404);
+      await request(app.app).post('/login').set('Sec-Fetch-Site', 'cross-site').type('form').send({ username: 'u', password: 'p' }).expect(440);
+      await request(app.app).post('/mfa').set('Sec-Fetch-Site', 'cross-site').type('form').send({ passcode: '123456' }).expect(440);
+    }
+    expect(hit).not.toHaveBeenCalled();
+    await request(app.app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: 'invalid' }).expect(440);
+    expect(hit).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed on malformed decisions and falsy rejections', async () => {
+    const app = await createApp({ store });
+    const hit = vi.spyOn(store.rateLimits, 'hit');
+    const handler = vi.spyOn(app.authProvider, 'handleMfa');
+    for (const result of [null, {}, { totalHits: 0, resetAt: Date.now() + 60_000 }, { totalHits: 1, resetAt: NaN }, { totalHits: 1, resetAt: 0 }]) {
+      hit.mockResolvedValueOnce(result as never);
+      await request(app.app).post('/mfa').type('form').send({ passcode: '123456' }).expect(503);
+    }
+    for (const error of [undefined, null, false, 0, '']) {
+      hit.mockRejectedValueOnce(error);
+      await request(app.app).post('/mfa').type('form').send({ passcode: '123456' }).expect(503);
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('prunes expired replay markers automatically without removing live markers', async () => {
+    vi.useFakeTimers();
+    const backend = new MemoryBackend();
+    try {
+      const now = Date.now();
+      await backend.insertResumeIfAbsent({ id: 'expired', consumedAt: now, expiresAt: now + 1 }, now);
+      await backend.insertResumeIfAbsent({ id: 'live', consumedAt: now, expiresAt: now + 120_000 }, now);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(backend.state.resumeTokens.has('expired')).toBe(false);
+      expect(await backend.insertResumeIfAbsent({ id: 'live', consumedAt: now, expiresAt: now + 180_000 }, Date.now())).toBe(false);
+    } finally {
+      await backend.close();
+      vi.useRealTimers();
+    }
   });
   it('refuses both routes with a fixed 503 when the store fails', async () => {
     const app = await createApp({ store });

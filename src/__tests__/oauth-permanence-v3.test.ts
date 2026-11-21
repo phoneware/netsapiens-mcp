@@ -39,6 +39,7 @@ describe('OAuth Permanence Contract v3', () => {
       nsClientId: 'test-ns-client',
       nsClientSecret: 'test-ns-secret',
       serverBaseUrl: 'http://localhost:3000',
+      replayAudience: 'permanence-test-store',
       store,
     });
 

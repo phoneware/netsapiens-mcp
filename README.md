@@ -90,7 +90,8 @@ Deploy the multi-user HTTP service with SQLite persistence:
 ```sh
 # Copy sample configuration and set your secret
 cp .env.example .env
-# Edit .env with your NETSAPIENS_API_URL and a random 32+ character MCP_SESSION_SECRET
+# Edit .env with NETSAPIENS_API_URL, a random 32+ character MCP_SESSION_SECRET,
+# and a stable unique MCP_MFA_REPLAY_AUDIENCE for this persistent store.
 
 docker compose up -d
 ```
