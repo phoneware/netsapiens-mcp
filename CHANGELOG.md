@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - MFA challenges are single-use, expire ten minutes after the first prompt, and allow at most five attempts. Sign-in assurance is stored with the session, and `/health` reports sign-in options.
 - Forwarded IP headers are ignored by default. Set `MCP_TRUST_PROXY_HOPS=1` only behind one trusted proxy that controls those headers and is the only path to the server.
 - Sign-in attempts share one store-backed budget across instances; store failures return 503. SQLite upgrades to schema 4, which older releases refuse. Firestore requires a TTL policy on `<namespace>_rate_limits.ttlAt`. Library backends implement `StoreBackend.hitRateLimit`, stores expose `McpStore.rateLimits`, and `FirestoreCollections` includes `rateLimits`.
+- HTTP startup binds the serving listener before opening its store and drops connections until initialization finishes. An occupied port therefore leaves SQLite untouched; failures after binding can still occur after a schema upgrade, so retain a verified pre-upgrade backup.
 
 ## 3.1.0
 

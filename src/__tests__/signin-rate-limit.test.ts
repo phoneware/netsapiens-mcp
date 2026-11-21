@@ -174,6 +174,8 @@ describe('shared sign-in limiter', () => {
   });
   it('rejects a store without the limiter at startup', async () => {
     const incomplete = { ...store, rateLimits: undefined } as unknown as McpStore;
+    const close = vi.spyOn(incomplete, 'close');
     await expect(createApp({ store: incomplete })).rejects.toThrow('ConfigError: the store does not implement rateLimits.hit');
+    expect(close).not.toHaveBeenCalled();
   });
 });

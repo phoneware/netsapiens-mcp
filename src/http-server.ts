@@ -8,6 +8,8 @@
  */
 
 import { randomUUID, createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { Socket } from 'node:net';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -23,7 +25,7 @@ import { ServerError, InvalidTokenError } from '@modelcontextprotocol/sdk/server
 import { StoreConfigError, StoreLockedError, RetryableRefreshError, LeaseLostError } from './store/codec.js';
 import { UpstreamUnavailableError, UpstreamTimeoutError } from './auth/netsapiens-auth-provider.js';
 import { parsePlatforms, type NetSapiensPlatform } from './auth/platforms.js';
-import { parseAuthMode } from './auth/auth-mode.js';
+import { parseAuthMode, type AuthMode } from './auth/auth-mode.js';
 import { allowLoopbackRedirectUri } from './auth/loopback-redirect.js';
 import { negotiateProtocolVersion } from './http/protocol-version.js';
 import { createSigninRateLimitOptions, signinLimitError, RATE_LIMIT_MESSAGE } from './http/signin-rate-limit.js';
@@ -116,22 +118,40 @@ function respondMethodNotAllowed(res: ServerResponse, message: string): void {
  * Build the Express app + auth provider without binding to a port.
  * Used by both `startHttpServer()` and the test harness.
  */
-export async function createApp(options?: {
+type HttpAppOptions = {
  store?: McpStore;
  authProvider?: NetSapiensAuthProvider;
  hooks?: import('./auth/types.js').AuthHooks;
-}): Promise<{
+};
+interface PreparedHttpConfig {
+ env: NodeJS.ProcessEnv;
+ config: MCPServerConfig;
+ platforms: readonly NetSapiensPlatform[];
+ port: number;
+ host: string;
+ baseUrl: URL;
+ mcpUrl: URL;
+ authMode: AuthMode;
+ nsClientId?: string;
+ nsClientSecret?: string;
+ proxyHops: string;
+ tokenLifetimeSec: number;
+}
+interface CreatedHttpApp {
  app: express.Express;
  authProvider: NetSapiensAuthProvider;
  baseUrl: URL;
  mcpUrl: URL;
  store: McpStore;
  platforms: readonly NetSapiensPlatform[];
-}> {
+}
+
+function prepareHttpConfig(options?: HttpAppOptions): PreparedHttpConfig {
+ const env = { ...process.env };
  const config = loadConfig();
- const platforms = parsePlatforms(process.env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
- const port = parseHttpPort(process.env.MCP_PORT);
- const baseUrl = new URL(process.env.MCP_BASE_URL || `http://localhost:${port}`);
+ const platforms = parsePlatforms(env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
+ const port = parseHttpPort(env.MCP_PORT);
+ const baseUrl = new URL(env.MCP_BASE_URL || `http://localhost:${port}`);
  const mcpUrl = new URL('/mcp', baseUrl);
  // Reuse the SDK's issuer validation before opening or upgrading the store.
  try {
@@ -141,9 +161,9 @@ export async function createApp(options?: {
   throw new Error('ConfigError: MCP_BASE_URL is not a valid OAuth issuer');
  }
 
- const authMode = parseAuthMode(process.env.NETSAPIENS_AUTH_MODE);
- const nsClientId = process.env.NETSAPIENS_OAUTH_CLIENT_ID;
- const nsClientSecret = process.env.NETSAPIENS_OAUTH_CLIENT_SECRET;
+ const authMode = parseAuthMode(env.NETSAPIENS_AUTH_MODE);
+ const nsClientId = env.NETSAPIENS_OAUTH_CLIENT_ID;
+ const nsClientSecret = env.NETSAPIENS_OAUTH_CLIENT_SECRET;
 
  if (authMode === 'oauth' && (!nsClientId || !nsClientSecret)) {
   throw new Error(
@@ -153,19 +173,27 @@ export async function createApp(options?: {
   );
  }
 
- const proxyHops = process.env.MCP_TRUST_PROXY_HOPS ?? '0';
+ const proxyHops = env.MCP_TRUST_PROXY_HOPS ?? '0';
  if (proxyHops !== '0' && proxyHops !== '1') throw new Error('ConfigError: MCP_TRUST_PROXY_HOPS must be 0 or 1');
- const tokenLifetimeSec = parseLifetimeHoursToSeconds(process.env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
- if (!options?.authProvider) validateReplayAudience(process.env.MCP_MFA_REPLAY_AUDIENCE);
+ const tokenLifetimeSec = parseLifetimeHoursToSeconds(env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
+ if (!options?.authProvider) validateReplayAudience(env.MCP_MFA_REPLAY_AUDIENCE);
+ return { env, config, platforms, port, host: env.MCP_HOST || '0.0.0.0', baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec };
+}
+
+export async function createApp(options?: HttpAppOptions) {
+ return createAppWithConfig(options, prepareHttpConfig(options));
+}
+
+async function createAppWithConfig(options: HttpAppOptions | undefined, prepared: PreparedHttpConfig): Promise<CreatedHttpApp> {
+ const { env, config, platforms, baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec } = prepared;
 
  let store: McpStore;
  if (options?.store) {
   store = options.store;
  } else {
-  const storeResult = await createStoreFromEnv();
+  const storeResult = await createStoreFromEnv(env);
   store = storeResult.store;
  }
- setUsageStore(store.usage);
 
  
  let authProvider: NetSapiensAuthProvider;
@@ -178,16 +206,19 @@ export async function createApp(options?: {
    nsClientSecret: authMode === 'oauth' ? nsClientSecret : undefined,
    tokenLifetimeSec,
    serverBaseUrl: baseUrl.origin,
-   replayAudience: process.env.MCP_MFA_REPLAY_AUDIENCE,
+   replayAudience: env.MCP_MFA_REPLAY_AUDIENCE,
    store,
    hooks: options?.hooks,
   });
+  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops));
+  setUsageStore(store.usage);
+  return { app, authProvider, baseUrl, mcpUrl, store, platforms };
  } catch (error) {
-  if (!options?.store) await store.close();
+  if (!options?.store) {
+   try { await store.close(); } catch { logger.error('Error closing store after app initialization failure'); }
+  }
   throw error;
  }
- const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops));
- return { app, authProvider, baseUrl, mcpUrl, store, platforms };
 }
 
 /**
@@ -197,70 +228,70 @@ export async function createApp(options?: {
  * especially, which otherwise leak a listener per case and collide on ports.
  */
 export async function startHttpServer(): Promise<HttpServer> {
- const { app, baseUrl, mcpUrl, store, platforms } = await createApp();
- const config = loadConfig();
- const port = parseHttpPort(process.env.MCP_PORT);
- const host = process.env.MCP_HOST || '0.0.0.0';
+ const prepared = prepareHttpConfig();
+ const { host, port, config, platforms, baseUrl, mcpUrl } = prepared;
+ const httpServer = createServer();
+ const rejectBeforeReady = (socket: Socket) => socket.destroy();
+ httpServer.on('connection', rejectBeforeReady);
 
- const onShutdown = async () => {
-  try {
-   await store.close();
-  } catch (err) {
-   logger.error('Error closing store on shutdown', { error: String(err) });
-  }
-  process.exit(0);
- };
+ await new Promise<void>((resolve, reject) => {
+  const onError = (error: Error) => { cleanup(); reject(error); };
+  const onListening = () => { cleanup(); resolve(); };
+  const cleanup = () => {
+   httpServer.removeListener('error', onError);
+   httpServer.removeListener('listening', onListening);
+  };
+  httpServer.once('error', onError);
+  httpServer.once('listening', onListening);
+  try { httpServer.listen(port, host); } catch (error) { cleanup(); reject(error); }
+ });
 
+ let initialized: CreatedHttpApp;
  try {
-  return await new Promise((resolve, reject) => {
-   const httpServer = app.listen(port, host);
-   const onStartError = (error: Error) => reject(error);
-   httpServer.once('error', onStartError);
-   httpServer.once('listening', () => {
-    httpServer.removeListener('error', onStartError);
-    process.once('SIGINT', onShutdown);
-    process.once('SIGTERM', onShutdown);
-   logger.info('NetSapiens MCP HTTP server started', {
-    host,
-    port,
-    mode: isStatelessMode() ? 'stateless' : 'session',
-    authorize: `${baseUrl.origin}/authorize`,
-    mcp: mcpUrl.href,
-   });
-   if (isStatelessMode() && process.env.MCP_CONFIRM_DESTRUCTIVE === 'true') {
-    logger.warn(
-     'MCP_CONFIRM_DESTRUCTIVE is on but MCP_STATELESS was forced true. ' +
-     'Elicitation prompts need a session to reach the client, so destructive ' +
-     'calls will fall back to MCP_CONFIRM_FALLBACK (default: refuse). ' +
-     'Set MCP_STATELESS=false to keep the confirmation gate.',
-    );
-   }
-   if (config.debug) {
-    logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
-   }
-   const origins = [...new Set(platforms.map((p) => new URL(p.apiUrl).origin))];
-   void warmVersionCache(origins).catch((err) => {
-    logger.warn('Failed to warm version cache on startup', { error: String(err) });
-   });
-   resolve(httpServer);
-  });
-
- 
-  httpServer.on('close', () => {
-   process.removeListener('SIGINT', onShutdown);
-   process.removeListener('SIGTERM', onShutdown);
-  });
-  });
+  initialized = await createAppWithConfig(undefined, prepared);
  } catch (error) {
-  process.removeListener('SIGINT', onShutdown);
-  process.removeListener('SIGTERM', onShutdown);
-  try {
-   await store.close();
-  } catch {
-   logger.error('Error closing store after listener startup failure');
-  }
+  await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   throw error;
  }
+ const { app, store } = initialized;
+ let closingStore: Promise<void> | undefined;
+ const closeStore = () => closingStore ??= store.close().catch(() => {
+  logger.error('Error closing store on shutdown');
+ });
+ const onShutdown = async () => {
+  httpServer.close();
+  httpServer.closeAllConnections();
+  await closeStore();
+  process.exit(0);
+ };
+ httpServer.once('close', () => {
+  process.removeListener('SIGINT', onShutdown);
+  process.removeListener('SIGTERM', onShutdown);
+  void closeStore();
+ });
+ process.once('SIGINT', onShutdown);
+ process.once('SIGTERM', onShutdown);
+ httpServer.on('request', app);
+ httpServer.removeListener('connection', rejectBeforeReady);
+
+ logger.info('NetSapiens MCP HTTP server started', {
+  host, port, mode: isStatelessMode() ? 'stateless' : 'session',
+  authorize: `${baseUrl.origin}/authorize`, mcp: mcpUrl.href,
+ });
+ if (isStatelessMode() && prepared.env.MCP_CONFIRM_DESTRUCTIVE === 'true') {
+  logger.warn(
+   'MCP_CONFIRM_DESTRUCTIVE is on but MCP_STATELESS was forced true. ' +
+   'Elicitation prompts need a session to reach the client, so destructive ' +
+   'calls will fall back to MCP_CONFIRM_FALLBACK (default: refuse). ' +
+   'Set MCP_STATELESS=false to keep the confirmation gate.',
+  );
+ }
+ if (config.debug) logger.debug('Debug mode enabled', { nsApiUrl: config.netsapiens.apiUrl });
+ const origins = [...new Set(platforms.map((p) => new URL(p.apiUrl).origin))];
+ void warmVersionCache(origins).catch((err) => {
+  logger.warn('Failed to warm version cache on startup', { error: String(err) });
+ });
+ return httpServer;
 }
 
 function parseHttpPort(raw: string | undefined): number {
