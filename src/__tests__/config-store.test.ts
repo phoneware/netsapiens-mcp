@@ -161,7 +161,7 @@ describe('config-store', () => {
 
   it('holds the real port but drops requests until initialization completes, then closes its store', async () => {
     const path = join(testHome, 'startup-gated.sqlite');
-    const keys = ['MCP_TRANSPORT', 'MCP_PORT', 'MCP_HOST', 'MCP_BASE_URL', 'MCP_PERSISTENCE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'MCP_MFA_REPLAY_AUDIENCE', 'NETSAPIENS_API_URL', 'NETSAPIENS_OAUTH_CLIENT_ID', 'NETSAPIENS_OAUTH_CLIENT_SECRET'] as const;
+    const keys = ['MCP_TRANSPORT', 'MCP_PORT', 'MCP_HOST', 'MCP_BASE_URL', 'MCP_PERSISTENCE', 'MCP_STORE_NAMESPACE', 'MCP_STORE_PATH', 'MCP_SESSION_SECRET', 'MCP_MFA_REPLAY_AUDIENCE', 'NETSAPIENS_API_URL', 'NETSAPIENS_OAUTH_CLIENT_ID', 'NETSAPIENS_OAUTH_CLIENT_SECRET'] as const;
     const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
     const sigint = process.listeners('SIGINT');
     const sigterm = process.listeners('SIGTERM');
@@ -189,8 +189,11 @@ describe('config-store', () => {
         MCP_MFA_REPLAY_AUDIENCE: 'gated-test', NETSAPIENS_API_URL: 'https://netsapiens.example.com',
         NETSAPIENS_OAUTH_CLIENT_ID: 'client', NETSAPIENS_OAUTH_CLIENT_SECRET: 'secret',
       });
+      delete process.env.MCP_STORE_NAMESPACE;
       starting = startHttpServer();
       await entered.promise;
+      process.env.MCP_STORE_NAMESPACE = 'changed_after_preflight';
+      process.env.MCP_STORE_PATH = join(testHome, 'changed-after-preflight.sqlite');
       const address = listener!.address();
       if (!address || typeof address === 'string') throw new Error('No listening address');
       const probe = createServer();
@@ -207,13 +210,16 @@ describe('config-store', () => {
       running = await starting;
       starting = undefined;
       expect(running).toBe(listener);
-      expect((await fetch(`http://127.0.0.1:${address.port}/health`)).status).toBe(200);
+      const health = await fetch(`http://127.0.0.1:${address.port}/health`);
+      expect(health.status).toBe(200);
+      expect((await health.json() as { store: { namespace: string } }).store.namespace).toBe('mcp');
       await new Promise<void>(resolve => running!.close(() => resolve()));
       running = undefined;
       expect(process.listeners('SIGINT')).toEqual(sigint);
       expect(process.listeners('SIGTERM')).toEqual(sigterm);
       const reopened = createSqliteStore({ path, namespace: 'mcp', key: deriveStoreKey('a'.repeat(32)) });
       await reopened.close();
+      delete process.env.MCP_STORE_NAMESPACE;
 
       const failedPath = join(testHome, 'startup-failed.sqlite');
       process.env.MCP_STORE_PATH = failedPath;

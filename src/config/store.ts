@@ -19,27 +19,27 @@ export interface StoreFromEnvResult {
 
 export async function createStoreFromEnv(env?: NodeJS.ProcessEnv): Promise<StoreFromEnvResult> {
   // 1. Validate removed variables
-  const tokenStorePath = env?.MCP_TOKEN_STORE_PATH !== undefined ? env.MCP_TOKEN_STORE_PATH : process.env.MCP_TOKEN_STORE_PATH;
+  const tokenStorePath = env ? env.MCP_TOKEN_STORE_PATH : process.env.MCP_TOKEN_STORE_PATH;
   if (tokenStorePath !== undefined) {
     throw new Error('ConfigError: MCP_TOKEN_STORE_PATH was removed in 3.0.0; use MCP_STORE_PATH');
   }
-  const authCodesCollection = env?.FIRESTORE_AUTH_CODES_COLLECTION !== undefined ? env.FIRESTORE_AUTH_CODES_COLLECTION : process.env.FIRESTORE_AUTH_CODES_COLLECTION;
+  const authCodesCollection = env ? env.FIRESTORE_AUTH_CODES_COLLECTION : process.env.FIRESTORE_AUTH_CODES_COLLECTION;
   if (authCodesCollection !== undefined) {
     throw new Error('ConfigError: FIRESTORE_AUTH_CODES_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE');
   }
-  const resumeTokensCollection = env?.FIRESTORE_RESUME_TOKENS_COLLECTION !== undefined ? env.FIRESTORE_RESUME_TOKENS_COLLECTION : process.env.FIRESTORE_RESUME_TOKENS_COLLECTION;
+  const resumeTokensCollection = env ? env.FIRESTORE_RESUME_TOKENS_COLLECTION : process.env.FIRESTORE_RESUME_TOKENS_COLLECTION;
   if (resumeTokensCollection !== undefined) {
     throw new Error('ConfigError: FIRESTORE_RESUME_TOKENS_COLLECTION was removed in 3.0.0; use MCP_STORE_NAMESPACE');
   }
 
   // 2. Validate session secret
-  const secret = env?.MCP_SESSION_SECRET ?? process.env.MCP_SESSION_SECRET;
+  const secret = env ? env.MCP_SESSION_SECRET : process.env.MCP_SESSION_SECRET;
   if (!secret || secret.length < 32) {
     throw new Error('ConfigError: MCP_SESSION_SECRET must be at least 32 characters');
   }
   // 3. Validate persistence mode
-  const persistenceRaw = env?.MCP_PERSISTENCE !== undefined ? env.MCP_PERSISTENCE : process.env.MCP_PERSISTENCE;
-  const gcpProject = env?.GOOGLE_CLOUD_PROJECT !== undefined ? env.GOOGLE_CLOUD_PROJECT : process.env.GOOGLE_CLOUD_PROJECT;
+  const persistenceRaw = env ? env.MCP_PERSISTENCE : process.env.MCP_PERSISTENCE;
+  const gcpProject = env ? env.GOOGLE_CLOUD_PROJECT : process.env.GOOGLE_CLOUD_PROJECT;
 
   if (persistenceRaw === 'file') {
     throw new Error('ConfigError: MCP_PERSISTENCE=file was removed in 3.0.0; the default store is sqlite (see MCP_STORE_PATH)');
@@ -58,9 +58,9 @@ export async function createStoreFromEnv(env?: NodeJS.ProcessEnv): Promise<Store
   }
 
   // 4. Validate namespace
-  const isReadOnly = (env?.MCP_READ_ONLY ?? process.env.MCP_READ_ONLY) === 'true';
+  const isReadOnly = (env ? env.MCP_READ_ONLY : process.env.MCP_READ_ONLY) === 'true';
   const defaultNamespace = isReadOnly ? 'readonly_mcp' : 'mcp';
-  const namespaceParam = env?.MCP_STORE_NAMESPACE !== undefined ? env.MCP_STORE_NAMESPACE : process.env.MCP_STORE_NAMESPACE;
+  const namespaceParam = env ? env.MCP_STORE_NAMESPACE : process.env.MCP_STORE_NAMESPACE;
   const namespace = namespaceParam ?? defaultNamespace;
   const namespaceRegex = /^[a-z][a-z0-9_]{0,30}$/;
   if (!namespaceRegex.test(namespace)) {
@@ -68,7 +68,7 @@ export async function createStoreFromEnv(env?: NodeJS.ProcessEnv): Promise<Store
   }
 
   // 5. Validate store path
-  const storePath = env?.MCP_STORE_PATH !== undefined ? env.MCP_STORE_PATH : process.env.MCP_STORE_PATH;
+  const storePath = env ? env.MCP_STORE_PATH : process.env.MCP_STORE_PATH;
   if (storePath !== undefined && persistence !== 'sqlite') {
     throw new Error(`ConfigError: MCP_STORE_PATH is only valid with MCP_PERSISTENCE=sqlite; got backend "${persistence}"`);
   }

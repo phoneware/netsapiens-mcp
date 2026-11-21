@@ -147,7 +147,28 @@ interface CreatedHttpApp {
 }
 
 function prepareHttpConfig(options?: HttpAppOptions): PreparedHttpConfig {
- const env = { ...process.env };
+ const env: NodeJS.ProcessEnv = {
+  NETSAPIENS_PLATFORMS: process.env.NETSAPIENS_PLATFORMS,
+  NETSAPIENS_AUTH_MODE: process.env.NETSAPIENS_AUTH_MODE,
+  NETSAPIENS_OAUTH_CLIENT_ID: process.env.NETSAPIENS_OAUTH_CLIENT_ID,
+  NETSAPIENS_OAUTH_CLIENT_SECRET: process.env.NETSAPIENS_OAUTH_CLIENT_SECRET,
+  MCP_PORT: process.env.MCP_PORT,
+  MCP_HOST: process.env.MCP_HOST,
+  MCP_BASE_URL: process.env.MCP_BASE_URL,
+  MCP_TRUST_PROXY_HOPS: process.env.MCP_TRUST_PROXY_HOPS,
+  MCP_TOKEN_LIFETIME_HOURS: process.env.MCP_TOKEN_LIFETIME_HOURS,
+  MCP_MFA_REPLAY_AUDIENCE: process.env.MCP_MFA_REPLAY_AUDIENCE,
+  MCP_CONFIRM_DESTRUCTIVE: process.env.MCP_CONFIRM_DESTRUCTIVE,
+  MCP_TOKEN_STORE_PATH: process.env.MCP_TOKEN_STORE_PATH,
+  FIRESTORE_AUTH_CODES_COLLECTION: process.env.FIRESTORE_AUTH_CODES_COLLECTION,
+  FIRESTORE_RESUME_TOKENS_COLLECTION: process.env.FIRESTORE_RESUME_TOKENS_COLLECTION,
+  MCP_SESSION_SECRET: process.env.MCP_SESSION_SECRET,
+  MCP_PERSISTENCE: process.env.MCP_PERSISTENCE,
+  GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT,
+  MCP_READ_ONLY: process.env.MCP_READ_ONLY,
+  MCP_STORE_NAMESPACE: process.env.MCP_STORE_NAMESPACE,
+  MCP_STORE_PATH: process.env.MCP_STORE_PATH,
+ };
  const config = loadConfig();
  const platforms = parsePlatforms(env.NETSAPIENS_PLATFORMS, config.netsapiens.apiUrl);
  const port = parseHttpPort(env.MCP_PORT);
