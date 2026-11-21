@@ -105,19 +105,34 @@ export async function createStoreFromEnv(env?: NodeJS.ProcessEnv): Promise<Store
     store = createSqliteStore({ path: dbPath!, namespace, key });
   } else if (persistence === 'firestore') {
     // Exception: @google-cloud/firestore is an optional peer dependency and cannot be statically imported.
-    let firestoreModule: { Firestore: new (opts: { projectId?: string; ignoreUndefinedProperties?: boolean }) => unknown };
+    let firestoreModule: { Firestore: new (opts: { projectId?: string; ignoreUndefinedProperties?: boolean }) => FirestoreLike & { terminate(): Promise<void> } };
     try {
       firestoreModule = (await import('@google-cloud/firestore')) as unknown as typeof firestoreModule;
     } catch {
       throw new Error('ConfigError: MCP_PERSISTENCE=firestore needs @google-cloud/firestore: npm install @google-cloud/firestore');
     }
-    const Firestore = firestoreModule.Firestore;
-    const db = new Firestore({ projectId: gcpProject, ignoreUndefinedProperties: true }) as unknown as FirestoreLike;
     const { createFirestoreStore } = await import('../store/firestore.js');
+    const db = new firestoreModule.Firestore({ projectId: gcpProject, ignoreUndefinedProperties: true });
+    try {
+      const ownedStore = createFirestoreStore({ db, namespace, key });
+      let closing: Promise<void> | undefined;
+      store = {
+        ...ownedStore,
+        close: () => closing ??= (async () => {
+          let storeError: unknown;
+          let storeFailed = false;
+          try { await ownedStore.close(); } catch (error) { storeFailed = true; storeError = error; }
+          try { await db.terminate(); } catch (error) { if (!storeFailed) throw error; }
+          if (storeFailed) throw storeError;
+        })(),
+      };
+    } catch (error) {
+      try { await db.terminate(); } catch { logger.error('Error terminating Firestore after store initialization failure'); }
+      throw error;
+    }
     const startMsg = `store: firestore (namespace ${namespace})`;
     console.error(startMsg);
     logger.info(startMsg);
-    store = createFirestoreStore({ db, namespace, key });
   } else {
     // memory
     const warnMsg = 'warn: memory store: every sign-in is lost on restart; one process only';
