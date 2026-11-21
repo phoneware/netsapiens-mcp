@@ -8,6 +8,8 @@ import http from 'node:http';
 const mockSetRequestHandler = vi.fn();
 const mockConnect = vi.fn();
 const mockClose = vi.fn();
+let mockIdentity = { nsUsername: 'testuser', nsApiUrl: 'https://netsapiens.example.com', nsRefreshFamilyId: 'family-1' };
+let mockClientId = 'test-client';
 
 vi.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
   Server: vi.fn().mockImplementation(function (this: any) {
@@ -48,6 +50,7 @@ vi.mock('../netsapiens-client.js', () => ({
     this.getAgentStatistics = vi.fn();
     this.testConnection = vi.fn();
     this.setApiToken = vi.fn();
+    this.setApiUrl = vi.fn();
   }),
 }));
 
@@ -63,8 +66,9 @@ let mockSessionId = 'test-session-id';
 let mockOnClose: (() => void) | undefined;
 
 vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
-  StreamableHTTPServerTransport: vi.fn().mockImplementation(function (this: any) {
+  StreamableHTTPServerTransport: vi.fn().mockImplementation(function (this: any, options: { onsessioninitialized?: (sid: string) => void }) {
     this.handleRequest = mockHandleRequest.mockImplementation((_req: any, res: any) => {
+      if (options.onsessioninitialized && _req.body?.method === 'initialize') options.onsessioninitialized(mockSessionId);
       // End the response so the HTTP request doesn't hang
       if (res && typeof res.end === 'function' && !res.writableEnded) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -108,9 +112,9 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => 
     return (req: any, _res: any, next: any) => {
       req.auth = {
         token: 'test-bearer-token',
-        clientId: 'test-client',
+        clientId: mockClientId,
         scopes: [],
-        extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
+        extra: { nsAccessToken: 'ns-token-123', ...mockIdentity },
       };
       next();
     };
@@ -121,17 +125,18 @@ vi.mock('@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js', () => 
 vi.mock('../auth/netsapiens-auth-provider.js', () => ({
   MFA_ATTEMPT_LIMIT: 5,
   validateReplayAudience: vi.fn(),
-  NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any) {
+  NetSapiensAuthProvider: vi.fn().mockImplementation(function (this: any, options: { secondFactorPolicy?: unknown }) {
     this.authMode = 'oauth';
     this.mfaReady = true;
+    this.effectiveSecondFactorPolicy = options.secondFactorPolicy ?? null;
     this.clientsStore = { getClient: vi.fn() };
     this.handleLogin = vi.fn();
-    this.verifyAccessToken = vi.fn().mockResolvedValue({
-      token: 'test-bearer-token',
-      clientId: 'test-client',
+    this.verifyAccessToken = vi.fn().mockImplementation(async (token: string) => ({
+      token,
+      clientId: mockClientId,
       scopes: [],
-      extra: { nsAccessToken: 'ns-token-123', nsUsername: 'testuser' },
-    });
+      extra: { nsAccessToken: 'ns-token-123', ...mockIdentity },
+    }));
   }),
 }));
 
@@ -156,6 +161,7 @@ const ENV_KEYS = [
   'MCP_HOST',
   'MCP_BASE_URL',
   'MCP_STATELESS',
+  'MCP_SECOND_FACTOR_POLICY',
 ] as const;
 
 /** Make one HTTP request to the bound local listener. */
@@ -232,6 +238,8 @@ describe('startHttpServer()', () => {
     vi.clearAllMocks();
     mockOnClose = undefined;
     mockSessionId = 'test-session-id';
+    mockIdentity = { nsUsername: 'testuser', nsApiUrl: 'https://netsapiens.example.com', nsRefreshFamilyId: 'family-1' };
+    mockClientId = 'test-client';
 
     savedEnv = {};
     for (const key of ENV_KEYS) {
@@ -282,6 +290,55 @@ describe('startHttpServer()', () => {
     expect(body.mode).toBe('session');
 
     consoleSpy.mockRestore();
+  });
+  it('reports the enabled non-secret second-factor policy on health', async () => {
+    const policy = { tiers: ['domain_admin', 'reseller', 'system_admin'], acceptProviderSignIn: true, acceptPastedToken: false, applyToExistingSessions: true };
+    process.env.MCP_SECOND_FACTOR_POLICY = JSON.stringify(policy);
+    testPort = await startFixture(servers);
+    const res = await request(testPort, 'GET', '/health');
+    expect(JSON.parse(res.body).signIn.secondFactorPolicy).toEqual(policy);
+  });
+
+  it('binds stateful POST, GET and DELETE to the verified principal, platform and family', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    testPort = await startFixture(servers);
+    const headers = { authorization: 'Bearer initial', 'mcp-session-id': mockSessionId };
+    const initialized = await request(testPort, 'POST', '/mcp', {
+      headers,
+      body: { method: 'initialize', jsonrpc: '2.0', id: 1 },
+    });
+    expect(initialized.status).toBe(200);
+    const owner = { ...mockIdentity };
+    for (const identity of [
+      { ...owner, nsUsername: 'other' },
+      { ...owner, nsApiUrl: 'https://other.example.com' },
+      { ...owner, nsRefreshFamilyId: 'family-2' },
+    ]) {
+      mockIdentity = identity;
+      for (const method of ['POST', 'GET', 'DELETE'] as const) {
+        const result = await request(testPort, method, '/mcp', {
+          headers,
+          body: method === 'POST' ? { method: 'tools/list', jsonrpc: '2.0', id: 2 } : undefined,
+        });
+        expect(result.status).toBe(404);
+      }
+    }
+    mockIdentity = owner;
+    mockClientId = 'another-client';
+    for (const method of ['POST', 'GET', 'DELETE'] as const) {
+      const result = await request(testPort, method, '/mcp', {
+        headers,
+        body: method === 'POST' ? { method: 'tools/list', jsonrpc: '2.0', id: 2 } : undefined,
+      });
+      expect(result.status).toBe(404);
+    }
+    mockClientId = 'test-client';
+    mockIdentity = owner;
+    const rotated = await request(testPort, 'POST', '/mcp', {
+      headers: { ...headers, authorization: 'Bearer rotated' },
+      body: { method: 'tools/list', jsonrpc: '2.0', id: 3 },
+    });
+    expect(rotated.status).toBe(200);
   });
 
   it('returns 401 or routes through bearerAuth on POST /mcp', async () => {
