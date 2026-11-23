@@ -157,6 +157,14 @@ function jwtPayload(token: unknown): Record<string, unknown> | undefined {
  }
 }
 
+/**
+ * Whether a NetSapiens grant answer still owes a second factor. Both grant steps use this one
+ * definition, so the mfa grant cannot finish a sign-in with a token that the password grant refuses.
+ */
+function isLimitedNsGrant(grant: { scope?: unknown; access_token?: unknown }): boolean {
+ return grant.scope === 'mfa_required' || jwtPayload(grant.access_token)?.user_scope === 'mfa_required';
+}
+
 export function signValue<T>(payload: T, ttlSec: number): string {
  const data = { ...(payload as object), exp: Math.floor(Date.now() / 1000) + ttlSec };
  const json = Buffer.from(JSON.stringify(data));
@@ -1685,7 +1693,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
    // A limited token means NetSapiens still owes a second factor. It is good only for the
    // mfa grant, so it never completes a sign-in on its own.
-   const limited = data.scope === 'mfa_required' || jwtPayload(data.access_token)?.user_scope === 'mfa_required';
+   const limited = isLimitedNsGrant(data);
    const hasToken = typeof data.access_token === 'string' && data.access_token.length > 0;
 
    // MFA challenge: NS returns mfa_type/mfa_vendor when a second factor is required.
@@ -1746,7 +1754,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     },
     { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
    );
-   if (typeof response.data?.access_token !== 'string' || !response.data.access_token || response.data.mfa_type || response.data.mfa_vendor || response.data.scope === 'mfa_required') {
+   if (typeof response.data?.access_token !== 'string' || !response.data.access_token || response.data.mfa_type || response.data.mfa_vendor || isLimitedNsGrant(response.data)) {
     throw new Error('MFA grant did not return a completed token');
    }
 

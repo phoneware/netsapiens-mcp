@@ -44,7 +44,7 @@ function hiddenField(html: string, name: string): string | undefined {
 }
 
 /** An unsigned JWT-shaped token. The server reads its claims without verifying them. */
-function unsignedJwt(claims: Record<string, unknown>): string {
+function unsignedJwt(claims: unknown): string {
  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
  return `${header}.${payload}.unchecked`;
@@ -54,6 +54,15 @@ function unsignedJwt(claims: Record<string, unknown>): string {
 function mfaGrantCount(): number {
  return mockedAxios.post.mock.calls
   .filter(([, body]: [unknown, { grant_type?: string }]) => body.grant_type === 'mfa').length;
+}
+
+async function authorizeState(app: Express): Promise<string> {
+ const reg = await request(app).post('/register').send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-flow' }).expect(201);
+ const auth = await request(app).get('/authorize').query({
+  response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
+  code_challenge: pkceChallenge(randomBytes(32).toString('base64url')), code_challenge_method: 'S256',
+ }).expect(200);
+ return hiddenField(auth.text, 'auth_state')!;
 }
 
 async function importApp(trustProxy = '1', persistent = false) {
@@ -485,6 +494,20 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
    expect(r.text).toMatch(/session has expired|reconnect/i);
    expect(r.headers['cache-control']).toContain('no-store');
   });
+
+  it.each([
+   ['a full JWT whose user_scope is an ordinary role', unsignedJwt({ user_scope: 'Office Manager' })],
+   ['a token with four segments', `${unsignedJwt({ user_scope: 'Office Manager' })}.extra`],
+   ['a JWT whose payload is an array', unsignedJwt(['mfa_required'])],
+   ['a JWT whose payload does not decode', 'eyJhbGciOiJub25lIn0.!!!.unchecked'],
+  ])('completes password sign-in for %s', async (_shape: string, accessToken: string) => {
+   const { app } = await importApp();
+   const state = await authorizeState(app);
+   mockedAxios.post = vi.fn().mockResolvedValueOnce({ data: { access_token: accessToken, refresh_token: 'ns-refresh', expires_in: 3600 } });
+   mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Office Manager' } });
+   const login = await request(app).post('/login').type('form').send({ username: 'alice', password: 'pw', auth_state: state }).expect(302);
+   expect(new URL(login.headers.location as string).searchParams.get('code')).toBeTruthy();
+  });
  });
 
  describe('MFA flow', () => {
@@ -803,15 +826,6 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
     .send({ passcode: '123456', mfa_state: 'invalid' }).expect(440);
   });
 
-  async function authorizeState(app: Express): Promise<string> {
-   const reg = await request(app).post('/register').send({ redirect_uris: ['http://localhost/cb'], client_name: 'mfa-flow' }).expect(201);
-   const auth = await request(app).get('/authorize').query({
-    response_type: 'code', client_id: reg.body.client_id, redirect_uri: 'http://localhost/cb',
-    code_challenge: pkceChallenge(randomBytes(32).toString('base64url')), code_challenge_method: 'S256',
-   }).expect(200);
-   return hiddenField(auth.text, 'auth_state')!;
-  }
-
   /** The password grant asks for an authenticator code; only 123456 passes the mfa grant. */
   function mfaNetSapiens() {
    return vi.fn(async (_url: string, body: { grant_type?: string; passcode?: string }) => {
@@ -990,6 +1004,23 @@ describe('OAuth flow (end-to-end)', SOCKET_RETRY, () => {
    const logs = captured.join('\n');
    expect(logs).toContain('NS MFA grant failed');
    for (const value of issued) expect(logs).not.toContain(value);
+  });
+
+  it('refuses an MFA grant whose token is limited by user_scope alone, and issues no code', async () => {
+   const { app, store } = await importApp();
+   const state = await authorizeState(app);
+   const issued = vi.spyOn(store.authCodes, 'put');
+   mockedAxios.post = vi.fn()
+    .mockResolvedValueOnce({ data: { access_token: 'partial', mfa_type: 'authenticator', mfa_vendor: 'google' } })
+    .mockResolvedValueOnce({ data: { access_token: unsignedJwt({ user_scope: 'mfa_required' }), expires_in: 600 } });
+   mockedAxios.get = vi.fn().mockResolvedValue({ data: { 'user-scope': 'Basic User' } });
+   const prompt = await request(app).post('/login').type('form').send({ username: 'alice', password: 'pw', auth_state: state }).expect(200);
+   const retry = await request(app).post('/mfa').type('form').send({ passcode: '123456', mfa_state: hiddenField(prompt.text, 'mfa_state') }).expect(200);
+   expect(retry.headers.location).toBeUndefined();
+   expect(retry.text).toMatch(/temporarily unavailable/);
+   expect(hiddenField(retry.text, 'mfa_state')).toBeTruthy();
+   expect(issued).not.toHaveBeenCalled();
+   expect(mfaGrantCount()).toBe(1);
   });
  });
 
