@@ -35,7 +35,7 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { LoopbackTolerantClientsStore } from './loopback-redirect.js';
 import { LeaseLostError, RetryableRefreshError } from '../store/codec.js';
-import type { McpStore, StoredToken, StoredSession, AuthCodeData } from '../store/types.js';
+import type { McpStore, RateLimitDecision, StoredToken, StoredSession, AuthCodeData } from '../store/types.js';
 import { nsScopeToTier, type UserRole } from './roles.js';
 import type {
  PendingAuthorization,
@@ -113,6 +113,8 @@ const PENDING_AUTH_TTL_SEC = 2 * 60 * 60;
 /** How long after a passcode prompt we still accept the code. */
 const MFA_CHALLENGE_TTL_SEC = 10 * 60;
 export const MFA_ATTEMPT_LIMIT = 5;
+/** Passcode submissions one account may make per hour, whatever the client IP. */
+export const MFA_ACCOUNT_LIMIT = Object.freeze({ limit: 10, windowMs: 3_600_000 });
 const memoryStoreEpochs = new WeakMap<McpStore, string>();
 
 function memoryStoreEpoch(store: McpStore): string | undefined {
@@ -142,6 +144,30 @@ function normalizeAssurance(extra: Record<string, string> | undefined): Record<s
 
 function hookSnapshot<T extends StoredToken>(stored: T): T {
  return { ...stored, extra: stored.extra ? { ...stored.extra } : undefined };
+}
+
+/**
+ * Claims from the payload segment of a JWT. The signature is not verified: this reads
+ * what NetSapiens says about its own token, and the claims are never logged.
+ */
+function jwtPayload(token: unknown): Record<string, unknown> | undefined {
+ if (typeof token !== 'string') return undefined;
+ const segments = token.split('.');
+ if (segments.length !== 3) return undefined;
+ try {
+  const claims: unknown = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+  return claims && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Record<string, unknown>) : undefined;
+ } catch {
+  return undefined;
+ }
+}
+
+/**
+ * Whether a NetSapiens grant answer still owes a second factor. Both grant steps use this one
+ * definition, so the mfa grant cannot finish a sign-in with a token that the password grant refuses.
+ */
+function isLimitedNsGrant(grant: { scope?: unknown; access_token?: unknown }): boolean {
+ return grant.scope === 'mfa_required' || jwtPayload(grant.access_token)?.user_scope === 'mfa_required';
 }
 
 export function signValue<T>(payload: T, ttlSec: number): string {
@@ -931,6 +957,20 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    sendPage(res, 440, this.renderErrorPage('MFA verification window has expired. Close this tab and reconnect from your MCP client to start over.', 440));
    return;
   }
+  // Every valid submission counts against the account, the correct one included. The budget is
+  // spent before the replay marker is consumed and before NetSapiens is called.
+  const budget = await this.spendMfaBudget(challenge.username);
+  if (!budget) {
+   logger.warn('MFA account budget unavailable');
+   res.set('Cache-Control', 'no-store').set('Retry-After', '5').status(503).json({ error: 'temporarily_unavailable', error_description: 'Service temporarily unavailable, please retry' });
+   return;
+  }
+  if (budget.totalHits > MFA_ACCOUNT_LIMIT.limit) {
+   logger.warn('MFA account budget exhausted');
+   res.set('Retry-After', String(Math.max(1, Math.ceil((budget.resetAt - Date.now()) / 1000))));
+   sendPage(res, 429, this.renderErrorPage('Too many verification attempts for this account. Wait an hour, then reconnect from your MCP client.', 429));
+   return;
+  }
   const marker = createHash('sha256').update(`mfa:${challenge.challengeId}`).digest('hex');
   let consumed: boolean;
   try {
@@ -972,6 +1012,21 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    return;
   }
   await this.completeSignIn(challenge.pending, { ...nsTokens, nsApiUrl: this.nsApiUrl }, challenge.username, { method: 'password', nsTotp: challenge.verifiedAuthenticator === true, authAt: new Date().toISOString(), nsGrantKind: 'oauth' }, res);
+ }
+
+ /**
+  * Counts one passcode submission against the account. Returns undefined when the store cannot
+  * count it or answers with something unusable, so the caller fails closed.
+  */
+ private async spendMfaBudget(username: string): Promise<RateLimitDecision | undefined> {
+  let decision: RateLimitDecision;
+  try {
+   decision = await this.store.rateLimits.hit('mfa_account', username.trim().toLowerCase(), MFA_ACCOUNT_LIMIT);
+  } catch {
+   return undefined;
+  }
+  if (!decision || !Number.isSafeInteger(decision.totalHits) || decision.totalHits < 1 || decision.totalHits > MFA_ACCOUNT_LIMIT.limit + 1 || !Number.isSafeInteger(decision.resetAt) || decision.resetAt <= Date.now() || !Number.isFinite(new Date(decision.resetAt).getTime())) return undefined;
+  return decision;
  }
 
  /**
@@ -1754,9 +1809,15 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
    const data = response.data || {};
 
+   // A limited token means NetSapiens still owes a second factor. It is good only for the
+   // mfa grant, so it never completes a sign-in on its own.
+   const limited = isLimitedNsGrant(data);
+   const hasToken = typeof data.access_token === 'string' && data.access_token.length > 0;
+
    // MFA challenge: NS returns mfa_type/mfa_vendor when a second factor is required.
    // The access_token in this response is only valid for the subsequent mfa grant call.
-   if (data.mfa_type || data.mfa_vendor) {
+   if (data.mfa_type || data.mfa_vendor || limited) {
+    if (!hasToken) throw new Error('NetSapiens did not return a usable MFA challenge');
     return {
      kind: 'mfa_required',
      partialAccessToken: data.access_token,
@@ -1767,6 +1828,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     };
    }
 
+   if (!hasToken) throw new Error('NetSapiens did not return a completed token');
    return {
     kind: 'tokens',
     tokens: {
@@ -1811,7 +1873,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
     },
     { headers: { 'Content-Type': 'application/json', Accept: 'application/json' } },
    );
-   if (typeof response.data?.access_token !== 'string' || !response.data.access_token || response.data.mfa_type || response.data.mfa_vendor || response.data.scope === 'mfa_required') {
+   if (typeof response.data?.access_token !== 'string' || !response.data.access_token || response.data.mfa_type || response.data.mfa_vendor || isLimitedNsGrant(response.data)) {
     throw new Error('MFA grant did not return a completed token');
    }
 

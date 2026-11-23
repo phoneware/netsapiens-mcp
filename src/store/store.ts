@@ -788,7 +788,7 @@ export function createStore(
     },
     rateLimits: {
       async hit(bucket, clientKey, policy) {
-        if (bucket !== 'signin') throw new TypeError('Invalid rate limit bucket');
+        if (bucket !== 'signin' && bucket !== 'mfa_account') throw new TypeError('Invalid rate limit bucket');
         if (typeof clientKey !== 'string' || clientKey.length < 1 || clientKey.length > 128) throw new TypeError('Invalid rate limit client key');
         const now = Date.now();
         let result;
