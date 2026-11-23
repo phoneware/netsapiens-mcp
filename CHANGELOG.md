@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
 - Forwarded IP headers are ignored by default. Set `MCP_TRUST_PROXY_HOPS=1` only behind one trusted proxy that controls those headers and is the only path to the server.
 - Sign-in attempts share one store-backed budget across instances; store failures return 503. SQLite upgrades to schema 4, which older releases refuse. Firestore requires a TTL policy on `<namespace>_rate_limits.ttlAt`. Library backends implement `StoreBackend.hitRateLimit`, stores expose `McpStore.rateLimits`, and `FirestoreCollections` includes `rateLimits`.
 - HTTP startup binds the serving listener before opening its store and drops connections until initialization finishes. An occupied port therefore leaves SQLite untouched; failures after binding can still occur after a schema upgrade, so retain a verified pre-upgrade backup.
+- A NetSapiens password grant that returns a limited token (`scope` or the token's `user_scope` is `mfa_required`) now shows the MFA prompt instead of signing the person in. A grant without a usable token shows "Authentication failed" and issues no code.
+- Each account gets ten MFA passcode submissions an hour, whatever the client IP or replica. The eleventh submission in that hour gets 429 until the window resets. A store failure gets 503 before NetSapiens is called, and the challenge stays usable.
+- Library: `RateLimitBucket` includes `mfa_account`.
 
 ## 3.1.0
 
