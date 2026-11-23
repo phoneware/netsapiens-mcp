@@ -140,7 +140,7 @@ export interface AuthCodeStore {
 }
 export interface ResumeTokenStore { consume(resumeId: string): Promise<boolean>; }
 export interface UsageStore { recordCall(userKey: string, toolName: string): Promise<void>; getUserUsage(userKey: string): Promise<Map<string, UsageRecord>>; }
-export type RateLimitBucket = 'signin';
+export type RateLimitBucket = 'signin' | 'mfa_account';
 export interface RateLimitPolicy { limit: number; windowMs: number; }
 export interface RateLimitDecision { totalHits: number; resetAt: number; }
 export interface RateLimitStore {
