@@ -282,6 +282,58 @@ With the registry configured, a person signs in only when the registry allows th
 
 Each sign-in and refused session writes an `Access sign-in` or `Access session` log line with its outcome and reason. An unavailable decision also logs its `cause`: `timeout` or `network` when the registry could not be reached in time or at all, `outage` when no cause was reported, `http_status`, `auth`, `contract` or `critical` when its answer is refused, and `policy_invalid` when the policy cannot be applied. A plain outage logs the reason `registry_unavailable`. The other causes log `registry_error`, or `policy_invalid` for a policy. No log line carries a token, an argument value or a registry body.
 
+## Environment
+
+The variables, their defaults and their limits are listed in the configuration reference, which is generated from the code. Three rules matter here.
+
+- Setting `MCP_ACCESS_REGISTRY_URL` turns the registry on. Every other registry variable is then validated, and a malformed value stops the server with a `ConfigError`.
+- The registry needs the HTTP transport. With the URL set, `MCP_TRANSPORT=stdio` exits with a `ConfigError`, because stdio could not enforce the registry and would fail open.
+- `/health` reports `"accessRegistry": "enforced"` only while the registry is on. Unset, the field is absent.
+
+## Enforcement
+
+With the registry on, the decision is applied at each point where access is decided.
+
+- **Sign-in.** A person signs in only when the registry allows their subject on their domain and the redirect URI is approved. A refusal shows a page and issues no code. An unavailable registry shows a 503 page.
+- **Each bearer request.** The current decision is checked. A refusal answers 401. An unavailable registry lets an existing session continue.
+- **Refresh.** A refused session revokes its family and answers `invalid_grant`.
+- **Tool listing.** A tool the decision does not allow is absent from `tools/list` and hidden from `search_api`. With the registry unavailable, the list is empty.
+- **Tool calls.** A tool the decision does not allow is refused when it is named directly, when `call_api` names it, and when a generated tool is called in full mode. A refused call sends nothing to NetSapiens.
+- **NetSapiens requests.** Every request the connector sends passes an operation check before it leaves. The check refuses an operation the decision denies, whichever tool asked for it. Redirects are not followed, and a 3xx answer is an error.
+- **Results.** Fields of each content kind the decision denies or strips are removed from the result, and `_withheld` counts them by kind. Fields classified as internal are removed. With `unclassifiedOutput: deny`, a field that no declaration names is removed too.
+- **Explicit foreign targets.** A request that names another domain in a `domain` path or query parameter is also judged by that domain's own decision. A denied decision refuses the request. An allowed decision applies its denials to that request. A domain that is not enrolled adds nothing, and the caller's own decision still applies.
+
+## Profiles and what a content denial covers
+
+A profile is the decision for one subject on one domain. A content denial is only as complete as the connector's classification, and it covers reads more fully than writes.
+
+- **Reads.** A profile that denies a content kind refuses the tools and NetSapiens operations that read or transmit that kind, and removes the classified content fields from other results, such as call history.
+- **Writes that route content.** With write access, an administrator can create destinations that carry content elsewhere: forwarding, schedules, storage, push registrations, SMTP relays, queue agents and carrier URLs. The connector classifies the destinations it knows and refuses them under a denied kind. No list of destinations can be complete, so a content denial alone does not close this class.
+- **Recommended for regulated data.** A profile that denies any content kind should also set `access: read`. This is the recommended configuration for regulated data, and `access: read` is the control that closes the write class above.
+- **Not content operations.** Two things sit outside the content classes, so a content denial does not cover them. Live-audio routing is one: transferring or answering a live call to another party, forwarding rules, dialing a number into a conference, and call and queue routing. Capture enablement is the other: switching recording, transcription or sentiment on. Only `access: read` or tool selection controls them.
+- **Unclassified output.** Fields the connector has not classified are not guaranteed removed. `unclassifiedOutput: deny` is the control for that. It refuses a generated tool with no output mapping and removes every field that no declaration names, so a declaration that omits a metadata field loses that field under this setting too. Check the fields a profile needs before denying unclassified output.
+
+A profile for regulated data usually allows the curated group only, denies every content kind, sets `access: read`, and sets `unclassifiedOutput: deny`. The groups a profile can name are listed under Effective policy.
+
+## What a deployment may claim
+
+For a profile set up as described above, and only for the accounts and domains the registry enrolls:
+
+- Only listed accounts in an enrolled domain can sign in, and only from approved AI apps.
+- The connector does not offer or run tools that list, read, play, download or forward call recordings, transcripts, voicemail, message text or AI call summaries, when the profile denies those kinds.
+- The connector refuses the underlying NetSapiens requests for those kinds, whichever tool asks: a direct call, `call_api`, a generated tool, a v1 call or a redirect.
+- Classified recording links and transcript, summary and message fields are removed from other results, such as call history.
+- Changes and revocations take effect within the cache lifetime, which the registry sets (`ttlSeconds`, clamped to 5 to 300 seconds). A registry outage closes new access once the last-known-good window has passed, which is 600 seconds by default. Existing sessions keep working through an outage.
+
+## What a deployment must not claim
+
+- **No HIPAA compliance, de-identification, or PHI or PII redaction or masking.** The connector does none of these. Free text is not masked: notes, names, caller ID text, contact notes, session names and SIP traces pass through.
+- **Not that no sensitive data reaches the AI.** Numbers, names, times, durations, queue and contact data still reach the AI, and so does anything the AI can infer from metadata.
+- **Not that content is removed wherever it appears.** Fields the connector has not classified are not guaranteed removed. Destinations created with write access are covered only where the connector classifies them.
+- **Not that other paths are covered.** The NetSapiens portal, direct API use, other hosts and other connectors are outside this connector.
+- **Not that breadth queries are covered.** A request that names no target domain follows the caller's own decision, so a query that spans many domains is judged by that decision alone.
+- **Not that the AI platform's data terms are the connector's.** Any data agreement with the AI platform belongs to the customer.
+
 ## Versioning
 
 This is version 1. A change that adds a restriction must either ship as a new version or name the restriction in `critical`, so an older client fails closed on it. A change that adds a member which does not restrict access may ship within version 1.
