@@ -215,8 +215,9 @@ const MESSAGE_BODY_OPERATIONS = [
 
 /**
  * SIP traces: the call and SIP message traces, their lists, their exports and their reads. A SIP MESSAGE carries an SMS
- * body, so a trace read can carry SMS text (conservative). Injecting a trace, storing it and revoking a share do not return
- * trace content.
+ * body, so a trace read can carry SMS text (conservative). A store returns a key that opens the stored trace with no token
+ * for up to 30 days, so it is sms_text too (conservative: the whole trace, SIP messages included). Injecting a trace and
+ * revoking a share do not return trace content.
  */
 const SIP_TRACE_OPERATIONS = [
   'GET /sipflow',
@@ -231,6 +232,9 @@ const SIP_TRACE_OPERATIONS = [
   'GET /domains/{}/cdrs/{}/sipflow',
   'GET /domains/{}/cdrs/{}/cradle2grave',
   'v1:trace:export',
+  'POST /domains/{}/cdrs/{}/sipflow/store',
+  'POST /domains/{}/sipflow/{}/store',
+  'POST /sipflow/{}/store',
 ] as const;
 
 /**
@@ -427,13 +431,10 @@ export const RECORD_LIST_OPERATIONS: Readonly<Record<string, RecordListEntry>> =
  */
 export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries([
-    ...freeOf('SIP trace revocation, storage and injection: no trace content is returned', [
+    ...freeOf('SIP trace revocation and injection: no trace content is returned; a store is sms_text above', [
       'DELETE /domains/{}/sipflow/share/{}',
       'DELETE /sipflow/share/{}',
-      'POST /domains/{}/cdrs/{}/sipflow/store',
-      'POST /domains/{}/sipflow/{}/store',
       'POST /sipflow/event',
-      'POST /sipflow/{}/store',
     ]),
     ...freeOf('conference, meeting and video schedules, participants, events and join tokens: no recording or message content', [
       'DELETE /domains/{}/conferences/{}',

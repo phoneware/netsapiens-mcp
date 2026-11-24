@@ -1790,7 +1790,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "expires": {"class":"metadata"},
     "expires-datetime": {"class":"metadata"},
     "hostname": {"class":"metadata"},
-    "key": {"class":"metadata"},
+    "key": {"class":"content","kind":"sms_text","media":"text"},
     "store-location": {"class":"metadata"},
   },
   "CallTraceShareEnvelope": {
@@ -17265,7 +17265,7 @@ export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {
     "expires": {"class":"metadata"},
     "expires-datetime": {"class":"metadata"},
     "hostname": {"class":"metadata"},
-    "key": {"class":"metadata"},
+    "key": {"class":"content","kind":"sms_text","media":"text"},
     "store-location": {"class":"metadata"},
   },
   "Union(CallcenterCode,CodeClassification,CodeDirection,CodeType)": {

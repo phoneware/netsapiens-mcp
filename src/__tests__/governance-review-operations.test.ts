@@ -4,7 +4,7 @@ import { getToolCatalogView } from '../access/groups.js';
 import { compilePolicy, type CompiledPolicy } from '../access/policy.js';
 import { contentKindsOf } from '../governance/content-operations.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
-import { projectOutput, resourceDeclaration } from '../governance/scrub.js';
+import { projectOutput, resourceDeclaration, scrubSecrets } from '../governance/scrub.js';
 import type { ContentKind, FieldClass } from '../governance/types.js';
 
 /** A write-capable policy that denies exactly the given kinds and allows everything else. */
@@ -285,5 +285,30 @@ describe('review finding 12: unverified items are decided conservatively', () =>
   it('CDR list operations stay usable under a deny: their fields are stripped, not the operation refused', () => {
     expect(kindSet('GET /domains/{}/cdrs')).toBe(undefined);
     expect(denying('ai_summary').operationDecision(v2('GET /domains/{}/cdrs'))).toEqual({ allowed: true });
+  });
+});
+
+describe('round 3 finding 1: a call-trace share returns a tokenless key, so storing a trace is sms_text', () => {
+  const STORE_OPERATIONS = ['POST /domains/{}/cdrs/{}/sipflow/store', 'POST /domains/{}/sipflow/{}/store', 'POST /sipflow/{}/store'];
+  const SHARE = 'Union(CallTraceShare,CallTraceShareEnvelope)';
+  const share = { success: true, data: { key: 'k-trace-7', expires: 2592000, callids: 'c1' } };
+
+  it.each(STORE_OPERATIONS)('%s is sms_text', (key) => {
+    expectKinds(key, ['sms_text']);
+  });
+
+  it('a deny of sms_text refuses every store operation', () => {
+    for (const key of STORE_OPERATIONS) expect(denying('sms_text').operationDecision(v2(key)).allowed, key).toBe(false);
+  });
+
+  it('unset output keeps the key: the share key is registry-only, so scrubbing and an unrestricted projection leave it', () => {
+    expect(scrubSecrets(share, resourceDeclaration(SHARE)).scrubbed).toEqual(share);
+    expect(projectOutput(share, resourceDeclaration(SHARE)).projected).toEqual(share);
+  });
+
+  it('the share key is a content field of sms_text, so a registry that strips sms_text removes it', () => {
+    expect(NS_RESOURCE_FIELDS.CallTraceShare.key).toEqual({ class: 'content', kind: 'sms_text', media: 'text' });
+    const stripped = projectOutput(share, resourceDeclaration(SHARE), { stripKinds: ['sms_text'] });
+    expect(stripped.projected).toEqual({ success: true, data: { expires: 2592000, callids: 'c1' } });
   });
 });
