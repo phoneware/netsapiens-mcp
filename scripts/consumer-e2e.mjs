@@ -452,7 +452,7 @@ function registryInheritedEnv() {
   );
 }
 
-function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry }) {
+function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry, confirm = false }) {
   return {
     ...registryInheritedEnv(),
     MCP_TRANSPORT: 'http',
@@ -468,6 +468,7 @@ function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry }) {
     MCP_MFA_REPLAY_AUDIENCE: 'consumer-registry-e2e',
     MCP_TRUST_PROXY_HOPS: '1',
     MCP_TOOL_MODE: toolMode,
+    ...(confirm ? { MCP_CONFIRM_DESTRUCTIVE: 'true' } : {}),
     ...(registry === undefined
       ? {}
       : {
@@ -479,7 +480,7 @@ function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry }) {
   };
 }
 
-async function startRegistryChild(tempDir, nsOrigin, name, { storePath, toolMode = 'curated', registry } = {}) {
+async function startRegistryChild(tempDir, nsOrigin, name, { storePath, toolMode = 'curated', registry, confirm = false } = {}) {
   const port = await getAvailablePort();
   const srv = await startMcpServerProcess(
     tempDir,
@@ -489,6 +490,7 @@ async function startRegistryChild(tempDir, nsOrigin, name, { storePath, toolMode
       storePath: storePath ?? path.join(tempDir, `registry-${name}.sqlite`),
       toolMode,
       registry,
+      confirm,
     }),
   );
   try {
@@ -597,6 +599,47 @@ async function openSessionAs(child, nsToken, redirectUri = REGISTRY_APP_REDIRECT
 }
 
 const sentSince = (fake, mark) => fake.requests.slice(mark).map((request) => `${request.method} ${request.path}`);
+
+/** The error a call rejected with, or undefined when it resolved. */
+async function rejectionOf(call) {
+  try {
+    await call;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** A JSON-RPC refusal by policy: the code and wording refusalOf reads from a raw response, read here from an SDK error. */
+function isRefusal(error) {
+  return error !== undefined && error !== null && REGISTRY_REFUSAL_CODES.has(error.code) && /not permitted/.test(error.message);
+}
+
+/**
+ * An MCP client that declares elicitation and records every prompt the server sends it. It answers each prompt with a
+ * decline, so a destructive call that is prompted does not run.
+ */
+async function connectEliciting(child, accessToken) {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const { ElicitRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const prompts = [];
+  const client = new Client({ name: 'registry-e2e-confirm', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    prompts.push(request.params);
+    return { action: 'decline' };
+  });
+  const transport = new StreamableHTTPClientTransport(new URL(`${child.base}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+    fetch: (url, init = {}) => {
+      const headers = new Headers(init.headers);
+      headers.set('X-Forwarded-For', registryClientAddress());
+      return fetch(url, { ...init, headers });
+    },
+  });
+  await client.connect(transport);
+  return { client, prompts, close: () => client.close() };
+}
 
 /** A sign-in that must be refused. The only NetSapiens request it may make is the identity read that precedes the decision. */
 async function signInRefusedWithNsCheck(fake, assertion, child, nsToken, redirectUri, status, copy) {
@@ -787,6 +830,8 @@ async function registryLeg(tempDir) {
       'ns-lukas': nsRecord('lukas', 'example.com'),
       'ns-mallory': nsRecord('mallory', 'example.com'),
       'ns-zed': nsRecord('zed', 'unenrolled.example'),
+      'ns-confirmdeny': nsRecord('confirmdeny', 'example.com'),
+      'ns-confirmallow': nsRecord('confirmallow', 'example.com'),
     },
     routeModules: [
       {
@@ -1139,6 +1184,54 @@ async function registryLeg(tempDir) {
       fail('registry', 'registry authentication: the registry refused the wrong token', 'no unauthorized answer');
     }
     pass('registry', 'registry authentication: a wrong token fails closed with 503, and the registry refuses it');
+
+    // Row E6: a refused destructive tool never reaches the confirmation prompt. This child turns the gate on. Its client
+    // declares elicitation, records every prompt the server sends, and declines each one, so no destructive call runs.
+    // (a) A tool the policy denies is refused with zero prompts and zero NetSapiens requests. (b) An allowed destructive
+    // tool prompts exactly once. (c) call_api with a denied destructive inner tool is refused with zero prompts. Row (c)
+    // asserts only the refusal and its prompt count: an allowed destructive inner tool through call_api is not prompted,
+    // a pre-existing gap tracked separately, and this row does not depend on it.
+    reg.setDecision('example.com', 'confirmdeny@example.com', decide('confirmdeny-1', { tools: { deny: ['end_call'] }, platforms: [REGISTRY_APP_REDIRECT] }));
+    reg.setDecision('example.com', 'confirmallow@example.com', decide('confirmallow-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+    const confirm = await startRegistryChild(tempDir, fake.origin, 'confirm', { registry, confirm: true });
+    try {
+      const denied = await openSessionAs(confirm, 'ns-confirmdeny');
+      const allowed = await openSessionAs(confirm, 'ns-confirmallow');
+      const denyClient = await connectEliciting(confirm, denied.tokens.accessToken);
+      const allowClient = await connectEliciting(confirm, allowed.tokens.accessToken);
+      try {
+        const denyMark = fake.requests.length;
+        const denyError = await rejectionOf(denyClient.client.callTool({ name: 'end_call', arguments: {} }));
+        const denySent = sentSince(fake, denyMark);
+        if (denyClient.prompts.length !== 0) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `${denyClient.prompts.length} prompt(s)`);
+        if (!isRefusal(denyError)) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `not refused by policy: ${truncate(denyError?.message ?? 'it ran')}`);
+        if (denySent.length !== 0) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `NetSapiens received ${denySent.join(', ')}`);
+        pass('registry', 'E6 (a): a denied destructive tool is refused with zero prompts and zero NetSapiens requests');
+
+        const allowMark = fake.requests.length;
+        const allowError = await rejectionOf(allowClient.client.callTool({ name: 'end_call', arguments: {} }));
+        const allowSent = sentSince(fake, allowMark);
+        if (allowClient.prompts.length !== 1) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', `${allowClient.prompts.length} prompt(s)`);
+        if (allowError === undefined) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', 'the declined prompt did not stop the call');
+        if (allowSent.length !== 0) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', `NetSapiens received ${allowSent.join(', ')} after the decline`);
+        pass('registry', 'E6 (b): an allowed destructive tool prompts exactly once, and a declined prompt runs nothing');
+
+        const innerPromptsBefore = denyClient.prompts.length;
+        const innerMark = fake.requests.length;
+        const innerError = await rejectionOf(denyClient.client.callTool({ name: 'call_api', arguments: { tool_name: 'end_call', args: {} } }));
+        const innerSent = sentSince(fake, innerMark);
+        const innerPrompts = denyClient.prompts.length - innerPromptsBefore;
+        if (innerPrompts !== 0) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `${innerPrompts} prompt(s)`);
+        if (!isRefusal(innerError)) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `not refused by policy: ${truncate(innerError?.message ?? 'it ran')}`);
+        if (innerSent.length !== 0) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `NetSapiens received ${innerSent.join(', ')}`);
+        pass('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts and zero NetSapiens requests');
+      } finally {
+        await denyClient.close();
+        await allowClient.close();
+      }
+    } finally {
+      await confirm.srv.stop();
+    }
 
     // Row 11: stdio cannot enforce the registry, so the server refuses to start with it.
     const runner = getPackageBinaryRunner(tempDir);
