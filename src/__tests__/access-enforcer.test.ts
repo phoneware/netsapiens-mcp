@@ -137,6 +137,14 @@ const CAUSES: ReadonlyArray<{ readonly name: string; readonly response: Registry
     response: { kind: 'text', body: JSON.stringify({ version: 2, decision: 'deny', reason: 'x', revision: '0', ttlSeconds: 60 }) },
     cause: 'contract',
   },
+  {
+    name: 'a deny with ttlSeconds 0',
+    response: {
+      kind: 'text',
+      body: JSON.stringify({ version: 1, decision: 'deny', reason: 'subject_not_enabled', revision: '0', ttlSeconds: 0 }),
+    },
+    cause: 'contract',
+  },
   { name: 'a body over 64 KiB', response: { kind: 'text', body: 'x'.repeat(64 * 1024 + 1) }, cause: 'contract' },
   {
     name: 'a deny with a critical member',

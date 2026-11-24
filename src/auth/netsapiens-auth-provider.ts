@@ -1925,9 +1925,10 @@ private async admitRegistrySignIn(res: Response, pending: PendingAuthorization, 
 
 
  /**
-  * The registry's verdict on an existing session (E2 and E3). A session without a registry identity or an approved
-  * redirect signs in again, and a denied tenant or an unapproved redirect refuses. An unavailable registry lets the
-  * session continue, so people stay signed in. Returns the message for a refusal, or undefined when the session may go on.
+  * The registry's verdict on an existing session (E2 and E3). A session without a registry identity, or whose identity
+  * names another account than the one it runs as, signs in again. A denied tenant or an unapproved redirect refuses.
+  * An unavailable registry lets the session continue, so people stay signed in. Returns the message for a refusal, or
+  * undefined when the session may go on.
   */
 private async sessionAccessRefusal(session: StoredToken, access: CausedAccessEnforcer): Promise<string | undefined> {
   const extra = session.extra ?? {};
