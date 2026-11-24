@@ -5,138 +5,139 @@ import { describe, expect, it } from 'vitest';
 import { toolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import { normalizeOperationKey } from '../netsapiens/operation-key.js';
-import { CONTENT_GATE, isGatedOperation, listedKindsOf, v1OperationKeyOf } from '../governance/content-operations.js';
+import {
+  isGatedOperation,
+  listedKindsOf,
+  NAME_REVIEWS,
+  RECORD_LIST_OPERATIONS,
+  REVIEWED_CONTENT_FREE,
+  v1OperationKeyOf,
+} from '../governance/content-operations.js';
+import {
+  isDestinationName,
+  isVoicemailDestination,
+  operationViolations,
+  REVIEWED_SETTING_NAMES,
+  RESPONSE_NAME_PATTERN,
+} from '../governance/gates.js';
 import { OPERATION_OUTPUTS } from '../governance/operation-outputs.generated.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
-import {
-  DESTINATION_PATTERN,
-  operationViolations,
-  requestRequirement,
-  responseRequirement,
-  isVoicemailDestination,
-} from '../governance/gates.js';
 import { forEachOperation, mergeFacts, operationFactsOf, type Components, type OperationFacts, type SpecDocument } from '../governance/spec-walk.js';
-import type { FieldClass } from '../governance/types.js';
 
-const TEST_DIR = resolve(fileURLToPath(import.meta.url), '..');
+interface FactInput {
+  responseNames?: string[];
+  responseMedia?: string[];
+  writes?: boolean;
+  bodyNames?: string[];
+  requestNames?: string[];
+  requestEnumValues?: string[];
+}
 
-function facts(partial: Partial<OperationFacts>): OperationFacts {
+/** The facts of one synthetic operation. */
+function facts(input: FactInput): OperationFacts {
   return {
-    responseNames: new Set(partial.responseNames ?? []),
-    responseMedia: new Set(partial.responseMedia ?? []),
-    requestNames: new Set(partial.requestNames ?? []),
-    requestEnumValues: new Set(partial.requestEnumValues ?? []),
+    responseNames: new Set(input.responseNames ?? []),
+    responseMedia: new Set(input.responseMedia ?? []),
+    writes: input.writes ?? false,
+    bodyNames: new Set(input.bodyNames ?? []),
+    requestNames: new Set(input.requestNames ?? []),
+    requestEnumValues: new Set(input.requestEnumValues ?? []),
   };
 }
 
-const TRANSCRIPT: FieldClass = { class: 'content', kind: 'transcript', media: 'text' };
-
-describe('gate (a): the path and object pattern covers the new surfaces', () => {
+describe('gate (a): a write that names a destination must be listed', () => {
   it.each([
-    'POST /subscriptions',
-    'PUT /domains/{}/subscriptions/{}',
-    'POST /hooks/webhook',
-    'GET /domains/{}/users/{}/playback/{}',
-    'POST /domains/{}/uploads',
-    'v1:event:create',
-    'v1:conversation:read',
-    'v1:email:create',
-    'v1:upload:create',
-  ])('gates %s', (key) => {
-    expect(isGatedOperation(key), key).toBe(true);
+    'smtp-host',
+    'export-hostname',
+    'remote_path',
+    'service-url',
+    'ccc-ip',
+    'archive-path',
+    'inbound-email',
+    'participants',
+    'email',
+    'dest-number',
+    'bucket',
+    'server-id',
+  ])('flags a write that names %s', (name) => {
+    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: [name] }), undefined, undefined, {})).toHaveLength(1);
   });
 
-  it.each(['GET /domains/{}/cdrs', 'GET /domains/{}/users', 'v1:cdr2:readbyid', 'v1:user:list'])('does not gate %s', (key) => {
-    expect(isGatedOperation(key), key).toBe(false);
+  it('accepts a destination write listed free with a reason', () => {
+    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: ['smtp-host'] }), undefined, [], {})).toEqual([]);
   });
 
-  it('exposes the gate pattern the reviewer named', () => {
-    expect(CONTENT_GATE.test('subscri')).toBe(true);
-    expect(CONTENT_GATE.test('webhook')).toBe(true);
-  });
-});
-
-describe('gate (b): response requirement across every spec branch', () => {
-  it('flags a response whose field is classified content, and requires that kind to be listed', () => {
-    const requirement = responseRequirement(facts({ responseNames: ['transcription'] }), { transcription: TRANSCRIPT });
-    expect(requirement.kinds).toEqual(['transcript']);
-    expect(requirement.flagged).toBe(true);
+  it('does not flag a read that names a destination, or a write that names none', () => {
+    expect(operationViolations('GET /synthetic', facts({ bodyNames: ['smtp-host'] }), undefined, undefined, {})).toEqual([]);
+    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: ['display-name'] }), undefined, undefined, {})).toEqual([]);
   });
 
-  it('flags a response carrying a transcript-named field the table does not classify', () => {
-    const requirement = responseRequirement(facts({ responseNames: ['call-recording-status'] }), {});
-    expect(requirement.flagged).toBe(true);
-    expect(requirement.kinds).toEqual([]);
-  });
-
-  it('flags a non-JSON media response, whatever its fields', () => {
-    expect(responseRequirement(facts({ responseMedia: ['audio/wav'] }), undefined).flagged).toBe(true);
-    expect(responseRequirement(facts({ responseMedia: ['image/webp'] }), undefined).flagged).toBe(true);
-  });
-
-  it('leaves a plain JSON response with no classified or named fields unflagged', () => {
-    expect(responseRequirement(facts({ responseNames: ['success', 'message'] }), { success: { class: 'metadata' } }).flagged).toBe(false);
-  });
-
-  it('reports every violation for an unlisted operation, so the failure names the kinds it needs', () => {
-    const violations = operationViolations('GET /synthetic/{}', facts({ responseNames: ['transcription'] }), { transcription: TRANSCRIPT }, undefined);
-    expect(violations).toEqual(['GET /synthetic/{}: unlisted, carries transcript']);
-  });
-
-  it('fails when the listed kinds miss a kind the response carries', () => {
-    const violations = operationViolations('GET /synthetic/{}', facts({ responseNames: ['transcription'] }), { transcription: TRANSCRIPT }, []);
-    expect(violations).toEqual(['GET /synthetic/{}: listed kinds [] miss transcript']);
-  });
-
-  it('passes when the listed kinds cover the response', () => {
-    expect(operationViolations('GET /synthetic/{}', facts({ responseNames: ['transcription'] }), { transcription: TRANSCRIPT }, ['transcript'])).toEqual([]);
-  });
-
-  it('passes a listed operation whose response is media', () => {
-    expect(operationViolations('GET /synthetic/{}', facts({ responseMedia: ['audio/wav'] }), undefined, [])).toEqual([]);
+  it('matches whole name tokens, so a substring such as ipaware or hosted is not a destination', () => {
+    expect(isDestinationName('ipaware-status')).toBe(false);
+    expect(isDestinationName('hosted-video')).toBe(false);
+    expect(isDestinationName('ip-address')).toBe(true);
   });
 });
 
-describe('gate (c): request requirement for sinks and model enums', () => {
-  it('flags a request with a sink and an enum naming a model, and requires that model kind', () => {
-    const requirement = requestRequirement(facts({ requestNames: ['post-url', 'model'], requestEnumValues: ['message'] }));
-    expect(requirement.flagged).toBe(true);
-    expect(requirement.kinds).toEqual(['sms_text']);
-  });
-
-  it('requires transcript and ai_summary for a cdr model, conservatively', () => {
-    const requirement = requestRequirement(facts({ requestNames: ['post-url'], requestEnumValues: ['cdr'] }));
-    expect(requirement.kinds).toEqual(expect.arrayContaining(['transcript', 'ai_summary']));
-  });
-
-  it('does not flag an enum with no sink, or a sink with no model enum', () => {
-    expect(requestRequirement(facts({ requestNames: ['model'], requestEnumValues: ['message'] })).flagged).toBe(false);
-    expect(requestRequirement(facts({ requestNames: ['post-url'], requestEnumValues: ['daily'] })).flagged).toBe(false);
-  });
-
-  it('fails an unlisted subscription-style request', () => {
-    const violations = operationViolations('POST /synthetic', facts({ requestNames: ['post-url'], requestEnumValues: ['voicemail'] }), undefined, undefined);
-    expect(violations).toEqual(['POST /synthetic: unlisted, transmits voicemail']);
-  });
-});
-
-describe('gate (d): every voicemail destination is listed as voicemail', () => {
-  it.each(['email-send-alert-new-voicemail-cc-list-csv', 'voicemail-reminder-email-address-array', 'voicemail-forward-new-destination', 'vmail_fwd_to'])(
-    'treats %s as a destination',
+describe('gate (b): response names match without regard to case, and each must be reviewed', () => {
+  it.each(['Transcript-Text', 'Body', 'media-type', 'attachment-count', 'Fax-Enabled', 'message-waiting', 'text-to-speech-voice'])(
+    'flags the unreviewed response name %s',
     (name) => {
-      expect(isVoicemailDestination(name)).toBe(true);
-      expect(DESTINATION_PATTERN.test(name)).toBe(true);
+      expect(RESPONSE_NAME_PATTERN.test(name)).toBe(true);
+      expect(operationViolations('GET /synthetic', facts({ responseNames: [name] }), undefined, undefined, {})).toHaveLength(1);
     },
   );
 
-  it.each(['voicemail-enabled', 'voicemail-login-pin', 'voicemail-transcription-enabled'])('does not treat %s as a destination', (name) => {
-    expect(isVoicemailDestination(name)).toBe(false);
+  it('does not let a free listing silence a name the operation has not reviewed', () => {
+    expect(operationViolations('GET /synthetic', facts({ responseNames: ['Fax-Enabled'] }), undefined, [], {})).toHaveLength(1);
+  });
+
+  it('silences a name the operation reviews with a reason', () => {
+    expect(
+      operationViolations('GET /synthetic', facts({ responseNames: ['Fax-Enabled'] }), undefined, [], { 'Fax-Enabled': 'a fax switch' }),
+    ).toEqual([]);
+  });
+
+  it('does not silence a name reviewed with an empty reason', () => {
+    expect(operationViolations('GET /synthetic', facts({ responseNames: ['Fax-Enabled'] }), undefined, [], { 'Fax-Enabled': '' })).toHaveLength(1);
+  });
+
+  it('silences a name on the setting whitelist, and every whitelisted setting carries a reason', () => {
+    expect(operationViolations('GET /synthetic', facts({ responseNames: ['recording-configuration'] }), undefined, [], {})).toEqual([]);
+    for (const reason of Object.values(REVIEWED_SETTING_NAMES)) expect(reason.trim().length).toBeGreaterThan(0);
   });
 });
 
-describe('gate over the real specs', () => {
+describe('gate (c): v1 objects that carry destinations and records are gated', () => {
+  it.each(['v1:domain:update', 'v1:cdrschedule:create', 'v1:cdr2:readbyid'])('gates %s', (key) => {
+    expect(isGatedOperation(key)).toBe(true);
+  });
+
+  it('does not gate an unrelated v1 object', () => {
+    expect(isGatedOperation('v1:user:list')).toBe(false);
+  });
+
+  it('keeps the voicemail destination names that the voicemail kind depends on', () => {
+    expect(isVoicemailDestination('email-send-alert-new-voicemail-cc-list-csv')).toBe(true);
+    expect(isVoicemailDestination('voicemail-enabled')).toBe(false);
+  });
+});
+
+describe('reasons', () => {
+  it('every free, record-list and name-review entry carries a non-empty reason', () => {
+    const reasons = [
+      ...Object.values(REVIEWED_CONTENT_FREE),
+      ...Object.values(RECORD_LIST_OPERATIONS).map((entry) => entry.reason),
+      ...Object.values(NAME_REVIEWS).flatMap((names) => Object.values(names)),
+    ];
+    for (const reason of reasons) expect(reason.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe('the gate over the real specs', () => {
+  const TEST_DIR = resolve(fileURLToPath(import.meta.url), '..');
   const specRoot = resolve(TEST_DIR, '../../spec/v2');
-  const branches: readonly string[] = JSON.parse(readFileSync(resolve(specRoot, 'BRANCHES.json'), 'utf8')) as string[];
+  const branches = JSON.parse(readFileSync(resolve(specRoot, 'BRANCHES.json'), 'utf8')) as string[];
 
   const factsByKey = new Map<string, OperationFacts>();
   for (const branch of branches) {
@@ -144,7 +145,7 @@ describe('gate over the real specs', () => {
     const components: Components = doc.components?.schemas ?? {};
     forEachOperation(doc, (method, path, op) => {
       const key = normalizeOperationKey(method, path);
-      factsByKey.set(key, mergeFacts(factsByKey.get(key), operationFactsOf(op, components)));
+      factsByKey.set(key, mergeFacts(factsByKey.get(key), operationFactsOf(method, op, components)));
     });
   }
 
@@ -158,13 +159,23 @@ describe('gate over the real specs', () => {
     return keys;
   }
 
-  it('every live operation that the response or request gate flags is listed with the kinds it carries', () => {
+  it('every live operation the gates flag is listed, and every name it carries is reviewed', () => {
     const violations: string[] = [];
     for (const key of [...liveKeys()].sort()) {
       const resource = Object.hasOwn(OPERATION_OUTPUTS, key) ? OPERATION_OUTPUTS[key] : undefined;
       const table = resource === undefined ? undefined : NS_RESOURCE_FIELDS[resource];
-      violations.push(...operationViolations(key, factsByKey.get(key) ?? facts({}), table, listedKindsOf(key)));
+      const names = Object.hasOwn(NAME_REVIEWS, key) ? NAME_REVIEWS[key] : {};
+      violations.push(...operationViolations(key, factsByKey.get(key) ?? facts({}), table, listedKindsOf(key), names));
     }
     expect(violations).toEqual([]);
+  });
+
+  it('every name review names a listed operation and a name that operation really returns', () => {
+    for (const [key, names] of Object.entries(NAME_REVIEWS)) {
+      expect(listedKindsOf(key), `${key} is listed`).not.toBeUndefined();
+      for (const name of Object.keys(names)) {
+        expect(factsByKey.get(key)?.responseNames.has(name), `${key} returns ${name}`).toBe(true);
+      }
+    }
   });
 });

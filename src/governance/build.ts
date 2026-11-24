@@ -4,7 +4,7 @@
  * declared when any branch declares it, and an operation maps to the union of what every branch returns for it.
  */
 import { CONTENT_KIND_ORDER } from './content-operations.js';
-import { componentOf, inlineNames, partsOf, reachedComponents, responseShape, successMedia, type Components, type SchemaNode, type SpecOperation } from './spec-walk.js';
+import { checkNesting, componentOf, inlineNames, partsOf, reachedComponents, responseShape, successMedia, type Components, type SchemaNode, type SpecOperation } from './spec-walk.js';
 import type { ContentKind, FieldClass } from './types.js';
 
 /** The resource an operation maps to when its response has fields no component names. */
@@ -86,6 +86,15 @@ function mergeInto(target: Table, source: Table, label: string): void {
   }
 }
 
+/** What one build shares across its walks: the reviewed overrides, and the component tables already walked. */
+interface Walk {
+  readonly overrides: BuildInput['overrides'];
+  /** Per spec branch, the table of each component whose walk cut no reference. */
+  readonly known: Map<Components, Map<string, Table>>;
+  /** How many references have been cut. A walk that cut one depends on the path that reached it, so it is not kept. */
+  cuts: number;
+}
+
 /**
  * The classes a schema declares: its own properties at their default class, and every component it reaches through
  * a reference, an item type or a combinator, with that component's classes as the component declares them.
@@ -94,26 +103,44 @@ function classesOf(
   node: SchemaNode | undefined,
   components: Components,
   stack: ReadonlySet<string>,
-  overrides: BuildInput['overrides'],
+  walk: Walk,
   label: string,
+  depth: number,
 ): Table {
   const table: Table = {};
   if (node === undefined) return table;
+  checkNesting(depth);
   if (node.$ref !== undefined) {
     const name = componentOf(node.$ref);
-    if (stack.has(name)) return table;
-    return componentTable(name, components, new Set([...stack, name]), overrides);
+    if (stack.has(name)) {
+      walk.cuts += 1;
+      return table;
+    }
+    return componentTable(name, components, new Set([...stack, name]), walk, depth + 1);
   }
-  if (node.items !== undefined) mergeInto(table, classesOf(node.items, components, stack, overrides, label), label);
-  for (const part of partsOf(node)) mergeInto(table, classesOf(part, components, stack, overrides, label), label);
+  // partsOf already holds an array's item type, so each part is walked exactly once.
+  for (const part of partsOf(node)) mergeInto(table, classesOf(part, components, stack, walk, label, depth + 1), label);
   for (const field of Object.keys(node.properties ?? {})) mergeInto(table, { [field]: defaultClass(field) }, label);
   return table;
 }
 
-/** The table one component declares in one branch: what its schema reaches, then its reviewed overrides. */
-function componentTable(name: string, components: Components, stack: ReadonlySet<string>, overrides: BuildInput['overrides']): Table {
-  const table = classesOf(components[name], components, stack, overrides, name);
-  for (const [field, cls] of Object.entries(overrides[name] ?? {})) table[field] = cls;
+/**
+ * The table one component declares in one branch: what its schema reaches, then its reviewed overrides. A walk that
+ * cut no reference covered an acyclic part of the graph, so its table does not depend on the path that reached it,
+ * and it is kept: a component reached by many paths is walked once.
+ */
+function componentTable(name: string, components: Components, stack: ReadonlySet<string>, walk: Walk, depth: number): Table {
+  let tables = walk.known.get(components);
+  if (tables === undefined) {
+    tables = new Map<string, Table>();
+    walk.known.set(components, tables);
+  }
+  const known = tables.get(name);
+  if (known !== undefined) return { ...known };
+  const cutsBefore = walk.cuts;
+  const table = classesOf(components[name], components, stack, walk, name, depth);
+  for (const [field, cls] of Object.entries(walk.overrides[name] ?? {})) table[field] = cls;
+  if (walk.cuts === cutsBefore) tables.set(name, { ...table });
   return table;
 }
 
@@ -134,12 +161,13 @@ export function buildGovernanceTables(input: BuildInput): BuildOutput {
   const fields: Record<string, Table> = {};
 
   // 1. Every component's table, merged over the branches that declare it.
+  const walk: Walk = { overrides, known: new Map(), cuts: 0 };
   const names = [...new Set(branches.flatMap((branch) => Object.keys(branch.components)))].sort();
   for (const name of names) {
     const table: Table = {};
     for (const branch of branches) {
       if (!Object.hasOwn(branch.components, name)) continue;
-      mergeInto(table, componentTable(name, branch.components, new Set([name]), overrides), name);
+      mergeInto(table, componentTable(name, branch.components, new Set([name]), walk, 0), name);
     }
     fields[name] = table;
   }
