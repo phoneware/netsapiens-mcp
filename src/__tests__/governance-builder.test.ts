@@ -1,6 +1,7 @@
+import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import { buildGovernanceTables, type BuildBranch } from '../governance/build.js';
-import type { Components, SpecOperation } from '../governance/spec-walk.js';
+import { forEachProperty, inlineNames, type Components, type SchemaNode, type SpecOperation } from '../governance/spec-walk.js';
 import type { FieldClass } from '../governance/types.js';
 
 const TRANSCRIPT: FieldClass = { class: 'content', kind: 'transcript', media: 'text' };
@@ -142,5 +143,103 @@ describe('builder: an operation maps to every branch that defines it', () => {
       customs: NO_CUSTOMS,
     };
     expect(buildGovernanceTables(input)).toEqual(buildGovernanceTables(input));
+  });
+});
+
+/** A chain whose every level is an allOf of the level below it, twice, so the paths below each level double. */
+function doubledChain(levels: number): Components {
+  const components: Record<string, SchemaNode> = { [`C${levels}`]: { type: 'object', properties: { id: { type: 'string' } } } };
+  for (let level = levels - 1; level >= 0; level--) components[`C${level}`] = { allOf: [ref(`C${level + 1}`), ref(`C${level + 1}`)] };
+  return components;
+}
+
+/** An inline object nested the given number of levels, each one a property of the one above it. */
+function nestedObject(levels: number): SchemaNode {
+  let node: SchemaNode = { type: 'string' };
+  for (let level = 0; level < levels; level++) node = { type: 'object', properties: { next: node } };
+  return node;
+}
+
+/** An inline allOf nested the given number of levels, around one object with a single field. */
+function nestedAllOf(levels: number): SchemaNode {
+  let node: SchemaNode = { type: 'object', properties: { id: { type: 'string' } } };
+  for (let level = 0; level < levels; level++) node = { allOf: [node] };
+  return node;
+}
+
+describe('builder: walks stay linear and refuse nesting past the limit (review finding 5)', () => {
+  it('builds a doubled allOf chain of 22 levels in linear time', () => {
+    const started = performance.now();
+    const out = buildGovernanceTables({
+      branches: [branch(doubledChain(22), [{ key: 'GET /chain', op: jsonResponse(ref('C0')) }])],
+      overrides: {},
+      customs: NO_CUSTOMS,
+    });
+    expect(performance.now() - started).toBeLessThan(3000);
+    expect(out.fields.C0).toEqual({ id: { class: 'metadata' } });
+  });
+
+  it('builds an array nested 22 levels in linear time, walking each item type once', () => {
+    const components: Record<string, SchemaNode> = { L0: { type: 'object', properties: { id: { type: 'string' } } } };
+    for (let level = 1; level <= 22; level++) components[`L${level}`] = { type: 'array', items: ref(`L${level - 1}`) };
+    const started = performance.now();
+    const out = buildGovernanceTables({ branches: [branch(components, [])], overrides: {}, customs: NO_CUSTOMS });
+    expect(performance.now() - started).toBeLessThan(3000);
+    expect(out.fields.L22).toEqual({ id: { class: 'metadata' } });
+  });
+
+  it('keeps the fields of a cycle: each member reaches every field of the others, and the walk ends', () => {
+    const out = buildGovernanceTables({
+      branches: [
+        branch(
+          {
+            A: { allOf: [ref('B')], properties: { a: { type: 'string' } } },
+            B: { allOf: [ref('A')], properties: { b: { type: 'string' } } },
+            R: { allOf: [ref('A')] },
+          },
+          [],
+        ),
+      ],
+      overrides: {},
+      customs: NO_CUSTOMS,
+    });
+    expect(Object.keys(out.fields.A).sort()).toEqual(['a', 'b']);
+    expect(Object.keys(out.fields.B).sort()).toEqual(['a', 'b']);
+    expect(Object.keys(out.fields.R).sort()).toEqual(['a', 'b']);
+  });
+
+  it('keeps each branch apart: a name two branches define merges their fields, and no table leaks between them', () => {
+    const out = buildGovernanceTables({
+      branches: [
+        branch({ Shared: { properties: { one: { type: 'string' } } }, Holder: { allOf: [ref('Shared')] } }, []),
+        branch({ Shared: { properties: { two: { type: 'string' } } }, Holder: { allOf: [ref('Shared')] } }, []),
+      ],
+      overrides: {},
+      customs: NO_CUSTOMS,
+    });
+    expect(Object.keys(out.fields.Shared).sort()).toEqual(['one', 'two']);
+    expect(Object.keys(out.fields.Holder).sort()).toEqual(['one', 'two']);
+  });
+
+  it('refuses an allOf nested past the limit with a clear error, not a stack overflow', () => {
+    const input = { branches: [branch({ Deep: nestedAllOf(300) }, [])], overrides: {}, customs: NO_CUSTOMS };
+    expect(() => buildGovernanceTables(input)).toThrow(/nests deeper than 256 levels/);
+  });
+
+  it('refuses a response nested past the limit, in the walks that read its fields', () => {
+    const input = { branches: [branch({}, [{ key: 'GET /deep', op: jsonResponse(nestedObject(300)) }])], overrides: {}, customs: NO_CUSTOMS };
+    expect(() => buildGovernanceTables(input)).toThrow(/nests deeper than 256 levels/);
+  });
+
+  it('still reads a response nested 200 levels deep, and the spec walks read the same depth', () => {
+    const out = buildGovernanceTables({
+      branches: [branch({}, [{ key: 'GET /deep', op: jsonResponse(nestedObject(200)) }])],
+      overrides: {},
+      customs: NO_CUSTOMS,
+    });
+    expect(out.outputs['GET /deep']).toBe('InlineResponse');
+    expect(inlineNames(nestedObject(200))).toEqual(new Set(['next']));
+    expect(() => forEachProperty(nestedObject(300), {}, () => undefined)).toThrow(/nests deeper than 256 levels/);
+    expect(() => inlineNames(nestedObject(300))).toThrow(/nests deeper than 256 levels/);
   });
 });

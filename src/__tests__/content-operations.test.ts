@@ -83,7 +83,7 @@ describe('content operation review (spec 3.6)', () => {
     expect(isGatedOperation('v1:cdrexport:read')).toBe(true);
     expect(isGatedOperation('GET /domains/{}/cdrs/{}/cradle2grave')).toBe(true);
     expect(isGatedOperation('GET /domains/{}/cdrs')).toBe(false);
-    expect(isGatedOperation('v1:cdr2:readbyid')).toBe(false);
+    expect(isGatedOperation('v1:cdr2:readbyid')).toBe(true);
   });
 });
 

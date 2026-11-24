@@ -255,9 +255,9 @@ describe('review finding 12: unverified items are decided conservatively', () =>
     expectKinds('GET /domains/{}/users/{}/meetings/{}/sfu', ['call_recording']);
   });
 
-  it('v1 subscriber create and update can set voicemail forwarding and email, so they are voicemail', () => {
-    expectKinds('v1:subscriber:create', ['voicemail']);
-    expectKinds('v1:subscriber:update', ['voicemail']);
+  it('v1 subscriber create and update set voicemail forwarding, and the address that receives transcripts and fax', () => {
+    expectKinds('v1:subscriber:create', ['transcript', 'voicemail', 'fax_page']);
+    expectKinds('v1:subscriber:update', ['transcript', 'voicemail', 'fax_page']);
     expect(denying('voicemail').operationDecision(v1('v1:subscriber:update'))).toEqual({
       allowed: false,
       reason: 'content:voicemail',

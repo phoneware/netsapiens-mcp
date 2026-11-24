@@ -3,23 +3,27 @@
  * review each operation must have. Pure: the caller supplies the facts and the classes, so a test can feed a
  * synthetic operation to each gate and see it fail.
  *
- * An operation is flagged when its response carries a classified content field, a field the response pattern names
- * and is not reviewed as a setting, or non-JSON media; when its request names a sink and a model that carries
- * content; or when its request names a voicemail destination. A flagged operation must be listed, under every kind it
- * carries.
+ * An operation is flagged when:
+ * - its response carries a field classified as content, a name that is content by name, or non-JSON media;
+ * - its response carries a name the response pattern matches that no classified field, setting entry or review
+ *   for that operation explains;
+ * - its request sends content to a sink with a model that carries content, or names a voicemail destination;
+ * - it is a write that names a destination, whatever the destination carries.
+ * A flagged operation must be listed, under every kind it carries. A free listing never silences a name the pattern
+ * matches: the name must be on the setting whitelist, or reviewed for this operation with a non-empty reason.
  */
 import { CONTENT_KIND_ORDER } from './content-operations.js';
 import { UNAMBIGUOUS_CONTENT_NAMES } from './scrub.js';
 import type { OperationFacts } from './spec-walk.js';
 import type { ContentKind, FieldClass } from './types.js';
 
-/** Response field names that name content by their shape. A name matching it must be reviewed. */
-export const RESPONSE_NAME_PATTERN = /transcri|summary|sentiment|topics|segments|recording|vcon|file-access-url|thumbnail-url|analysis|dialog/;
+/** Response field names that name content by their shape, matched without regard to case. */
+export const RESPONSE_NAME_PATTERN =
+  /transcri|summary|sentiment|topics|segments|recording|vcon|file-access-url|thumbnail-url|analysis|dialog|text|body|message|media|attachment|fax/i;
 
 /**
- * Response field names the pattern matches that are settings, counts, identifiers or plumbing, reviewed by name. They
- * carry no content, so the pattern does not flag them. Any other name the pattern matches must be reviewed by listing
- * the operation that returns it. A name here never changes a field's class: a classified field still carries its kind.
+ * Response names the pattern matches that are settings, counts, identifiers or status words, reviewed by name. They carry
+ * no content, so the pattern does not flag them. A name here never changes a field's class.
  */
 export const REVIEWED_SETTING_NAMES: Readonly<Record<string, string>> = {
   'analysis-denylist': 'a user-interface setting for call analysis: a list of rules, not analysis output',
@@ -36,6 +40,33 @@ export const REVIEWED_SETTING_NAMES: Readonly<Record<string, string>> = {
   'meeting-recording-enabled': 'a meeting switch that enables recording; no recording content',
   'recording-configuration': 'a domain switch that enables call recording; no recording content',
   'voicemail-transcription-enabled': 'a user or domain switch that enables voicemail transcription; no transcript',
+  'agent-call-disconnect-reason-text': 'a short reason an agent call ended, such as busy or no answer: a label, not call content',
+  'agent-status-message': 'a status line for an agent: a label, not call content',
+  'call-disconnect-reason-text': 'a short reason a call ended, such as busy or no answer: a label, not call content',
+  'call-fax-codec': 'the fax codec a call negotiated: a setting, not fax content',
+  'call-fax-relay-side-a-packet-count': 'a count of fax relay packets on a call: a number, not fax content',
+  'call-fax-relay-side-b-packet-count': 'a count of fax relay packets on a call: a number, not fax content',
+  'call-intelligence-summary-status': 'the state of the summary job for a transcription: a status word, not the summary',
+  'call-recording-status': 'the recording status of a call, recorded or not: a status word, not recording content',
+  'connection-block-media-in-sip-180-ringing': 'a SIP connection setting about media during ringing: a switch, not content',
+  'error-message': 'the error text of a failed request: a status line, not record content',
+  'fax-id': 'an identifier of a fax record: a record ID, not content',
+  'file-access-url-expires-datetime': 'the expiry time of a signed file link: a timestamp, not content',
+  'limits-max-fax-accounts': 'a limit on fax accounts for a domain: a number, not fax content',
+  'music-on-hold-comfort-message-repeat-interval-seconds': 'an interval for comfort messages on hold: a number, not content',
+  'phonenumber-fax': "a contact's fax number: an address, not fax content",
+  'queue-call-disconnect-reason-text': 'a short reason a queued call ended, such as busy or no answer: a label, not call content',
+  'recording-server-id': 'an identifier of a recording server: a record ID, not content',
+  'schedule-run-immediately': 'a switch that runs a CDR export schedule now: a setting, not content',
+  'source-recording-server-id': 'an identifier of the recording server a sync came from: a record ID, not content',
+  'status-message': 'a status line for an agent or a queue: a label, not call content',
+  'text-to-speech-gender': 'the gender of a text-to-speech voice: a setting, not content',
+  'text-to-speech-language': 'the language a text-to-speech voice reads in: a setting, not content',
+  'text-to-speech-name': 'the name of a text-to-speech voice: a setting, not content',
+  'text-to-speech-sub-type': 'the sub type of a text-to-speech voice: a setting, not content',
+  'text-to-speech-type': 'the type of a text-to-speech voice: a setting, not content',
+  'text-to-speech-voice-id': 'the text-to-speech voice an announcement uses: a setting, not content',
+  'voicemail-recording-started-datetime': 'the time a voicemail recording started: a timestamp, not content',
 };
 
 /** Request fields that send data out: a URL to post to, an address, a copy list, a forward, or an owner. */
@@ -58,6 +89,37 @@ export function isVoicemailDestination(name: string): boolean {
   return DESTINATION_PATTERN.test(name);
 }
 
+/** Name tokens that name where something is sent: an address, a host or server, a path, a bucket, or a participant. */
+const DESTINATION_TOKENS: ReadonlySet<string> = new Set([
+  'url',
+  'uri',
+  'host',
+  'hostname',
+  'ip',
+  'path',
+  'email',
+  'smtp',
+  'participant',
+  'recipient',
+  'bucket',
+  'server',
+]);
+
+/** The tokens of a field name: split at separators and camel-case joins, lower-cased, with a plural s dropped. */
+function nameTokens(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()
+    .split(/[-_.\s]+/)
+    .filter((token) => token !== '')
+    .map((token) => token.replace(/s$/, ''));
+}
+
+/** Whether a field name names a destination: one of its tokens is a destination token, or begins with dest. */
+export function isDestinationName(name: string): boolean {
+  return nameTokens(name).some((token) => DESTINATION_TOKENS.has(token) || token.startsWith('dest'));
+}
+
 export interface GateRequirement {
   /** The kinds the operation returns or transmits, in decision order. */
   readonly kinds: readonly ContentKind[];
@@ -65,6 +127,8 @@ export interface GateRequirement {
   readonly flagged: boolean;
   /** Why the operation is flagged, phrased for a violation message. Undefined when it is not flagged. */
   readonly reason: string | undefined;
+  /** Response names the pattern matches that no class, setting entry or review for the operation explains. */
+  readonly unreviewedNames: readonly string[];
 }
 
 function orderedKinds(kinds: Iterable<ContentKind>): ContentKind[] {
@@ -76,10 +140,24 @@ function unambiguousKind(name: string): ContentKind | undefined {
   return Object.hasOwn(UNAMBIGUOUS_CONTENT_NAMES, name) ? UNAMBIGUOUS_CONTENT_NAMES[name] : undefined;
 }
 
-/** Gate (b): the response's content, judged by the resource table its operation maps to. */
-export function responseRequirement(facts: OperationFacts, table: Readonly<Record<string, FieldClass>> | undefined): GateRequirement {
+/**
+ * Whether a response name the pattern matches is explained: a table class other than metadata (content, internal,
+ * secret or record ID, which only a review sets), a whitelisted setting, or a non-empty review for this operation.
+ */
+function isReviewed(name: string, cls: FieldClass | undefined, reviewedNames: Readonly<Record<string, string>>): boolean {
+  if (cls !== undefined && cls.class !== 'metadata') return true;
+  if (Object.hasOwn(REVIEWED_SETTING_NAMES, name)) return true;
+  return Object.hasOwn(reviewedNames, name) && reviewedNames[name].trim() !== '';
+}
+
+/** Gate (b): the response's content, judged by the resource table its operation maps to, and its unexplained names. */
+export function responseRequirement(
+  facts: OperationFacts,
+  table: Readonly<Record<string, FieldClass>> | undefined,
+  reviewedNames: Readonly<Record<string, string>>,
+): GateRequirement {
   const kinds = new Set<ContentKind>();
-  let named = false;
+  const unreviewed: string[] = [];
   for (const name of facts.responseNames) {
     const cls = table !== undefined && Object.hasOwn(table, name) ? table[name] : undefined;
     if (cls?.class === 'content') {
@@ -87,63 +165,91 @@ export function responseRequirement(facts: OperationFacts, table: Readonly<Recor
       for (const also of cls.alsoKinds ?? []) kinds.add(also);
     }
     const unambiguous = unambiguousKind(name);
-    if (unambiguous !== undefined) kinds.add(unambiguous);
-    if (RESPONSE_NAME_PATTERN.test(name) && !Object.hasOwn(REVIEWED_SETTING_NAMES, name)) named = true;
+    if (unambiguous !== undefined) {
+      kinds.add(unambiguous);
+      continue;
+    }
+    if (RESPONSE_NAME_PATTERN.test(name) && !isReviewed(name, cls, reviewedNames)) unreviewed.push(name);
   }
+  unreviewed.sort();
   const ordered = orderedKinds(kinds);
-  const media = facts.responseMedia.size > 0;
   const parts = [
     ordered.length > 0 ? `carries ${ordered.join(', ')}` : undefined,
-    named && ordered.length === 0 ? 'has a response field the content pattern names' : undefined,
-    media ? 'returns non-JSON media' : undefined,
+    unreviewed.length > 0 ? `has response fields no review explains (${unreviewed.join(', ')})` : undefined,
+    facts.responseMedia.size > 0 ? 'returns non-JSON media' : undefined,
   ].filter((part): part is string => part !== undefined);
-  return { kinds: ordered, flagged: parts.length > 0, reason: parts.length > 0 ? parts.join('; ') : undefined };
+  return {
+    kinds: ordered,
+    flagged: parts.length > 0,
+    reason: parts.length > 0 ? parts.join('; ') : undefined,
+    unreviewedNames: unreviewed,
+  };
 }
 
-/** Gate (c): a request that sends content to a sink, and a voicemail destination. */
+/** Gates (c) and (a): a request that sends content to a sink, a voicemail destination, and a write that names a destination. */
 export function requestRequirement(facts: OperationFacts): GateRequirement {
-  const sinks = [...facts.requestNames].filter((name) => SINK_NAMES.has(name));
-  const kinds = new Set<ContentKind>();
+  const sinks = [...facts.requestNames].some((name) => SINK_NAMES.has(name));
+  const modelKinds = new Set<ContentKind>();
   for (const value of facts.requestEnumValues) {
     if (!Object.hasOwn(MODEL_KINDS, value)) continue;
-    for (const kind of MODEL_KINDS[value]) kinds.add(kind);
+    for (const kind of MODEL_KINDS[value]) modelKinds.add(kind);
   }
-  const transmits = sinks.length > 0 && kinds.size > 0;
-  const destination = [...facts.requestNames].some(isVoicemailDestination);
-  if (destination) kinds.add('voicemail');
-  const ordered = orderedKinds(kinds);
+  const transmits = sinks && modelKinds.size > 0;
+  const voicemailDestination = [...facts.requestNames].some(isVoicemailDestination);
+  const destinations = facts.writes ? [...facts.bodyNames].filter(isDestinationName).sort() : [];
+  const kinds = new Set(modelKinds);
+  if (voicemailDestination) kinds.add('voicemail');
   const parts = [
-    transmits ? `transmits ${ordered.join(', ')}` : undefined,
-    destination ? 'sets a voicemail destination' : undefined,
+    transmits ? `transmits ${orderedKinds(modelKinds).join(', ')}` : undefined,
+    voicemailDestination ? 'sets a voicemail destination' : undefined,
+    destinations.length > 0 ? `writes a destination (${destinations.join(', ')})` : undefined,
   ].filter((part): part is string => part !== undefined);
-  return { kinds: ordered, flagged: parts.length > 0, reason: parts.length > 0 ? parts.join('; ') : undefined };
+  return {
+    kinds: orderedKinds(kinds),
+    flagged: parts.length > 0,
+    reason: parts.length > 0 ? parts.join('; ') : undefined,
+    unreviewedNames: [],
+  };
 }
 
-/** Both gates together: the kinds an operation must be listed under, and why it is flagged. */
-export function operationRequirement(facts: OperationFacts, table: Readonly<Record<string, FieldClass>> | undefined): GateRequirement {
-  const response = responseRequirement(facts, table);
+/** Every gate together: the kinds an operation must be listed under, why it is flagged, and its unexplained names. */
+export function operationRequirement(
+  facts: OperationFacts,
+  table: Readonly<Record<string, FieldClass>> | undefined,
+  reviewedNames: Readonly<Record<string, string>>,
+): GateRequirement {
+  const response = responseRequirement(facts, table, reviewedNames);
   const request = requestRequirement(facts);
   const reasons = [response.reason, request.reason].filter((reason): reason is string => reason !== undefined);
   return {
     kinds: orderedKinds([...response.kinds, ...request.kinds]),
     flagged: response.flagged || request.flagged,
     reason: reasons.length > 0 ? reasons.join('; ') : undefined,
+    unreviewedNames: response.unreviewedNames,
   };
 }
 
 /**
- * The violations of one operation: an unlisted flagged operation, or a listing that misses a kind it carries. An
- * empty list means the operation is covered. 'unreviewed' lists every kind, so it covers any flagged operation.
+ * The violations of one operation. An unlisted flagged operation is one violation. A listed one violates when it
+ * misses a kind it carries, or when a name the pattern matches is not reviewed for it. 'unreviewed' lists every kind,
+ * so it covers any flagged operation. An empty list means the operation is covered.
  */
 export function operationViolations(
   key: string,
   facts: OperationFacts,
   table: Readonly<Record<string, FieldClass>> | undefined,
   listed: readonly ContentKind[] | 'unreviewed' | undefined,
+  reviewedNames: Readonly<Record<string, string>>,
 ): string[] {
-  const requirement = operationRequirement(facts, table);
-  if (!requirement.flagged || listed === 'unreviewed') return [];
+  if (listed === 'unreviewed') return [];
+  const requirement = operationRequirement(facts, table, reviewedNames);
+  if (!requirement.flagged) return [];
   if (listed === undefined) return [`${key}: unlisted, ${requirement.reason ?? 'flagged'}`];
+  const violations: string[] = [];
+  if (requirement.unreviewedNames.length > 0) {
+    violations.push(`${key}: response names not reviewed for this operation (${requirement.unreviewedNames.join(', ')})`);
+  }
   const missing = requirement.kinds.filter((kind) => !listed.includes(kind));
-  return missing.length > 0 ? [`${key}: listed kinds [${listed.join(', ')}] miss ${missing.join(', ')}`] : [];
+  if (missing.length > 0) violations.push(`${key}: listed kinds [${listed.join(', ')}] miss ${missing.join(', ')}`);
+  return violations;
 }
