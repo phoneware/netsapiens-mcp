@@ -650,7 +650,7 @@ async function signInRefusedWithNsCheck(fake, assertion, child, nsToken, redirec
     fail('registry', assertion, `NetSapiens received ${sent.join(', ')} during the sign-in`);
   }
   if (signed.status !== status || signed.code !== undefined || !signed.html.includes(copy)) {
-    fail('registry', assertion, `status ${signed.status}, code ${signed.code === undefined ? 'none' : 'issued'}`);
+    fail('registry', assertion, `expected status ${status} with no code, got status ${signed.status}, code ${signed.code === undefined ? 'none' : 'issued'}`);
   }
   pass('registry', assertion);
 }
@@ -1074,7 +1074,7 @@ async function registryLeg(tempDir) {
     if ((await registryRpc(erinAfter, 'tools/list', {})).status !== 200) fail('registry', 'registry down: the refreshed session is accepted', 'refused');
     const erinNew = await registrySignIn(primary, 'ns-erin');
     if (erinNew.status !== 503 || erinNew.code !== undefined || !erinNew.html.includes(COPY_UNAVAILABLE)) {
-      fail('registry', 'registry down: a new sign-in is 503', `status ${erinNew.status}`);
+      fail('registry', 'registry down: a new sign-in is 503', `expected status 503 with no code, got status ${erinNew.status}, code ${erinNew.code === undefined ? 'none' : 'issued'}`);
     }
     pass('registry', 'registry down: a new sign-in gets 503 with no code');
     reg.setFault('example.com', 'erin@example.com', null);
@@ -1096,7 +1096,7 @@ async function registryLeg(tempDir) {
     if ((await registryTools(lukas.session)).length !== 0) fail('registry', 'last known good: past the window tools/list is empty', 'tools were listed');
     const lkgExpired = await registrySignIn(lkg, 'ns-lukas');
     if (lkgExpired.status !== 503 || lkgExpired.code !== undefined || !lkgExpired.html.includes(COPY_UNAVAILABLE)) {
-      fail('registry', 'last known good: past the window a new sign-in is 503', `status ${lkgExpired.status}`);
+      fail('registry', 'last known good: past the window a new sign-in is 503', `expected status 503 with no code, got status ${lkgExpired.status}, code ${lkgExpired.code === undefined ? 'none' : 'issued'}`);
     }
     pass('registry', 'last known good: past the window, tools are empty and a new sign-in is 503');
     reg.setFault('example.com', 'lukas@example.com', null);
@@ -1123,7 +1123,12 @@ async function registryLeg(tempDir) {
       registryCall(fullCarol.session, RECORDING_TOOL, { domain: 'example.com', callid: 'slice-f-call-1' }));
     // unclassifiedOutput deny: a generated tool with no output mapping is absent and refused.
     const unmapped = aliceFull.filter((name) => !daveFull.includes(name));
-    if (unmapped.length === 0) fail('registry', 'unclassified output: an unmapped generated tool is absent', 'no tool is unmapped in the packed build');
+    // The tools alice sees and dave, who denies unclassified output, does not. Only generated tools with no classification
+    // carry the unclassified group, and this build has some. Under M-UNCLASS-TOOL dave sees them too, so the set empties and
+    // this check fails. The mutant is caught here, and the direct-call row below then runs on no tool. This row derives the
+    // set from alice and dave rather than from the governance names, so it cannot assert absence on a set a mutant leaves
+    // intact. Deriving the names from the governance build would close that; this leg does not read them yet.
+    if (unmapped.length === 0) fail('registry', 'unclassified output: an unmapped generated tool is absent', 'the set is empty: dave sees every generated tool alice sees, so the unclassified deny did not apply');
     await refusedWithoutSend(fake, 'unclassified output deny: an unmapped generated tool is refused on a direct call with zero NetSapiens requests', () =>
       registryCall(fullDave.session, unmapped[0], {}));
     const daveCdrs = await registryCall(fullDave.session, 'get_domains_by_domain_cdrs_1', { domain: 'example.com' });
@@ -1179,7 +1184,7 @@ async function registryLeg(tempDir) {
     const beforeWrong = reg.requests.length;
     const wrong = await startChild('wrong-token', { registry: { ...registry, token: REGISTRY_BAD_BEARER } });
     const wrongSignIn = await registrySignIn(wrong, 'ns-alice');
-    if (wrongSignIn.status !== 503 || wrongSignIn.code !== undefined) fail('registry', 'registry authentication: a wrong token fails closed', `status ${wrongSignIn.status}`);
+    if (wrongSignIn.status !== 503 || wrongSignIn.code !== undefined) fail('registry', 'registry authentication: a wrong token fails closed', `expected status 503 with no code, got status ${wrongSignIn.status}, code ${wrongSignIn.code === undefined ? 'none' : 'issued'}`);
     if (!reg.requests.slice(beforeWrong).some((entry) => entry.authorized === false && entry.outcome === 'unauthorized')) {
       fail('registry', 'registry authentication: the registry refused the wrong token', 'no unauthorized answer');
     }
@@ -1248,7 +1253,7 @@ async function registryLeg(tempDir) {
     });
     const stdioOut = `${stdio.stdout}\n${stdio.stderr}`;
     if (stdio.status !== 1 || !stdioOut.includes('ConfigError: MCP_ACCESS_REGISTRY_URL requires MCP_TRANSPORT=http')) {
-      fail('registry', 'stdio misuse: exits 1 with the ConfigError', `status ${stdio.status}: ${stdioOut.slice(0, 300)}`);
+      fail('registry', 'stdio misuse: exits 1 with the ConfigError', `expected exit 1 with the ConfigError, got exit ${stdio.status} and output ${JSON.stringify(stdioOut.slice(0, 300))}`);
     }
     pass('registry', 'stdio misuse: exits 1 with the ConfigError before serving anything');
 
@@ -1267,7 +1272,7 @@ async function registryLeg(tempDir) {
     pass('registry', 'legacy session: a session made while the registry was unset gets 401 under it');
     const legacyRefresh = await registryRefresh(legacyAfter, gina.tokens);
     if (legacyRefresh.status !== 400 || legacyRefresh.json.error !== 'invalid_grant') {
-      fail('registry', 'legacy session: refresh is invalid_grant', `status ${legacyRefresh.status}`);
+      fail('registry', 'legacy session: refresh is invalid_grant', refreshRefusalFailure(legacyRefresh));
     }
     pass('registry', 'legacy session: its refresh answers invalid_grant');
     await openSessionAs(legacyAfter, 'ns-gina');
