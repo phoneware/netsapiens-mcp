@@ -79,9 +79,10 @@ const CDR_SCHEDULE_WRITE_OPERATIONS = [
 ] as const;
 
 /**
- * Writes that set where call recordings are kept or sent: the storage a domain archives to, the recording servers that
- * receive call media, the entries that choose which addresses are recorded, and the archive configurations. Reads of
- * these settings stay in REVIEWED_CONTENT_FREE.
+ * Writes that set where call recordings or call media are kept or sent: the storage a domain archives to, the recording
+ * servers that receive call media (a core server's recording-server map included), the entries that choose which addresses
+ * are recorded, the entry sync that copies them to a server, the archive configurations, and the free-form recording
+ * configuration published to every server (unverified). Reads of these settings stay in REVIEWED_CONTENT_FREE.
  */
 const RECORDING_DESTINATION_OPERATIONS = [
   'POST /domains/{}/recording-storage',
@@ -96,6 +97,12 @@ const RECORDING_DESTINATION_OPERATIONS = [
   'PUT /recordings/archive-configs/{}/{}/{}',
   'v1:recording:create',
   'v1:recording:update',
+  'PUT /recordings/coreservers/{}',
+  'POST /recordings/servers/{}/entries/sync',
+  'POST /recordings/config',
+  'PUT /recordings/config/{}',
+  'POST /recordings/nmc-config',
+  'PUT /recordings/nmc-config/{}',
 ] as const;
 
 /**
@@ -111,6 +118,23 @@ const SUBSCRIPTION_TRANSMIT_OPERATIONS = [
   'POST /domains/{}/subscriptions',
   'PUT /domains/{}/subscriptions/{}',
   'v1:event:create',
+] as const;
+
+/**
+ * Push registrations: each sets the device or web-push endpoint that receives call and message notifications. The
+ * notification payload is not verified, so each registration is conservatively sms_text and voicemail. Deletes are listed
+ * with the writes, since they change the same registrations.
+ */
+const PUSH_REGISTRATION_OPERATIONS = [
+  'POST /push',
+  'PUT /push',
+  'DELETE /push',
+  'POST /domains/{}/push',
+  'PUT /domains/{}/push',
+  'DELETE /domains/{}/push',
+  'POST /domains/{}/users/{}/push',
+  'PUT /domains/{}/users/{}/push',
+  'DELETE /domains/{}/users/{}/push',
 ] as const;
 
 /**
@@ -186,7 +210,8 @@ const FAX_NUMBER_WRITE_OPERATIONS = [
 
 /**
  * Writes that redirect SMS: a session's members, a number's destination, a number assigned to an inbox, an inbox member,
- * and a phone number's SMS destination. Whoever is added or named receives the text.
+ * a phone number's SMS destination, a carrier's outbound URL (which receives every outbound message), and a v1 SMS number's
+ * destination. Whoever is added or named receives the text.
  */
 const SMS_REDIRECT_OPERATIONS = [
   'PUT /domains/{}/users/{}/messagesessions/{}',
@@ -200,6 +225,10 @@ const SMS_REDIRECT_OPERATIONS = [
   'POST /domains/{}/inboxes/{}/members',
   'v1:messagesession:accept',
   'v1:messagesession:update',
+  'POST /smscarriers',
+  'PUT /smscarriers/{}',
+  'v1:smsnumber:create',
+  'v1:smsnumber:update',
 ] as const;
 
 /**
@@ -286,6 +315,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
   ]),
   voicemail: lookup([
     ...VOICEMAIL_OPERATIONS,
+    ...PUSH_REGISTRATION_OPERATIONS,
     ...VOICEMAIL_REDIRECT_OPERATIONS,
     ...SMTP_RELAY_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
@@ -295,6 +325,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
   ]),
   sms_text: lookup([
     ...SMS_REDIRECT_OPERATIONS,
+    ...PUSH_REGISTRATION_OPERATIONS,
     ...MESSAGE_BODY_OPERATIONS,
     ...SIP_TRACE_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
@@ -471,7 +502,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/users/{}/meetings/{}',
       'PUT /domains/{}/users/{}/meetings/{}/attendee/{}',
     ]),
-    ...freeOf('recording configuration and inventory: reads, deletes, syncs and configuration writes that name no recording destination', [
+    ...freeOf('recording configuration and inventory: reads and deletes, which set no recording destination; the writes that set one are call_recording above', [
       'DELETE /domains/{}/recording-storage/{}',
       'DELETE /recordings/archive-configs/{}/{}/{}',
       'DELETE /recordings/config/{}',
@@ -501,12 +532,6 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /recordings/servers/{}/entries/count',
       'GET /recordings/servers/{}/entries/sync/{}',
       'GET /recordings/storage',
-      'POST /recordings/config',
-      'POST /recordings/nmc-config',
-      'POST /recordings/servers/{}/entries/sync',
-      'PUT /recordings/config/{}',
-      'PUT /recordings/coreservers/{}',
-      'PUT /recordings/nmc-config/{}',
     ]),
     ...freeOf('fax setup: numbers, vendors, cover-page templates and deletes; fax documents are fax_page above', [
       'DELETE /domains/{}/fax/cover-page',
@@ -559,10 +584,8 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /smsnumbers',
       'POST /domains/{}/smsblocks',
       'POST /domains/{}/users/{}/smsblocks',
-      'POST /smscarriers',
       'PUT /domains/{}/smsblocks/{}',
       'PUT /domains/{}/users/{}/messagesessions/{}/leave',
-      'PUT /smscarriers/{}',
     ]),
     ...freeOf('greeting, music and message deletes, counts, reorders and players: no message content is returned', [
       'DELETE /domains/{}/moh/{}',
@@ -639,11 +662,9 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
     ...freeOf('v1 recording delete: removes a recording record and returns no content; reads are call_recording above', [
       'v1:recording:delete',
     ]),
-    ...freeOf('v1 SMS numbers: setup, with no message content', [
+    ...freeOf('v1 SMS numbers: counts and reads, with no message content; a create or update sets a destination and is sms_text above', [
       'v1:smsnumber:count',
-      'v1:smsnumber:create',
       'v1:smsnumber:read',
-      'v1:smsnumber:update',
     ]),
     ...freeOf('subscription settings: which events go to which URL. Reads and deletes return settings, not events', [
       'DELETE /domains/{}/subscriptions/{}',

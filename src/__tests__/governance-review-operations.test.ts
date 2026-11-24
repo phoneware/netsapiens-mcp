@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONTENT_KINDS } from '../access/contract.js';
 import { getToolCatalogView } from '../access/groups.js';
 import { compilePolicy, type CompiledPolicy } from '../access/policy.js';
-import { contentKindsOf } from '../governance/content-operations.js';
+import { contentKindsOf, REVIEWED_CONTENT_FREE } from '../governance/content-operations.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
 import { projectOutput, resourceDeclaration, scrubSecrets } from '../governance/scrub.js';
 import type { ContentKind, FieldClass } from '../governance/types.js';
@@ -310,5 +310,46 @@ describe('round 3 finding 1: a call-trace share returns a tokenless key, so stor
     expect(NS_RESOURCE_FIELDS.CallTraceShare.key).toEqual({ class: 'content', kind: 'sms_text', media: 'text' });
     const stripped = projectOutput(share, resourceDeclaration(SHARE), { stripKinds: ['sms_text'] });
     expect(stripped.projected).toEqual({ success: true, data: { expires: 2592000, callids: 'c1' } });
+  });
+});
+
+describe('round 3 finding 2: writes that route SMS, push notifications or recordings', () => {
+  it.each(['POST /smscarriers', 'PUT /smscarriers/{}', 'v1:smsnumber:create', 'v1:smsnumber:update'])(
+    '%s is sms_text: a carrier URL or an inbound SMS destination receives the text',
+    (key) => {
+      expectKinds(key, ['sms_text']);
+    },
+  );
+
+  it.each([
+    'POST /push',
+    'PUT /push',
+    'DELETE /push',
+    'POST /domains/{}/push',
+    'PUT /domains/{}/push',
+    'DELETE /domains/{}/push',
+    'POST /domains/{}/users/{}/push',
+    'PUT /domains/{}/users/{}/push',
+    'DELETE /domains/{}/users/{}/push',
+  ])('%s is sms_text and voicemail: a registration sets the device that receives notifications (payload unverified)', (key) => {
+    expectKinds(key, ['sms_text', 'voicemail']);
+  });
+
+  it.each([
+    'PUT /recordings/coreservers/{}',
+    'POST /recordings/servers/{}/entries/sync',
+    'POST /recordings/config',
+    'PUT /recordings/config/{}',
+    'POST /recordings/nmc-config',
+    'PUT /recordings/nmc-config/{}',
+  ])('%s is call_recording: it sets where call media or recordings are sent (free-form config is unverified)', (key) => {
+    expectKinds(key, ['call_recording']);
+  });
+
+  it('reads and deletes of these settings stay free: they set no destination', () => {
+    for (const key of ['GET /smscarriers', 'DELETE /smscarriers/{}', 'GET /recordings/config', 'DELETE /recordings/config/{}']) {
+      expect(kindSet(key), key).toBe(undefined);
+      expect(REVIEWED_CONTENT_FREE[key], key).toBeDefined();
+    }
   });
 });
