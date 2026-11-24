@@ -706,7 +706,7 @@ function toolPayload(res) {
 async function refusedWithoutSend(fake, assertion, call) {
   const mark = fake.requests.length;
   const res = await call();
-  if (refusalOf(res) === undefined) fail('registry', assertion, `expected a refusal, got ${res.rawText.slice(0, 300)}`);
+  if (refusalOf(res) === undefined) fail('registry', assertion, `expected a refusal, got ${describeResponse(res)}`);
   const sent = sentSince(fake, mark);
   if (sent.length > 0) fail('registry', assertion, `refused, yet NetSapiens received ${sent.join(', ')}`);
   pass('registry', assertion);
@@ -717,7 +717,7 @@ async function refusedWithoutSend(fake, assertion, call) {
 async function allowedAndSent(fake, assertion, call, expectedLine) {
   const mark = fake.requests.length;
   const res = await call();
-  if (refusalOf(res) !== undefined) fail('registry', assertion, `refused: ${res.rawText.slice(0, 300)}`);
+  if (refusalOf(res) !== undefined) fail('registry', assertion, `refused: ${describeResponse(res)}`);
   const sent = sentSince(fake, mark);
   if (!sent.some(expectedLine)) fail('registry', assertion, `NetSapiens received ${sent.join(', ') || 'nothing'}`);
   pass('registry', assertion);
@@ -960,7 +960,7 @@ async function registryLeg(tempDir) {
       registryCallApi(carol.session, RECORDING_TOOL, { domain: 'example.com', callid: 'slice-f-call-1' }));
     const carolRaw = await registryCall(carol.session, 'recent_calls', { limit: 2 });
     const carolCalls = toolPayload(carolRaw);
-    if (carolCalls?.data?.length !== 1) fail('registry', 'content deny: recent_calls keeps its rows', carolRaw.rawText.slice(0, 300));
+    if (carolCalls?.data?.length !== 1) fail('registry', 'content deny: recent_calls keeps its rows', describeResponse(carolRaw));
     if (carolRaw.rawText.includes('SECRET-')) fail('registry', 'content deny: recent_calls strips every content field', 'a content value survived');
     const expected = expectedWithheld(cdrRow, cdrFields);
     if (JSON.stringify(Object.entries(carolCalls._withheld ?? {}).sort()) !== JSON.stringify(Object.entries(expected).sort())) {
