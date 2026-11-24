@@ -249,6 +249,7 @@ function checkWorkflow(text: string): void {
   ]);
   expect(build).toContain('node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs install,config,sqlite,memory,version');
   expect(build).toContain('node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs firestore --firestore-major 8');
+  expect(build).toContain('node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs registry');
   expect(build).toContain("NSMCP_REQUIRE_FIRESTORE_EMULATOR: '1'");
   expect(build).toContain('node scripts/verify-pack.mjs "$RUNNER_TEMP/release-tarball/$TARBALL"');
 

@@ -93,6 +93,7 @@ jobs:
         run: |
           node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs install,config,sqlite,memory,version,mfa
           node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs firestore --firestore-major 8
+          node scripts/consumer-e2e.mjs --tarball "$RUNNER_TEMP/release-tarball/$TARBALL" --legs registry
       - name: Verify frozen artifact after consumers
         env:
           SHA256: ${{ steps.freeze.outputs.sha256 }}

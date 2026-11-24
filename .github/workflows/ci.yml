@@ -92,6 +92,8 @@ jobs:
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
       - name: Run consumer e2e
         run: node scripts/consumer-e2e.mjs --tarball "$TARBALL"
+      - name: Run registry e2e leg
+        run: node scripts/consumer-e2e.mjs --tarball "$TARBALL" --legs registry
 
   consumer-firestore:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.isolated_proof }}
