@@ -4,7 +4,7 @@ import type { AccessPolicyV1 } from '../access/contract.js';
 import { deriveStoreKey } from '../store/codec.js';
 import { createMemoryStore } from '../store/memory.js';
 import { NS_SECRET, closeHarnesses, startFakeNs, startHarness, type FakeNs } from './support/access-harness.js';
-import { OTHER_REDIRECT, REDIRECT, SUBJECT, TENANT, policy, type Answer } from './support/access-registry-fake.js';
+import { OTHER_REDIRECT, REDIRECT, SUBJECT, policy, type Answer } from './support/access-registry-fake.js';
 import {
   bodyString,
   openLoginPage,
@@ -135,32 +135,24 @@ describe('registry sessions (E2 and E3)', () => {
     expect((await postTokenLogin(h.app, authState, h.fake.origin, 'tok-alice')).status).toBe(503);
   });
 
-  it('answers 404 when a stateful session is presented by a different subject', async () => {
-    let presentedSubject: string | undefined;
-    const h = await startHarness({
-      stateless: false,
-      wrapAccess: (access) => ({
-        evaluate: access.evaluate,
-        identityFromAuthInfo(extra) {
-          const identity = access.identityFromAuthInfo(extra);
-          return identity !== undefined && presentedSubject !== undefined ? { ...identity, subject: presentedSubject } : identity;
-        },
-      }),
-    });
-    h.registry.set(TENANT, allow());
-    const token = await signIn(h.app, h.fake.origin, 'tok-alice', REDIRECT);
-    const init = await mcp(h.app, token, INITIALIZE).expect(200);
+  it('answers 404 when a stateful session is presented by another account, and the owner still reaches it', async () => {
+    const h = await startHarness({ stateless: false });
+    h.registry.set(SUBJECT, allow());
+    h.registry.set('bob@domain.com', allow());
+    const alice = await signInFull(h.app, h.fake.origin, 'tok-alice', REDIRECT);
+    const bobToken = await signIn(h.app, h.fake.origin, 'tok-bob', REDIRECT);
+    const init = await mcp(h.app, alice.accessToken, INITIALIZE).expect(200);
     const sessionId = init.headers['mcp-session-id'] as string;
     expect(sessionId).toBeTruthy();
-    expect((await mcp(h.app, token, TOOLS_LIST, sessionId)).status).toBe(200);
+    expect((await mcp(h.app, alice.accessToken, TOOLS_LIST, sessionId)).status).toBe(200);
 
-    presentedSubject = 'mallory@domain.com';
-    expect((await mcp(h.app, token, TOOLS_LIST, sessionId)).status).toBe(404);
+    expect((await mcp(h.app, bobToken, TOOLS_LIST, sessionId)).status).toBe(404);
     expect(
-      (await request(h.app).get('/mcp').set('Accept', 'text/event-stream').set('Authorization', `Bearer ${token}`).set('mcp-session-id', sessionId)).status,
+      (await request(h.app).get('/mcp').set('Accept', 'text/event-stream').set('Authorization', `Bearer ${bobToken}`).set('mcp-session-id', sessionId))
+        .status,
     ).toBe(404);
     expect(
-      (await request(h.app).delete('/mcp').set('Authorization', `Bearer ${token}`).set('mcp-session-id', sessionId)).status,
+      (await request(h.app).delete('/mcp').set('Authorization', `Bearer ${bobToken}`).set('mcp-session-id', sessionId)).status,
     ).toBe(404);
   });
 });

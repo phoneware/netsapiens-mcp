@@ -53,7 +53,7 @@ export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
 import { ACCESS_EXTRA_KEYS, type AccessIdentity } from '../access/types.js';
 import type { AccessUnavailableCause, CausedAccessEnforcer } from '../access/enforcer.js';
-import { normalizeIdentity } from '../access/identity.js';
+import { normalizeIdentity, normalizeTenant, normalizeUser, subjectOf } from '../access/identity.js';
 
 export class UpstreamTimeoutError extends Error {
  constructor(message = 'Upstream refresh request timed out') {
@@ -486,6 +486,21 @@ const SAFE_LOG_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
 function logReason(reason: string): string {
  if (SAFE_LOG_REASON.test(reason)) return reason;
  return 'unrecognised';
+}
+
+/**
+ * The account a stored session runs as, keyed the way the registry keys it: user@tenant, normalized the way sign-in
+ * normalizes it. Undefined when the stored name cannot be keyed.
+ */
+function principalOf(username: string): { readonly tenant: string; readonly subject: string } | undefined {
+ const parts = username.split('@');
+ if (parts.length !== 2) return undefined;
+ try {
+  const tenant = normalizeTenant(parts[1]);
+  return { tenant, subject: subjectOf(normalizeUser(parts[0]), tenant) };
+ } catch {
+  return undefined;
+ }
 }
 
 function mfaPageHtml(
@@ -1920,6 +1935,11 @@ private async sessionAccessRefusal(session: StoredToken, access: CausedAccessEnf
   const logBase = { tenant: identity?.tenant, subject: identity?.subject, clientId: session.clientId };
   if (identity === undefined || typeof extra.authRedirectUri !== 'string') {
    logger.info('Access session', { ...logBase, outcome: 'reauth_required', reason: 'no_registry_identity' });
+   return 'Sign in again to continue.';
+  }
+  const principal = principalOf(session.nsUsername);
+  if (principal?.subject !== identity.subject) {
+   logger.info('Access session', { clientId: session.clientId, tenant: principal?.tenant, subject: principal?.subject, outcome: 'reauth_required', reason: 'principal_mismatch' });
    return 'Sign in again to continue.';
   }
   const view = await access.evaluate(identity);

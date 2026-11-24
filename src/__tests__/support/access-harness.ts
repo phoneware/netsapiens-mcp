@@ -8,8 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { vi, type MockInstance } from 'vitest';
 import type { Response } from 'express';
 import { startFakeNetSapiens } from '../../../scripts/fake-netsapiens/index.mjs';
-import { createAccessEnforcer } from '../../access/enforcer.js';
-import type { CausedAccessEnforcer } from '../../access/enforcer.js';
+import { createAccessEnforcer, type CausedAccessEnforcer } from '../../access/enforcer.js';
 import type { RegistryClient } from '../../access/registry-client.js';
 import type { NetSapiensAuthProvider } from '../../auth/netsapiens-auth-provider.js';
 import type { AuthHooks } from '../../auth/types.js';
@@ -29,6 +28,7 @@ export const NS_USERS: Readonly<Record<string, Record<string, string>>> = {
   'tok-alice': { login: 'alice@domain.com', user: 'alice', domain: 'domain.com', 'user-scope': 'Office Manager' },
   'tok-bob': { login: 'bob@domain.com', user: 'bob', domain: 'domain.com', 'user-scope': 'Office Manager' },
   'tok-carol': { login: 'carol', user: 'carol', 'user-scope': 'Office Manager' },
+  'tok-mixed': { login: 'Bob@Domain.COM', user: 'Bob', domain: 'Domain.COM', 'user-scope': 'Office Manager' },
 };
 
 /** The identity lookups a sign-in or a token check makes. Anything else is tool traffic. */
