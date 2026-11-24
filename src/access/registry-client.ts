@@ -397,7 +397,9 @@ export interface HttpFetchOptions {
  * Every response is mapped to a RegistryResponse. A 200 body leaves as text for the client to parse; no other body is kept.
  */
 export function createHttpFetchDecision(options: HttpFetchOptions): FetchDecision {
-  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  let baseEnd = options.baseUrl.length;
+  while (baseEnd > 0 && options.baseUrl.charCodeAt(baseEnd - 1) === 47) baseEnd--;
+  const baseUrl = options.baseUrl.slice(0, baseEnd);
   const fetchFn: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
   const credential = credentialSource(options.auth, {
     fetch: fetchFn,

@@ -31,7 +31,10 @@ export interface McpHttp {
 }
 
 function bearerOf(header: string | undefined): string | undefined {
-  return header?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (header === undefined || header.length < 8 || header.slice(0, 6).toLowerCase() !== 'bearer') return undefined;
+  let start = 6;
+  while (start < header.length && /\s/.test(header[start] as string)) start++;
+  return start > 6 && start < header.length ? header.slice(start) : undefined;
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

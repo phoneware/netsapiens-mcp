@@ -345,7 +345,7 @@ describe('registry client: errors are never read as not enrolled', () => {
     network.respond = () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.example.com/' } });
     await client.decide(QUERY);
     expect(network.decisions()[0].redirect).toBe('manual');
-    expect(network.sent.some((sent) => sent.raw.startsWith('https://elsewhere.example.com'))).toBe(false);
+    expect(network.sent.some((sent) => new URL(sent.raw).hostname === 'elsewhere.example.com')).toBe(false);
   });
 
   it('maps 401 and 403 to auth and every other failing status to http_status', async () => {

@@ -448,9 +448,35 @@ const ACCESS_APP_NOT_APPROVED_COPY = 'This AI app is not approved for your organ
 const ACCESS_UNVERIFIED_COPY = 'We could not verify your account. Sign in with your own user credentials.';
 const ACCESS_UNAVAILABLE_COPY = 'Sign-in is temporarily unavailable. Try again in a few minutes.';
 
-/** The redirect URI as a log line shows it: no query, no fragment and no userinfo. */
-function redirectForLog(uri: string): string {
- return uri.replace(/[?#].*$/, '').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+/**
+ * The redirect URI as a log line shows it: no query, no fragment and no userinfo. Built from index scans, not
+ * regular expressions, because the URI is client controlled and a pattern could be made to run slowly on it.
+ */
+export function redirectForLog(uri: string): string {
+ let end = uri.length;
+ for (let i = 0; i < uri.length; i++) {
+  const ch = uri[i];
+  if (ch === '?' || ch === '#') { end = i; break; }
+ }
+ const stripped = uri.slice(0, end);
+ const schemeEnd = stripped.indexOf('://');
+ if (schemeEnd < 1) return stripped;
+ const scheme = stripped.slice(0, schemeEnd);
+ for (let i = 0; i < scheme.length; i++) {
+  const code = scheme.charCodeAt(i);
+  const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  const rest = (code >= 48 && code <= 57) || code === 43 || code === 45 || code === 46;
+  if (!(letter || (i > 0 && rest))) return stripped;
+ }
+ const authorityStart = schemeEnd + 3;
+ let authorityEnd = stripped.length;
+ for (let i = authorityStart; i < stripped.length; i++) {
+  if (stripped[i] === '/') { authorityEnd = i; break; }
+ }
+ const authority = stripped.slice(authorityStart, authorityEnd);
+ const at = authority.lastIndexOf('@');
+ if (at < 0) return stripped;
+ return `${stripped.slice(0, authorityStart)}${authority.slice(at + 1)}${stripped.slice(authorityEnd)}`;
 }
 
 /** The platform as a log line shows it, or "invalid" when it is not an http origin. */

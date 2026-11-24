@@ -18,7 +18,7 @@ import { allowView, createFakeEnforcer } from './support/fake-access-enforcer.js
 import { connectClient, startMcpHttp, type ConnectedClient, type McpHttp } from './support/mcp-http.js';
 
 const HOME = 'example.com';
-const TARGET = 'spooner.example';
+const TARGET = 'clinic.example';
 const SUMMARY = 'call-intelligence-summary';
 
 const savedStateless = process.env.MCP_STATELESS;
