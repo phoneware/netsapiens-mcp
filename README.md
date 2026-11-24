@@ -116,6 +116,10 @@ Selected accounts must complete an explicitly identified NetSapiens authenticato
 
 This option rejects malformed configuration and cannot be combined with a custom HTTP auth provider. Rotating `MCP_SESSION_SECRET` invalidates stored assurance signatures, so affected privileged users must sign in again.
 
+## Guardrails
+
+Guardrails are optional. Set `MCP_ACCESS_REGISTRY_URL` to have an access registry decide, for each person who signs in, which accounts may sign in, from which AI apps, which tools they may use, and which kinds of content the connector refuses: call recordings, transcripts, voicemail, message text, AI call summaries and fax pages. Read-only profiles and refusal of unclassified output are available. The registry can only narrow the settings you already have, and an unreachable registry fails closed. A content denial covers reads. With write access, a profile can still create destinations that carry content elsewhere, so regulated deployments should also deny write access. The registry is not HIPAA compliance and does not redact data. See [docs/access-registry.md](docs/access-registry.md) for what it enforces and what it does not.
+
 ## 🔌 Connecting MCP Clients
 
 ### Claude Desktop
