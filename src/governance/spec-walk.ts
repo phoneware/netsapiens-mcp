@@ -66,6 +66,17 @@ const HTTP_METHODS: ReadonlySet<string> = new Set(['get', 'post', 'put', 'patch'
 const JSON_MEDIA = 'application/json';
 
 /**
+ * The deepest schema nesting a walk follows. A spec that nests deeper is refused with an error, rather than left to
+ * overflow the stack or drop fields without a trace.
+ */
+const MAX_NESTING = 256;
+
+/** Throws when a walk enters a level past MAX_NESTING. Every walk checks each level it enters. */
+export function checkNesting(depth: number): void {
+  if (depth > MAX_NESTING) throw new Error(`schema nests deeper than ${MAX_NESTING} levels; the spec is too deep to classify`);
+}
+
+/**
  * Components whose fields are the API's status envelope, not record content. A response that names one contributes
  * none of its fields to the response gate. Each entry gives the reason, as every review in the gates does.
  */
@@ -117,7 +128,8 @@ export function partsOf(node: SchemaNode): readonly SchemaNode[] {
 
 /**
  * Visits every property a schema declares at any depth, following references and combinators. A component is
- * entered once per walk, so a cycle ends. A component named in skip contributes no properties.
+ * entered once per walk, so a cycle ends. A component named in skip contributes no properties. Nesting past
+ * MAX_NESTING is refused.
  */
 export function forEachProperty(
   node: SchemaNode | undefined,
@@ -125,20 +137,22 @@ export function forEachProperty(
   visit: (name: string, schema: SchemaNode) => void,
   seen: Set<string> = new Set(),
   skip: ReadonlySet<string> = new Set(),
+  depth = 0,
 ): void {
   if (node === undefined) return;
+  checkNesting(depth);
   if (node.$ref !== undefined) {
     const name = componentOf(node.$ref);
     if (seen.has(name) || skip.has(name)) return;
     seen.add(name);
-    forEachProperty(components[name], components, visit, seen, skip);
+    forEachProperty(components[name], components, visit, seen, skip, depth + 1);
     return;
   }
   for (const [key, child] of Object.entries(node.properties ?? {})) {
     visit(key, child);
-    forEachProperty(child, components, visit, seen, skip);
+    forEachProperty(child, components, visit, seen, skip, depth + 1);
   }
-  for (const part of partsOf(node)) forEachProperty(part, components, visit, seen, skip);
+  for (const part of partsOf(node)) forEachProperty(part, components, visit, seen, skip, depth + 1);
 }
 
 /** Every component a schema reaches, directly or through other components, at any depth. */
@@ -146,17 +160,19 @@ export function reachedComponents(
   node: SchemaNode | undefined,
   components: Components,
   found: Set<string> = new Set(),
+  depth = 0,
 ): Set<string> {
   if (node === undefined) return found;
+  checkNesting(depth);
   if (node.$ref !== undefined) {
     const name = componentOf(node.$ref);
     if (found.has(name)) return found;
     found.add(name);
-    reachedComponents(components[name], components, found);
+    reachedComponents(components[name], components, found, depth + 1);
     return found;
   }
-  for (const child of Object.values(node.properties ?? {})) reachedComponents(child, components, found);
-  for (const part of partsOf(node)) reachedComponents(part, components, found);
+  for (const child of Object.values(node.properties ?? {})) reachedComponents(child, components, found, depth + 1);
+  for (const part of partsOf(node)) reachedComponents(part, components, found, depth + 1);
   return found;
 }
 
@@ -164,13 +180,14 @@ export function reachedComponents(
  * The property names a schema declares outside every component it reaches: the fields an inline object carries.
  * A reference is not entered, because the component it names classifies its own fields.
  */
-export function inlineNames(node: SchemaNode | undefined, names: Set<string> = new Set()): Set<string> {
+export function inlineNames(node: SchemaNode | undefined, names: Set<string> = new Set(), depth = 0): Set<string> {
   if (node === undefined || node.$ref !== undefined) return names;
+  checkNesting(depth);
   for (const [key, child] of Object.entries(node.properties ?? {})) {
     names.add(key);
-    inlineNames(child, names);
+    inlineNames(child, names, depth + 1);
   }
-  for (const part of partsOf(node)) inlineNames(part, names);
+  for (const part of partsOf(node)) inlineNames(part, names, depth + 1);
   return names;
 }
 
@@ -183,7 +200,8 @@ export function responseShape(node: SchemaNode | undefined): ResponseShape {
   const components = new Set<string>();
   let inline = false;
   const visit = (current: SchemaNode | undefined, depth: number): void => {
-    if (current === undefined || depth > 32) return;
+    if (current === undefined) return;
+    checkNesting(depth);
     if (current.$ref !== undefined) {
       components.add(componentOf(current.$ref));
       return;
