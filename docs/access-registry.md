@@ -243,9 +243,9 @@ A result is cleaned after the tool runs. Fields of every kind set to `deny` or `
 ## Caching and fail-closed
 
 - **Cache key.** `(connector, platform, tenant, subject, role, tier)`. The cache holds at most 10,000 entries per process and evicts the least recently used.
-- **Freshness.** An entry is fresh while the current time is before its validation time plus the clamped `ttlSeconds`.
+- **Freshness.** An answer's age is the larger of two measures of the time since its request was sent: the monotonic clock, which never runs backwards, and the wall clock, where a step backwards counts as zero. An answer is fresh while its age is below the clamped `ttlSeconds`. So a backwards clock step cannot extend freshness, while a forward jump, or a machine that slept while the monotonic clock stood still, ages an answer sooner, and it is revalidated sooner. An answer that was sent after the monotonic clock's current reading has no known age: it is stale and is never last known good.
 - **Revalidation.** A stale entry triggers one revalidation per key at a time, sent with `If-None-Match`. A `200` replaces the entry. A `304` marks the entry validated now.
-- **Last known good.** When revalidation fails, the cached decision is used while the current time is before its validation time plus `MAX_STALE`. The default `MAX_STALE` is 600 seconds. The deployment sets it between 0 and 3600 seconds, and the registry cannot change it.
+- **Last known good.** When revalidation fails, the cached decision is used while its age, measured as for freshness, is below `MAX_STALE`. The default `MAX_STALE` is 600 seconds. The deployment sets it between 0 and 3600 seconds, and the registry cannot change it.
 - **Unavailable.** With no cached entry, a registry error is unavailable at once. Past the last-known-good window, the result is unavailable.
 - **Deny decisions** are cached and kept last known good in the same way as allows.
 

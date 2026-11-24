@@ -130,6 +130,13 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 | `MCP_PROMOTE_THRESHOLD` | http, stdio | No | None | Tool promotion threshold. |
 | `MCP_PROMOTE_WINDOW_DAYS` | http, stdio | No | None | Tool promotion window. |
 | `MCP_SYNCHRONOUS_WRITES` | http, stdio | No | None | Control synchronous upstream writes. |
+| `MCP_ACCESS_REGISTRY_URL` | http | No | None | Access registry base URL. Unset disables the registry. Must be https unless it is loopback. Stdio exits 1 with a ConfigError when it is set. |
+| `MCP_ACCESS_REGISTRY_AUTH` | http | No | None | Required when the URL is set: bearer, google-id-token or none. none is for loopback URLs only. Any other value is a ConfigError. |
+| `MCP_ACCESS_REGISTRY_TOKEN` | http | No | None | Bearer secret for the registry. Required when MCP_ACCESS_REGISTRY_AUTH is bearer. |
+| `MCP_ACCESS_REGISTRY_AUDIENCE` | http | No | None | Identity token audience. Required when MCP_ACCESS_REGISTRY_AUTH is google-id-token. |
+| `MCP_ACCESS_REGISTRY_CONNECTOR` | http | No | `netsapiens-mcp` | Connector ID sent to the registry. |
+| `MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS` | http | No | `600` | Last-known-good window in seconds, 0 to 3600. The registry cannot extend it. |
+| `MCP_ACCESS_REGISTRY_TIMEOUT_MS` | http | No | `3000` | Registry request timeout in milliseconds, 500 to 30000. |
 <!-- /facts:env-table -->
 
 ## Library Usage

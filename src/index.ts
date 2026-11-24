@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { assertAccessRegistryTransport } from './access/config.js';
 import { normalizePlatformUrl } from './auth/platforms.js';
 import type { UserRole } from './auth/roles.js';
 import { createAvailabilityContext } from './netsapiens/availability.js';
@@ -175,6 +176,8 @@ export class NetSapiensMCPServer {
 
 export async function main(): Promise<void> {
  const transport = process.env.MCP_TRANSPORT || 'stdio';
+ // Stdio cannot enforce the access registry, so refuse before any other work rather than fail open.
+ assertAccessRegistryTransport(transport);
 
  if (transport === 'http') {
   const { startHttpServer } = await import('./http-server.js');

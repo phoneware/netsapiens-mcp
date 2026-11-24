@@ -9,6 +9,7 @@ import { parsePlatforms } from '../auth/platforms.js';
 import { NetSapiensAuthProvider } from '../auth/netsapiens-auth-provider.js';
 import { createMemoryStore } from '../store/memory.js';
 import { deriveStoreKey } from '../store/codec.js';
+import { loadAccessRegistryConfig } from '../access/config.js';
 
 const home = mkdtempSync(join(tmpdir(), 'nsmcp-config-test-'));
 afterAll(() => rmSync(home, { recursive: true, force: true }));
@@ -38,10 +39,34 @@ describe('configuration contract', () => {
   [{ MCP_SESSION_SECRET: undefined }, 'ConfigError: MCP_SESSION_SECRET must be at least 32 characters'],
   [{ MCP_SESSION_SECRET: 'x'.repeat(31) }, 'ConfigError: MCP_SESSION_SECRET must be at least 32 characters'],
   [{ MCP_MFA_REPLAY_AUDIENCE: 'invalid audience' }, 'ConfigError: replayAudience must be a stable replay-store identity'],
+  [{ MCP_TRANSPORT: 'stdio', MCP_ACCESS_REGISTRY_URL: 'https://registry.example.com' }, 'ConfigError: MCP_ACCESS_REGISTRY_URL requires MCP_TRANSPORT=http; stdio cannot enforce the access registry, so it would fail open'],
+  [{ MCP_TRANSPORT: undefined, MCP_ACCESS_REGISTRY_URL: 'https://registry.example.com' }, 'ConfigError: MCP_ACCESS_REGISTRY_URL requires MCP_TRANSPORT=http; stdio cannot enforce the access registry, so it would fail open'],
  ])('rejects invalid startup configuration', (env, message) => {
   const result = startup(env);
   expect(result.status).toBe(1);
   expect(result.stderr.split(/\r?\n/)).toContain(message);
+ });
+
+ const REGISTRY_BASE = {
+   MCP_ACCESS_REGISTRY_URL: 'https://registry.example.com',
+   MCP_ACCESS_REGISTRY_AUTH: 'bearer',
+   MCP_ACCESS_REGISTRY_TOKEN: 'static-token-value',
+ };
+ it.each([
+   [{ MCP_ACCESS_REGISTRY_URL: 'registry.example.com' }, 'ConfigError: MCP_ACCESS_REGISTRY_URL must be an absolute https URL with no credentials, query or fragment'],
+   [{ MCP_ACCESS_REGISTRY_URL: 'http://registry.example.com' }, 'ConfigError: MCP_ACCESS_REGISTRY_URL must use https unless it is a loopback address'],
+   [{ MCP_ACCESS_REGISTRY_AUTH: undefined }, 'ConfigError: MCP_ACCESS_REGISTRY_AUTH is required when MCP_ACCESS_REGISTRY_URL is set; use bearer, google-id-token or none'],
+   [{ MCP_ACCESS_REGISTRY_AUTH: 'Bearer' }, 'ConfigError: MCP_ACCESS_REGISTRY_AUTH must be bearer, google-id-token or none'],
+   [{ MCP_ACCESS_REGISTRY_TOKEN: undefined }, 'ConfigError: MCP_ACCESS_REGISTRY_TOKEN is required when MCP_ACCESS_REGISTRY_AUTH is bearer'],
+   [{ MCP_ACCESS_REGISTRY_TOKEN: 'two words' }, 'ConfigError: MCP_ACCESS_REGISTRY_TOKEN must be visible ASCII with no spaces'],
+   [{ MCP_ACCESS_REGISTRY_AUTH: 'google-id-token', MCP_ACCESS_REGISTRY_TOKEN: undefined }, 'ConfigError: MCP_ACCESS_REGISTRY_AUDIENCE is required when MCP_ACCESS_REGISTRY_AUTH is google-id-token'],
+   [{ MCP_ACCESS_REGISTRY_AUTH: 'google-id-token', MCP_ACCESS_REGISTRY_AUDIENCE: 'two words' }, 'ConfigError: MCP_ACCESS_REGISTRY_AUDIENCE must be visible ASCII with no spaces'],
+   [{ MCP_ACCESS_REGISTRY_AUTH: 'none' }, 'ConfigError: MCP_ACCESS_REGISTRY_AUTH none is permitted only for a loopback MCP_ACCESS_REGISTRY_URL'],
+   [{ MCP_ACCESS_REGISTRY_CONNECTOR: 'two words' }, 'ConfigError: MCP_ACCESS_REGISTRY_CONNECTOR must be 1 to 64 letters, digits, periods, underscores or hyphens, starting with a letter or digit'],
+   [{ MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS: '3601' }, 'ConfigError: MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS must be a whole number from 0 to 3600'],
+   [{ MCP_ACCESS_REGISTRY_TIMEOUT_MS: '499' }, 'ConfigError: MCP_ACCESS_REGISTRY_TIMEOUT_MS must be a whole number from 500 to 30000'],
+ ])('rejects invalid access registry configuration', (override, message) => {
+   expect(() => loadAccessRegistryConfig({ ...REGISTRY_BASE, ...override })).toThrow(new Error(message));
  });
 
  it('validates ids, origins, entry types and normalizes URLs', () => {
