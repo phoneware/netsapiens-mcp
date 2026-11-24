@@ -55,4 +55,11 @@ export const ENV_VARS: readonly EnvVar[] = [
  { name: 'MCP_PROMOTE_THRESHOLD', transports: ['http', 'stdio'], required: false, default: null, effect: 'Tool promotion threshold.' },
  { name: 'MCP_PROMOTE_WINDOW_DAYS', transports: ['http', 'stdio'], required: false, default: null, effect: 'Tool promotion window.' },
  { name: 'MCP_SYNCHRONOUS_WRITES', transports: ['http', 'stdio'], required: false, default: null, effect: 'Control synchronous upstream writes.' },
+ { name: 'MCP_ACCESS_REGISTRY_URL', transports: ['http'], required: false, default: null, effect: 'Access registry base URL. Unset disables the registry. Must be https unless it is loopback. Stdio exits 1 with a ConfigError when it is set.' },
+ { name: 'MCP_ACCESS_REGISTRY_AUTH', transports: ['http'], required: false, default: null, effect: 'Required when the URL is set: bearer, google-id-token or none. none is for loopback URLs only. Any other value is a ConfigError.' },
+ { name: 'MCP_ACCESS_REGISTRY_TOKEN', transports: ['http'], required: false, default: null, effect: 'Bearer secret for the registry. Required when MCP_ACCESS_REGISTRY_AUTH is bearer.' },
+ { name: 'MCP_ACCESS_REGISTRY_AUDIENCE', transports: ['http'], required: false, default: null, effect: 'Identity token audience. Required when MCP_ACCESS_REGISTRY_AUTH is google-id-token.' },
+ { name: 'MCP_ACCESS_REGISTRY_CONNECTOR', transports: ['http'], required: false, default: 'netsapiens-mcp', effect: 'Connector ID sent to the registry.' },
+ { name: 'MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS', transports: ['http'], required: false, default: '600', effect: 'Last-known-good window in seconds, 0 to 3600. The registry cannot extend it.' },
+ { name: 'MCP_ACCESS_REGISTRY_TIMEOUT_MS', transports: ['http'], required: false, default: '3000', effect: 'Registry request timeout in milliseconds, 500 to 30000.' },
 ];
