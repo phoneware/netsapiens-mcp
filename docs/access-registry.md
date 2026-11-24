@@ -90,6 +90,28 @@ Deny reasons in use are `tenant_not_enrolled`, `tenant_disabled`, `subject_not_e
 }
 ```
 
+Any string is a valid reason, including the empty string and a string longer than 200 characters. The client keeps the first 64 characters of a reason, replaces each character outside printable ASCII with `?`, and reports the empty string as `unspecified`. Both of these deny decisions are valid:
+
+```json
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "",
+  "revision": "0",
+  "ttlSeconds": 60
+}
+```
+
+```json
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "An example reason that runs well past the 200 characters an earlier parser allowed, and past the 64 characters the client keeps. The decision is still a deny, and the client shortens the reason before any log or error message uses it.",
+  "revision": "0",
+  "ttlSeconds": 60
+}
+```
+
 ### Members
 
 | Member | Rule |
@@ -98,7 +120,7 @@ Deny reasons in use are `tenant_not_enrolled`, `tenant_disabled`, `subject_not_e
 | `decision` | `allow` or `deny`. |
 | `revision` | 1 to 128 characters from `A-Z a-z 0-9 . _ : -`. The client compares it with `If-None-Match`. |
 | `ttlSeconds` | An integer of at least 1. The client clamps it to 5 to 300 seconds. |
-| `reason` | Deny only. A non-empty string of at most 200 characters. |
+| `reason` | Deny only. Any string, including an empty one. The client keeps a sanitized copy, as described under Decision response. |
 | `policy` | Allow only. Required. See Policy below. |
 | `critical` | An array of member names. Any non-empty array makes the whole response a contract error. |
 | Any other member | Ignored. |
@@ -115,6 +137,18 @@ A registry that adds a restriction this contract does not define must name it in
 | `unclassifiedOutput` | `deny` or `allow`. |
 | `platforms` | An array of at most 512 entries, each an https URI without userinfo, fragment or query; the word `loopback`; or `*`. See Platforms and redirect URIs. |
 
+## Parsing entry points
+
+The package exports three functions from its entry point. Each takes one kind of input:
+
+| Function | Takes | Use it when |
+|---|---|---|
+| `parseRegistryDecisionText(text)` | The response body as text | The body is read as text. The text is parsed exactly once. |
+| `parseRegistryDecisionValue(value)` | A value already parsed, such as the result of `res.json()` | An embedder already holds a parsed value. A string is refused, because a string may be JSON text that was encoded twice. |
+| `parseRegistryDecision(input)` | Either | Compatibility only. A string is read as text and any other value as a parsed value. Do not use it in new code. |
+
+Embedders that return `res.json()` MUST use `parseRegistryDecisionValue`. Clients that read the body as text MUST use `parseRegistryDecisionText`. A body encoded twice parses to a JSON string, which is a contract error on either path.
+
 ## Status handling
 
 | Outcome | Client treatment |
@@ -124,6 +158,7 @@ A registry that adds a restriction this contract does not define must name it in
 | Any other status, including `404` | Registry error. Never "not enrolled". |
 | Network error, or no answer within the timeout (default 3000 ms) | Registry error. |
 | Body is not JSON | Registry error, class `invalid_json`. |
+| Body parses to a JSON string, which a body encoded twice does | Registry error, class `contract`. |
 | Body over 64 KiB | Registry error, class `oversize`. |
 | Contract violation | Registry error, class `contract`. |
 | Non-empty `critical` | Registry error, class `critical`. |
@@ -139,6 +174,7 @@ The fixtures in `src/__tests__/fixtures/access/` show each class. A valid decisi
 - `invalid-bad-ttl.json`: uses a ttl of zero.
 - `invalid-version.json`: uses version 2.
 - `invalid-http-platform.json`: lists a non-loopback platform over http.
+- `invalid-double-encoded.json`: a JSON string holding decision JSON. That is what a body encoded twice parses to, so it is refused on both parsing paths.
 
 ## Platforms and redirect URIs
 
@@ -155,12 +191,14 @@ A platform entry that is not one of the three forms makes the response a contrac
 
 The client builds the identity the registry keys on from the sign-in:
 
-- **Tenant.** The home domain, trimmed and lowercased. It must not be empty and must not contain whitespace, `@` or a control character.
-- **User.** The NetSapiens user name, trimmed and lowercased, without the domain. The same rules apply.
+- **Tenant.** The home domain. Leading and trailing ASCII space (0x20) and tab are trimmed, and nothing else is. What remains must be printable ASCII (0x21 to 0x7E) with no `@` and no blank inside it. Uppercase ASCII letters are then lowercased.
+- **User.** The NetSapiens user name, with the same rules and no domain.
 - **Subject.** `user@tenant`.
 - **Platform.** The origin of the NetSapiens API URL: scheme, host and port, with the host lowercased and default ports removed.
 
-Mixed-case input and lowercase input produce the same identity, so a sign-in string and a portal URL that differ only in case address the same registry entry.
+A name that breaks these rules is refused, never normalized. Non-ASCII letters, no break and ideographic spaces, the byte order mark, zero width characters, line and paragraph separators and control characters all fail. Two raw names therefore never share a registry key. A name that is empty after trimming is refused too. A conforming registry applies the same rule to the names it stores and compares.
+
+Mixed-case ASCII input and lowercase input produce the same identity, so a sign-in string and a portal URL that differ only in ASCII case address the same registry entry.
 
 ## Effective policy
 
@@ -174,6 +212,8 @@ For each request, the client decides in this order and reports the first refusal
 6. Otherwise the tool is allowed.
 
 The decision runs on every dispatch, including calls that reach a tool through another tool, through a search, or through a promotion.
+
+**Names and patterns.** A tool name longer than 256 characters is refused as `not_allowed` before any pattern is tried, under every policy, the unset one included. No tool the package ships has a name that long, so the limit refuses no real tool. Patterns match the whole name. `*` matches any run of characters, including none and line breaks. Every other character matches only itself. Matching takes time linear in the name, so a pattern cannot stall a call.
 
 Operations are checked before a request leaves the client. An operation is refused when:
 

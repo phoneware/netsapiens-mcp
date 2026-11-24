@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CONTENT_KINDS, parseRegistryDecision } from '../access/contract.js';
+import { CONTENT_KINDS, parseRegistryDecision, parseRegistryDecisionText, parseRegistryDecisionValue } from '../access/contract.js';
 import * as lib from '../lib.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/access/', import.meta.url));
@@ -137,8 +137,6 @@ const MALFORMED: Array<[string, unknown]> = [
     }),
   ],
   ['a deny without a reason', without(VALID_DENY, 'reason')],
-  ['a deny with an empty reason', denyWith({ reason: '' })],
-  ['a deny with a reason over 200 characters', denyWith({ reason: 'r'.repeat(201) })],
   ['critical that is not a list', allowWith({ critical: 'policy.v2' })],
   ['critical that holds a non-string', allowWith({ critical: [1] })],
   ['critical that is null', allowWith({ critical: null })],
@@ -273,5 +271,122 @@ describe('wire fixtures', () => {
       ok: true,
       decision: VALID_DENY,
     });
+  });
+});
+
+describe('error messages carry no registry values', () => {
+  const HOSTILE = 'Bearer sk-live-SECRET\nINJECTED';
+
+  it.each([
+    ['policy.access', allowWith({ policy: policyWith({ access: HOSTILE }) })],
+    ['a content kind', allowWith({ policy: policyWith({ content: { ...CONTENT, transcript: HOSTILE } }) })],
+    ['unclassifiedOutput', allowWith({ policy: policyWith({ unclassifiedOutput: HOSTILE }) })],
+    ['decision', allowWith({ decision: HOSTILE })],
+  ])('a hostile value in %s is not echoed in the error', (_where, body) => {
+    const result = parseRegistryDecision(body);
+    expect(result.ok).toBe(false);
+    const message = result.ok ? '' : result.message;
+    expect(message).not.toContain('SECRET');
+    expect(message).not.toContain('Bearer');
+    expect(message).toMatch(/^[\x20-\x7e]+$/);
+  });
+});
+
+describe('entry points', () => {
+  const ONCE = JSON.stringify(VALID_ALLOW);
+  const TWICE = JSON.stringify(ONCE);
+
+  it('parses JSON text exactly once in parseRegistryDecisionText', () => {
+    expect(parseRegistryDecisionText(ONCE)).toEqual({ ok: true, decision: VALID_ALLOW });
+  });
+
+  it('takes a parsed object in parseRegistryDecisionValue', () => {
+    expect(parseRegistryDecisionValue(VALID_ALLOW)).toEqual({ ok: true, decision: VALID_ALLOW });
+  });
+
+  it('refuses a double-encoded body given to parseRegistryDecisionValue', () => {
+    expect(parseRegistryDecisionValue(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('refuses a double-encoded body given to parseRegistryDecisionText', () => {
+    expect(parseRegistryDecisionText(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('refuses the inner text an embedder gets from a double-encoded body parsed once', () => {
+    const parsedOnce: unknown = JSON.parse(TWICE);
+    expect(parseRegistryDecisionValue(parsedOnce)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it.each([5, null, true, [VALID_ALLOW]])('refuses %j given to parseRegistryDecisionValue', (value) => {
+    expect(parseRegistryDecisionValue(value)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it.each(['[]', 'null', '5', '"text"'])('refuses JSON text %s given to parseRegistryDecisionText', (text) => {
+    expect(parseRegistryDecisionText(text)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('reports text that is not JSON as invalid_json', () => {
+    expect(parseRegistryDecisionText('{"version":1,')).toMatchObject({ ok: false, errorClass: 'invalid_json' });
+  });
+
+  it('keeps the dispatcher: a string is read as text, any other value as a parsed value', () => {
+    expect(parseRegistryDecision(ONCE)).toEqual({ ok: true, decision: VALID_ALLOW });
+    expect(parseRegistryDecision(VALID_ALLOW)).toEqual({ ok: true, decision: VALID_ALLOW });
+    expect(parseRegistryDecision(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('exports all three functions from the package entry point', () => {
+    expect(lib.parseRegistryDecision).toBe(parseRegistryDecision);
+    expect(lib.parseRegistryDecisionText).toBe(parseRegistryDecisionText);
+    expect(lib.parseRegistryDecisionValue).toBe(parseRegistryDecisionValue);
+  });
+});
+
+describe('deny reasons', () => {
+  it('accepts an empty reason and reports it as unspecified', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'unspecified' }),
+    });
+  });
+
+  it('accepts a reason over 200 characters and keeps its first 64', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'r'.repeat(201) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'r'.repeat(64) }),
+    });
+  });
+
+  it('replaces each character outside printable ASCII with a question mark', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'Bad\nReason\u0000\u00e9 ok' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'Bad?Reason?? ok' }),
+    });
+  });
+
+  it('counts a character outside the basic plane as one character', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '\u{1F600}'.repeat(3) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: '???' }),
+    });
+  });
+
+  it('keeps at most 64 characters after replacement', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '\u00e9'.repeat(100) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: '?'.repeat(64) }),
+    });
+  });
+
+  it('keeps a printable reason of up to 64 characters unchanged', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'registry_maintenance' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'registry_maintenance' }),
+    });
+  });
+
+  it('refuses a reason that is not a string', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 5 }))).toMatchObject({ ok: false, errorClass: 'contract' });
+    expect(parseRegistryDecision(denyWith({ reason: null }))).toMatchObject({ ok: false, errorClass: 'contract' });
   });
 });

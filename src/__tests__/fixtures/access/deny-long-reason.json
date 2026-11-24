@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "An example reason that runs well past the 200 characters an earlier parser allowed, and past the 64 characters the client keeps. The decision is still a deny, and the client shortens the reason before any log or error message uses it.",
+  "revision": "0",
+  "ttlSeconds": 60
+}

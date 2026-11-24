@@ -1,8 +1,9 @@
 /**
  * Identity normalization for the access registry (docs/access-registry.md, "Identity").
  *
- * The registry keys every decision on (platform, tenant, subject). These functions make the same account
- * produce the same key whatever case or padding the sign-in or the portal URL carried.
+ * The registry keys every decision on (platform, tenant, subject). Tenant and user names are NetSapiens domain and
+ * user names, which are ASCII. A name is never normalized into a different name: anything outside printable ASCII is
+ * refused, so two raw names cannot share a registry key.
  */
 import { normalizePlatformUrl } from '../auth/platforms.js';
 import { nsScopeToTier } from '../auth/roles.js';
@@ -26,29 +27,46 @@ export class AccessIdentityError extends Error {
   }
 }
 
-/** Whitespace, '@' and control characters are never part of a domain or user name. */
-const FORBIDDEN_NAME_CHARS = /[\s@\u0000-\u001f\u007f]/;
+/** Printable ASCII, 0x21 to 0x7E. The space is excluded: it is trimmed at the ends and refused inside a name. */
+const PRINTABLE_ASCII = /^[!-~]+$/;
 
-function normalizeName(raw: string, field: 'tenant' | 'user'): string {
-  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  if (value === '') {
-    throw new AccessIdentityError(field === 'tenant' ? 'empty_tenant' : 'empty_user', `${field} is empty`);
-  }
-  if (FORBIDDEN_NAME_CHARS.test(value)) {
-    throw new AccessIdentityError(
-      field === 'tenant' ? 'invalid_tenant' : 'invalid_user',
-      `${field} contains whitespace, "@" or a control character`,
-    );
-  }
-  return value;
+/**
+ * Removes ASCII space and tab from both ends, and nothing else. It is a loop rather than a regular expression, so a
+ * long run of blanks costs time linear in its length.
+ */
+function trimSpaceAndTab(raw: string): string {
+  let start = 0;
+  let end = raw.length;
+  while (start < end && (raw[start] === ' ' || raw[start] === '\t')) start++;
+  while (end > start && (raw[end - 1] === ' ' || raw[end - 1] === '\t')) end--;
+  return raw.slice(start, end);
 }
 
-/** Home domain as the registry keys it: trimmed, lowercased. */
+/**
+ * Tenant and user names: trim ASCII space and tab, refuse anything outside printable ASCII or containing "@", then
+ * lowercase. The checks run before lowercasing, so no non-ASCII character can lowercase into an ASCII one.
+ */
+function normalizeName(raw: string, field: 'tenant' | 'user'): string {
+  const trimmed = typeof raw === 'string' ? trimSpaceAndTab(raw) : '';
+  const isTenant = field === 'tenant';
+  if (trimmed === '') {
+    throw new AccessIdentityError(isTenant ? 'empty_tenant' : 'empty_user', `${field} is empty`);
+  }
+  if (!PRINTABLE_ASCII.test(trimmed) || trimmed.includes('@')) {
+    throw new AccessIdentityError(
+      isTenant ? 'invalid_tenant' : 'invalid_user',
+      `${field} must be printable ASCII with no spaces inside and no "@"`,
+    );
+  }
+  return trimmed.toLowerCase();
+}
+
+/** Home domain as the registry keys it: ASCII space and tab trimmed, printable ASCII only, lowercased. */
 export function normalizeTenant(raw: string): string {
   return normalizeName(raw, 'tenant');
 }
 
-/** NetSapiens user name as the registry keys it: trimmed, lowercased, no domain. */
+/** NetSapiens user name as the registry keys it: the same rules as the tenant, and no domain. */
 export function normalizeUser(raw: string): string {
   return normalizeName(raw, 'user');
 }

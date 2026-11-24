@@ -187,7 +187,7 @@ describe('tool decisions', () => {
     try {
       const compiled = compilePolicy(policy({ allow: ['@nope'] }), catalog(TOOLS), 'r1');
       expect(compiled.toolDecision('get_domains')).toEqual({ allowed: false, reason: 'not_allowed' });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unknown group'), { group: '@nope' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unknown group'), { index: 0 });
     } finally {
       warn.mockRestore();
     }
@@ -353,5 +353,51 @@ describe('ALLOW_ALL', () => {
   it('allows any valid redirect, loopback included', () => {
     expect(ALLOW_ALL.allowsRedirect('https://anything.example/cb')).toBe(true);
     expect(ALLOW_ALL.allowsRedirect('http://localhost:1/x')).toBe(true);
+  });
+});
+
+describe('decisions are frozen', () => {
+  it('freezes allowed and refused decisions', () => {
+    const allowed = ALLOW_ALL.toolDecision('get_domains');
+    const refused = compilePolicy(policy({ allow: ['@curated'] }), catalog(TOOLS), 'r1').toolDecision('delete_domain');
+    expect(Object.isFrozen(allowed)).toBe(true);
+    expect(Object.isFrozen(refused)).toBe(true);
+  });
+
+  it('refuses a change to a decision a caller holds', () => {
+    const decision = ALLOW_ALL.toolDecision('get_domains');
+    expect(Reflect.set(decision, 'allowed', false)).toBe(false);
+    expect(decision).toEqual({ allowed: true });
+  });
+
+  it('keeps later decisions allowed after an attempted change', () => {
+    expect(ALLOW_ALL.toolDecision('get_domains')).toEqual({ allowed: true });
+  });
+});
+
+describe('policy errors and logs carry no registry values', () => {
+  const HOSTILE_GROUP = '@Bearer sk-live-SECRET\nINJECTED';
+
+  it('refuses an unknown deny group without echoing it', () => {
+    let message = '';
+    try {
+      compilePolicy(policy({ deny: [HOSTILE_GROUP] }), catalog(TOOLS), 'r1');
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/unknown group/);
+    expect(message).not.toContain('SECRET');
+    expect(message).not.toContain('\n');
+  });
+
+  it('logs an unknown allow group without echoing it', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      compilePolicy(policy({ allow: [HOSTILE_GROUP] }), catalog(TOOLS), 'r1');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
