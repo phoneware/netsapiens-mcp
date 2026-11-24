@@ -175,6 +175,8 @@ For each request, the client decides in this order and reports the first refusal
 
 The decision runs on every dispatch, including calls that reach a tool through another tool, through a search, or through a promotion.
 
+**Names and patterns.** A tool name longer than 256 characters is refused as `not_allowed` before any pattern is tried, under every policy, the unset one included. No tool the package ships has a name that long, so the limit refuses no real tool. Patterns match the whole name. `*` matches any run of characters, including none and line breaks. Every other character matches only itself. Matching takes time linear in the name, so a pattern cannot stall a call.
+
 Operations are checked before a request leaves the client. An operation is refused when:
 
 - its content kind is denied, or it is unreviewed and any kind is denied;

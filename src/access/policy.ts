@@ -1,12 +1,19 @@
 /**
  * Compiles a registry policy against the tool catalog and decides every tool, operation and redirect
  * (docs/access-registry.md, "Effective policy"). Pure: no network, no environment.
+ *
+ * Matching builds no regular expression. A pattern is split at its stars and each piece is checked with a prefix,
+ * suffix or indexOf test, so a decision costs time linear in the name. A name longer than the limit is refused
+ * before any pattern is tried.
  */
 import { logger } from '../utils/logger.js';
 import type { ContentKind } from '../governance/types.js';
 import { CONTENT_KINDS, type AccessMode, type AccessPolicyV1, type ContentAction, type UnclassifiedOutput } from './contract.js';
 import { buildRedirectMatcher, parsePlatformEntry, type PlatformEntry } from './redirect.js';
 import type { OperationRef, ToolCatalogView } from './types.js';
+
+/** Longest tool name a decision matches. A longer name is refused as not_allowed under every policy. */
+const MAX_TOOL_NAME_LENGTH = 256;
 
 /** Group names the package defines. Any other "@" entry in tools.deny makes the policy invalid. */
 const KNOWN_GROUPS: Record<string, true> = {
@@ -65,23 +72,40 @@ function refuse(reason: DenyReason): PolicyDecision {
 
 const READ_ACTION = /^(read|count|list|search|get)/;
 
+/** A pattern split at its stars: "a*b" is ["a", "b"], and "*" is ["", ""]. */
+type Glob = readonly string[];
+
 interface PatternList {
   readonly groups: ReadonlySet<string>;
-  readonly globs: readonly RegExp[];
+  readonly globs: readonly Glob[];
 }
 
-function escapeLiteral(text: string): string {
-  return text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** The MCP_DISABLED_TOOLS grammar: "*" matches any run of characters, across the whole name. */
-function compileGlob(pattern: string): RegExp {
-  return new RegExp(`^${pattern.split('*').map(escapeLiteral).join('[\\s\\S]*')}$`);
+/**
+ * Whether a name matches a pattern split at its stars. The first piece must be a prefix and the last a suffix, and
+ * each middle piece must occur in order between them. Each middle piece takes its first occurrence. For patterns
+ * made only of stars and literal text, that choice never rules out a match, so nothing is retried.
+ */
+function globMatches(segments: Glob, name: string): boolean {
+  if (segments.length === 1) return name === segments[0];
+  const head = segments[0];
+  const tail = segments[segments.length - 1];
+  if (name.length < head.length + tail.length) return false;
+  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
+  const limit = name.length - tail.length;
+  let position = head.length;
+  for (let i = 1; i < segments.length - 1; i++) {
+    const middle = segments[i];
+    if (middle === '') continue;
+    const found = name.indexOf(middle, position);
+    if (found === -1 || found + middle.length > limit) return false;
+    position = found + middle.length;
+  }
+  return true;
 }
 
 function compilePatternList(entries: readonly string[], side: 'allow' | 'deny'): PatternList {
   const groups = new Set<string>();
-  const globs: RegExp[] = [];
+  const globs: Glob[] = [];
   for (const raw of entries) {
     const pattern = raw.trim();
     if (pattern === '') {
@@ -97,7 +121,7 @@ function compilePatternList(entries: readonly string[], side: 'allow' | 'deny'):
       }
       continue;
     }
-    globs.push(compileGlob(pattern));
+    globs.push(pattern.split('*'));
   }
   return { groups, globs };
 }
@@ -106,7 +130,7 @@ function listMatches(list: PatternList, names: readonly string[], memberOf: Read
   for (const group of list.groups) {
     if (memberOf.has(group)) return true;
   }
-  return list.globs.some((glob) => names.some((name) => glob.test(name)));
+  return list.globs.some((segments) => names.some((name) => globMatches(segments, name)));
 }
 
 function checkedAction(action: unknown, kind: ContentKind): ContentAction {
@@ -153,8 +177,9 @@ export function compilePolicy(policy: AccessPolicyV1, catalog: ToolCatalogView, 
   const deniedKinds = CONTENT_KINDS.filter((kind) => content[kind] === 'deny');
   const strippedKinds = CONTENT_KINDS.filter((kind) => content[kind] === 'strip');
 
-  // Order is fixed: deny, allow, read, content, unclassified. The first refusal is the reason reported.
+  // Order is fixed: length, deny, allow, read, content, unclassified. The first refusal is the reason reported.
   function toolDecision(name: string): PolicyDecision {
+    if (name.length > MAX_TOOL_NAME_LENGTH) return refuse('not_allowed');
     const entry = catalog.lookupTool(name);
     const names = entry === undefined ? [name] : [entry.canonical, entry.exposed];
     const memberOf = new Set<string>(entry === undefined ? [] : entry.groups);
