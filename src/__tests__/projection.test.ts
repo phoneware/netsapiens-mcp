@@ -80,24 +80,43 @@ async function recentCalls(policy: CompiledPolicy | undefined): Promise<Payload>
   return JSON.parse(textOf(result)) as Payload;
 }
 
-const CALL_INTELLIGENCE = ['call-intelligence-summary', 'call-intelligence-topics-top', 'prefilled-transcription-api'];
-const METADATA = ['call-direction', 'call-answer-datetime', 'call-orig-call-id', 'call-intelligence-percent-positive'];
+/** Summary and topics, and the thirteen sentiment fields B classifies as ai_summary: analysis of the call's words. */
+const CALL_SUMMARY = ['call-intelligence-summary', 'call-intelligence-topics-top'];
+const CALL_SENTIMENT = [
+  'call-intelligence-percent-negative',
+  'call-intelligence-percent-neutral',
+  'call-intelligence-percent-positive',
+  'call-intelligence-ending-percent-negative',
+  'call-intelligence-ending-percent-neutral',
+  'call-intelligence-ending-percent-positive',
+  'call-intelligence-duration-seconds-negative',
+  'call-intelligence-duration-seconds-neutral',
+  'call-intelligence-duration-seconds-positive',
+  'call-intelligence-ending-duration-seconds-negative',
+  'call-intelligence-ending-duration-seconds-neutral',
+  'call-intelligence-ending-duration-seconds-positive',
+  'call-intelligence-ending-sentiment-scale',
+];
+/** Internal relay field: dropped under every policy. */
+const INTERNAL = ['prefilled-transcription-api'];
+/** True metadata: kept under every policy. */
+const METADATA = ['call-direction', 'call-answer-datetime', 'call-orig-call-id'];
 
 describe('E9 projection of the innermost result', () => {
   it('removes the call-intelligence and internal fields, keeps the metadata, and counts the stripped fields', async () => {
     const payload = await recentCalls(compiled(STRIP_AI_AND_TRANSCRIPT));
     const row = payload.data?.[0] ?? {};
-    for (const field of CALL_INTELLIGENCE) expect(row).not.toHaveProperty(field);
+    for (const field of [...CALL_SUMMARY, ...CALL_SENTIMENT, ...INTERNAL]) expect(row).not.toHaveProperty(field);
     for (const field of METADATA) expect(row).toHaveProperty(field);
-    expect(payload._withheld).toEqual({ ai_summary: 2 });
+    // The two summary fields and the thirteen sentiment fields are ai_summary and withheld; the internal field is dropped uncounted.
+    expect(payload._withheld).toEqual({ ai_summary: 15 });
   });
 
   it('strips the fields of a denied kind as well as refusing its operations (the strip set includes denied kinds)', async () => {
     const payload = await recentCalls(compiled(DENY_AI));
     const row = payload.data?.[0] ?? {};
-    expect(row).not.toHaveProperty('call-intelligence-summary');
-    expect(row).not.toHaveProperty('call-intelligence-topics-top');
-    expect(payload._withheld).toEqual({ ai_summary: 2 });
+    for (const field of [...CALL_SUMMARY, ...CALL_SENTIMENT]) expect(row).not.toHaveProperty(field);
+    expect(payload._withheld).toEqual({ ai_summary: 15 });
   });
 
   it('drops every undeclared path under unclassifiedOutput deny, and counts it', async () => {
@@ -106,7 +125,7 @@ describe('E9 projection of the innermost result', () => {
     expect(row).not.toHaveProperty('x-debug-blob');
     for (const field of METADATA) expect(row).toHaveProperty(field);
     expect(payload._withheld?.undeclared).toBeGreaterThan(0);
-    expect(payload._withheld?.ai_summary).toBe(2);
+    expect(payload._withheld?.ai_summary).toBe(15);
   });
 
   it('keeps undeclared paths when unclassifiedOutput is allow, and adds no undeclared count', async () => {
