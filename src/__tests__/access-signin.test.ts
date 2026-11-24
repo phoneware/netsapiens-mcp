@@ -275,6 +275,26 @@ describe('registry configuration at startup', () => {
     }
   });
 
+  it('refuses a caller-built provider when only the registry environment is set', async () => {
+    const fake = await startFakeNs();
+    const store = createMemoryStore({ namespace: 'test', key: deriveStoreKey(NS_SECRET) });
+    try {
+      const provider = new NetSapiensAuthProvider({
+        nsApiUrl: fake.origin,
+        platforms: [{ id: 'default', label: 'fake', apiUrl: fake.origin }],
+        authMode: 'token',
+        store,
+      });
+      const env = { MCP_ACCESS_REGISTRY_URL: 'https://registry.example.com', MCP_ACCESS_REGISTRY_AUTH: 'bearer', MCP_ACCESS_REGISTRY_TOKEN: 'registry-token' };
+      await expect(startHarness({ registry: false, fake, store, authProvider: provider, env })).rejects.toThrow(
+        'cannot be combined with a custom authProvider',
+      );
+    } finally {
+      await store.close();
+      await fake.close();
+    }
+  });
+
   it('builds the enforcer from the environment and asks the registry it names', async () => {
     const loopback = await startLoopbackRegistry((query) =>
       query.get('subject') === SUBJECT ? allow() : { decision: 'deny', reason: 'subject_not_enabled' },
