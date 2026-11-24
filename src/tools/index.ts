@@ -1241,7 +1241,10 @@ export function registerAllTools(
   }
  }
 
- /** Session mode (E10): the first view is recorded; a later view that differs tells the client its tool list changed. */
+/**
+ * Session mode (E10): the first view is recorded; a later view that differs tells the client its tool list changed.
+ * The view is read on each request and nothing polls: a change that no request observes sends nothing until the next one.
+ */
  async function observeScope(scope: AccessScope): Promise<void> {
   if (scope.kind === 'open' || isStatelessMode()) return;
   const previous = lastSignature;
