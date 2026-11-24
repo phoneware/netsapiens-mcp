@@ -137,3 +137,59 @@ describe('identity normalization', () => {
     ).toBe('empty_tenant');
   });
 });
+
+describe('names outside printable ASCII are refused, never normalized', () => {
+  // Each of these trims or lowercases onto a different name, or looks like an ASCII name it is not.
+  const OUTSIDE_PRINTABLE_ASCII: Array<[string, string]> = [
+    ['\u212Aexample', 'Kelvin sign, which lowercases to k'],
+    ['\u00A0acme', 'no break space'],
+    ['\uFEFFacme', 'byte order mark'],
+    ['acme\u3000', 'ideographic space'],
+    ['acme\u2028', 'line separator'],
+    ['\uFF41\uFF43\uFF4D\uFF45', 'fullwidth letters'],
+    ['ac\u200Bme', 'zero width space'],
+    ['stra\u1E9Ee', 'capital sharp s'],
+  ];
+
+  it.each(OUTSIDE_PRINTABLE_ASCII)('refuses the tenant %j (%s)', (raw) => {
+    expect(codeOf(() => normalizeTenant(raw))).toBe('invalid_tenant');
+  });
+
+  it.each(OUTSIDE_PRINTABLE_ASCII)('refuses the user %j (%s)', (raw) => {
+    expect(codeOf(() => normalizeUser(raw))).toBe('invalid_user');
+  });
+
+  it('trims ASCII space and tab at both ends, and only those', () => {
+    expect(normalizeTenant(' \tPractice.Example\t ')).toBe('practice.example');
+    expect(normalizeUser('\t alice \t')).toBe('alice');
+  });
+
+  it.each(['ac me', 'ac\tme', 'ac\u0001me', 'ac\u007Fme', 'ac\nme'])(
+    'refuses %j, which has a blank or control character inside it',
+    (raw) => {
+      expect(codeOf(() => normalizeTenant(raw))).toBe('invalid_tenant');
+      expect(codeOf(() => normalizeUser(raw))).toBe('invalid_user');
+    },
+  );
+
+  it('accepts every printable ASCII character except the at sign, and lowercases only letters', () => {
+    let text = '';
+    for (let code = 0x21; code <= 0x7e; code++) {
+      if (code !== 0x40) text += String.fromCharCode(code);
+    }
+    expect(normalizeTenant(text)).toBe(text.toLowerCase());
+    expect(normalizeUser(text)).toBe(text.toLowerCase());
+  });
+
+  it('keeps the raw name out of the error message', () => {
+    let message = '';
+    try {
+      normalizeTenant('ac\nSECRET@example');
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toBe('');
+    expect(message).not.toContain('SECRET');
+    expect(message).not.toContain('\n');
+  });
+});

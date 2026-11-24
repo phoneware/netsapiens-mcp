@@ -34,7 +34,8 @@ export type UnclassifiedOutput = 'deny' | 'allow';
 export const MAX_LIST_ENTRIES = 512;
 export const MAX_PATTERN_LENGTH = 200;
 export const MAX_PLATFORM_LENGTH = 2048;
-export const MAX_REASON_LENGTH = 200;
+/** A deny reason keeps this many characters. Anything beyond is dropped, not an error. */
+const MAX_REASON_CHARACTERS = 64;
 export const REVISION_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export interface AccessPolicyV1 {
@@ -60,6 +61,7 @@ export type AccessDecisionV1 =
   | {
       readonly version: 1;
       readonly decision: 'deny';
+      /** Sanitized: the first 64 characters, each printable ASCII or "?", or "unspecified". Never the raw registry text. */
       readonly reason: string;
       readonly revision: string;
       readonly ttlSeconds: number;
@@ -127,8 +129,8 @@ const allowSchema = z.object({
 const denySchema = z.object({
   version: z.literal(1),
   decision: z.literal('deny'),
-  // Any non-empty reason is still a deny: unknown reasons fail closed.
-  reason: z.string().min(1).max(MAX_REASON_LENGTH),
+  // Any string is still a deny: an empty or unknown reason fails closed. The decision keeps a sanitized copy.
+  reason: z.string(),
   revision: revisionSchema,
   ttlSeconds: ttlSchema,
 });
@@ -140,19 +142,24 @@ const decisionSchema = z.discriminatedUnion('decision', [allowSchema, denySchema
 const criticalEnvelopeSchema = z.object({ critical: z.array(z.string()).optional() });
 
 /**
- * Parses a registry decision body. Accepts the JSON text or the value already parsed.
- * Unknown members are dropped, unless `critical` names one, which makes the whole response a contract error.
+ * The reason a deny keeps: its first 64 characters (code points), each printable ASCII or "?". An empty reason is
+ * reported as "unspecified". Reasons are free text from the registry, so nothing outside printable ASCII is kept.
  */
-export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResult {
-  let value: unknown = input;
-  if (typeof input === 'string') {
-    try {
-      value = JSON.parse(input);
-    } catch {
-      return failure('invalid_json', 'decision body is not valid JSON');
-    }
+function sanitizeDenyReason(reason: string): string {
+  if (reason === '') return 'unspecified';
+  let kept = '';
+  let count = 0;
+  for (const character of reason) {
+    if (count === MAX_REASON_CHARACTERS) break;
+    const code = character.codePointAt(0) ?? 0;
+    kept += code >= 0x20 && code <= 0x7e ? character : '?';
+    count++;
   }
+  return kept;
+}
 
+/** Checks a value already known to be a JSON object: the `critical` member first, then the decision schema. */
+function decodeDecision(value: unknown): ParseRegistryDecisionResult {
   const envelope = criticalEnvelopeSchema.safeParse(value);
   if (!envelope.success) {
     return failure('contract', describeIssues(envelope.error.issues));
@@ -164,17 +171,69 @@ export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResu
 
   const parsed = decisionSchema.safeParse(value);
   if (!parsed.success) return failure('contract', describeIssues(parsed.error.issues));
+  if (parsed.data.decision === 'deny') {
+    return { ok: true, decision: { ...parsed.data, reason: sanitizeDenyReason(parsed.data.reason) } };
+  }
   return { ok: true, decision: parsed.data };
+}
+
+/**
+ * Parses registry decision JSON text. The text is parsed exactly once. A result that is not an object is a contract
+ * error, which is what a body encoded twice produces. Use this when the response body is read as text.
+ */
+export function parseRegistryDecisionText(text: string): ParseRegistryDecisionResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return failure('invalid_json', 'decision body is not valid JSON');
+  }
+  if (typeof value === 'string') {
+    return failure('contract', 'decision text parsed to a JSON string, not an object; the body may be encoded twice');
+  }
+  return decodeDecision(value);
+}
+
+/**
+ * Parses a registry decision that is already a parsed value, such as the result of `res.json()`. It takes an object
+ * only. A string is refused, because it may be JSON text that a registry encoded twice.
+ */
+export function parseRegistryDecisionValue(value: unknown): ParseRegistryDecisionResult {
+  if (typeof value === 'string') {
+    return failure('contract', 'decision value is a string; pass JSON text to parseRegistryDecisionText');
+  }
+  return decodeDecision(value);
+}
+
+/**
+ * Compatibility entry point. A string is read as JSON text, as parseRegistryDecisionText reads it, and any other
+ * value is taken as a parsed value, as parseRegistryDecisionValue takes it. Embedders that return `res.json()` must
+ * call parseRegistryDecisionValue, and clients that read the body as text must call parseRegistryDecisionText.
+ */
+export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResult {
+  return typeof input === 'string' ? parseRegistryDecisionText(input) : parseRegistryDecisionValue(input);
 }
 
 function failure(errorClass: RegistryDecisionErrorClass, message: string): ParseRegistryDecisionResult {
   return { ok: false, errorClass, message };
 }
 
-/** Paths and messages only. Received values are never echoed into errors or logs. */
-function describeIssues(issues: ReadonlyArray<{ readonly path: ReadonlyArray<PropertyKey>; readonly message: string }>): string {
+/** Identifier-shaped text only: a schema member name, a zod issue code, or an array position. */
+const LABEL = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+function label(part: PropertyKey): string {
+  if (typeof part === 'number') return String(part);
+  if (typeof part === 'string' && LABEL.test(part)) return part;
+  return '?';
+}
+
+/**
+ * Describes each issue by its path and code only. zod messages are never used: zod 3 quotes the received value in
+ * some of them, and a registry value must not reach an error string or a log.
+ */
+function describeIssues(issues: ReadonlyArray<{ readonly path: ReadonlyArray<PropertyKey>; readonly code: string }>): string {
   return issues
     .slice(0, 3)
-    .map((issue) => `${issue.path.map(String).join('.') || '(root)'}: ${issue.message}`)
+    .map((issue) => `${issue.path.map(label).join('.') || '(root)'}: ${label(issue.code)}`)
     .join('; ');
 }
