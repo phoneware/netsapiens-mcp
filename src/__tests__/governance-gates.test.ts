@@ -22,6 +22,7 @@ import {
 } from '../governance/gates.js';
 import { OPERATION_OUTPUTS } from '../governance/operation-outputs.generated.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
+import { v1FactsOf } from '../governance/v1-facts.js';
 import { forEachOperation, mergeFacts, operationFactsOf, type Components, type OperationFacts, type SpecDocument } from '../governance/spec-walk.js';
 
 interface FactInput {
@@ -29,6 +30,7 @@ interface FactInput {
   responseMedia?: string[];
   writes?: boolean;
   bodyNames?: string[];
+  queryNames?: string[];
   requestNames?: string[];
   requestEnumValues?: string[];
 }
@@ -40,6 +42,7 @@ function facts(input: FactInput): OperationFacts {
     responseMedia: new Set(input.responseMedia ?? []),
     writes: input.writes ?? false,
     bodyNames: new Set(input.bodyNames ?? []),
+    queryNames: new Set(input.queryNames ?? []),
     requestNames: new Set(input.requestNames ?? []),
     requestEnumValues: new Set(input.requestEnumValues ?? []),
   };
@@ -63,8 +66,10 @@ describe('gate (a): a write that names a destination must be listed', () => {
     expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: [name] }), undefined, undefined, {})).toHaveLength(1);
   });
 
-  it('accepts a destination write listed free with a reason', () => {
-    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: ['smtp-host'] }), undefined, [], {})).toEqual([]);
+  it('accepts a destination write listed free with a reason that says what the destination receives', () => {
+    expect(
+      operationViolations('POST /synthetic', facts({ writes: true, bodyNames: ['smtp-host'] }), undefined, [], {}, 'receives nothing: a relay host name'),
+    ).toEqual([]);
   });
 
   it('does not flag a read that names a destination, or a write that names none', () => {
@@ -76,6 +81,63 @@ describe('gate (a): a write that names a destination must be listed', () => {
     expect(isDestinationName('ipaware-status')).toBe(false);
     expect(isDestinationName('hosted-video')).toBe(false);
     expect(isDestinationName('ip-address')).toBe(true);
+  });
+});
+
+describe('gate (a), round 3: destination words, query names, v1 facts and the reason a free listing must give', () => {
+  it.each([
+    'callback-number',
+    'webhook-id',
+    'endpoint-id',
+    'target-user',
+    'forward-always',
+    'forwardto',
+    'outbound-to',
+    'to-user',
+    'cc-list',
+    'bcc-list',
+    'cclist',
+    'notify-on-voicemail',
+    'account-code',
+    'integration-key',
+    'credentials-id',
+    'address-line-1',
+    'members',
+    'push-network',
+    'push-device-token',
+    'device-aor',
+    'phonenumber-fax',
+    'responder-user',
+    'callqueue-agent-id',
+  ])('flags a write that names %s, a word that names where content goes', (name) => {
+    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: [name] }), undefined, undefined, {})).toHaveLength(1);
+  });
+
+  it('matches whole words only: a word that contains a destination word is not one', () => {
+    for (const name of ['toolbar', 'accountant', 'notification-count', 'addressing-mode']) expect(isDestinationName(name), name).toBe(false);
+    expect(isDestinationName('address')).toBe(true);
+  });
+
+  it('reads the query names of a write: a destination in the query is a destination write', () => {
+    expect(operationViolations('POST /synthetic', facts({ writes: true, queryNames: ['to'] }), undefined, undefined, {})).toHaveLength(1);
+    expect(operationViolations('GET /synthetic', facts({ queryNames: ['to'] }), undefined, undefined, {})).toEqual([]);
+  });
+
+  it('derives v1 facts from the apidoc: a v1 write that names a destination is flagged, and a v1 read sets nothing', () => {
+    expect(v1FactsOf('update', ['dest', 'number']).writes).toBe(true);
+    expect(v1FactsOf('count', ['dest']).writes).toBe(false);
+    expect(operationViolations('v1:smsnumber:update', v1FactsOf('update', ['dest']), undefined, undefined, {})).toHaveLength(1);
+    expect(operationViolations('v1:smsnumber:count', v1FactsOf('count', ['dest']), undefined, undefined, {})).toEqual([]);
+  });
+
+  it('refuses a free listing of a destination write whose reason does not say what the destination receives', () => {
+    const write = facts({ writes: true, bodyNames: ['smtp-host'] });
+    expect(operationViolations('POST /synthetic', write, undefined, [], {})).toHaveLength(1);
+    expect(operationViolations('POST /synthetic', write, undefined, [], {}, 'a relay setting')).toHaveLength(1);
+  });
+
+  it('asks no reason of a free listing that names no destination', () => {
+    expect(operationViolations('POST /synthetic', facts({ writes: true, bodyNames: ['display-name'] }), undefined, [], {})).toEqual([]);
   });
 });
 
@@ -148,6 +210,13 @@ describe('the gate over the real specs', () => {
       factsByKey.set(key, mergeFacts(factsByKey.get(key), operationFactsOf(method, op, components)));
     });
   }
+  for (const def of v1ToolRegistry.values()) {
+    const raw = def.operation?.key;
+    const key = raw === undefined ? undefined : v1OperationKeyOf(raw);
+    if (key === undefined) continue;
+    const schema = def.schema.inputSchema as unknown as { properties?: Record<string, unknown> };
+    factsByKey.set(key, mergeFacts(factsByKey.get(key), v1FactsOf(key.split(':')[2] ?? '', Object.keys(schema.properties ?? {}))));
+  }
 
   function liveKeys(): Set<string> {
     const keys = new Set<string>();
@@ -165,7 +234,8 @@ describe('the gate over the real specs', () => {
       const resource = Object.hasOwn(OPERATION_OUTPUTS, key) ? OPERATION_OUTPUTS[key] : undefined;
       const table = resource === undefined ? undefined : NS_RESOURCE_FIELDS[resource];
       const names = Object.hasOwn(NAME_REVIEWS, key) ? NAME_REVIEWS[key] : {};
-      violations.push(...operationViolations(key, factsByKey.get(key) ?? facts({}), table, listedKindsOf(key), names));
+      const reason = Object.hasOwn(REVIEWED_CONTENT_FREE, key) ? REVIEWED_CONTENT_FREE[key] : undefined;
+      violations.push(...operationViolations(key, factsByKey.get(key) ?? facts({}), table, listedKindsOf(key), names, reason));
     }
     expect(violations).toEqual([]);
   });

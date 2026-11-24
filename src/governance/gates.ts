@@ -89,7 +89,15 @@ export function isVoicemailDestination(name: string): boolean {
   return DESTINATION_PATTERN.test(name);
 }
 
-/** Name tokens that name where something is sent: an address, a host or server, a path, a bucket, or a participant. */
+/** A reason that says what a destination receives. A free listing that silences a destination write must carry one. */
+export const RECEIVES_PATTERN = /\breceiv/i;
+
+/**
+ * Name words that name where something is sent: an address, a host or server, a path, a bucket, a participant, a
+ * recipient, a callback, a webhook, an endpoint, a target, a forward, a copy or notify list, an account, an integration,
+ * credentials, a member, a push registration, a phone number, a responder, or an agent that receives queued conversations.
+ * A word matches in its own form and without a plural s, so "address" and "addresses" both match.
+ */
 const DESTINATION_TOKENS: ReadonlySet<string> = new Set([
   'url',
   'uri',
@@ -103,21 +111,58 @@ const DESTINATION_TOKENS: ReadonlySet<string> = new Set([
   'recipient',
   'bucket',
   'server',
+  'callback',
+  'webhook',
+  'endpoint',
+  'target',
+  'forward',
+  'forwardto',
+  'to',
+  'cc',
+  'bcc',
+  'cclist',
+  'notify',
+  'account',
+  'integration',
+  'credentials',
+  'address',
+  'member',
+  'push',
+  'phonenumber',
+  'responder',
+  'agent',
 ]);
 
-/** The tokens of a field name: split at separators and camel-case joins, lower-cased, with a plural s dropped. */
-function nameTokens(name: string): string[] {
+/** Word runs that name a destination together: a push device's token, and its address of record. */
+const DESTINATION_PHRASES: readonly (readonly string[])[] = [
+  ['device', 'token'],
+  ['device', 'aor'],
+];
+
+/** The lower-cased words of a field name, split at separators and camel-case joins. */
+function wordsOf(name: string): string[] {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
     .toLowerCase()
     .split(/[-_.\s]+/)
-    .filter((token) => token !== '')
-    .map((token) => token.replace(/s$/, ''));
+    .filter((word) => word !== '');
 }
 
-/** Whether a field name names a destination: one of its tokens is a destination token, or begins with dest. */
+/** Whether the words contain the phrase as a run, in order. */
+function containsRun(words: readonly string[], phrase: readonly string[]): boolean {
+  return words.some((_, start) => phrase.every((word, offset) => words[start + offset] === word));
+}
+
+/**
+ * Whether a field name names a destination: one of its words, in its own form or without a plural s, is a destination
+ * word or begins with dest, or its words contain a destination phrase.
+ */
 export function isDestinationName(name: string): boolean {
-  return nameTokens(name).some((token) => DESTINATION_TOKENS.has(token) || token.startsWith('dest'));
+  const words = wordsOf(name);
+  const forms = words.flatMap((word) => (word.endsWith('s') ? [word, word.slice(0, -1)] : [word]));
+  if (forms.some((form) => DESTINATION_TOKENS.has(form) || form.startsWith('dest'))) return true;
+  const singular = words.map((word) => (word.endsWith('s') ? word.slice(0, -1) : word));
+  return DESTINATION_PHRASES.some((phrase) => containsRun(singular, phrase));
 }
 
 export interface GateRequirement {
@@ -129,6 +174,8 @@ export interface GateRequirement {
   readonly reason: string | undefined;
   /** Response names the pattern matches that no class, setting entry or review for the operation explains. */
   readonly unreviewedNames: readonly string[];
+  /** The request names that name a destination: body names, and query names for a write. Empty when none does. */
+  readonly destinations: readonly string[];
 }
 
 function orderedKinds(kinds: Iterable<ContentKind>): ContentKind[] {
@@ -183,6 +230,7 @@ export function responseRequirement(
     flagged: parts.length > 0,
     reason: parts.length > 0 ? parts.join('; ') : undefined,
     unreviewedNames: unreviewed,
+    destinations: [],
   };
 }
 
@@ -196,7 +244,7 @@ export function requestRequirement(facts: OperationFacts): GateRequirement {
   }
   const transmits = sinks && modelKinds.size > 0;
   const voicemailDestination = [...facts.requestNames].some(isVoicemailDestination);
-  const destinations = facts.writes ? [...facts.bodyNames].filter(isDestinationName).sort() : [];
+  const destinations = facts.writes ? [...new Set([...facts.bodyNames, ...facts.queryNames])].filter(isDestinationName).sort() : [];
   const kinds = new Set(modelKinds);
   if (voicemailDestination) kinds.add('voicemail');
   const parts = [
@@ -209,6 +257,7 @@ export function requestRequirement(facts: OperationFacts): GateRequirement {
     flagged: parts.length > 0,
     reason: parts.length > 0 ? parts.join('; ') : undefined,
     unreviewedNames: [],
+    destinations,
   };
 }
 
@@ -226,13 +275,16 @@ export function operationRequirement(
     flagged: response.flagged || request.flagged,
     reason: reasons.length > 0 ? reasons.join('; ') : undefined,
     unreviewedNames: response.unreviewedNames,
+    destinations: request.destinations,
   };
 }
 
 /**
  * The violations of one operation. An unlisted flagged operation is one violation. A listed one violates when it
  * misses a kind it carries, or when a name the pattern matches is not reviewed for it. 'unreviewed' lists every kind,
- * so it covers any flagged operation. An empty list means the operation is covered.
+ * so it covers any flagged operation. A free listing of a destination write must give a reason that says what the
+ * destination receives (RECEIVES_PATTERN), since no kind shows that the destination carries no content. An empty list
+ * means the operation is covered.
  */
 export function operationViolations(
   key: string,
@@ -240,6 +292,7 @@ export function operationViolations(
   table: Readonly<Record<string, FieldClass>> | undefined,
   listed: readonly ContentKind[] | 'unreviewed' | undefined,
   reviewedNames: Readonly<Record<string, string>>,
+  freeReason?: string,
 ): string[] {
   if (listed === 'unreviewed') return [];
   const requirement = operationRequirement(facts, table, reviewedNames);
@@ -251,5 +304,9 @@ export function operationViolations(
   }
   const missing = requirement.kinds.filter((kind) => !listed.includes(kind));
   if (missing.length > 0) violations.push(`${key}: listed kinds [${listed.join(', ')}] miss ${missing.join(', ')}`);
+  const receivesDestination = freeReason !== undefined && RECEIVES_PATTERN.test(freeReason);
+  if (listed.length === 0 && requirement.destinations.length > 0 && !receivesDestination) {
+    violations.push(`${key}: free listing silences a destination write (${requirement.destinations.join(', ')}) without saying what the destination receives`);
+  }
   return violations;
 }
