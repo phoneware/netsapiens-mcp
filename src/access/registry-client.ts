@@ -5,8 +5,8 @@
  * returns is fresh, revalidated, last known good, or unavailable. A caller treats unavailable as closed.
  * Nothing here reads the environment: config.ts does that and passes plain values in.
  *
- * Ages are measured on a monotonic clock, so a change to the wall clock cannot make an answer fresher or staler. The
- * wall clock is read only to check an identity token's exp claim. A text body is parsed with
+ * An answer's age is the larger of its monotonic age and its wall-clock age (see ageOf), so it is never younger than
+ * either clock says. The wall clock is also read to check an identity token's exp claim. A text body is parsed with
  * parseRegistryDecisionText, and an embedder's parsed value with parseRegistryDecisionValue.
  */
 import { DEFAULT_ACCESS_REGISTRY_MAX_STALE_SECONDS, DEFAULT_ACCESS_REGISTRY_TIMEOUT_MS } from './config.js';
@@ -116,10 +116,10 @@ export type FetchDecision = (request: RegistryRequest) => Promise<RegistryRespon
 /** Returns milliseconds. Each option that takes a clock says whether it is monotonic or wall-clock time. */
 export type Clock = () => number;
 
-/** Monotonic milliseconds. Every age is measured on this clock, which a change to the wall clock cannot move. */
+/** Monotonic milliseconds. It never runs backwards, so it bounds every age from below. */
 const monotonicNowMs: Clock = () => performance.now();
 
-/** Wall-clock milliseconds since the epoch. Read only to check an identity token's exp claim, never to measure an age. */
+/** Wall-clock milliseconds since the epoch. It can step in either direction, and a step back counts as zero in an age. */
 const wallNowMs: Clock = () => Date.now();
 
 /** The fetch shape the HTTP transport uses. Tests inject their own. */
@@ -128,21 +128,31 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 export interface RegistryClientOptions {
   readonly connector: string;
   readonly fetchDecision: FetchDecision;
-  /** Monotonic milliseconds for every age. Defaults to performance.now, so a wall clock change cannot move an age. */
+  /** Monotonic milliseconds. Defaults to performance.now. */
   readonly now?: Clock;
+  /** Wall-clock milliseconds since the epoch. Defaults to Date.now. It can raise an age, never lower one. */
+  readonly wallNow?: Clock;
   /** Per-request timeout in milliseconds. Defaults to 3000. */
   readonly timeoutMs?: number;
-  /** Last-known-good window in milliseconds. Defaults to 600000. */
+  /** Last-known-good window in milliseconds, measured as an age. Defaults to 600000. */
   readonly maxStaleMs?: number;
   /** Most answers held at once. The least recently used is evicted first. Defaults to 10000. */
   readonly maxEntries?: number;
 }
 
+/** Both clocks, read together. An age is measured between two readings. */
+interface ClockReading {
+  /** Monotonic milliseconds. */
+  readonly monotonic: number;
+  /** Wall-clock milliseconds since the epoch. */
+  readonly wall: number;
+}
+
 interface CacheEntry {
   readonly decision: AccessDecisionV1;
-  /** Send time of the request that last confirmed the decision, on the monotonic clock. */
-  readonly validatedAt: number;
-  /** How long the entry stays fresh after validatedAt. */
+  /** The clock readings taken when the request that confirmed the decision was sent. */
+  readonly validatedAt: ClockReading;
+  /** How old an answer may be, in milliseconds, and still be fresh. */
   readonly freshForMs: number;
 }
 
@@ -200,6 +210,7 @@ export class RegistryClient {
   private readonly connector: string;
   private readonly fetchDecision: FetchDecision;
   private readonly clock: Clock;
+  private readonly wallClock: Clock;
   private readonly timeoutMs: number;
   private readonly maxStaleMs: number;
   private readonly cache: LruCache<CacheEntry>;
@@ -217,6 +228,7 @@ export class RegistryClient {
     this.connector = options.connector;
     this.fetchDecision = options.fetchDecision;
     this.clock = options.now ?? monotonicNowMs;
+    this.wallClock = options.wallNow ?? wallNowMs;
     this.timeoutMs = timeoutMs;
     this.maxStaleMs = maxStaleMs;
     this.cache = new LruCache<CacheEntry>(maxEntries);
@@ -228,10 +240,15 @@ export class RegistryClient {
     return this.cache.size;
   }
 
+  /** Both clocks, read together. */
+  private readClocks(): ClockReading {
+    return { monotonic: this.clock(), wall: this.wallClock() };
+  }
+
   /**
    * The registry's answer for a query: from the cache while it is fresh, otherwise from the registry. A stale answer
-   * is revalidated, and concurrent callers for one key share one request. An entry validated after the clock reads is
-   * stale, and is never last known good.
+   * is revalidated, and concurrent callers for one key share one request. An answer whose age is unknown, because the
+   * monotonic clock reads earlier than its validation, is stale and is never last known good.
    */
   async decide(query: RegistryQuery): Promise<RegistryResult> {
     const key: RegistryKey = {
@@ -244,7 +261,7 @@ export class RegistryClient {
     };
     const id = JSON.stringify([key.connector, key.platform, key.tenant, key.subject, key.role, key.tier]);
     const entry = this.cache.get(id);
-    const age = entry === undefined ? undefined : elapsedMs(entry.validatedAt, this.clock());
+    const age = entry === undefined ? undefined : ageOf(entry, this.readClocks());
     if (entry !== undefined && age !== undefined && age < entry.freshForMs) {
       this.report(key, id, 'debug', { source: 'fresh', decision: entry.decision, ageMs: age });
       return { source: 'fresh', decision: entry.decision };
@@ -261,11 +278,11 @@ export class RegistryClient {
 
   /** One registry round trip for a key, then the cache and the fail-closed rules. Never rejects. */
   private async refresh(key: RegistryKey, id: string, previous: CacheEntry | undefined): Promise<RegistryResult> {
-    const startedAt = this.clock();
+    const sentAt = this.readClocks();
     const ifNoneMatch = previous === undefined ? undefined : `"${previous.decision.revision}"`;
     const response = await this.attempt(key, ifNoneMatch);
-    const latencyMs = elapsedMs(startedAt, this.clock());
-    const judged = judgeSafely(response, previous, startedAt);
+    const latencyMs = elapsedMs(sentAt.monotonic, this.clock());
+    const judged = judgeSafely(response, previous, sentAt);
     if (judged.ok) {
       this.cache.set(id, judged.entry);
       const source: RegistrySource = previous === undefined ? 'fresh' : 'revalidated';
@@ -274,12 +291,12 @@ export class RegistryClient {
         decision: judged.entry.decision,
         httpStatus: judged.httpStatus,
         latencyMs,
-        ageMs: previous === undefined ? undefined : elapsedMs(previous.validatedAt, startedAt),
+        ageMs: previous === undefined ? undefined : ageOf(previous, sentAt),
       });
       return { source, decision: judged.entry.decision };
     }
-    const at = this.clock();
-    const ageMs = previous === undefined ? undefined : elapsedMs(previous.validatedAt, at);
+    const now = this.readClocks();
+    const ageMs = previous === undefined ? undefined : ageOf(previous, now);
     if (previous !== undefined && ageMs !== undefined && ageMs < this.maxStaleMs) {
       this.report(key, id, 'warn', {
         source: 'lkg',
@@ -369,8 +386,8 @@ export interface HttpFetchOptions {
   readonly fetch?: FetchLike;
   /** The identity token endpoint. Defaults to Google's metadata service. Tests point it at a fake. */
   readonly metadataUrl?: string;
-  /** Wall-clock milliseconds since the epoch. Read only to check an identity token's exp claim; ages never use it. */
-  readonly now?: Clock;
+  /** Wall-clock milliseconds since the epoch. Read only to check an identity token's exp claim. Defaults to Date.now. */
+  readonly wallNow?: Clock;
   /** Timeout for the identity token request, in milliseconds. Defaults to 3000. */
   readonly timeoutMs?: number;
 }
@@ -385,7 +402,7 @@ export function createHttpFetchDecision(options: HttpFetchOptions): FetchDecisio
   const credential = credentialSource(options.auth, {
     fetch: fetchFn,
     metadataUrl: options.metadataUrl ?? METADATA_IDENTITY_URL,
-    wallNow: options.now ?? wallNowMs,
+    wallNow: options.wallNow ?? wallNowMs,
     timeoutMs: options.timeoutMs ?? DEFAULT_ACCESS_REGISTRY_TIMEOUT_MS,
   });
   return async ({ key, ifNoneMatch, signal }) => {
@@ -417,9 +434,9 @@ export interface AccessRegistryClientDeps {
   readonly fetchDecision?: FetchDecision;
   readonly fetch?: FetchLike;
   readonly metadataUrl?: string;
-  /** Monotonic milliseconds for every age. Defaults to performance.now. */
+  /** Monotonic milliseconds. Defaults to performance.now. */
   readonly now?: Clock;
-  /** Wall-clock milliseconds since the epoch, for identity token expiry only. Defaults to Date.now. */
+  /** Wall-clock milliseconds since the epoch. Defaults to Date.now. Used for ages and for identity token expiry. */
   readonly wallNow?: Clock;
   readonly maxEntries?: number;
 }
@@ -438,10 +455,11 @@ export function createAccessRegistryClient(
         auth: config.auth,
         fetch: deps.fetch,
         metadataUrl: deps.metadataUrl,
-        now: deps.wallNow,
+        wallNow: deps.wallNow,
         timeoutMs: config.timeoutMs,
       }),
     now: deps.now,
+    wallNow: deps.wallNow,
     timeoutMs: config.timeoutMs,
     maxStaleMs: config.maxStaleSeconds * 1000,
     maxEntries: deps.maxEntries,
@@ -452,20 +470,20 @@ export function createAccessRegistryClient(
  * Judges one response against the cached answer it may revalidate. A parser result is judged by its errorClass,
  * never by its message: the message is written for people, so its wording can change.
  */
-function interpret(response: RegistryResponse, previous: CacheEntry | undefined, startedAt: number): Judgement {
+function interpret(response: RegistryResponse, previous: CacheEntry | undefined, sentAt: ClockReading): Judgement {
   if (response.kind === 'text') {
     if (Buffer.byteLength(response.body, 'utf8') > MAX_BODY_BYTES) {
       return { ok: false, errorClass: 'oversize', httpStatus: 200 };
     }
-    return judgeDecision(parseRegistryDecisionText(response.body), 200, startedAt);
+    return judgeDecision(parseRegistryDecisionText(response.body), 200, sentAt);
   }
   if (response.kind === 'value') {
-    return judgeDecision(parseRegistryDecisionValue(response.value), undefined, startedAt);
+    return judgeDecision(parseRegistryDecisionValue(response.value), undefined, sentAt);
   }
   if (response.kind === 'not_modified') {
     // A 304 answers only the conditional request this client sends, and that request needs a cached answer.
     if (previous === undefined) return { ok: false, errorClass: 'http_status', httpStatus: 304 };
-    return { ok: true, httpStatus: 304, entry: { ...previous, validatedAt: startedAt } };
+    return { ok: true, httpStatus: 304, entry: { ...previous, validatedAt: sentAt } };
   }
   return { ok: false, errorClass: response.errorClass, httpStatus: response.httpStatus };
 }
@@ -474,19 +492,34 @@ function interpret(response: RegistryResponse, previous: CacheEntry | undefined,
  * Judges a checked response, and never throws. Anything that goes wrong while judging, such as a getter that throws
  * inside an embedder's value, is a contract error.
  */
-function judgeSafely(response: RegistryResponse, previous: CacheEntry | undefined, startedAt: number): Judgement {
+function judgeSafely(response: RegistryResponse, previous: CacheEntry | undefined, sentAt: ClockReading): Judgement {
   try {
-    return interpret(response, previous, startedAt);
+    return interpret(response, previous, sentAt);
   } catch {
     return { ok: false, errorClass: 'contract' };
   }
 }
 
 /** Turns a parser result into a cache entry, or into the error class the parser reported. */
-function judgeDecision(parsed: ParseRegistryDecisionResult, httpStatus: number | undefined, startedAt: number): Judgement {
+function judgeDecision(parsed: ParseRegistryDecisionResult, httpStatus: number | undefined, sentAt: ClockReading): Judgement {
   if (!parsed.ok) return { ok: false, errorClass: parsed.errorClass, httpStatus };
   const freshForMs = Math.min(MAX_TTL_SECONDS, Math.max(MIN_TTL_SECONDS, parsed.decision.ttlSeconds)) * 1000;
-  return { ok: true, httpStatus, entry: { decision: parsed.decision, validatedAt: startedAt, freshForMs } };
+  return { ok: true, httpStatus, entry: { decision: parsed.decision, validatedAt: sentAt, freshForMs } };
+}
+
+/**
+ * The age of a cached answer at `now`, in milliseconds: the larger of its monotonic age and its wall-clock age, where a
+ * wall-clock age below zero counts as zero. So the answer is never younger than either clock says. A backwards wall step
+ * cannot make it fresher, because the monotonic age keeps growing. A forward wall jump, or a machine that slept while the
+ * monotonic clock stood still, ages it sooner, so it is revalidated sooner. A monotonic age below zero means the answer
+ * was validated after the monotonic clock reads, so its age is unknown: the result is undefined, and callers treat that
+ * as stale and never last known good. A reading that is not a finite number is unknown too.
+ */
+function ageOf(entry: CacheEntry, now: ClockReading): number | undefined {
+  const monotonic = now.monotonic - entry.validatedAt.monotonic;
+  const wall = now.wall - entry.validatedAt.wall;
+  if (!Number.isFinite(monotonic) || monotonic < 0 || !Number.isFinite(wall)) return undefined;
+  return Math.max(monotonic, Math.max(0, wall));
 }
 
 /** What a decision source resolves with when it is not one of the four response shapes. */
@@ -531,10 +564,7 @@ function statusOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
 }
 
-/**
- * Milliseconds from one reading of a clock to a later one, or undefined when the clock went backwards or is not a
- * number. An undefined age is unknown, so it is never fresh and never last known good.
- */
+/** Milliseconds from one monotonic reading to a later one, or undefined when the clock went backwards or is not a number. */
 function elapsedMs(from: number, to: number): number | undefined {
   const value = to - from;
   return Number.isFinite(value) && value >= 0 ? value : undefined;

@@ -126,7 +126,7 @@ function setup(options: SetupOptions = {}) {
     auth: options.auth ?? { mode: 'bearer', token: TOKEN },
     fetch: network.fetch,
     metadataUrl: METADATA,
-    now: options.wallNow ?? now,
+    wallNow: options.wallNow ?? now,
     timeoutMs: options.timeoutMs,
   });
   const client = new RegistryClient({
