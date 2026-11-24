@@ -394,6 +394,12 @@ Vcon: {
   'queue-calls-handling-avg-duration-minutes': { class: 'metadata' },
   'queue-calls-talking-duration-minutes': { class: 'metadata' },
  },
+// A call-trace share: the bearer key that opens a stored trace with no token, for up to 30 days. It is registry-only,
+// sms_text content rather than secret: a secret class would also remove it from the unset output of the three store
+// tools, which return it today.
+CallTraceShare: {
+  key: { class: 'content', kind: 'sms_text', media: 'text' },
+},
 };
 
 /**

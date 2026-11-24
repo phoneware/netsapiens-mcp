@@ -13,6 +13,13 @@
  * be explained by a classified field, the setting whitelist, or NAME_REVIEWS. The coverage test fails on an unreviewed
  * gated operation and on an entry naming an operation that no longer exists. Changing an entry changes the @content
  * groups; the group snapshot shows the effect.
+ *
+ * Two limits are documented here. Live-audio routing (a call's transfer and answer destinations, forwarding answer rules,
+ * calls placed to a first party, participants dialled into a live conference, v1 call operations, queued and wake-up calls,
+ * SIP connections and routes) sends live audio, which is not one of the six kinds, so those operations stay free with a
+ * reason that names the destination. Capture enablement (queue, device, connection, meeting and call recording switches,
+ * and v1 call:record_on) returns and transmits no content, so it is not a content operation. Both limits are protected only
+ * by access read, so a profile that denies content must also be read-only.
  */
 import type { ContentKind } from './types.js';
 
@@ -79,9 +86,10 @@ const CDR_SCHEDULE_WRITE_OPERATIONS = [
 ] as const;
 
 /**
- * Writes that set where call recordings are kept or sent: the storage a domain archives to, the recording servers that
- * receive call media, the entries that choose which addresses are recorded, and the archive configurations. Reads of
- * these settings stay in REVIEWED_CONTENT_FREE.
+ * Writes that set where call recordings or call media are kept or sent: the storage a domain archives to, the recording
+ * servers that receive call media (a core server's recording-server map included), the entries that choose which addresses
+ * are recorded, the entry sync that copies them to a server, the archive configurations, and the free-form recording
+ * configuration published to every server (unverified). Reads of these settings stay in REVIEWED_CONTENT_FREE.
  */
 const RECORDING_DESTINATION_OPERATIONS = [
   'POST /domains/{}/recording-storage',
@@ -96,6 +104,12 @@ const RECORDING_DESTINATION_OPERATIONS = [
   'PUT /recordings/archive-configs/{}/{}/{}',
   'v1:recording:create',
   'v1:recording:update',
+  'PUT /recordings/coreservers/{}',
+  'POST /recordings/servers/{}/entries/sync',
+  'POST /recordings/config',
+  'PUT /recordings/config/{}',
+  'POST /recordings/nmc-config',
+  'PUT /recordings/nmc-config/{}',
 ] as const;
 
 /**
@@ -111,6 +125,23 @@ const SUBSCRIPTION_TRANSMIT_OPERATIONS = [
   'POST /domains/{}/subscriptions',
   'PUT /domains/{}/subscriptions/{}',
   'v1:event:create',
+] as const;
+
+/**
+ * Push registrations: each sets the device or web-push endpoint that receives call and message notifications. The
+ * notification payload is not verified, so each registration is conservatively sms_text and voicemail. Deletes are listed
+ * with the writes, since they change the same registrations.
+ */
+const PUSH_REGISTRATION_OPERATIONS = [
+  'POST /push',
+  'PUT /push',
+  'DELETE /push',
+  'POST /domains/{}/push',
+  'PUT /domains/{}/push',
+  'DELETE /domains/{}/push',
+  'POST /domains/{}/users/{}/push',
+  'PUT /domains/{}/users/{}/push',
+  'DELETE /domains/{}/users/{}/push',
 ] as const;
 
 /**
@@ -162,6 +193,7 @@ const SMTP_RELAY_OPERATIONS = [
   'POST /domains',
   'PUT /domains/{}',
   'PUT /resellers/{}',
+  'POST /resellers',
   'v1:domain:create',
   'v1:domain:update',
 ] as const;
@@ -186,7 +218,9 @@ const FAX_NUMBER_WRITE_OPERATIONS = [
 
 /**
  * Writes that redirect SMS: a session's members, a number's destination, a number assigned to an inbox, an inbox member,
- * and a phone number's SMS destination. Whoever is added or named receives the text.
+ * a phone number's SMS destination, a carrier's outbound URL (which receives every outbound message), a v1 SMS number's
+ * destination, and a queue agent (which receives the SMS conversations its queue routes to it). Whoever is added or named
+ * receives the text.
  */
 const SMS_REDIRECT_OPERATIONS = [
   'PUT /domains/{}/users/{}/messagesessions/{}',
@@ -200,6 +234,14 @@ const SMS_REDIRECT_OPERATIONS = [
   'POST /domains/{}/inboxes/{}/members',
   'v1:messagesession:accept',
   'v1:messagesession:update',
+  'POST /smscarriers',
+  'PUT /smscarriers/{}',
+  'v1:smsnumber:create',
+  'v1:smsnumber:update',
+  'POST /domains/{}/callqueues/{}/agents',
+  'PUT /domains/{}/callqueues/{}/agents/{}',
+  'v1:agent:create',
+  'v1:agent:update',
 ] as const;
 
 /**
@@ -215,8 +257,9 @@ const MESSAGE_BODY_OPERATIONS = [
 
 /**
  * SIP traces: the call and SIP message traces, their lists, their exports and their reads. A SIP MESSAGE carries an SMS
- * body, so a trace read can carry SMS text (conservative). Injecting a trace, storing it and revoking a share do not return
- * trace content.
+ * body, so a trace read can carry SMS text (conservative). A store returns a key that opens the stored trace with no token
+ * for up to 30 days, so it is sms_text too (conservative: the whole trace, SIP messages included). Injecting a trace and
+ * revoking a share do not return trace content.
  */
 const SIP_TRACE_OPERATIONS = [
   'GET /sipflow',
@@ -231,6 +274,9 @@ const SIP_TRACE_OPERATIONS = [
   'GET /domains/{}/cdrs/{}/sipflow',
   'GET /domains/{}/cdrs/{}/cradle2grave',
   'v1:trace:export',
+  'POST /domains/{}/cdrs/{}/sipflow/store',
+  'POST /domains/{}/sipflow/{}/store',
+  'POST /sipflow/{}/store',
 ] as const;
 
 /**
@@ -282,6 +328,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
   ]),
   voicemail: lookup([
     ...VOICEMAIL_OPERATIONS,
+    ...PUSH_REGISTRATION_OPERATIONS,
     ...VOICEMAIL_REDIRECT_OPERATIONS,
     ...SMTP_RELAY_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
@@ -291,6 +338,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
   ]),
   sms_text: lookup([
     ...SMS_REDIRECT_OPERATIONS,
+    ...PUSH_REGISTRATION_OPERATIONS,
     ...MESSAGE_BODY_OPERATIONS,
     ...SIP_TRACE_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
@@ -427,15 +475,12 @@ export const RECORD_LIST_OPERATIONS: Readonly<Record<string, RecordListEntry>> =
  */
 export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries([
-    ...freeOf('SIP trace revocation, storage and injection: no trace content is returned', [
+    ...freeOf('SIP trace revocation and injection: no trace content is returned; a store is sms_text above, and an injected event receives a host name, not content', [
       'DELETE /domains/{}/sipflow/share/{}',
       'DELETE /sipflow/share/{}',
-      'POST /domains/{}/cdrs/{}/sipflow/store',
-      'POST /domains/{}/sipflow/{}/store',
       'POST /sipflow/event',
-      'POST /sipflow/{}/store',
     ]),
-    ...freeOf('conference, meeting and video schedules, participants, events and join tokens: no recording or message content', [
+    ...freeOf('conference, meeting and video schedules: a schedule and its e-mail and dial-in settings, which receive no recording or message content; live audio into a meeting is a documented limit', [
       'DELETE /domains/{}/conferences/{}',
       'DELETE /domains/{}/conferences/{}/participants/{}',
       'DELETE /domains/{}/users/{}/meetings/{}',
@@ -458,19 +503,16 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /domains/{}/users/{}/video/conference',
       'GET /meetings/register/{}',
       'POST /domains/{}/conferences',
-      'POST /domains/{}/conferences/{}/participants',
       'POST /domains/{}/users/{}/meetings',
       'POST /domains/{}/users/{}/meetings/getId',
       'POST /domains/{}/users/{}/meetings/{}',
       'POST /domains/{}/users/{}/meetings/{}/instance/{}/log',
-      'POST /domains/{}/users/{}/video/conference',
       'POST /meetings/register/{}',
       'PUT /domains/{}/conferences/{}',
-      'PUT /domains/{}/conferences/{}/participants/{}',
       'PUT /domains/{}/users/{}/meetings/{}',
       'PUT /domains/{}/users/{}/meetings/{}/attendee/{}',
     ]),
-    ...freeOf('recording configuration and inventory: reads, deletes, syncs and configuration writes that name no recording destination', [
+    ...freeOf('recording configuration and inventory: reads and deletes, which set no recording destination; the writes that set one are call_recording above', [
       'DELETE /domains/{}/recording-storage/{}',
       'DELETE /recordings/archive-configs/{}/{}/{}',
       'DELETE /recordings/config/{}',
@@ -500,12 +542,6 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /recordings/servers/{}/entries/count',
       'GET /recordings/servers/{}/entries/sync/{}',
       'GET /recordings/storage',
-      'POST /recordings/config',
-      'POST /recordings/nmc-config',
-      'POST /recordings/servers/{}/entries/sync',
-      'PUT /recordings/config/{}',
-      'PUT /recordings/coreservers/{}',
-      'PUT /recordings/nmc-config/{}',
     ]),
     ...freeOf('fax setup: numbers, vendors, cover-page templates and deletes; fax documents are fax_page above', [
       'DELETE /domains/{}/fax/cover-page',
@@ -558,10 +594,8 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /smsnumbers',
       'POST /domains/{}/smsblocks',
       'POST /domains/{}/users/{}/smsblocks',
-      'POST /smscarriers',
       'PUT /domains/{}/smsblocks/{}',
       'PUT /domains/{}/users/{}/messagesessions/{}/leave',
-      'PUT /smscarriers/{}',
     ]),
     ...freeOf('greeting, music and message deletes, counts, reorders and players: no message content is returned', [
       'DELETE /domains/{}/moh/{}',
@@ -613,7 +647,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:domain:read',
       'v1:elementdomain:read',
     ]),
-    ...freeOf('v1 conferences and meetings: schedules, participants and events, with no recording or message content', [
+    ...freeOf('v1 conferences and meetings: a schedule that receives its participant list and events, with no recording or message content', [
       'v1:conference:count',
       'v1:conference:create',
       'v1:conference:delete',
@@ -629,7 +663,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:meeting:readEvents',
       'v1:meeting:update',
     ]),
-    ...freeOf('v1 message deletes, session deletes, dispatches and leaves: no message text is returned; session accepts and updates are sms_text above', [
+    ...freeOf('v1 message deletes, session deletes, dispatches and leaves: no message text is returned; a leave removes a participant, who receives no text; session accepts and updates are sms_text above', [
       'v1:message:delete',
       'v1:messagesession:delete',
       'v1:messagesession:dispatch',
@@ -638,11 +672,9 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
     ...freeOf('v1 recording delete: removes a recording record and returns no content; reads are call_recording above', [
       'v1:recording:delete',
     ]),
-    ...freeOf('v1 SMS numbers: setup, with no message content', [
+    ...freeOf('v1 SMS numbers: counts and reads, with no message content; a create or update sets a destination and is sms_text above', [
       'v1:smsnumber:count',
-      'v1:smsnumber:create',
       'v1:smsnumber:read',
-      'v1:smsnumber:update',
     ]),
     ...freeOf('subscription settings: which events go to which URL. Reads and deletes return settings, not events', [
       'DELETE /domains/{}/subscriptions/{}',
@@ -652,7 +684,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:event:delete',
       'v1:event:read',
     ]),
-    ...freeOf('video conference event subscriptions: meeting events, with no call, message or voicemail content', [
+    ...freeOf('video conference event subscriptions: meeting events a host receives, with no call, message or voicemail content; the host limit is a count', [
       'DELETE /domains/{}/video/subscription/{}',
       'GET /domains/{}/video/subscription/{}',
       'POST /domains/{}/video/subscription/{}',
@@ -663,12 +695,12 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:vmailnag:delete',
       'v1:vmailnag:read',
     ]),
-    ...freeOf('e-mail report schedules and statistics e-mails: which statistics go to which address, not call content', [
+    ...freeOf('e-mail report schedules and statistics e-mails: the statistics e-mailed to the addresses named, which the recipients receive as counts, not one of the six kinds', [
       'DELETE /domains/{}/users/{}/emailreports',
       'GET /domains/{}/users/{}/emailreports',
       'PUT /domains/{}/users/{}/emailreports',
     ]),
-    ...freeOf('call-center statistics sent by e-mail: counts and durations, not one of the six kinds', [
+    ...freeOf('call-center statistics sent by e-mail: the recipients named receive counts and durations, not one of the six kinds', [
       'POST /domains/{}/callcenter-reports/{}/send-email',
       'POST /domains/{}/callcenter-reports',
       'PUT /domains/{}/callcenter-reports/{}',
@@ -677,7 +709,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /domains/{}/subscriptions/list',
       'GET /subscriptions/{}',
     ]),
-    ...freeOf('e-mail address checks: whether an address is verified or valid; no message content', [
+    ...freeOf('e-mail address checks: the address named receives a fixed test message through the SMTP server named, with no message content', [
       'GET /domains/{}/users/{}/email/checkVerified/{}',
       'POST /email/validate',
     ]),
@@ -693,11 +725,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/speech-words/{}',
       'PUT /speech-words/{}',
     ]),
-    ...freeOf('v1 call control: answer, hold, park, transfer, disconnect, record, play and place calls; no call content is returned', [
-      'v1:call:answer',
-      'v1:call:call',
-      'v1:call:call_to_playback',
-      'v1:call:call_to_record',
+    ...freeOf('v1 call control: hold, park, disconnect, reject and recording switches on a live call; no call content is returned, and a recording switch is enablement (a documented limit)', [
       'v1:call:disconnect',
       'v1:call:hold_orig',
       'v1:call:hold_term',
@@ -708,15 +736,13 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:call:record_unpause',
       'v1:call:reject',
       'v1:call:unhold',
-      'v1:call:xfer',
-      'v1:call:xfer_peer',
     ]),
     ...freeOf('live call state and counts: the active call carries addresses and states, with no content', [
       'v1:call:count',
       'v1:call:read',
       'v1:callidemgr:read',
     ]),
-    ...freeOf('call queue settings: queue configuration, with no call content', [
+    ...freeOf('call queue settings: the agents, callbacks and overflow forwards a queue uses, which receive live calls (a documented limit) and no call content; its recording configuration is enablement', [
       'v1:callqueue:create',
       'v1:callqueue:delete',
       'v1:callqueue:read',
@@ -729,18 +755,16 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:callqueueemailreport:update',
     ]),
     ...freeOf('queue statistics: counts and averages, not call content', ['v1:callqueuereport:read', 'v1:callqueuestat:read']),
-    ...freeOf('wake-up call requests and queued calls: scheduling, with no call content', [
-      'v1:callrequest:addWakeUp',
+    ...freeOf('wake-up call requests: reads and cancels, with no call content', [
       'v1:callrequest:delWakeUp',
       'v1:callrequest:read',
-      'v1:queuedcall:create',
     ]),
     ...freeOf('v1 file uploads: the server stores the file and returns no content', ['v1:upload:create', 'v1:upload:upload']),
     ...freeOf('pictures and templates with a signed link: the link is a picture or template, not one of the six kinds', [
       'GET /images/{}',
       'GET /templates/{}',
     ]),
-    ...freeOf('pictures and templates an administrator uploads, deletes or updates: not one of the six kinds', [
+    ...freeOf('pictures and templates an administrator uploads, deletes or updates: the server a picture or template is stored on, which receives the file and no content of one of the six kinds', [
       'DELETE /images/{}',
       'POST /images/{}',
       'POST /templates/{}',
@@ -761,7 +785,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /oidc-providers/{}/logo',
       'GET /resellers/{}/brands/{}/{}/assets/{}/download',
     ]),
-    ...freeOf('speech-word and voice audio: recognition vocabulary and text-to-speech output, not call content', [
+    ...freeOf('speech-word and voice audio: recognition vocabulary and the text-to-speech voice a user sets, which receive no call content', [
       'GET /domains/{}/speech-words/{}/file',
       'GET /domains/{}/speech-words/{}/play',
       'GET /domains/{}/users/{}/voices',
@@ -783,7 +807,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'POST /apt/update',
       'POST /apt/update/{}',
     ]),
-    ...freeOf('brand and restore settings: the host and sender names that appear in links and mail, not a destination for content', [
+    ...freeOf('brand and restore settings: the host and sender names that links and mail use, which receive no content', [
       'POST /brand-defaults',
       'POST /brand-defaults/{}',
       'POST /domains/{}/brands',
@@ -795,7 +819,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/restore',
       'PUT /restore',
     ]),
-    ...freeOf('server and provisioning settings: where the phone system and its configuration are reached, not content', [
+    ...freeOf('server and provisioning settings: the host names, settings and login details that phones and servers are reached with, which receive no call or message content', [
       'DELETE /configurations/{}',
       'POST /config-definitions',
       'POST /configurations',
@@ -811,7 +835,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /nsconfigs',
       'PUT /phones/servers/{}',
     ]),
-    ...freeOf('phone and device provisioning: the servers a phone registers to, not content', [
+    ...freeOf('phone and device provisioning: the servers, SIP registrations and button targets a phone receives, and no call or message content; device recording and notification switches are enablement', [
       'POST /domains/{}/phones',
       'POST /domains/{}/users/{}/devices',
       'POST /phones',
@@ -819,7 +843,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/users/{}/devices/{}',
       'PUT /phones',
     ]),
-    ...freeOf('IP addresses an account may use, and IP allow and block lists: access settings, not content', [
+    ...freeOf('IP, emergency and 911 address records: the addresses the platform matches or stores, which receive no content; an emergency callback number is live audio (a documented limit)', [
       'DELETE /domains/{}/addresses/endpoints/{}',
       'DELETE /domains/{}/addresses/{}',
       'DELETE /domains/{}/users/{}/addresses/{}',
@@ -834,7 +858,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/addresses/{}',
       'PUT /domains/{}/users/{}/addresses/{}',
     ]),
-    ...freeOf('SIP connections, dial rules and call routes: where calls are signalled, translated and sent, not content', [
+    ...freeOf('SIP connections, dial rules, call routes and number routing, a documented limit: a call is signalled, translated and sent to the host or user it names, which receives live audio, not one of the six kinds', [
       'DELETE /domains/{}/connections/{}',
       'POST /connections',
       'POST /dialplans/{}/dialrules',
@@ -855,18 +879,18 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /routes/{}',
       'PUT /routes/{}/routecon/{}',
     ]),
-    ...freeOf('network test targets: hosts probed for call quality, not content', [
+    ...freeOf('network test targets: the hosts a network test probes, which receive probe traffic and no content', [
       'POST /domains/{}/networktests',
       'POST /domains/{}/users/{}/networktests',
     ]),
-    ...freeOf('single sign-on provider endpoints: discovery and key addresses, not content', [
+    ...freeOf('single sign-on provider endpoints: the URLs the platform calls to sign users in, which receive a sign-in request and no content', [
       'POST /domains/{}/oidc-providers',
       'POST /oidc-providers',
       'POST /oidc-providers/verify',
       'PUT /domains/{}/oidc-providers/{}',
       'PUT /oidc-providers/{}',
     ]),
-    ...freeOf('address book and site records: e-mail addresses that are looked up, not a destination for content', [
+    ...freeOf('address book and site records: the e-mail addresses and phone numbers a contact or site holds, which are looked up and receive nothing', [
       'POST /domains/{}/contacts',
       'POST /domains/{}/sites',
       'POST /domains/{}/users/{}/contacts',
@@ -875,7 +899,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/sites/{}',
       'PUT /domains/{}/users/{}/contacts/{}',
     ]),
-    ...freeOf('UI extension registry and settings: web addresses and bucket paths of extensions, not content', [
+    ...freeOf('UI extension registry and settings: the web addresses and bucket paths an extension loads from, which receive no content (callback payloads are unverified)', [
       'POST /ui-extensions/registry',
       'POST /ui-extensions/registry/{}/access',
       'POST /ui-extensions/registry/{}/deploy',
@@ -883,7 +907,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /ui-extensions/registry/{}/access/{}',
       'PUT /ui-extensions/settings',
     ]),
-    ...freeOf('number filters: which numbers a user or domain accepts, not content', [
+    ...freeOf('number filters: the numbers a user or domain rejects, which receive nothing but the list', [
       'DELETE /domains/{}/number-filters',
       'DELETE /domains/{}/users/{}/number-filters',
       'POST /domains/{}/number-filters',
@@ -895,25 +919,85 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/video',
     ]),
     ...freeOf('answer rules: the order of call routing rules, not content', ['PUT /domains/{}/users/{}/answerrules/reorder']),
-    ...freeOf('call control: where a call is answered, transferred or queued; the call content is not returned', [
+    ...freeOf('live call control, a documented limit: the destination of a call, transfer, answer, forward, queue or participant receives live audio, which is not one of the six kinds; protected only by access read', [
       'PATCH /domains/{}/users/{}/calls/{}/answer',
       'PATCH /domains/{}/users/{}/calls/{}/transfer',
       'PATCH /domains/{}/users/{}/calls/{}/transferPeer',
       'POST /domains/{}/queuedcall/{}',
       'POST /domains/{}/users/{}/calls/{}/{}',
+      'POST /domains/{}/conferences/{}/participants',
+      'PUT /domains/{}/conferences/{}/participants/{}',
+      'POST /domains/{}/users/{}/video/conference',
+      'POST /domains/{}/users/{}/answerrules',
+      'PUT /domains/{}/users/{}/answerrules/{}',
+      'POST /domains/{}/users/{}/calls',
+      'v1:call:answer',
+      'v1:call:call',
+      'v1:call:call_to_playback',
+      'v1:call:call_to_record',
+      'v1:call:xfer',
+      'v1:call:xfer_peer',
+      'v1:callrequest:addWakeUp',
+      'v1:queuedcall:create',
+      'v1:participant:create',
     ]),
     ...freeOf('deletes and writes that return text or a status: no content is returned', [
       'DELETE /domains/{}',
       'DELETE /domains/{}/users/{}/calls/{}/reject',
       'DELETE /resellers/{}',
-      'POST /domains/{}/callqueues',
-      'POST /resellers',
     ]),
     ...freeOf('interface translations: the product copy of the UI, not one of the six kinds', [
       'DELETE /translations',
       'POST /translations',
       'POST /translations/sync-filesystem',
       'PUT /translations',
+    ]),
+    ...freeOf('SIP connections, dial rules, call routes and number routing, a documented limit: a call is signalled, translated and sent to the host or user it names, which receives live audio, not one of the six kinds', [
+      'v1:connection:create',
+      'v1:connection:update',
+      'v1:dialrule:create',
+      'v1:dialrule:update',
+      'v1:phonenumber:create',
+      'v1:phonenumber:update',
+      'v1:route:create',
+      'v1:route:delete',
+      'v1:route:update',
+      'v1:routecon:create',
+      'v1:routecon:delete',
+      'v1:routecon:update',
+    ]),
+    ...freeOf('server and provisioning settings: the host names, settings and login details that phones and servers are reached with, which receive no call or message content', ['POST /ndpconfig', 'PUT /ndpconfig/{}']),
+    ...freeOf('IP, emergency and 911 address records: the addresses the platform matches or stores, which receive no content; an emergency callback number is live audio (a documented limit)', [
+      'POST /domains/{}/addresses/validate',
+      'v1:address:copyEndpoint',
+      'v1:address:create',
+      'v1:address:createAddressEndpoint',
+      'v1:address:delete',
+      'v1:address:deleteAddressEndpoint',
+      'v1:address:duplicate',
+      'v1:address:update',
+    ]),
+    ...freeOf('address book and site records: the e-mail addresses and phone numbers a contact or site holds, which are looked up and receive nothing', ['v1:contact:create', 'v1:contact:update']),
+    ...freeOf('phone and device provisioning: the servers, SIP registrations and button targets a phone receives, and no call or message content; device recording and notification switches are enablement', [
+      'POST /domains/{}/phoneconfiguration',
+      'POST /domains/{}/phonetemplates',
+      'PUT /domains/{}/phoneconfiguration/{}',
+      'PUT /domains/{}/phonetemplates/{}',
+      'v1:device:update',
+      'v1:mac:create',
+      'v1:mac:update',
+    ]),
+    ...freeOf('the billing account code of a call record: it receives a label for billing, not call content', [
+      'PUT /cdrs/{}',
+      'PUT /domains/{}/cdrs/{}',
+      'PUT /domains/{}/users/{}/cdrs/{}',
+    ]),
+    ...freeOf('an agent status log entry: the log receives a status line about the agent, not content', ['v1:agentlog:create']),
+    ...freeOf('a time range that a routing rule applies at set times: it receives the dates and times only, not content', ['v1:timerange:create', 'v1:timerange:update']),
+    ...freeOf('user-interface configuration: a host name that a setting names, which receives nothing but the setting, not content', ['v1:uiconfig:create', 'v1:uiconfigdef:create']),
+    ...freeOf('call queue settings: the agents, callbacks and overflow forwards a queue uses, which receive live calls (a documented limit) and no call content; its recording configuration is enablement', [
+      'POST /domains/{}/callqueues',
+      'PUT /domains/{}/callqueues/{}',
     ]),
   ]),
 );

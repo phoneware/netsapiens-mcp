@@ -30,7 +30,7 @@ export interface MediaObject {
 export interface SpecOperation {
   readonly responses?: Readonly<Record<string, { readonly content?: Readonly<Record<string, MediaObject>> }>>;
   readonly requestBody?: { readonly content?: Readonly<Record<string, MediaObject>> };
-  readonly parameters?: readonly { readonly name?: string; readonly schema?: SchemaNode }[];
+  readonly parameters?: readonly { readonly name?: string; readonly in?: string; readonly schema?: SchemaNode }[];
 }
 
 /** One OpenAPI document of a spec branch. */
@@ -55,6 +55,8 @@ export interface OperationFacts {
   readonly writes: boolean;
   /** Every property name a request body reaches, at any depth. */
   readonly bodyNames: Set<string>;
+  /** Every query parameter name a request sends. A write can name a destination in its query, as a report e-mail does. */
+  readonly queryNames: Set<string>;
   /** Every body property and parameter name a request reaches. */
   readonly requestNames: Set<string>;
   /** Every string enum value a request property or parameter declares. */
@@ -275,11 +277,21 @@ export function operationFactsOf(method: string, operation: SpecOperation, compo
       readEnum(schema);
     });
   }
+  const queryNames = new Set<string>();
   for (const parameter of operation.parameters ?? []) {
     if (parameter.name !== undefined) requestNames.add(parameter.name);
+    if (parameter.name !== undefined && parameter.in === 'query') queryNames.add(parameter.name);
     if (parameter.schema) readEnum(parameter.schema);
   }
-  return { responseNames, responseMedia, writes: ['post', 'put', 'patch'].includes(method.toLowerCase()), bodyNames, requestNames, requestEnumValues };
+  return {
+    responseNames,
+    responseMedia,
+    writes: ['post', 'put', 'patch'].includes(method.toLowerCase()),
+    bodyNames,
+    requestNames,
+    queryNames,
+    requestEnumValues,
+  };
 }
 
 /** The union of two operations' facts, for an operation that more than one branch defines. */
@@ -292,6 +304,7 @@ export function mergeFacts(a: OperationFacts | undefined, b: OperationFacts): Op
     writes: a.writes || b.writes,
     bodyNames: union(a.bodyNames, b.bodyNames),
     requestNames: union(a.requestNames, b.requestNames),
+    queryNames: union(a.queryNames, b.queryNames),
     requestEnumValues: union(a.requestEnumValues, b.requestEnumValues),
   };
 }
