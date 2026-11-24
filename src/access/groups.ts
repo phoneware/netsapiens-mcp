@@ -97,8 +97,8 @@ function operationKeyOf(def: ToolDefinition): string | undefined {
 function generatedAccess(registryKey: string, def: ToolDefinition): { readonly read: boolean; readonly destructive: boolean } {
   const key = operationKeyOf(def);
   if (key?.startsWith('v1:')) {
-    const action = key.split(':')[2] ?? '';
-    return { read: V1_READ_ACTION.test(action), destructive: isDestructiveV1Action(action) };
+    const [, object = '', action = ''] = key.split(':');
+    return { read: V1_READ_ACTION.test(action), destructive: isDestructiveV1Action(object, action) };
   }
   const hints = classifyTool(registryKey, def);
   return { read: hints.readOnlyHint, destructive: hints.destructiveHint };

@@ -168,7 +168,7 @@ async function admitV1(op: Extract<GuardedOperation, { kind: 'v1' }>, options: O
     }
   }
   // A destructive v1 action is judged as the DELETE it performs, so the policy's destructive rule covers it (P2).
-  const ref = isDestructiveV1Action(op.action)
+  const ref = isDestructiveV1Action(op.object, op.action)
     ? { kind: 'v2' as const, method: 'DELETE', key }
     : { kind: 'v1' as const, action: op.action, key };
   refuseUnlessAllowed(key, options.policy.operationDecision(ref));
