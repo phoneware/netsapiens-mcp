@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "registry_maintenance",
+  "revision": "maint-2026-11-23",
+  "ttlSeconds": 30
+}

@@ -94,3 +94,14 @@ export type {
 } from './store/types.js';
 export type { ContentKind, FieldClass, FieldRule, OutputDeclaration, ToolTargets, NsResourceName } from './governance/types.js';
 export type { SelfIdentity, QueueAgentResolution } from './tools/curated/queue-agent.js';
+
+// Access registry wire contract (docs/access-registry.md)
+export { parseRegistryDecision } from './access/contract.js';
+export type {
+  AccessDecisionV1,
+  AccessPolicyV1,
+  ContentAction,
+  ParseRegistryDecisionResult,
+  RegistryDecisionErrorClass,
+} from './access/contract.js';
+export type { AccessEnforcer, AccessEvaluateOptions, AccessIdentity, AccessView } from './access/types.js';
