@@ -186,6 +186,7 @@ const SMTP_RELAY_OPERATIONS = [
   'POST /domains',
   'PUT /domains/{}',
   'PUT /resellers/{}',
+  'POST /resellers',
   'v1:domain:create',
   'v1:domain:update',
 ] as const;
@@ -210,8 +211,9 @@ const FAX_NUMBER_WRITE_OPERATIONS = [
 
 /**
  * Writes that redirect SMS: a session's members, a number's destination, a number assigned to an inbox, an inbox member,
- * a phone number's SMS destination, a carrier's outbound URL (which receives every outbound message), and a v1 SMS number's
- * destination. Whoever is added or named receives the text.
+ * a phone number's SMS destination, a carrier's outbound URL (which receives every outbound message), a v1 SMS number's
+ * destination, and a queue agent (which receives the SMS conversations its queue routes to it). Whoever is added or named
+ * receives the text.
  */
 const SMS_REDIRECT_OPERATIONS = [
   'PUT /domains/{}/users/{}/messagesessions/{}',
@@ -229,6 +231,10 @@ const SMS_REDIRECT_OPERATIONS = [
   'PUT /smscarriers/{}',
   'v1:smsnumber:create',
   'v1:smsnumber:update',
+  'POST /domains/{}/callqueues/{}/agents',
+  'PUT /domains/{}/callqueues/{}/agents/{}',
+  'v1:agent:create',
+  'v1:agent:update',
 ] as const;
 
 /**
@@ -929,7 +935,6 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'DELETE /domains/{}/users/{}/calls/{}/reject',
       'DELETE /resellers/{}',
       'POST /domains/{}/callqueues',
-      'POST /resellers',
     ]),
     ...freeOf('interface translations: the product copy of the UI, not one of the six kinds', [
       'DELETE /translations',

@@ -353,3 +353,19 @@ describe('round 3 finding 2: writes that route SMS, push notifications or record
     }
   });
 });
+
+describe('round 3 finding 6: the remaining redirects, a reseller relay and a queue agent', () => {
+  it('POST /resellers sets the SMTP relay that mails voicemail, transcripts and fax, as PUT /resellers/{} does', () => {
+    expectKinds('POST /resellers', ['transcript', 'voicemail', 'fax_page']);
+    expectKinds('PUT /resellers/{}', ['transcript', 'voicemail', 'fax_page']);
+  });
+
+  it.each([
+    'POST /domains/{}/callqueues/{}/agents',
+    'PUT /domains/{}/callqueues/{}/agents/{}',
+    'v1:agent:create',
+    'v1:agent:update',
+  ])('%s is sms_text: an agent of a queue receives the SMS conversations that queue routes to it', (key) => {
+    expectKinds(key, ['sms_text']);
+  });
+});
