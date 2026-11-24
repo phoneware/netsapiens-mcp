@@ -31,3 +31,20 @@ describe('operation outputs (spec 3.3, output projection)', () => {
     );
   });
 });
+
+describe('composite output resources', () => {
+  it('declares every field of every member, and names members in sorted order', () => {
+    const composites = [...new Set(Object.values(OPERATION_OUTPUTS))].filter((name) => name.startsWith('Union('));
+    expect(composites.length).toBeGreaterThan(0);
+    for (const composite of composites) {
+      const members = composite.slice('Union('.length, -1).split(',');
+      expect(members.length, composite).toBeGreaterThan(1);
+      expect(members, composite).toEqual([...members].sort());
+      for (const member of members) {
+        for (const field of Object.keys(NS_RESOURCE_FIELDS[member] ?? {})) {
+          expect(Object.hasOwn(NS_RESOURCE_FIELDS[composite] ?? {}, field), `${composite} lacks ${member}.${field}`).toBe(true);
+        }
+      }
+    }
+  });
+});

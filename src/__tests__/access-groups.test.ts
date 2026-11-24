@@ -6,7 +6,7 @@ import { getAllToolDefinitions } from '../tools/index.js';
 import { toolRegistry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { ToolDefinition } from '../generated/types.js';
-import { CONTENT_KIND_ORDER } from '../governance/content-operations.js';
+import { CONTENT_KIND_ORDER, v1OperationKeyOf } from '../governance/content-operations.js';
 
 /** The generated tools in the order src/tools/index.ts builds them: v2, then the v1 names that do not collide. */
 function combinedRegistry(): Map<string, ToolDefinition> {
@@ -167,6 +167,15 @@ describe('tool catalog view: operations', () => {
     expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording']);
     expect(view.lookupOperation('GET /insight/{}')).toBe('unreviewed');
     expect(view.lookupOperation('GET /fax/vendors')).toBeUndefined();
+  });
+
+  it('resolves a v1 key built from the object and action, the key E builds for a v1Call', () => {
+    // Slice E builds "v1:<object>:<action>" itself from the v1Call arguments, so this format is the contract.
+    const view = getToolCatalogView();
+    expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording']);
+    expect(view.lookupOperation('v1:audio:count')).toBeUndefined();
+    const registryKey = v1ToolRegistry.get('v1_audio_play')?.operation?.key ?? '';
+    expect(v1OperationKeyOf(registryKey)).toBe('v1:audio:play');
   });
 });
 
