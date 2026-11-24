@@ -237,4 +237,21 @@ describe('fake access registry', () => {
     expect(merged.content.call_recording).toBe('allow');
     expect(merged.access).toBe('write');
   });
+
+  it('allowAll answers allow for every key that has no fault, and a fault still wins over it', async () => {
+    const open = (await startFakeAccessRegistry({ allowAll: true })) as FakeAccessRegistry;
+    try {
+      open.setDecision(alice.tenant, alice.subject, denyDecision({ reason: 'subject_not_enabled' }));
+      const allowed = await fetch(decisionUrl(open, alice), { headers: { Accept: 'application/json' } });
+      expect(allowed.status).toBe(200);
+      const parsed = parseRegistryDecisionText(await allowed.text());
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.decision).toMatchObject({ decision: 'allow', revision: 'rev-1' });
+      open.setFault(alice.tenant, alice.subject, fault('status', { status: 503 }));
+      const faulted = await fetch(decisionUrl(open, alice), { headers: { Accept: 'application/json' } });
+      expect(faulted.status).toBe(503);
+    } finally {
+      await open.close();
+    }
+  });
 });
