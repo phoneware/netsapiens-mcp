@@ -149,7 +149,7 @@ A redirect URI is permitted when it matches one platform entry under these rules
 - An https entry permits an `https` URI with the same host and port, and the same path once trailing slashes are removed from both. A query on the redirect URI is ignored.
 - `*` permits any valid URI.
 
-Platform entries are checked when the registry's decision is read. An entry that is not one of the three forms makes the policy unavailable.
+A platform entry that is not one of the three forms makes the response a contract error, which the client handles as any other registry error.
 
 ## Identity
 
