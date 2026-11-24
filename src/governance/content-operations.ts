@@ -75,6 +75,26 @@ const CDR_SCHEDULE_WRITE_OPERATIONS = [
   'v1:cdrschedule:update',
 ] as const;
 
+/**
+ * Writes that set where call recordings are kept or sent: the storage a domain archives to, the recording servers that
+ * receive call media, the entries that choose which addresses are recorded, and the archive configurations. Reads of
+ * these settings stay in REVIEWED_CONTENT_FREE.
+ */
+const RECORDING_DESTINATION_OPERATIONS = [
+  'POST /domains/{}/recording-storage',
+  'PUT /domains/{}/recording-storage/{}',
+  'POST /recordings/servers',
+  'PUT /recordings/servers/{}',
+  'POST /recordings/entries',
+  'PUT /recordings/entries',
+  'POST /recordings/servers/{}/entries',
+  'PUT /recordings/servers/{}/entries',
+  'POST /recordings/archive-configs',
+  'PUT /recordings/archive-configs/{}/{}/{}',
+  'v1:recording:create',
+  'v1:recording:update',
+] as const;
+
 /** Event subscriptions: each posts the events of its model to a URL, so they transmit the kinds those events carry. */
 const SUBSCRIPTION_TRANSMIT_OPERATIONS = [
   'POST /subscriptions',
@@ -182,7 +202,7 @@ function isListed(table: Readonly<Record<string, unknown>>, key: string): boolea
 
 /** Each operation a kind's set lists. A key may appear under several kinds. */
 export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<string, true>>>> = {
-  call_recording: lookup([...RECORDING_OPERATIONS, ...VCON_OPERATIONS]),
+  call_recording: lookup([...RECORDING_OPERATIONS, ...RECORDING_DESTINATION_OPERATIONS, ...VCON_OPERATIONS]),
   transcript: lookup([
     ...TRANSCRIPTION_OPERATIONS,
     ...VCON_OPERATIONS,
@@ -375,7 +395,7 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'PUT /domains/{}/users/{}/meetings/{}',
       'PUT /domains/{}/users/{}/meetings/{}/attendee/{}',
     ]),
-    ...freeOf('recording configuration, servers, storage and recording entries: settings that say which addresses are recorded', [
+    ...freeOf('recording configuration and inventory: reads, deletes, syncs and configuration writes that name no recording destination', [
       'DELETE /domains/{}/recording-storage/{}',
       'DELETE /recordings/archive-configs/{}/{}/{}',
       'DELETE /recordings/config/{}',
@@ -405,22 +425,12 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /recordings/servers/{}/entries/count',
       'GET /recordings/servers/{}/entries/sync/{}',
       'GET /recordings/storage',
-      'POST /domains/{}/recording-storage',
-      'POST /recordings/archive-configs',
       'POST /recordings/config',
-      'POST /recordings/entries',
       'POST /recordings/nmc-config',
-      'POST /recordings/servers',
-      'POST /recordings/servers/{}/entries',
       'POST /recordings/servers/{}/entries/sync',
-      'PUT /domains/{}/recording-storage/{}',
-      'PUT /recordings/archive-configs/{}/{}/{}',
       'PUT /recordings/config/{}',
       'PUT /recordings/coreservers/{}',
-      'PUT /recordings/entries',
       'PUT /recordings/nmc-config/{}',
-      'PUT /recordings/servers/{}',
-      'PUT /recordings/servers/{}/entries',
     ]),
     ...freeOf('fax setup: numbers, vendors, cover-page templates and deletes; fax documents are fax_page above', [
       'DELETE /domains/{}/fax/cover-page',
@@ -543,10 +553,8 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:messagesession:leave',
       'v1:messagesession:update',
     ]),
-    ...freeOf('v1 recording settings: enabling, disabling and updating recording records; reads are call_recording above', [
-      'v1:recording:create',
+    ...freeOf('v1 recording delete: removes a recording record and returns no content; reads are call_recording above', [
       'v1:recording:delete',
-      'v1:recording:update',
     ]),
     ...freeOf('v1 SMS numbers: setup, with no message content', [
       'v1:smsnumber:count',
