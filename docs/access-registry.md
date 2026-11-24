@@ -115,6 +115,18 @@ A registry that adds a restriction this contract does not define must name it in
 | `unclassifiedOutput` | `deny` or `allow`. |
 | `platforms` | An array of at most 512 entries, each an https URI without userinfo, fragment or query; the word `loopback`; or `*`. See Platforms and redirect URIs. |
 
+## Parsing entry points
+
+The package exports three functions from its entry point. Each takes one kind of input:
+
+| Function | Takes | Use it when |
+|---|---|---|
+| `parseRegistryDecisionText(text)` | The response body as text | The body is read as text. The text is parsed exactly once. |
+| `parseRegistryDecisionValue(value)` | A value already parsed, such as the result of `res.json()` | An embedder already holds a parsed value. A string is refused, because a string may be JSON text that was encoded twice. |
+| `parseRegistryDecision(input)` | Either | Compatibility only. A string is read as text and any other value as a parsed value. Do not use it in new code. |
+
+Embedders that return `res.json()` MUST use `parseRegistryDecisionValue`. Clients that read the body as text MUST use `parseRegistryDecisionText`. A body encoded twice parses to a JSON string, which is a contract error on either path.
+
 ## Status handling
 
 | Outcome | Client treatment |
@@ -124,6 +136,7 @@ A registry that adds a restriction this contract does not define must name it in
 | Any other status, including `404` | Registry error. Never "not enrolled". |
 | Network error, or no answer within the timeout (default 3000 ms) | Registry error. |
 | Body is not JSON | Registry error, class `invalid_json`. |
+| Body parses to a JSON string, which a body encoded twice does | Registry error, class `contract`. |
 | Body over 64 KiB | Registry error, class `oversize`. |
 | Contract violation | Registry error, class `contract`. |
 | Non-empty `critical` | Registry error, class `critical`. |
@@ -139,6 +152,7 @@ The fixtures in `src/__tests__/fixtures/access/` show each class. A valid decisi
 - `invalid-bad-ttl.json`: uses a ttl of zero.
 - `invalid-version.json`: uses version 2.
 - `invalid-http-platform.json`: lists a non-loopback platform over http.
+- `invalid-double-encoded.json`: a JSON string holding decision JSON. That is what a body encoded twice parses to, so it is refused on both parsing paths.
 
 ## Platforms and redirect URIs
 

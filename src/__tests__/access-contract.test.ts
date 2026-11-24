@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CONTENT_KINDS, parseRegistryDecision } from '../access/contract.js';
+import { CONTENT_KINDS, parseRegistryDecision, parseRegistryDecisionText, parseRegistryDecisionValue } from '../access/contract.js';
 import * as lib from '../lib.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/access/', import.meta.url));
@@ -291,5 +291,55 @@ describe('error messages carry no registry values', () => {
     expect(message).not.toContain('SECRET');
     expect(message).not.toContain('Bearer');
     expect(message).toMatch(/^[\x20-\x7e]+$/);
+  });
+});
+
+describe('entry points', () => {
+  const ONCE = JSON.stringify(VALID_ALLOW);
+  const TWICE = JSON.stringify(ONCE);
+
+  it('parses JSON text exactly once in parseRegistryDecisionText', () => {
+    expect(parseRegistryDecisionText(ONCE)).toEqual({ ok: true, decision: VALID_ALLOW });
+  });
+
+  it('takes a parsed object in parseRegistryDecisionValue', () => {
+    expect(parseRegistryDecisionValue(VALID_ALLOW)).toEqual({ ok: true, decision: VALID_ALLOW });
+  });
+
+  it('refuses a double-encoded body given to parseRegistryDecisionValue', () => {
+    expect(parseRegistryDecisionValue(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('refuses a double-encoded body given to parseRegistryDecisionText', () => {
+    expect(parseRegistryDecisionText(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('refuses the inner text an embedder gets from a double-encoded body parsed once', () => {
+    const parsedOnce: unknown = JSON.parse(TWICE);
+    expect(parseRegistryDecisionValue(parsedOnce)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it.each([5, null, true, [VALID_ALLOW]])('refuses %j given to parseRegistryDecisionValue', (value) => {
+    expect(parseRegistryDecisionValue(value)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it.each(['[]', 'null', '5', '"text"'])('refuses JSON text %s given to parseRegistryDecisionText', (text) => {
+    expect(parseRegistryDecisionText(text)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('reports text that is not JSON as invalid_json', () => {
+    expect(parseRegistryDecisionText('{"version":1,')).toMatchObject({ ok: false, errorClass: 'invalid_json' });
+  });
+
+  it('keeps the dispatcher: a string is read as text, any other value as a parsed value', () => {
+    expect(parseRegistryDecision(ONCE)).toEqual({ ok: true, decision: VALID_ALLOW });
+    expect(parseRegistryDecision(VALID_ALLOW)).toEqual({ ok: true, decision: VALID_ALLOW });
+    expect(parseRegistryDecision(TWICE)).toMatchObject({ ok: false, errorClass: 'contract' });
+  });
+
+  it('exports all three functions from the package entry point', () => {
+    expect(lib.parseRegistryDecision).toBe(parseRegistryDecision);
+    expect(lib.parseRegistryDecisionText).toBe(parseRegistryDecisionText);
+    expect(lib.parseRegistryDecisionValue).toBe(parseRegistryDecisionValue);
   });
 });

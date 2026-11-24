@@ -96,7 +96,7 @@ export type { ContentKind, FieldClass, FieldRule, OutputDeclaration, ToolTargets
 export type { SelfIdentity, QueueAgentResolution } from './tools/curated/queue-agent.js';
 
 // Access registry wire contract (docs/access-registry.md)
-export { parseRegistryDecision } from './access/contract.js';
+export { parseRegistryDecision, parseRegistryDecisionText, parseRegistryDecisionValue } from './access/contract.js';
 export type {
   AccessDecisionV1,
   AccessPolicyV1,

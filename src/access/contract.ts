@@ -139,20 +139,8 @@ const decisionSchema = z.discriminatedUnion('decision', [allowSchema, denySchema
 // everything else, so unknown members never reach decisionSchema.
 const criticalEnvelopeSchema = z.object({ critical: z.array(z.string()).optional() });
 
-/**
- * Parses a registry decision body. Accepts the JSON text or the value already parsed.
- * Unknown members are dropped, unless `critical` names one, which makes the whole response a contract error.
- */
-export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResult {
-  let value: unknown = input;
-  if (typeof input === 'string') {
-    try {
-      value = JSON.parse(input);
-    } catch {
-      return failure('invalid_json', 'decision body is not valid JSON');
-    }
-  }
-
+/** Checks a value already known to be a JSON object: the `critical` member first, then the decision schema. */
+function decodeDecision(value: unknown): ParseRegistryDecisionResult {
   const envelope = criticalEnvelopeSchema.safeParse(value);
   if (!envelope.success) {
     return failure('contract', describeIssues(envelope.error.issues));
@@ -165,6 +153,43 @@ export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResu
   const parsed = decisionSchema.safeParse(value);
   if (!parsed.success) return failure('contract', describeIssues(parsed.error.issues));
   return { ok: true, decision: parsed.data };
+}
+
+/**
+ * Parses registry decision JSON text. The text is parsed exactly once. A result that is not an object is a contract
+ * error, which is what a body encoded twice produces. Use this when the response body is read as text.
+ */
+export function parseRegistryDecisionText(text: string): ParseRegistryDecisionResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return failure('invalid_json', 'decision body is not valid JSON');
+  }
+  if (typeof value === 'string') {
+    return failure('contract', 'decision text parsed to a JSON string, not an object; the body may be encoded twice');
+  }
+  return decodeDecision(value);
+}
+
+/**
+ * Parses a registry decision that is already a parsed value, such as the result of `res.json()`. It takes an object
+ * only. A string is refused, because it may be JSON text that a registry encoded twice.
+ */
+export function parseRegistryDecisionValue(value: unknown): ParseRegistryDecisionResult {
+  if (typeof value === 'string') {
+    return failure('contract', 'decision value is a string; pass JSON text to parseRegistryDecisionText');
+  }
+  return decodeDecision(value);
+}
+
+/**
+ * Compatibility entry point. A string is read as JSON text, as parseRegistryDecisionText reads it, and any other
+ * value is taken as a parsed value, as parseRegistryDecisionValue takes it. Embedders that return `res.json()` must
+ * call parseRegistryDecisionValue, and clients that read the body as text must call parseRegistryDecisionText.
+ */
+export function parseRegistryDecision(input: unknown): ParseRegistryDecisionResult {
+  return typeof input === 'string' ? parseRegistryDecisionText(input) : parseRegistryDecisionValue(input);
 }
 
 function failure(errorClass: RegistryDecisionErrorClass, message: string): ParseRegistryDecisionResult {
