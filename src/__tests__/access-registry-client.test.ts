@@ -113,7 +113,7 @@ interface SetupOptions {
   readonly timeoutMs?: number;
   readonly maxStaleMs?: number;
   readonly maxEntries?: number;
-  /** The wall clock for identity token expiry. Defaults to the age clock, so the two move together. */
+  /** The wall clock. Defaults to the age clock, so the two move together. Ages read it too. */
   readonly wallNow?: Clock;
 }
 
@@ -133,6 +133,7 @@ function setup(options: SetupOptions = {}) {
     connector: CONNECTOR,
     fetchDecision,
     now,
+    wallNow: options.wallNow ?? now,
     timeoutMs: options.timeoutMs,
     maxStaleMs: options.maxStaleMs,
     maxEntries: options.maxEntries,
@@ -998,5 +999,84 @@ describe('registry client: decision sources that return without a promise', () =
       now: () => START,
     });
     await expect(client.decide(QUERY)).resolves.toEqual({ source: 'unavailable', errorClass: 'network' });
+  });
+});
+
+describe('registry client: a wall clock that sleeps, steps back or jumps forward', () => {
+  it('revalidates an entry after a sleep, because the wall clock ages it past its TTL while the monotonic clock stands still', async () => {
+    const wall = { now: START };
+    const { client, network } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody({ revision: 'rev-before-sleep' }));
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+
+    wall.now += MINUTE + SECOND;
+    network.respond = () => json(200, denyBody({ reason: 'subject_not_enabled', revision: 'rev-after-sleep' }));
+    expect(await client.decide(QUERY)).toMatchObject({ source: 'revalidated', decision: { decision: 'deny' } });
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('answers a failed revalidation after a sleep past MAX_STALE as unavailable, not last known good', async () => {
+    const wall = { now: START };
+    const { client, network } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody());
+    await client.decide(QUERY);
+
+    wall.now += 10 * MINUTE + SECOND;
+    network.respond = () => json(500, 'boom');
+    expect(await client.decide(QUERY)).toEqual({ source: 'unavailable', errorClass: 'http_status' });
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('keeps an answer last known good after a short sleep, aged by the wall clock', async () => {
+    const wall = { now: START };
+    const { client, network } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody());
+    await client.decide(QUERY);
+
+    wall.now += MINUTE + SECOND;
+    network.respond = () => json(500, 'boom');
+    expect(await client.decide(QUERY)).toEqual({ source: 'lkg', decision: allowBody(), errorClass: 'http_status' });
+  });
+
+  it('gives the same result when the wall clock steps backwards while the monotonic clock advances', async () => {
+    const wall = { now: START };
+    const { client, network, clock } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody());
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+
+    clock.now += 30 * SECOND;
+    wall.now -= HOUR;
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+    expect(network.decisions()).toHaveLength(1);
+
+    clock.now += 31 * SECOND;
+    network.respond = () => json(500, 'boom');
+    expect(await client.decide(QUERY)).toEqual({ source: 'lkg', decision: allowBody(), errorClass: 'http_status' });
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('revalidates an entry sooner after a forward wall jump, because the wall clock ages it past its TTL', async () => {
+    const wall = { now: START };
+    const { client, network, clock } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody());
+    await client.decide(QUERY);
+
+    clock.now += 5 * SECOND;
+    wall.now += 90 * SECOND;
+    network.respond = () => json(200, allowBody({ revision: 'rev-after-jump' }));
+    expect(await client.decide(QUERY)).toMatchObject({ source: 'revalidated', decision: { revision: 'rev-after-jump' } });
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('keeps an answer fresh after a forward wall jump that stays inside the TTL', async () => {
+    const wall = { now: START };
+    const { client, network, clock } = setup({ wallNow: () => wall.now });
+    network.respond = () => json(200, allowBody());
+    await client.decide(QUERY);
+
+    clock.now += 5 * SECOND;
+    wall.now += 30 * SECOND;
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+    expect(network.decisions()).toHaveLength(1);
   });
 });
