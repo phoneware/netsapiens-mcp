@@ -461,6 +461,9 @@ function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry, confi
     MCP_BASE_URL: `http://127.0.0.1:${port}`,
     NETSAPIENS_API_URL: nsOrigin,
     NETSAPIENS_AUTH_MODE: 'token',
+    // The server refreshes its NetSapiens version in the background. One second makes that probe land inside the
+    // request windows below on every run, so the harness has to handle it instead of passing when the timing is lucky.
+    NETSAPIENS_VERSION_TTL_SECONDS: '1',
     MCP_SESSION_SECRET: REGISTRY_SESSION_SECRET,
     MCP_PERSISTENCE: 'sqlite',
     MCP_STORE_PATH: storePath,
@@ -598,7 +601,17 @@ async function openSessionAs(child, nsToken, redirectUri = REGISTRY_APP_REDIRECT
   return { session, tokens, signedAt };
 }
 
-const sentSince = (fake, mark) => fake.requests.slice(mark).map((request) => `${request.method} ${request.path}`);
+/**
+ * The requests NetSapiens received since `mark`, as "METHOD /path". The server refreshes its NetSapiens version in the
+ * background, on its own timer, with two unauthenticated GETs. A refresh can land in any window, so those two are left
+ * out. A request to either path that carries a credential is still reported.
+ */
+const VERSION_PROBE_PATHS = new Set(['/ns-api/v2/version', '/ns-api/webroot/apidoc/api_data.json']);
+const sentSince = (fake, mark) =>
+  fake.requests
+    .slice(mark)
+    .filter((request) => !(request.method === 'GET' && VERSION_PROBE_PATHS.has(request.path) && !request.hasAuth))
+    .map((request) => `${request.method} ${request.path}`);
 
 /** The error a call rejected with, or undefined when it resolved. */
 async function rejectionOf(call) {

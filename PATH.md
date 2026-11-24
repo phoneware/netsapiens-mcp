@@ -6,25 +6,25 @@ An operator installs the published netsapiens-mcp package, starts it with an exp
 
 Before release (using packed tarball):
 ```bash
-node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.1.0.tgz>
+node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.2.0.tgz>
 ```
 
 After release (from registry):
 ```bash
-node scripts/consumer-e2e.mjs --registry 3.1.0
+node scripts/consumer-e2e.mjs --registry 3.2.0
 ```
 
 The default command covers the install, config, SQLite, memory, version, library, and MFA legs.
 Run the Firestore leg separately against a disposable Firestore emulator:
 
 ```bash
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP_REQUIRE_FIRESTORE_EMULATOR=1 node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.1.0.tgz> --legs firestore --firestore-major 8
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP_REQUIRE_FIRESTORE_EMULATOR=1 node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.2.0.tgz> --legs firestore --firestore-major 8
 ```
 
 The access registry leg runs the packed package with a registry configured, against a fake NetSapiens and a fake registry. It is not part of the default legs:
 
 ```bash
-node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.1.0.tgz> --legs registry
+node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.2.0.tgz> --legs registry
 ```
 
 ## Transport & Verification
