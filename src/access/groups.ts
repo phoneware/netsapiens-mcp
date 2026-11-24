@@ -8,7 +8,8 @@
  */
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { buildMetaTools } from '../tools/curated/meta.js';
-import { isToolDestructive, isToolReadOnly } from '../tools/index.js';
+import { classifyTool, isToolDestructive, isToolReadOnly } from '../tools/index.js';
+import { isDestructiveV1Action, V1_READ_ACTION } from '../netsapiens/operation-key.js';
 import { toolRegistry as v2Registry } from '../generated/registry.js';
 import { v1ToolRegistry } from '../generated/v1/registry.js';
 import type { ToolDefinition } from '../generated/types.js';
@@ -88,16 +89,34 @@ function operationKeyOf(def: ToolDefinition): string | undefined {
  return def.operation?.family === 'v1' ? v1OperationKeyOf(key) : key;
 }
 
+/**
+ * The access of a generated entry, from the operation it dispatches. A name lookup would find a curated tool of the same
+ * name and judge the generated write by it. A v1 action is read or destructive by its action; a v2 entry takes the hints of
+ * its definition, its HTTP method, as the policy's operation check does.
+ */
+function generatedAccess(registryKey: string, def: ToolDefinition): { readonly read: boolean; readonly destructive: boolean } {
+  const key = operationKeyOf(def);
+  if (key?.startsWith('v1:')) {
+    const action = key.split(':')[2] ?? '';
+    return { read: V1_READ_ACTION.test(action), destructive: isDestructiveV1Action(action) };
+  }
+  const hints = classifyTool(registryKey, def);
+  return { read: hints.readOnlyHint, destructive: hints.destructiveHint };
+}
+
 function entryFor(input: {
- readonly canonical: string;
- readonly exposed: string;
- readonly origin: '@curated' | '@meta' | '@generated';
- readonly operations: readonly string[];
- readonly classified: boolean;
+  readonly canonical: string;
+  readonly exposed: string;
+  readonly origin: '@curated' | '@meta' | '@generated';
+  readonly operations: readonly string[];
+  readonly classified: boolean;
+  /** A generated entry's access, from its own definition. Curated and meta entries read their own metadata by name. */
+  readonly access?: { readonly read: boolean; readonly destructive: boolean };
 }): ToolCatalogEntry {
- const groups = new Set<string>([input.origin]);
- groups.add(isToolReadOnly(input.canonical) ? '@read' : '@write');
- if (isToolDestructive(input.canonical)) groups.add('@destructive');
+  const groups = new Set<string>([input.origin]);
+  const access = input.access ?? { read: isToolReadOnly(input.canonical), destructive: isToolDestructive(input.canonical) };
+  groups.add(access.read ? '@read' : '@write');
+  if (access.destructive) groups.add('@destructive');
  const kinds = new Set<ContentKind>();
  for (const operation of input.operations) {
   const classification = contentKindsOf(operation);
@@ -141,6 +160,7 @@ function buildCatalog(): ToolCatalogView {
     origin: '@generated',
     operations: operation === undefined ? [] : [operation],
     classified: operation !== undefined && Object.hasOwn(OPERATION_OUTPUTS, operation),
+    access: generatedAccess(registryKey, def),
    }),
   );
  }

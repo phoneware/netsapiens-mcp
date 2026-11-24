@@ -5,7 +5,7 @@ import { v1OperationKey } from '../governance/content-operations.js';
 import type { ContentKind } from '../governance/types.js';
 import type { NetSapiensClient } from '../netsapiens-client.js';
 import type { AvailabilityContext } from './availability.js';
-import { normalizeOperationKey } from './operation-key.js';
+import { isDestructiveV1Action, normalizeOperationKey } from './operation-key.js';
 import {
   expandPathTemplate,
   hasPlaceholder,
@@ -167,7 +167,10 @@ async function admitV1(op: Extract<GuardedOperation, { kind: 'v1' }>, options: O
       throw new OperationRefusedError(key, `v1_identity_param:${name}`, NOT_PERMITTED);
     }
   }
-  const ref = { kind: 'v1' as const, action: op.action, key };
+  // A destructive v1 action is judged as the DELETE it performs, so the policy's destructive rule covers it (P2).
+  const ref = isDestructiveV1Action(op.action)
+    ? { kind: 'v2' as const, method: 'DELETE', key }
+    : { kind: 'v1' as const, action: op.action, key };
   refuseUnlessAllowed(key, options.policy.operationDecision(ref));
   await admitTargets(key, ref, explicitDomains([op.params?.domain]), options);
 }
