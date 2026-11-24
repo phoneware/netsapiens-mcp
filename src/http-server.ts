@@ -47,6 +47,8 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { getVersionInfo, getCachedVersionInfo, warmVersionCache, getVersionTtlSeconds, type VersionInfo } from './netsapiens/version.js';
 import { createAvailabilityContext, type AvailabilityContext } from './netsapiens/availability.js';
 import { createGuardedClient } from './netsapiens/guarded-client.js';
+import { loadAccessRegistryConfig, readAccessRegistryEnv, type AccessRegistryConfig } from './access/config.js';
+import { createAccessEnforcer, type CausedAccessEnforcer } from './access/enforcer.js';
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -86,6 +88,16 @@ function ownsSession(session: McpSession, req: AuthenticatedRequest): boolean {
   current.familyId === session.identity.familyId;
 }
 
+/**
+ * In registry mode a stateful session answers only the subject it was opened for. A request whose identity is missing or
+ * different finds no session. Unset, the check is not made.
+ */
+function boundToSubject(session: McpSession, req: AuthenticatedRequest, access: CausedAccessEnforcer | undefined): boolean {
+ if (access === undefined) return true;
+ const subject = access.identityFromAuthInfo(req.auth?.extra);
+ return session.subject !== undefined && subject !== undefined && subject.subject === session.subject;
+}
+
 interface McpSession {
  transport: StreamableHTTPServerTransport;
  server: Server;
@@ -95,6 +107,7 @@ interface McpSession {
  lastVersionInfo?: VersionInfo;
  identity: SessionIdentity;
  recovery: RecoveryCredential;
+ subject?: string;
 }
 
 /**
@@ -156,6 +169,7 @@ type HttpAppOptions = {
  store?: McpStore;
  authProvider?: NetSapiensAuthProvider;
  hooks?: import('./auth/types.js').AuthHooks;
+ access?: CausedAccessEnforcer;
 };
 interface PreparedHttpConfig {
  env: NodeJS.ProcessEnv;
@@ -170,8 +184,9 @@ interface PreparedHttpConfig {
  nsClientSecret?: string;
  proxyHops: string;
  tokenLifetimeSec: number;
+ accessRegistry?: AccessRegistryConfig;
 }
-interface CreatedHttpApp {
+export interface CreatedHttpApp {
  app: express.Express;
  authProvider: NetSapiensAuthProvider;
  baseUrl: URL;
@@ -237,7 +252,12 @@ function prepareHttpConfig(options?: HttpAppOptions): PreparedHttpConfig {
  if (proxyHops !== '0' && proxyHops !== '1') throw new Error('ConfigError: MCP_TRUST_PROXY_HOPS must be 0 or 1');
  const tokenLifetimeSec = parseLifetimeHoursToSeconds(env.MCP_TOKEN_LIFETIME_HOURS, 24 * 7);
  if (!options?.authProvider) validateReplayAudience(env.MCP_MFA_REPLAY_AUDIENCE);
- return { env, config, platforms, port, host: env.MCP_HOST || '0.0.0.0', baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec };
+ const access = options?.access;
+ const accessRegistry = access === undefined ? loadAccessRegistryConfig(readAccessRegistryEnv()) : undefined;
+ if (options?.authProvider !== undefined && (access !== undefined || accessRegistry?.enabled === true)) {
+  throw new Error('ConfigError: the access registry cannot be combined with a custom authProvider; configure the provider directly');
+ }
+ return { env, config, platforms, port, host: env.MCP_HOST || '0.0.0.0', baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec, accessRegistry };
 }
 
 export async function createApp(options?: HttpAppOptions) {
@@ -245,7 +265,7 @@ export async function createApp(options?: HttpAppOptions) {
 }
 
 async function createAppWithConfig(options: HttpAppOptions | undefined, prepared: PreparedHttpConfig): Promise<CreatedHttpApp> {
- const { env, config, platforms, baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec } = prepared;
+ const { env, config, platforms, baseUrl, mcpUrl, authMode, nsClientId, nsClientSecret, proxyHops, tokenLifetimeSec, accessRegistry } = prepared;
 
  let store: McpStore;
  if (options?.store) {
@@ -256,6 +276,7 @@ async function createAppWithConfig(options: HttpAppOptions | undefined, prepared
  }
 
  
+ const access = options?.access ?? (accessRegistry?.enabled === true ? createAccessEnforcer(accessRegistry) : undefined);
  let authProvider: NetSapiensAuthProvider;
  try {
   authProvider = options?.authProvider ?? new NetSapiensAuthProvider({
@@ -270,8 +291,9 @@ async function createAppWithConfig(options: HttpAppOptions | undefined, prepared
    store,
    hooks: options?.hooks,
    secondFactorPolicy: parseSecondFactorPolicy(env.MCP_SECOND_FACTOR_POLICY),
+  access,
   });
-  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops));
+  const { app } = wireApp(config, authProvider, baseUrl, mcpUrl, store, platforms, Number(proxyHops), access);
   setUsageStore(store.usage);
   return { app, authProvider, baseUrl, mcpUrl, store, platforms };
  } catch (error) {
@@ -383,6 +405,7 @@ function wireApp(
  store: McpStore,
  platforms: readonly NetSapiensPlatform[],
  proxyHops: number,
+ access?: CausedAccessEnforcer,
 ): { app: express.Express; sessions: Map<string, McpSession> } {
 
  // -----------------------------------------------------------------------
@@ -562,6 +585,7 @@ function wireApp(
     multiInstance: store.capabilities.multiInstance,
    },
    netsapiens: indexedNetsapiens,
+   ...(access === undefined ? {} : { accessRegistry: 'enforced' as const }),
    });
   } catch (err) {
    console.error('ERROR IN /health:', err);
@@ -684,7 +708,7 @@ function wireApp(
   // bearer, so the NS client is rebuilt from that bearer each time and no
   // cross-request state exists to go stale or to be pinned to an instance.
   if (isStatelessMode()) {
-   const { server, client } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
+  const { server, client } = await createAuthenticatedMcpServerForRequest(config, req, authProvider, access);
    void client;
    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
@@ -701,19 +725,20 @@ function wireApp(
   if (isInitializeRequest(body)) {
    // Create a server + client using the authenticated user's NS token, role, and identity.
    const identity = sessionIdentity(req);
+  const subject = access?.identityFromAuthInfo(req.auth?.extra)?.subject;
    if (!identity) {
     res.writeHead(403, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Authenticated session identity unavailable' }));
     return;
    }
-   const { server, client, availabilityContext, versionInfo, recovery } = await createAuthenticatedMcpServerForRequest(config, req, authProvider);
+  const { server, client, availabilityContext, versionInfo, recovery } = await createAuthenticatedMcpServerForRequest(config, req, authProvider, access);
    const extra = req.auth?.extra as Record<string, unknown> | undefined;
    const nsApiUrl = (extra?.nsApiUrl as string | undefined) || config.netsapiens.apiUrl;
 
    const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sid: string) => {
-     sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo, identity, recovery });
+     sessions.set(sid, { transport, server, client, availabilityContext, nsApiUrl, lastVersionInfo: versionInfo, identity, recovery, subject });
      ensureSessionWatcher(sessions);
     },
    });
@@ -739,7 +764,7 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
-  if (!ownsSession(session, req)) {
+  if (!ownsSession(session, req) || !boundToSubject(session, req, access)) {
    respondSessionNotFound(res);
    return;
   }
@@ -785,7 +810,7 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
-  if (!ownsSession(session, req)) {
+  if (!ownsSession(session, req) || !boundToSubject(session, req, access)) {
    respondSessionNotFound(res);
    return;
   }
@@ -813,7 +838,7 @@ function wireApp(
   }
 
   const session = sessions.get(sessionId)!;
-  if (!ownsSession(session, req)) {
+  if (!ownsSession(session, req) || !boundToSubject(session, req, access)) {
    respondSessionNotFound(res);
    return;
   }
@@ -880,6 +905,8 @@ async function createAuthenticatedMcpServer(
  nsApiUrl?: string,
  authProvider?: NetSapiensAuthProvider,
  recovery: RecoveryCredential = {},
+/** Carried to the tool wiring; registerTools receives it once the tool-level enforcement lands. */
+ access?: CausedAccessEnforcer,
 ) {
  const server = new Server(
   serverImplementation(config),
@@ -922,6 +949,7 @@ async function createAuthenticatedMcpServerForRequest(
  config: ReturnType<typeof loadConfig>,
  req: AuthenticatedRequest,
  authProvider?: NetSapiensAuthProvider,
+ access?: CausedAccessEnforcer,
 ) {
  const extra = req.auth?.extra as Record<string, unknown> | undefined;
  return createAuthenticatedMcpServer(
@@ -932,5 +960,6 @@ async function createAuthenticatedMcpServerForRequest(
   extra?.nsApiUrl as string | undefined,
   authProvider,
   { bearerToken: req.auth?.token },
+ access,
  );
 }

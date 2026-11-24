@@ -105,3 +105,5 @@ export type {
   RegistryDecisionErrorClass,
 } from './access/contract.js';
 export type { AccessEnforcer, AccessEvaluateOptions, AccessIdentity, AccessView } from './access/types.js';
+export { createAccessEnforcer } from './access/enforcer.js';
+export type { AccessEnforcerDeps, AccessUnavailableCause, AccessUnavailableView, CausedAccessEnforcer, CausedAccessView } from './access/enforcer.js';

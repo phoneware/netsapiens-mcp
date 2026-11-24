@@ -51,6 +51,9 @@ import { normalizePlatformUrl } from './platforms.js';
 import { hasServerAssurance, knownScope, parseSecondFactorPolicy, satisfiesSecondFactorPolicy, scopeRequiresSecondFactor, signServerAssurance, type SecondFactorPolicy } from './second-factor-policy.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
+import { ACCESS_EXTRA_KEYS, type AccessIdentity } from '../access/types.js';
+import type { AccessUnavailableCause, CausedAccessEnforcer } from '../access/enforcer.js';
+import { normalizeIdentity, normalizeTenant, normalizeUser, subjectOf } from '../access/identity.js';
 
 export class UpstreamTimeoutError extends Error {
  constructor(message = 'Upstream refresh request timed out') {
@@ -78,6 +81,9 @@ export class UpstreamUnavailableError extends Error {
 
 /** A verified identity mismatch or credential rejection requires a fresh login. */
 class PolicyReconnectRequired extends Error {}
+
+/** NetSapiens did not establish a verified user identity. No registry or policy can be keyed on it. */
+class UnverifiedIdentityError extends Error {}
 
 // ---------------------------------------------------------------------------
 // Signed state helpers.
@@ -436,6 +442,67 @@ function escapeHtml(s: string): string {
  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Copy for a sign-in the registry refuses or cannot decide. The copy is fixed: it says nothing about the policy. */
+const ACCESS_NOT_ENABLED_COPY = 'Your organization has not enabled this AI connector for your account.';
+const ACCESS_APP_NOT_APPROVED_COPY = 'This AI app is not approved for your organization.';
+const ACCESS_UNVERIFIED_COPY = 'We could not verify your account. Sign in with your own user credentials.';
+const ACCESS_UNAVAILABLE_COPY = 'Sign-in is temporarily unavailable. Try again in a few minutes.';
+
+/** The redirect URI as a log line shows it: no query, no fragment and no userinfo. */
+function redirectForLog(uri: string): string {
+ return uri.replace(/[?#].*$/, '').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+}
+
+/** The platform as a log line shows it, or "invalid" when it is not an http origin. */
+function platformForLog(apiUrl: string): string {
+ try {
+  return normalizePlatformUrl(apiUrl);
+ } catch {
+  return 'invalid';
+ }
+}
+
+/** The log reason for each unavailable cause. A plain outage stays registry_unavailable; a broken answer or policy is named. */
+const UNAVAILABLE_REASON: Readonly<Record<AccessUnavailableCause, string>> = {
+ outage: 'registry_unavailable',
+ timeout: 'registry_unavailable',
+ network: 'registry_unavailable',
+ http_status: 'registry_error',
+ auth: 'registry_error',
+ contract: 'registry_error',
+ critical: 'registry_error',
+ policy_invalid: 'policy_invalid',
+};
+
+/** The cause and reason an unavailable view logs. A view from an enforcer that names no cause is a plain outage. */
+function unavailableFields(view: { readonly cause?: AccessUnavailableCause }): { readonly cause: AccessUnavailableCause; readonly reason: string } {
+ const cause = view.cause ?? 'outage';
+ return { cause, reason: UNAVAILABLE_REASON[cause] };
+}
+
+/** The registry's text reaches a log only as a plain identifier. Anything else is logged as unrecognised. */
+const SAFE_LOG_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+function logReason(reason: string): string {
+ if (SAFE_LOG_REASON.test(reason)) return reason;
+ return 'unrecognised';
+}
+
+/**
+ * The account a stored session runs as, keyed the way the registry keys it: user@tenant, normalized the way sign-in
+ * normalizes it. Undefined when the stored name cannot be keyed.
+ */
+function principalOf(username: string): { readonly tenant: string; readonly subject: string } | undefined {
+ const parts = username.split('@');
+ if (parts.length !== 2) return undefined;
+ try {
+  const tenant = normalizeTenant(parts[1]);
+  return { tenant, subject: subjectOf(normalizeUser(parts[0]), tenant) };
+ } catch {
+  return undefined;
+ }
+}
+
 function mfaPageHtml(
  mfaUrl: string,
  mfaVendor: string | undefined,
@@ -542,6 +609,8 @@ export interface NetSapiensAuthProviderOptions {
   * atomic store with subject-guard support; the provider refuses to start otherwise.
   */
  subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
+ /** Registry access for sign-in and sessions. Unset, sign-in and session checks are the same as before the registry. */
+ access?: CausedAccessEnforcer;
 }
 
 /** Authorized request facts a subject resolver may use. */
@@ -556,6 +625,16 @@ export interface SubjectIssuance {
  readonly extraKey: string;
  readonly value: string;
  readonly guard?: SubjectGuard;
+}
+
+/** A registry sign-in's NetSapiens identity, as NetSapiens returned it, and the registry key it normalizes to. */
+interface RegistryIdentity {
+ readonly user: string;
+ readonly domain: string;
+ readonly scope: string;
+ readonly displayName: string;
+ readonly email: string;
+ readonly key: AccessIdentity;
 }
 
 interface MfaChallenge {
@@ -589,6 +668,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private serverBaseUrl?: string;
  private replayAudience?: string;
  private secondFactorPolicy?: SecondFactorPolicy;
+private readonly access?: CausedAccessEnforcer;
 
  private challengeAudience(): string {
   return JSON.stringify([this.store.backend, this.store.namespace, this.serverBaseUrl?.toLowerCase() ?? '', this.replayAudience]);
@@ -635,6 +715,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    }
   }
   this.subjectForIssuance = options.subjectForIssuance;
+this.access = options.access;
  }
 
  private renderLoginPage(
@@ -842,6 +923,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    username: validated.username,
    nsUserRole: validated.userRole,
    scope: validated.scope,
+   ...(this.access === undefined ? {} : { user: validated.user, domain: validated.domain }),
    nsApiUrl: resolvedPlatform.apiUrl,
   };
 
@@ -1042,6 +1124,75 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   return this.finishSignIn(pending, nsTokens, username, assurance, res);
  }
 
+ /**
+  * The NetSapiens identity a registry sign-in is keyed on (E1). Token mode carries the user record that validateNsToken
+  * read. Otherwise NetSapiens is asked strictly, as the policy path asks. A refusal sends its page and returns undefined.
+  */
+ private async resolveRegistryIdentity(
+  res: Response,
+  pending: PendingAuthorization,
+  nsTokens: NsTokenResponse,
+  username: string,
+ ): Promise<RegistryIdentity | undefined> {
+  const apiUrl = nsTokens.nsApiUrl ?? this.nsApiUrl;
+  const logBase = { platform: platformForLog(apiUrl), clientId: pending.clientId, redirectUri: redirectForLog(pending.redirectUri) };
+  let record: { user: string; domain: string; scope: string; displayName: string; email: string };
+  if (nsTokens.user && nsTokens.domain) {
+   record = { user: nsTokens.user, domain: nsTokens.domain, scope: nsTokens.scope ?? '', displayName: username, email: '' };
+  } else {
+   try {
+    const detected = await this.detectNsUserInfo(nsTokens.access_token, apiUrl, username, true);
+    record = { user: detected.user, domain: detected.domain, scope: detected.scope, displayName: detected.displayName, email: detected.email };
+   } catch (err) {
+    if (err instanceof UnverifiedIdentityError) {
+     logger.info('Access sign-in', { ...logBase, outcome: 'identity_unresolved', reason: 'no_verified_user_record' });
+     sendPage(res, 403, this.renderErrorPage(ACCESS_UNVERIFIED_COPY, 403));
+    } else {
+     logger.info('Access sign-in', { ...logBase, outcome: 'unavailable', reason: 'identity_lookup_failed' });
+     sendPage(res, 503, this.renderErrorPage('Unable to verify your account role. Please try again.', 503));
+    }
+    return undefined;
+   }
+  }
+  try {
+   const key = normalizeIdentity({ nsApiUrl: apiUrl, domain: record.domain, user: record.user, scope: record.scope });
+   return { ...record, key };
+  } catch {
+   logger.info('Access sign-in', { ...logBase, outcome: 'identity_unresolved', reason: 'identity_not_keyable' });
+   sendPage(res, 403, this.renderErrorPage(ACCESS_UNVERIFIED_COPY, 403));
+   return undefined;
+  }
+ }
+
+ /** The registry's decision for a sign-in (E1). A refusal sends its page and returns false. */
+private async admitRegistrySignIn(res: Response, pending: PendingAuthorization, identity: AccessIdentity, access: CausedAccessEnforcer): Promise<boolean> {
+  const view = await access.evaluate(identity);
+  const logBase = {
+   platform: identity.platform,
+   tenant: identity.tenant,
+   subject: identity.subject,
+   clientId: pending.clientId,
+   redirectUri: redirectForLog(pending.redirectUri),
+  };
+  if (view.kind === 'unavailable') {
+   logger.info('Access sign-in', { ...logBase, outcome: 'unavailable', ...unavailableFields(view) });
+   sendPage(res, 503, this.renderErrorPage(ACCESS_UNAVAILABLE_COPY, 503));
+   return false;
+  }
+  if (view.kind === 'deny') {
+   logger.info('Access sign-in', { ...logBase, outcome: 'deny', reason: logReason(view.reason) });
+   sendPage(res, 403, this.renderErrorPage(ACCESS_NOT_ENABLED_COPY, 403));
+   return false;
+  }
+  if (!view.policy.allowsRedirect(pending.redirectUri)) {
+   logger.info('Access sign-in', { ...logBase, outcome: 'platform_denied', reason: 'redirect_not_approved', revision: view.policy.revision });
+   sendPage(res, 403, this.renderErrorPage(ACCESS_APP_NOT_APPROVED_COPY, 403));
+   return false;
+  }
+  logger.info('Access sign-in', { ...logBase, outcome: 'allow', revision: view.policy.revision });
+  return true;
+ }
+
  private async finishSignIn(
   pending: PendingAuthorization,
   nsTokens: NsTokenResponse,
@@ -1061,7 +1212,21 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   let email = '';
   let verifiedUsername: string | undefined;
 
-  if (!nsUserRole || !whoScope || this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
+  let registryIdentity: RegistryIdentity | undefined;
+  if (this.access) {
+   const resolved = await this.resolveRegistryIdentity(res, pending, nsTokens, username);
+   if (resolved === undefined) return;
+   if (!(await this.admitRegistrySignIn(res, pending, resolved.key, this.access))) return;
+   registryIdentity = resolved;
+   whoUser = resolved.user;
+   whoDomain = resolved.domain;
+   whoScope = resolved.scope;
+   verifiedUsername = `${resolved.user}@${resolved.domain}`;
+   username = verifiedUsername;
+   nsUserRole = nsScopeToTier(resolved.scope);
+   displayName = resolved.displayName;
+   email = resolved.email;
+  } else if (!nsUserRole || !whoScope || this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
    try {
     const detected = await this.detectNsUserInfo(nsTokens.access_token, nsTokens.nsApiUrl, username, this.policyAppliesToPlatform(nsTokens.nsApiUrl));
     if (detected.verifiedIdentity && this.policyAppliesToPlatform(nsTokens.nsApiUrl)) {
@@ -1153,13 +1318,16 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    }
   }
   const safeExtra = { ...tokenExtra };
-  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind', 'authAssuranceSig']) delete safeExtra[key];
+  for (const key of ['authMethod', 'authNsTotp', 'authAt', 'authProviderSubjectHash', 'authProviderTenant', 'nsGrantKind', 'authAssuranceSig', ...ACCESS_EXTRA_KEYS]) delete safeExtra[key];
   Object.assign(safeExtra, {
    authMethod: assurance.method,
    authNsTotp: String(assurance.method === 'password' && assurance.nsTotp),
    authAt: assurance.authAt,
    nsGrantKind: assurance.nsGrantKind,
   });
+  if (registryIdentity !== undefined) {
+   Object.assign(safeExtra, { nsDomain: registryIdentity.domain, nsUser: registryIdentity.user, nsScope: registryIdentity.scope, authRedirectUri: pending.redirectUri });
+  }
   if (assurance.providerSubjectHash !== undefined) safeExtra.authProviderSubjectHash = assurance.providerSubjectHash;
   if (assurance.providerTenant !== undefined) safeExtra.authProviderTenant = assurance.providerTenant;
   if (verifiedUsername) signServerAssurance(safeExtra, verifiedUsername, normalizePlatformUrl(nsTokens.nsApiUrl ?? this.nsApiUrl), getSessionSecret());
@@ -1345,6 +1513,13 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
 
    const { familyId, generation } = lookup;
    const session = { ...lookup.session, extra: normalizeAssurance(lookup.session.extra) };
+   if (this.access !== undefined) {
+    const refusal = await this.sessionAccessRefusal(session, this.access);
+    if (refusal !== undefined) {
+     await this.store.sessions.revokeFamily(familyId);
+     throw new InvalidGrantError(refusal);
+    }
+   }
    // A retry returns an existing successor; never bypass policy on this path.
    // Refresh an expired upstream bearer before role verification.
    const checkAfterRefresh = lookup.status !== 'retry' && !!session.nsRefreshToken &&
@@ -1632,6 +1807,10 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
 
 
+  if (this.access !== undefined) {
+   const refusal = await this.sessionAccessRefusal(stored, this.access);
+   if (refusal !== undefined) throw new InvalidTokenError(refusal);
+  }
   const authInfo: AuthInfo = {
    token,
    clientId: stored.clientId,
@@ -1744,6 +1923,41 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
   }
  }
 
+
+ /**
+  * The registry's verdict on an existing session (E2 and E3). A session without a registry identity, or whose identity
+  * names another account than the one it runs as, signs in again. A denied tenant or an unapproved redirect refuses.
+  * An unavailable registry lets the session continue, so people stay signed in. Returns the message for a refusal, or
+  * undefined when the session may go on.
+  */
+private async sessionAccessRefusal(session: StoredToken, access: CausedAccessEnforcer): Promise<string | undefined> {
+  const extra = session.extra ?? {};
+  const identity = access.identityFromAuthInfo({ ...extra, nsApiUrl: session.nsApiUrl ?? this.nsApiUrl });
+  const logBase = { tenant: identity?.tenant, subject: identity?.subject, clientId: session.clientId };
+  if (identity === undefined || typeof extra.authRedirectUri !== 'string') {
+   logger.info('Access session', { ...logBase, outcome: 'reauth_required', reason: 'no_registry_identity' });
+   return 'Sign in again to continue.';
+  }
+  const principal = principalOf(session.nsUsername);
+  if (principal?.subject !== identity.subject) {
+   logger.info('Access session', { clientId: session.clientId, tenant: principal?.tenant, subject: principal?.subject, outcome: 'reauth_required', reason: 'principal_mismatch' });
+   return 'Sign in again to continue.';
+  }
+  const view = await access.evaluate(identity);
+  if (view.kind === 'unavailable') {
+   logger.info('Access session', { ...logBase, outcome: 'unavailable_pass', ...unavailableFields(view) });
+   return undefined;
+  }
+  if (view.kind === 'deny') {
+   logger.info('Access session', { ...logBase, outcome: 'deny', reason: logReason(view.reason) });
+   return 'Access to this connector is no longer approved. Sign in again.';
+  }
+  if (!view.policy.allowsRedirect(extra.authRedirectUri)) {
+   logger.info('Access session', { ...logBase, outcome: 'platform_denied', reason: 'redirect_not_approved' });
+   return 'This AI app is no longer approved. Sign in again.';
+  }
+  return undefined;
+ }
 
  private async issueTokens(
   clientId: string,
@@ -1920,7 +2134,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
    const user = (data?.user as string | undefined) ?? defaultUser;
    const domain = (data?.domain as string | undefined) ?? defaultDomain;
    const verifiedIdentity = typeof data?.user === 'string' && !!data.user.trim() && typeof data?.domain === 'string' && !!data.domain.trim();
-   if (strict && !verifiedIdentity) throw new Error('Unable to verify account identity');
+   if (strict && !verifiedIdentity) throw new UnverifiedIdentityError('Unable to verify account identity');
    const firstName = data?.['name-first-name'] ?? data?.['first-name'];
    const lastName = data?.['name-last-name'] ?? data?.['last-name'];
    const displayName = [firstName, lastName].filter(Boolean).join(' ') || data?.name || data?.description || user;
@@ -1937,7 +2151,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
       timeout: 15000,
      });
      const keyData = keyRes.data;
-     if (strict) throw new Error('API key does not establish a verified user identity');
+     if (strict) throw new UnverifiedIdentityError('API key does not establish a verified user identity');
      const scope = (keyData?.['user-scope'] ?? keyData?.scope ?? '') as string;
      const role = nsScopeToTier(scope);
      return {
