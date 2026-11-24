@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Optional access registry. Set `MCP_ACCESS_REGISTRY_URL` and a registry decides, for each signed-in person, which accounts may sign in, from which AI apps, which tools they may use, whether they may write, and which content kinds the connector refuses: call recordings, transcripts, voicemail, message text, AI call summaries and fax pages. The registry can only narrow what the environment allows, and it fails closed. Related variables: `MCP_ACCESS_REGISTRY_AUTH`, `MCP_ACCESS_REGISTRY_TOKEN`, `MCP_ACCESS_REGISTRY_AUDIENCE`, `MCP_ACCESS_REGISTRY_CONNECTOR`, `MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS` and `MCP_ACCESS_REGISTRY_TIMEOUT_MS`. It needs the HTTP transport, and `/health` reports `accessRegistry: enforced` while it is on. See `docs/access-registry.md`.
+- `scripts/fake-access-registry.mjs`, a programmable registry for tests, and a `registry` leg in `scripts/consumer-e2e.mjs` that runs the packed package against it.
+
 ### Changed
 
 - MFA challenges are single-use, expire ten minutes after the first prompt, and allow at most five attempts. Sign-in assurance is stored with the session, and `/health` reports sign-in options.
@@ -13,6 +18,11 @@ All notable changes to this project will be documented in this file.
 - A NetSapiens password grant that returns a limited token (`scope` or the token's `user_scope` is `mfa_required`) now shows the MFA prompt instead of signing the person in. A grant without a usable token shows "Authentication failed" and issues no code.
 - Each account gets ten MFA passcode submissions an hour, whatever the client IP, across replicas that share one store. Each process with the in-memory store has its own budget. The eleventh submission in that hour gets 429 until the window resets. A store failure gets 503 before NetSapiens is called, and the challenge stays usable.
 - Library: `RateLimitBucket` includes `mfa_account`.
+- A hook or a resumed sign-in that supplies `nsDomain`, `nsUser`, `nsScope` or `authRedirectUri` now has those values dropped, in every mode. Nothing read them before.
+- Strict identity failures are an `Error` subclass with the same message.
+- `createApp` with a custom `authProvider` and `MCP_ACCESS_REGISTRY_URL` set throws a `ConfigError`.
+- A request whose path value is empty or a dot segment (`.` or `..`, including percent-encoded forms) is refused before any HTTP request, with `success: false` and the message `The request was not sent`. Every other request is unchanged. In registry mode, a path value with a separator or a control character is refused as well.
+- In registry mode, NetSapiens requests are sent with redirects disabled, and a 3xx answer is treated as an error.
 
 ## 3.1.0
 
