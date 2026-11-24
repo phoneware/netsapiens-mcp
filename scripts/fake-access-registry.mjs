@@ -10,6 +10,9 @@
  * critical member, an oversize body and a redirect. Nothing is simulated beyond the contract: the connector does the
  * checks, and this server only answers.
  *
+ * `allowAll` answers allow with the default policy for every key that has no fault. It is the positive control for the
+ * e2e registry leg: a leg that still passes when every decision is allow is not proving refusals.
+ *
  * Every request is appended to `requests`, rejected ones included, with the outcome it was given. Bodies and bearer
  * tokens are not logged.
  */
@@ -78,15 +81,17 @@ function revisionOfIfNoneMatch(header) {
 /**
  * Starts the fake registry on a loopback port.
  *
- * @param {{ bearer?: string | null, latencyMs?: number, hostname?: string }} [options]
+ * @param {{ bearer?: string | null, latencyMs?: number, hostname?: string, allowAll?: boolean }} [options]
  *   bearer: the token every request must present, or null to accept any request.
  *   latencyMs: a delay before every answer.
+ *   allowAll: answer allow with the default policy for every key that has no fault.
  */
 export async function startFakeAccessRegistry(options = {}) {
   const hostname = options.hostname ?? '127.0.0.1';
   const state = {
     bearer: options.bearer ?? null,
     latencyMs: options.latencyMs ?? 0,
+    allowAll: options.allowAll ?? false,
     decisions: new Map(),
     faults: new Map(),
   };
@@ -139,9 +144,7 @@ export async function startFakeAccessRegistry(options = {}) {
 
     const key = keyOf(query.tenant, query.subject);
     const spec = state.faults.get(key) ??
-      state.decisions.get(key) ??
-      state.decisions.get(keyOf(query.tenant, '*')) ??
-      denyDecision();
+      (state.allowAll ? allowDecision({ ttlSeconds: 5 }) : state.decisions.get(key) ?? state.decisions.get(keyOf(query.tenant, '*')) ?? denyDecision());
     entry.ifNoneMatch = req.headers['if-none-match'] ?? null;
 
     if (spec.kind === 'fault') return applyFault(spec, entry, res, finish);

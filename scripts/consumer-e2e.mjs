@@ -17,6 +17,8 @@
  *   - mfa: exercises password challenge, single-use retries and MCP connection against a fake NetSapiens.
  *   - library: tsc --noEmit on consumer TS file importing from 'netsapiens-mcp/lib'.
  *   - registry: main() with the access registry configured, against the fake NetSapiens and the fake registry. Every refusal is asserted with zero NetSapiens requests; the leg needs the 'registry' name and no other leg.
+ *       REGISTRY_E2E_COLLECT=1 keeps the registry leg going past a failed row and lists every row that failed (revert-proof runs). The default stops at the first failure.
+ *       REGISTRY_E2E_ALLOW_ALL=1 makes the fake registry allow everything (the positive control: refusal rows must then fail).
  */
 
 import { spawn, execSync } from 'node:child_process';
@@ -90,10 +92,19 @@ function parseArgs() {
 }
 
 function pass(leg, assertion) {
+  if (leg === 'registry' && collectedRegistryFailures.includes(assertion)) return;
   console.log(`PASS ${leg} ${assertion}`);
 }
 
+// REGISTRY_E2E_COLLECT=1 keeps the registry leg going after a failed row, so one run lists every row a change breaks.
+// The default stops at the first failure.
+const collectedRegistryFailures = [];
 function fail(leg, assertion, reason) {
+  if (leg === 'registry' && process.env.REGISTRY_E2E_COLLECT === '1') {
+    console.log(`FAIL ${leg} ${assertion}: ${reason}`);
+    collectedRegistryFailures.push(assertion);
+    return;
+  }
   throw new Error(`FAIL ${leg} ${assertion}: ${reason}`);
 }
 
@@ -745,7 +756,7 @@ async function registryLeg(tempDir) {
 
   // Every decision carries a short cache lifetime, so a change lands within the test. A subject with no decision is
   // refused as not enrolled, which is the registry's own answer for a domain it does not serve.
-  const reg = await startFakeAccessRegistry({ bearer: REGISTRY_BEARER });
+  const reg = await startFakeAccessRegistry({ bearer: REGISTRY_BEARER, allowAll: process.env.REGISTRY_E2E_ALLOW_ALL === '1' });
   const decide = (revision, overrides) => allowDecision({ ttlSeconds: REGISTRY_TTL_SECONDS, revision, policy: policy(overrides) });
   const allContentDenied = Object.fromEntries(REGISTRY_KINDS.map((kind) => [kind, 'deny']));
   reg.setDecision('example.com', 'alice@example.com', decide('alice-1', {
@@ -1251,6 +1262,7 @@ async function main() {
     if (opts.legs.includes('registry')) {
       console.log('Running leg: registry');
       await registryLeg(tempDir);
+      if (collectedRegistryFailures.length > 0) throw new Error(`registry leg: ${collectedRegistryFailures.length} row(s) failed`);
     }
 
     // -------------------------------------------------------------------------
