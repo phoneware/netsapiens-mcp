@@ -15,6 +15,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   'call-term-call-id': { class: 'record_id', recordType: 'call' },
   'call-parent-call-id': { class: 'record_id', recordType: 'call' },
   'call-through-call-id': { class: 'record_id', recordType: 'call' },
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
   ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
   'prefilled-transcription-api': { class: 'internal' },
@@ -54,6 +55,42 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   onnet: { class: 'metadata' },
   uid: { class: 'record_id', recordType: 'user' },
  },
+
+// CDR variants with the same call-intelligence fields as CdrD. The user-scope call history is CdrU.
+CdrDBase: {
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrGBase: {
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrG: {
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrUBase: {
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrU: {
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+// CDR schedule export: the file link is a signed download of transcripts.
+CdrExport: {
+  'file-access-url': { class: 'content', kind: 'transcript', media: 'document' },
+},
 
  // Active Calls
  ActiveCall: {
