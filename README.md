@@ -102,6 +102,20 @@ The unauthenticated `/health` endpoint reports available sign-in methods, effect
 For a direct listener, forwarded IP headers are ignored. Set `MCP_TRUST_PROXY_HOPS=1` only when every request reaches the server through one trusted proxy that controls those headers.
 Sign-in attempts share a store-backed limit across server instances. If the store cannot count an attempt, sign-in returns 503. Configure Firestore TTL on `<namespace>_rate_limits.ttlAt`; SQLite upgrades its database to schema 4, which older releases cannot open. Before upgrading SQLite, take and verify a SQLite-aware backup with writes quiesced. Roll back with a schema-4-compatible binary or restore that backup, accepting that writes made after the backup are lost.
 
+### Optional sign-in policy
+
+HTTP operators can set `MCP_SECOND_FACTOR_POLICY` to this JSON object:
+
+```json
+{"tiers":["domain_admin","reseller","system_admin"],"acceptProviderSignIn":true,"acceptPastedToken":false,"applyToExistingSessions":true}
+```
+
+The policy is disabled when unset and applies only to the primary `NETSAPIENS_API_URL` platform. These tiers select the exact NetSapiens scopes Office Manager, Reseller, and Super User, not Site Manager, Domain Admin, or Call Center Supervisor. Unknown scope or an unavailable identity lookup fails closed without revoking the session.
+
+Selected accounts must complete an explicitly identified NetSapiens authenticator challenge, or use an independently implemented trusted provider sign-in. Trusting provider sign-in is not evidence that the provider performed MFA. Pasted tokens are refused for these scopes with the configuration above. Existing sessions for selected scopes without signed server assurance must sign in again, including sessions issued before this policy existed.
+
+This option rejects malformed configuration and cannot be combined with a custom HTTP auth provider. Rotating `MCP_SESSION_SECRET` invalidates stored assurance signatures, so affected privileged users must sign in again.
+
 ## 🔌 Connecting MCP Clients
 
 ### Claude Desktop
