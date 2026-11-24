@@ -171,10 +171,22 @@ function failure(errorClass: RegistryDecisionErrorClass, message: string): Parse
   return { ok: false, errorClass, message };
 }
 
-/** Paths and messages only. Received values are never echoed into errors or logs. */
-function describeIssues(issues: ReadonlyArray<{ readonly path: ReadonlyArray<PropertyKey>; readonly message: string }>): string {
+/** Identifier-shaped text only: a schema member name, a zod issue code, or an array position. */
+const LABEL = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+function label(part: PropertyKey): string {
+  if (typeof part === 'number') return String(part);
+  if (typeof part === 'string' && LABEL.test(part)) return part;
+  return '?';
+}
+
+/**
+ * Describes each issue by its path and code only. zod messages are never used: zod 3 quotes the received value in
+ * some of them, and a registry value must not reach an error string or a log.
+ */
+function describeIssues(issues: ReadonlyArray<{ readonly path: ReadonlyArray<PropertyKey>; readonly code: string }>): string {
   return issues
     .slice(0, 3)
-    .map((issue) => `${issue.path.map(String).join('.') || '(root)'}: ${issue.message}`)
+    .map((issue) => `${issue.path.map(label).join('.') || '(root)'}: ${label(issue.code)}`)
     .join('; ');
 }

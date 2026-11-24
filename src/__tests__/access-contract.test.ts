@@ -275,3 +275,21 @@ describe('wire fixtures', () => {
     });
   });
 });
+
+describe('error messages carry no registry values', () => {
+  const HOSTILE = 'Bearer sk-live-SECRET\nINJECTED';
+
+  it.each([
+    ['policy.access', allowWith({ policy: policyWith({ access: HOSTILE }) })],
+    ['a content kind', allowWith({ policy: policyWith({ content: { ...CONTENT, transcript: HOSTILE } }) })],
+    ['unclassifiedOutput', allowWith({ policy: policyWith({ unclassifiedOutput: HOSTILE }) })],
+    ['decision', allowWith({ decision: HOSTILE })],
+  ])('a hostile value in %s is not echoed in the error', (_where, body) => {
+    const result = parseRegistryDecision(body);
+    expect(result.ok).toBe(false);
+    const message = result.ok ? '' : result.message;
+    expect(message).not.toContain('SECRET');
+    expect(message).not.toContain('Bearer');
+    expect(message).toMatch(/^[\x20-\x7e]+$/);
+  });
+});

@@ -106,18 +106,18 @@ function globMatches(segments: Glob, name: string): boolean {
 function compilePatternList(entries: readonly string[], side: 'allow' | 'deny'): PatternList {
   const groups = new Set<string>();
   const globs: Glob[] = [];
-  for (const raw of entries) {
+  for (const [index, raw] of entries.entries()) {
     const pattern = raw.trim();
     if (pattern === '') {
-      throw new AccessPolicyError('invalid_entry', `tools.${side} contains an empty entry`);
+      throw new AccessPolicyError('invalid_entry', `tools.${side}[${index}] is blank`);
     }
     if (pattern.startsWith('@')) {
       if (KNOWN_GROUPS[pattern] === true) {
         groups.add(pattern);
       } else if (side === 'deny') {
-        throw new AccessPolicyError('unknown_group', `tools.deny names unknown group ${pattern}`);
+        throw new AccessPolicyError('unknown_group', `tools.deny[${index}] names an unknown group`);
       } else {
-        logger.warn('Access policy allow entry names an unknown group and matches nothing', { group: pattern });
+        logger.warn('Access policy allow entry names an unknown group and matches nothing', { index });
       }
       continue;
     }
