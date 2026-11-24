@@ -4,10 +4,18 @@
  * The client does not decide access. It asks the registry, caches each answer, and reports whether the answer it
  * returns is fresh, revalidated, last known good, or unavailable. A caller treats unavailable as closed.
  * Nothing here reads the environment: config.ts does that and passes plain values in.
+ *
+ * A text body is parsed with parseRegistryDecisionText, and an embedder's parsed value with parseRegistryDecisionValue.
  */
 import { DEFAULT_ACCESS_REGISTRY_MAX_STALE_SECONDS, DEFAULT_ACCESS_REGISTRY_TIMEOUT_MS } from './config.js';
 import type { AccessRegistryAuthConfig, EnabledAccessRegistryConfig } from './config.js';
-import { parseRegistryDecision, type AccessDecisionV1, type RegistryDecisionErrorClass } from './contract.js';
+import {
+  parseRegistryDecisionText,
+  parseRegistryDecisionValue,
+  type AccessDecisionV1,
+  type ParseRegistryDecisionResult,
+  type RegistryDecisionErrorClass,
+} from './contract.js';
 import type { AccessTier } from './types.js';
 import { logger } from '../utils/logger.js';
 
@@ -65,9 +73,14 @@ export interface RegistryResult {
   readonly errorClass?: RegistryErrorClass;
 }
 
-/** What one registry request returned, before the client judges it. */
+/**
+ * What one registry request returned, before the client judges it. A `text` body is the body of a 200 response, which
+ * the client parses with parseRegistryDecisionText. A `value` is an already-parsed JSON value an embedder supplies,
+ * which the client checks with parseRegistryDecisionValue.
+ */
 export type RegistryResponse =
-  | { readonly kind: 'decision'; readonly body: string }
+  | { readonly kind: 'text'; readonly body: string }
+  | { readonly kind: 'value'; readonly value: unknown }
   | { readonly kind: 'not_modified' }
   | { readonly kind: 'failure'; readonly errorClass: RegistryErrorClass; readonly httpStatus?: number };
 
@@ -81,7 +94,7 @@ export interface RegistryRequest {
 
 /**
  * Makes one registry request. The HTTP transport is the default, and library embedders may supply their own.
- * A throw counts as a network error.
+ * A throw counts as a network error. A decision arrives as text or as a value; see RegistryResponse.
  */
 export type FetchDecision = (request: RegistryRequest) => Promise<RegistryResponse>;
 
@@ -121,7 +134,7 @@ interface Outcome {
 }
 
 type Judgement =
-  | { readonly ok: true; readonly httpStatus: number; readonly entry: CacheEntry }
+  | { readonly ok: true; readonly httpStatus?: number; readonly entry: CacheEntry }
   | { readonly ok: false; readonly errorClass: RegistryErrorClass; readonly httpStatus?: number };
 
 /** A bounded map that evicts the least recently used key once it is full. */
@@ -298,7 +311,7 @@ export class RegistryClient {
         this.lastWarning.set(id, at);
       }
     }
-    // Registry text is never logged verbatim. A reason outside the plain identifier shape is reported as unrecognised.
+    // The reason is the parser's sanitized copy. Only plain identifier text is logged; anything else is unrecognised.
     const { decision } = outcome;
     let reason: string | undefined;
     if (decision?.decision === 'deny') reason = SAFE_REASON.test(decision.reason) ? decision.reason : 'unrecognised';
@@ -335,7 +348,7 @@ export interface HttpFetchOptions {
 
 /**
  * The HTTP transport. Redirects are never followed, so the bearer token only goes to the configured registry.
- * Every response is mapped to a RegistryResponse, and no body text leaves this function except as a decision body.
+ * Every response is mapped to a RegistryResponse. A 200 body leaves as text for the client to parse; no other body is kept.
  */
 export function createHttpFetchDecision(options: HttpFetchOptions): FetchDecision {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -402,16 +415,19 @@ export function createAccessRegistryClient(
   });
 }
 
-/** Judges one transport response against the cached answer it may revalidate. */
+/**
+ * Judges one response against the cached answer it may revalidate. A parser result is judged by its errorClass,
+ * never by its message: the message is written for people, so its wording can change.
+ */
 function interpret(response: RegistryResponse, previous: CacheEntry | undefined, startedAt: number): Judgement {
-  if (response.kind === 'decision') {
+  if (response.kind === 'text') {
     if (Buffer.byteLength(response.body, 'utf8') > MAX_BODY_BYTES) {
       return { ok: false, errorClass: 'oversize', httpStatus: 200 };
     }
-    const parsed = parseRegistryDecision(response.body);
-    if (!parsed.ok) return { ok: false, errorClass: parsed.errorClass, httpStatus: 200 };
-    const freshForMs = Math.min(MAX_TTL_SECONDS, Math.max(MIN_TTL_SECONDS, parsed.decision.ttlSeconds)) * 1000;
-    return { ok: true, httpStatus: 200, entry: { decision: parsed.decision, validatedAt: startedAt, freshForMs } };
+    return judgeDecision(parseRegistryDecisionText(response.body), 200, startedAt);
+  }
+  if (response.kind === 'value') {
+    return judgeDecision(parseRegistryDecisionValue(response.value), undefined, startedAt);
   }
   if (response.kind === 'not_modified') {
     // A 304 answers only the conditional request this client sends, and that request needs a cached answer.
@@ -419,6 +435,13 @@ function interpret(response: RegistryResponse, previous: CacheEntry | undefined,
     return { ok: true, httpStatus: 304, entry: { ...previous, validatedAt: startedAt } };
   }
   return { ok: false, errorClass: response.errorClass, httpStatus: response.httpStatus };
+}
+
+/** Turns a parser result into a cache entry, or into the error class the parser reported. */
+function judgeDecision(parsed: ParseRegistryDecisionResult, httpStatus: number | undefined, startedAt: number): Judgement {
+  if (!parsed.ok) return { ok: false, errorClass: parsed.errorClass, httpStatus };
+  const freshForMs = Math.min(MAX_TTL_SECONDS, Math.max(MIN_TTL_SECONDS, parsed.decision.ttlSeconds)) * 1000;
+  return { ok: true, httpStatus, entry: { decision: parsed.decision, validatedAt: startedAt, freshForMs } };
 }
 
 function decisionUrl(baseUrl: string, key: RegistryKey): string {
@@ -440,7 +463,7 @@ async function readRegistryResponse(response: Response, signal: AbortSignal): Pr
     if (response.status === 200) {
       const body = await readBounded(response, MAX_BODY_BYTES);
       if (body === undefined) return { kind: 'failure', errorClass: 'oversize', httpStatus: 200 };
-      return { kind: 'decision', body };
+      return { kind: 'text', body };
     }
     await discard(response);
     if (response.status === 304) return { kind: 'not_modified' };

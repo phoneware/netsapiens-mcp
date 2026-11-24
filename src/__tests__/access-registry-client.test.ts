@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccessRegistryAuthConfig, EnabledAccessRegistryConfig } from '../access/config.js';
+import { normalizeIdentity } from '../access/identity.js';
 import {
   createAccessRegistryClient,
   createHttpFetchDecision,
@@ -43,6 +44,9 @@ function allowBody(patch: Record<string, unknown> = {}): Record<string, unknown>
 function denyBody(patch: Record<string, unknown> = {}): Record<string, unknown> {
   return { ...fixture('deny.json'), ...patch };
 }
+
+/** The allow decision as the JSON text the registry sends on the wire. */
+const DECISION_TEXT = JSON.stringify(allowBody());
 
 function json(status: number, body: unknown): Response {
   const text = typeof body === 'string' ? body : JSON.stringify(body);
@@ -170,6 +174,7 @@ const ERROR_SCENARIOS: readonly ErrorScenario[] = [
   { name: 'a network failure', errorClass: 'network', respond: () => Promise.reject(new TypeError('fetch failed')) },
   { name: 'a body that is not JSON', errorClass: 'invalid_json', respond: () => json(200, 'not json {') },
   { name: 'a body that breaks the contract', errorClass: 'contract', respond: () => json(200, allowBody({ version: 2 })) },
+  { name: 'a body that is a JSON string literal holding a decision', errorClass: 'contract', respond: () => json(200, JSON.stringify(DECISION_TEXT)) },
   { name: 'a critical member', errorClass: 'critical', respond: () => json(200, allowBody({ critical: ['policy.v2'] })) },
   { name: 'an oversize body', errorClass: 'oversize', respond: () => json(200, { padding: 'x'.repeat(64 * 1024) }) },
 ];
@@ -402,6 +407,34 @@ describe('registry client: single flight', () => {
   });
 });
 
+describe('registry client: deny reasons', () => {
+  const COLD: RegistryQuery = { ...QUERY, subject: 'cold@example.com' };
+
+  it.each([
+    ['an empty reason', '', 'unspecified'],
+    ['a 234-character reason', 'r'.repeat(234), 'r'.repeat(64)],
+  ])('serves a deny with %s as a deny, never as a registry error', async (_description, reason, sanitized) => {
+    const { client, network, clock } = setup();
+    network.respond = () => json(200, denyBody({ reason }));
+    const cold = await client.decide(COLD);
+    expect(cold).toMatchObject({ source: 'fresh', decision: { decision: 'deny', reason: sanitized } });
+    expect(cold.errorClass).toBeUndefined();
+
+    network.respond = () => json(200, allowBody({ revision: 'rev-allow' }));
+    await client.decide(QUERY);
+    clock.now += MINUTE + SECOND;
+    network.respond = () => json(200, denyBody({ reason, revision: 'rev-deny' }));
+    const warm = await client.decide(QUERY);
+    expect(warm).toMatchObject({
+      source: 'revalidated',
+      decision: { decision: 'deny', reason: sanitized, revision: 'rev-deny' },
+    });
+    expect(warm.errorClass).toBeUndefined();
+    expect(await client.decide(QUERY)).toMatchObject({ source: 'fresh', decision: { decision: 'deny', reason: sanitized } });
+    expect(network.decisions()).toHaveLength(3);
+  });
+});
+
 describe('registry client: requests and credentials', () => {
   it('sends the bearer token and the percent-encoded query to the decision endpoint', async () => {
     const { client, network } = setup();
@@ -415,6 +448,41 @@ describe('registry client: requests and credentials', () => {
     expect(sent.headers.Accept).toBe('application/json');
     expect(sent.headers['If-None-Match']).toBeUndefined();
     expect(sent.redirect).toBe('manual');
+  });
+
+  it('builds the request query from the identity fields, which are lowercase ASCII', async () => {
+    const identity = normalizeIdentity({
+      nsApiUrl: 'https://PBX.Example.com/',
+      domain: ' Example.COM ',
+      user: 'Jane.Doe',
+      scope: 'Office Manager',
+    });
+    expect(identity).toMatchObject({
+      platform: 'https://pbx.example.com',
+      tenant: 'example.com',
+      subject: 'jane.doe@example.com',
+      role: 'Office Manager',
+      tier: 'domain_admin',
+    });
+    const { client, network } = setup();
+    network.respond = () => json(200, allowBody());
+    await client.decide({
+      platform: identity.platform,
+      tenant: identity.tenant,
+      subject: identity.subject,
+      role: identity.role,
+      tier: identity.tier,
+    });
+    const query = network.decisions()[0].url.searchParams;
+    expect(query.get('platform')).toBe(identity.platform);
+    expect(query.get('tenant')).toBe(identity.tenant);
+    expect(query.get('subject')).toBe(identity.subject);
+    expect(query.get('role')).toBe(identity.role);
+    expect(query.get('tier')).toBe(identity.tier);
+    expect(query.get('tenant')).toBe('example.com');
+    expect(query.get('subject')).toBe('jane.doe@example.com');
+    expect(query.get('tenant')).toMatch(/^[!-~]+$/);
+    expect(query.get('subject')).toMatch(/^[!-~]+$/);
   });
 
   it('sends an empty role as an empty value', async () => {
@@ -590,6 +658,20 @@ describe('registry client: logging', () => {
     });
   });
 
+  it.each([
+    ['an empty reason', '', 'unspecified'],
+    ['a reason with a space in it', `tenant ${'x'.repeat(20)}`, 'unrecognised'],
+    ['a reason with a non-ASCII character', 'caf\u00e9-tenant', 'unrecognised'],
+    ['a 234-character reason of identifier characters', 'r'.repeat(234), 'r'.repeat(64)],
+  ])('logs the sanitized reason of a deny for %s', async (_description, reason, logged) => {
+    const logs = captureLogs();
+    const { client, network } = setup();
+    network.respond = () => json(200, denyBody({ reason }));
+    await client.decide(QUERY);
+    const entry = logs.entries.find((item) => item.level === 'info' && item.message === 'Access registry');
+    expect(entry?.context).toMatchObject({ decision: 'deny', reason: logged });
+  });
+
   it('warns once per key per minute and logs the repeats at debug', async () => {
     const logs = captureLogs();
     const { client, network, clock } = setup();
@@ -642,7 +724,7 @@ describe('registry client: construction', () => {
       timeoutMs: 3000,
     };
     const embedded = createAccessRegistryClient(config, {
-      fetchDecision: async () => ({ kind: 'decision', body: JSON.stringify(allowBody()) }),
+      fetchDecision: async () => ({ kind: 'value', value: allowBody() }),
     });
     expect(await embedded.decide(QUERY)).toMatchObject({ source: 'fresh', decision: { decision: 'allow' } });
     const broken = createAccessRegistryClient(config, {
@@ -651,6 +733,30 @@ describe('registry client: construction', () => {
       },
     });
     expect(await broken.decide(QUERY)).toEqual({ source: 'unavailable', errorClass: 'network' });
+  });
+
+  it('accepts an embedder value that is a parsed decision', async () => {
+    const client = new RegistryClient({
+      connector: CONNECTOR,
+      fetchDecision: async () => ({ kind: 'value', value: allowBody() }),
+      now: () => START,
+    });
+    expect(await client.decide(QUERY)).toMatchObject({ source: 'fresh', decision: { decision: 'allow' } });
+  });
+
+  it.each([
+    ['a JSON string holding a valid decision', DECISION_TEXT, 'contract'],
+    ['a decision that breaks the contract', allowBody({ version: 2 }), 'contract'],
+    ['a decision that names a critical member', allowBody({ critical: ['policy.v2'] }), 'critical'],
+    ['a JSON array holding one decision', [allowBody()], 'contract'],
+    ['null', null, 'contract'],
+  ])('refuses an embedder value that is %s as a registry error', async (_description, value, errorClass) => {
+    const client = new RegistryClient({
+      connector: CONNECTOR,
+      fetchDecision: async () => ({ kind: 'value', value }),
+      now: () => START,
+    });
+    expect(await client.decide(QUERY)).toEqual({ source: 'unavailable', errorClass });
   });
 
   it('builds the HTTP client from an enabled configuration, with its connector and bearer token', async () => {
