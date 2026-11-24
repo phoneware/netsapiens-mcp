@@ -219,7 +219,7 @@ Operations are checked before a request leaves the client. An operation is refus
 
 - its content kind is denied, or it is unreviewed and any kind is denied;
 - the access mode is `read` and the request is not a GET, or the NetSapiens action is not a read action;
-- `@destructive` is denied, or the mode is `read`, and the request is a DELETE.
+- `@destructive` is denied, or the mode is `read`, and the request is a DELETE. A NetSapiens action counts as a DELETE when the reviewed destructive list names it, or when its name carries a destructive verb such as delete, remove or purge.
 
 ### Groups
 
