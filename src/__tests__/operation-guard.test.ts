@@ -12,6 +12,8 @@ import { CONTENT_OPERATIONS, UNREVIEWED_CONTENT_OPERATIONS } from '../governance
 import type { ContentKind } from '../governance/types.js';
 import { createGuardedClient, createOperationGate, OperationRefusedError } from '../netsapiens/guarded-client.js';
 import { NetSapiensClient } from '../netsapiens-client.js';
+import { normalizeOperationKey } from '../netsapiens/operation-key.js';
+import { expandPathTemplate, operationKeyOfFinalPath } from '../netsapiens/request-path.js';
 import { CURATED_CATALOG } from '../tools/curated/catalog.js';
 import { textResult, type CuratedTool } from '../tools/curated/types.js';
 import { handleToolCall } from '../tools/index.js';
@@ -54,17 +56,49 @@ function gateFor(content: Record<ContentKind, 'allow' | 'deny'>) {
   return createOperationGate({ policy, foreignStrip: new Set<ContentKind>() });
 }
 
-/** Issues the request a table key names, with placeholder values, through a guarded client. */
-async function issue(guarded: NetSapiensClient, key: string): Promise<unknown> {
+/** A request built from a table key, and what the recording client records for it. */
+interface KeyedRequest {
+  readonly recorded: string;
+  send(guarded: NetSapiensClient): Promise<unknown>;
+}
+
+/**
+ * The request a table key names, with a neutral value at every placeholder. A whole-segment {} is keyed as {}, so it
+ * takes a fresh name. A partial placeholder such as {k}.txt is part of the key's text, so it keeps its name. A key the
+ * builder cannot express throws here, so it is reported rather than skipped.
+ */
+function requestFor(key: string): KeyedRequest {
   if (key.startsWith('v1:')) {
     const [, object, action] = key.split(':');
-    return guarded.v1Call(object, action, {});
+    return { recorded: key, send: (guarded) => guarded.v1Call(object, action, {}) };
   }
   const [method, path] = key.split(' ');
-  let index = 0;
-  const pathTemplate = path.replace(/\{\}/g, () => `{p${index++}}`);
-  const pathParams = Object.fromEntries(Array.from({ length: index }, (_, i) => [`p${i}`, 'x']));
-  return guarded.request({ method, pathTemplate, pathParams });
+  const pathParams: Record<string, string> = {};
+  let fresh = 0;
+  const pathTemplate = path
+    .split('/')
+    .map((segment) => {
+      if (segment === '{}') {
+        const name = `p${fresh++}`;
+        pathParams[name] = 'x';
+        return `{${name}}`;
+      }
+      for (const [, name] of segment.matchAll(/\{([^{}]+)\}/g)) pathParams[name] = 'x';
+      return segment;
+    })
+    .join('/');
+  if (pathTemplate.includes('{}') || normalizeOperationKey(method, pathTemplate) !== key) {
+    throw new Error(`the oracle cannot express the operation key ${key}`);
+  }
+  return { recorded: `${method} ${pathTemplate}`, send: (guarded) => guarded.request({ method, pathTemplate, pathParams }) };
+}
+
+/** Resolves to the rejection an operation raises, or to undefined when it resolves. */
+function refusalOf(pending: Promise<unknown>): Promise<unknown> {
+  return pending.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
 }
 
 function stringRecord(value: unknown): Record<string, string> | undefined {
@@ -122,26 +156,44 @@ afterAll(() => {
 describe('E8 the gate refuses every content operation whose kind is denied (table oracle)', () => {
   for (const kind of KINDS) {
     it.each(Object.keys(CONTENT_OPERATIONS[kind]))(`refuses %s under a denied ${kind}, with zero requests, and sends it when allowed`, async (key) => {
-      const refusedRaw = recordingClient();
-      await expect(issue(createGuardedClient(refusedRaw.client, undefined, { gate: gateFor(denying(kind)) }), key)).rejects.toBeInstanceOf(
-        OperationRefusedError,
-      );
-      expect(refusedRaw.calls).toEqual([]);
+      const request = requestFor(key);
+      const refused = recordingClient();
+      const error = await refusalOf(request.send(createGuardedClient(refused.client, undefined, { gate: gateFor(denying(kind)) })));
+      expect(error).toBeInstanceOf(OperationRefusedError);
+      expect((error as OperationRefusedError).reason).toBe(`content:${kind}`);
+      expect(refused.calls).toEqual([]);
 
-      const allowedRaw = recordingClient();
-      await issue(createGuardedClient(allowedRaw.client, undefined, { gate: gateFor({ ...ALL_CONTENT_ALLOWED }) }), key);
-      expect(allowedRaw.calls.length).toBe(1);
+      const allowed = recordingClient();
+      await request.send(createGuardedClient(allowed.client, undefined, { gate: gateFor({ ...ALL_CONTENT_ALLOWED }) }));
+      expect(allowed.calls).toEqual([request.recorded]);
     });
   }
 
-  it.each(Object.keys(UNREVIEWED_CONTENT_OPERATIONS))('refuses the unreviewed %s under any single denied kind, with zero requests', async (key) => {
-    for (const kind of KINDS) {
-      const raw = recordingClient();
-      await expect(issue(createGuardedClient(raw.client, undefined, { gate: gateFor(denying(kind)) }), key)).rejects.toBeInstanceOf(
-        OperationRefusedError,
-      );
-      expect(raw.calls).toEqual([]);
-    }
+  it.each(Object.keys(UNREVIEWED_CONTENT_OPERATIONS))(
+    'refuses the unreviewed %s under any single denied kind, with zero requests, and sends it when every kind is allowed',
+    async (key) => {
+      const request = requestFor(key);
+      for (const kind of KINDS) {
+        const raw = recordingClient();
+        const error = await refusalOf(request.send(createGuardedClient(raw.client, undefined, { gate: gateFor(denying(kind)) })));
+        expect(error).toBeInstanceOf(OperationRefusedError);
+        expect((error as OperationRefusedError).reason).toBe(`content:${kind}`);
+        expect(raw.calls).toEqual([]);
+      }
+      const allowed = recordingClient();
+      await request.send(createGuardedClient(allowed.client, undefined, { gate: gateFor({ ...ALL_CONTENT_ALLOWED }) }));
+      expect(allowed.calls).toEqual([request.recorded]);
+    },
+  );
+});
+
+describe('E8 partial placeholders expand by name and key by their template text', () => {
+  it('expands {k}.txt, keys the final path as the listed key, and lists that key under a content kind', () => {
+    const template = '/sipflow/download/{k}.txt';
+    const expanded = expandPathTemplate(template, { k: 'a b' });
+    expect(expanded).toBe('/sipflow/download/a%20b.txt');
+    expect(operationKeyOfFinalPath('GET', template, expanded)).toBe('GET /sipflow/download/{k}.txt');
+    expect(KINDS.some((kind) => 'GET /sipflow/download/{k}.txt' in CONTENT_OPERATIONS[kind])).toBe(true);
   });
 });
 

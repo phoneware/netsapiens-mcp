@@ -1,8 +1,9 @@
 /**
  * Route module for fake NetSapiens: call detail records (CDR lists).
  *
- * Each row carries metadata, call-intelligence fields (AI summary and topics, classified as ai_summary), an internal
- * field (prefilled-transcription-api) and a field no classification names, so a projection test sees each removed.
+ * Each row carries metadata, call-intelligence fields (the AI summary, the topics and the sentiment group, all classified
+ * as ai_summary), an internal field (prefilled-transcription-api) and a field no classification names, so a projection
+ * test sees each removed.
  * GET /domains/{domain}/cdrs
  * GET /domains/{domain}/users/{user}/cdrs
  */
@@ -18,6 +19,18 @@ export const CDR_FIXTURE_ROW = {
   'call-intelligence-summary': 'Customer asked about the March invoice.',
   'call-intelligence-topics-top': 'billing',
   'call-intelligence-percent-positive': '40',
+  'call-intelligence-percent-negative': '20',
+  'call-intelligence-percent-neutral': '40',
+  'call-intelligence-ending-percent-negative': '10',
+  'call-intelligence-ending-percent-neutral': '50',
+  'call-intelligence-ending-percent-positive': '40',
+  'call-intelligence-duration-seconds-negative': '12',
+  'call-intelligence-duration-seconds-neutral': '30',
+  'call-intelligence-duration-seconds-positive': '45',
+  'call-intelligence-ending-duration-seconds-negative': '4',
+  'call-intelligence-ending-duration-seconds-neutral': '9',
+  'call-intelligence-ending-duration-seconds-positive': '6',
+  'call-intelligence-ending-sentiment-scale': '3',
   'prefilled-transcription-api': 'https://transcribe.example.com/session/abc',
   'x-debug-blob': 'not classified anywhere',
 };

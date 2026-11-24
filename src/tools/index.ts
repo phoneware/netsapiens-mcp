@@ -107,7 +107,7 @@ function withDerivedHints(name: string, base: { readOnlyHint: boolean; destructi
  };
 }
 
-function classifyTool(name: string, def?: ToolDefinition): ToolHints {
+export function classifyTool(name: string, def?: ToolDefinition): ToolHints {
  if (!def) {
   const mapping = buildNameMapping();
   const regKey = mapping.exposedToRegistry.get(name) ?? name;

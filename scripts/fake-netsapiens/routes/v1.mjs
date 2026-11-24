@@ -3,6 +3,7 @@
  * object and action. audio:play answers with a signed media link, which the recording kind classifies as content.
  * The fake logs the request before routing, so a call the connector refuses is visible as a request that never came.
  */
+import { REDIRECT_TARGET } from './redirects.mjs';
 
 /**
  * @returns {Array<{ method: string, path: string, handler: Function }>}
@@ -16,6 +17,8 @@ export function v1Route() {
         const form = new URLSearchParams(typeof req.body === 'string' ? req.body : '');
         const object = form.get('object');
         const action = form.get('action');
+        if (object === 'redirect_probe') return { status: 302, headers: { Location: REDIRECT_TARGET }, body: '' };
+        if (object === 'redirect_probe_307') return { status: 307, headers: { Location: REDIRECT_TARGET }, body: '' };
         if (object === 'audio' && action === 'play') {
           return { status: 200, body: { 'file-access-url': 'https://media.example.com/greeting.wav' } };
         }
