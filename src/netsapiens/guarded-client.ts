@@ -146,7 +146,8 @@ async function admitTargets(
     if (verdict.kind === 'refuse') throw new OperationRefusedError(operationKey, verdict.reason, NOT_PERMITTED);
     if (verdict.policy === undefined) continue;
     const content = verdict.policy.operationDecision(ref);
-    if (!content.allowed && content.reason.startsWith('content:')) {
+    // The target's own content denials refuse a request aimed at it, and so does its read-only access (D3 (b)).
+    if (!content.allowed && (content.reason.startsWith('content:') || content.reason === 'read_only')) {
       throw new OperationRefusedError(operationKey, `foreign:${content.reason}`, NOT_PERMITTED);
     }
     for (const kind of [...verdict.policy.deniedKinds, ...verdict.policy.strippedKinds]) {
