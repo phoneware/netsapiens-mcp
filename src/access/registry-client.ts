@@ -5,7 +5,9 @@
  * returns is fresh, revalidated, last known good, or unavailable. A caller treats unavailable as closed.
  * Nothing here reads the environment: config.ts does that and passes plain values in.
  *
- * A text body is parsed with parseRegistryDecisionText, and an embedder's parsed value with parseRegistryDecisionValue.
+ * Ages are measured on a monotonic clock, so a change to the wall clock cannot make an answer fresher or staler. The
+ * wall clock is read only to check an identity token's exp claim. A text body is parsed with
+ * parseRegistryDecisionText, and an embedder's parsed value with parseRegistryDecisionValue.
  */
 import { DEFAULT_ACCESS_REGISTRY_MAX_STALE_SECONDS, DEFAULT_ACCESS_REGISTRY_TIMEOUT_MS } from './config.js';
 import type { AccessRegistryAuthConfig, EnabledAccessRegistryConfig } from './config.js';
@@ -48,6 +50,18 @@ export type RegistryErrorClass =
   | 'http_status'
   | 'oversize'
   | 'auth';
+
+/** Every RegistryErrorClass. The record is exhaustive by type, so a new class must be added here too. */
+const ERROR_CLASSES: Readonly<Record<RegistryErrorClass, true>> = {
+  invalid_json: true,
+  contract: true,
+  critical: true,
+  timeout: true,
+  network: true,
+  http_status: true,
+  oversize: true,
+  auth: true,
+};
 
 /** Where a result came from. Fresh, revalidated and lkg carry a decision. Unavailable carries none. */
 export type RegistrySource = 'fresh' | 'revalidated' | 'lkg' | 'unavailable';
@@ -94,11 +108,19 @@ export interface RegistryRequest {
 
 /**
  * Makes one registry request. The HTTP transport is the default, and library embedders may supply their own.
- * A throw counts as a network error. A decision arrives as text or as a value; see RegistryResponse.
+ * A throw counts as a network error. A result of any other shape is a contract error. A decision arrives as text or
+ * as a value; see RegistryResponse.
  */
 export type FetchDecision = (request: RegistryRequest) => Promise<RegistryResponse>;
 
+/** Returns milliseconds. Each option that takes a clock says whether it is monotonic or wall-clock time. */
 export type Clock = () => number;
+
+/** Monotonic milliseconds. Every age is measured on this clock, which a change to the wall clock cannot move. */
+const monotonicNowMs: Clock = () => performance.now();
+
+/** Wall-clock milliseconds since the epoch. Read only to check an identity token's exp claim, never to measure an age. */
+const wallNowMs: Clock = () => Date.now();
 
 /** The fetch shape the HTTP transport uses. Tests inject their own. */
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -106,7 +128,7 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 export interface RegistryClientOptions {
   readonly connector: string;
   readonly fetchDecision: FetchDecision;
-  /** Milliseconds since the epoch. Defaults to Date.now. */
+  /** Monotonic milliseconds for every age. Defaults to performance.now, so a wall clock change cannot move an age. */
   readonly now?: Clock;
   /** Per-request timeout in milliseconds. Defaults to 3000. */
   readonly timeoutMs?: number;
@@ -118,7 +140,7 @@ export interface RegistryClientOptions {
 
 interface CacheEntry {
   readonly decision: AccessDecisionV1;
-  /** Send time of the request that last confirmed the decision. */
+  /** Send time of the request that last confirmed the decision, on the monotonic clock. */
   readonly validatedAt: number;
   /** How long the entry stays fresh after validatedAt. */
   readonly freshForMs: number;
@@ -194,7 +216,7 @@ export class RegistryClient {
     }
     this.connector = options.connector;
     this.fetchDecision = options.fetchDecision;
-    this.clock = options.now ?? Date.now;
+    this.clock = options.now ?? monotonicNowMs;
     this.timeoutMs = timeoutMs;
     this.maxStaleMs = maxStaleMs;
     this.cache = new LruCache<CacheEntry>(maxEntries);
@@ -208,7 +230,8 @@ export class RegistryClient {
 
   /**
    * The registry's answer for a query: from the cache while it is fresh, otherwise from the registry. A stale answer
-   * is revalidated, and concurrent callers for one key share one request.
+   * is revalidated, and concurrent callers for one key share one request. An entry validated after the clock reads is
+   * stale, and is never last known good.
    */
   async decide(query: RegistryQuery): Promise<RegistryResult> {
     const key: RegistryKey = {
@@ -221,9 +244,9 @@ export class RegistryClient {
     };
     const id = JSON.stringify([key.connector, key.platform, key.tenant, key.subject, key.role, key.tier]);
     const entry = this.cache.get(id);
-    const at = this.clock();
-    if (entry !== undefined && at < entry.validatedAt + entry.freshForMs) {
-      this.report(key, id, 'debug', { source: 'fresh', decision: entry.decision, ageMs: at - entry.validatedAt });
+    const age = entry === undefined ? undefined : elapsedMs(entry.validatedAt, this.clock());
+    if (entry !== undefined && age !== undefined && age < entry.freshForMs) {
+      this.report(key, id, 'debug', { source: 'fresh', decision: entry.decision, ageMs: age });
       return { source: 'fresh', decision: entry.decision };
     }
     let pending = this.inflight.get(id);
@@ -241,8 +264,8 @@ export class RegistryClient {
     const startedAt = this.clock();
     const ifNoneMatch = previous === undefined ? undefined : `"${previous.decision.revision}"`;
     const response = await this.attempt(key, ifNoneMatch);
-    const latencyMs = this.clock() - startedAt;
-    const judged = interpret(response, previous, startedAt);
+    const latencyMs = elapsedMs(startedAt, this.clock());
+    const judged = judgeSafely(response, previous, startedAt);
     if (judged.ok) {
       this.cache.set(id, judged.entry);
       const source: RegistrySource = previous === undefined ? 'fresh' : 'revalidated';
@@ -251,13 +274,13 @@ export class RegistryClient {
         decision: judged.entry.decision,
         httpStatus: judged.httpStatus,
         latencyMs,
-        ageMs: previous === undefined ? undefined : startedAt - previous.validatedAt,
+        ageMs: previous === undefined ? undefined : elapsedMs(previous.validatedAt, startedAt),
       });
       return { source, decision: judged.entry.decision };
     }
     const at = this.clock();
-    const ageMs = previous === undefined ? undefined : at - previous.validatedAt;
-    if (previous !== undefined && at < previous.validatedAt + this.maxStaleMs) {
+    const ageMs = previous === undefined ? undefined : elapsedMs(previous.validatedAt, at);
+    if (previous !== undefined && ageMs !== undefined && ageMs < this.maxStaleMs) {
       this.report(key, id, 'warn', {
         source: 'lkg',
         decision: previous.decision,
@@ -279,7 +302,10 @@ export class RegistryClient {
     return { source: 'unavailable', errorClass: judged.errorClass };
   }
 
-  /** One call to the transport, bounded by the timeout. Never rejects. */
+  /**
+   * One call to the transport, bounded by the timeout. Never rejects. A rejection is a network error, and whatever the
+   * source resolves with is checked by asRegistryResponse, which maps a value of the wrong shape to a contract error.
+   */
   private async attempt(key: RegistryKey, ifNoneMatch: string | undefined): Promise<RegistryResponse> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
@@ -291,7 +317,7 @@ export class RegistryClient {
     });
     const answered = Promise.resolve()
       .then(() => this.fetchDecision({ key, ifNoneMatch, signal: controller.signal }))
-      .catch((): RegistryResponse => ({ kind: 'failure', errorClass: 'network' }));
+      .then(asRegistryResponse, (): RegistryResponse => ({ kind: 'failure', errorClass: 'network' }));
     try {
       return await Promise.race([answered, timedOut]);
     } finally {
@@ -305,7 +331,9 @@ export class RegistryClient {
     if (level === 'warn') {
       const at = this.clock();
       const last = this.lastWarning.get(id);
-      if (last !== undefined && at - last < WARN_INTERVAL_MS) {
+      // A clock that went backwards since the last warning has no measurable interval, so it does not silence one.
+      const since = last === undefined ? undefined : elapsedMs(last, at);
+      if (since !== undefined && since < WARN_INTERVAL_MS) {
         effective = 'debug';
       } else {
         this.lastWarning.set(id, at);
@@ -341,6 +369,7 @@ export interface HttpFetchOptions {
   readonly fetch?: FetchLike;
   /** The identity token endpoint. Defaults to Google's metadata service. Tests point it at a fake. */
   readonly metadataUrl?: string;
+  /** Wall-clock milliseconds since the epoch. Read only to check an identity token's exp claim; ages never use it. */
   readonly now?: Clock;
   /** Timeout for the identity token request, in milliseconds. Defaults to 3000. */
   readonly timeoutMs?: number;
@@ -353,17 +382,16 @@ export interface HttpFetchOptions {
 export function createHttpFetchDecision(options: HttpFetchOptions): FetchDecision {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const fetchFn: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
-  const clock: Clock = options.now ?? Date.now;
   const credential = credentialSource(options.auth, {
     fetch: fetchFn,
     metadataUrl: options.metadataUrl ?? METADATA_IDENTITY_URL,
-    clock,
+    wallNow: options.now ?? wallNowMs,
     timeoutMs: options.timeoutMs ?? DEFAULT_ACCESS_REGISTRY_TIMEOUT_MS,
   });
   return async ({ key, ifNoneMatch, signal }) => {
     let token: string | undefined;
     try {
-      token = await credential();
+      token = await credential.current();
     } catch {
       return { kind: 'failure', errorClass: 'auth' };
     }
@@ -376,7 +404,10 @@ export function createHttpFetchDecision(options: HttpFetchOptions): FetchDecisio
     } catch {
       return { kind: 'failure', errorClass: signal.aborted ? 'timeout' : 'network' };
     }
-    return readRegistryResponse(response, signal);
+    const result = await readRegistryResponse(response, signal);
+    // The registry refused the credential, so it is not reused. A static bearer token is never cached, so it stays.
+    if (token !== undefined && result.kind === 'failure' && result.errorClass === 'auth') credential.rejected(token);
+    return result;
   };
 }
 
@@ -386,7 +417,10 @@ export interface AccessRegistryClientDeps {
   readonly fetchDecision?: FetchDecision;
   readonly fetch?: FetchLike;
   readonly metadataUrl?: string;
+  /** Monotonic milliseconds for every age. Defaults to performance.now. */
   readonly now?: Clock;
+  /** Wall-clock milliseconds since the epoch, for identity token expiry only. Defaults to Date.now. */
+  readonly wallNow?: Clock;
   readonly maxEntries?: number;
 }
 
@@ -395,7 +429,6 @@ export function createAccessRegistryClient(
   config: EnabledAccessRegistryConfig,
   deps: AccessRegistryClientDeps = {},
 ): RegistryClient {
-  const now: Clock = deps.now ?? Date.now;
   return new RegistryClient({
     connector: config.connector,
     fetchDecision:
@@ -405,10 +438,10 @@ export function createAccessRegistryClient(
         auth: config.auth,
         fetch: deps.fetch,
         metadataUrl: deps.metadataUrl,
-        now,
+        now: deps.wallNow,
         timeoutMs: config.timeoutMs,
       }),
-    now,
+    now: deps.now,
     timeoutMs: config.timeoutMs,
     maxStaleMs: config.maxStaleSeconds * 1000,
     maxEntries: deps.maxEntries,
@@ -437,11 +470,74 @@ function interpret(response: RegistryResponse, previous: CacheEntry | undefined,
   return { ok: false, errorClass: response.errorClass, httpStatus: response.httpStatus };
 }
 
+/**
+ * Judges a checked response, and never throws. Anything that goes wrong while judging, such as a getter that throws
+ * inside an embedder's value, is a contract error.
+ */
+function judgeSafely(response: RegistryResponse, previous: CacheEntry | undefined, startedAt: number): Judgement {
+  try {
+    return interpret(response, previous, startedAt);
+  } catch {
+    return { ok: false, errorClass: 'contract' };
+  }
+}
+
 /** Turns a parser result into a cache entry, or into the error class the parser reported. */
 function judgeDecision(parsed: ParseRegistryDecisionResult, httpStatus: number | undefined, startedAt: number): Judgement {
   if (!parsed.ok) return { ok: false, errorClass: parsed.errorClass, httpStatus };
   const freshForMs = Math.min(MAX_TTL_SECONDS, Math.max(MIN_TTL_SECONDS, parsed.decision.ttlSeconds)) * 1000;
   return { ok: true, httpStatus, entry: { decision: parsed.decision, validatedAt: startedAt, freshForMs } };
+}
+
+/** What a decision source resolves with when it is not one of the four response shapes. */
+const CONTRACT_FAILURE: RegistryResponse = { kind: 'failure', errorClass: 'contract' };
+
+/**
+ * Checks what a decision source resolved with. Nothing from a source is trusted: a value outside the four response
+ * shapes is a contract error. It never throws, even when a getter does, so a shape cannot make a caller see a rejection.
+ */
+function asRegistryResponse(raw: unknown): RegistryResponse {
+  try {
+    return responseOf(raw) ?? CONTRACT_FAILURE;
+  } catch {
+    return CONTRACT_FAILURE;
+  }
+}
+
+/** The response a value has, or undefined when it has none of the four shapes. */
+function responseOf(raw: unknown): RegistryResponse | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const kind: unknown = 'kind' in raw ? raw.kind : undefined;
+  if (kind === 'text') {
+    const body: unknown = 'body' in raw ? raw.body : undefined;
+    return typeof body === 'string' ? { kind: 'text', body } : undefined;
+  }
+  if (kind === 'value') return 'value' in raw ? { kind: 'value', value: raw.value } : undefined;
+  if (kind === 'not_modified') return { kind: 'not_modified' };
+  if (kind === 'failure') {
+    const errorClass: unknown = 'errorClass' in raw ? raw.errorClass : undefined;
+    const httpStatus: unknown = 'httpStatus' in raw ? raw.httpStatus : undefined;
+    return isErrorClass(errorClass) ? { kind: 'failure', errorClass, httpStatus: statusOf(httpStatus) } : undefined;
+  }
+  return undefined;
+}
+
+function isErrorClass(value: unknown): value is RegistryErrorClass {
+  return typeof value === 'string' && Object.hasOwn(ERROR_CLASSES, value);
+}
+
+/** An HTTP status a source reports, when it is a whole number from 100 to 599. Anything else is not reported. */
+function statusOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
+}
+
+/**
+ * Milliseconds from one reading of a clock to a later one, or undefined when the clock went backwards or is not a
+ * number. An undefined age is unknown, so it is never fresh and never last known good.
+ */
+function elapsedMs(from: number, to: number): number | undefined {
+  const value = to - from;
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function decisionUrl(baseUrl: string, key: RegistryKey): string {
@@ -509,29 +605,51 @@ async function discard(response: Response): Promise<void> {
 interface CredentialDeps {
   readonly fetch: FetchLike;
   readonly metadataUrl: string;
-  readonly clock: Clock;
+  /** Wall-clock milliseconds since the epoch, for the exp claim. */
+  readonly wallNow: Clock;
   readonly timeoutMs: number;
 }
 
-/** Yields the credential for one request: none, the static bearer token, or a metadata identity token. */
-function credentialSource(auth: AccessRegistryAuthConfig, deps: CredentialDeps): () => Promise<string | undefined> {
-  if (auth.mode === 'none') return async () => undefined;
+/** The credential for each registry request, and the record of one the registry refused. */
+interface Credential {
+  /** The credential for the next request, or undefined when the mode sends none. Rejects when none can be obtained. */
+  current(): Promise<string | undefined>;
+  /** The registry refused a request that carried this token. A held identity token is dropped when it is this one. */
+  rejected(token: string): void;
+}
+
+/** The credential for the configured auth mode. A static bearer token is never cached, so a refusal changes nothing. */
+function credentialSource(auth: AccessRegistryAuthConfig, deps: CredentialDeps): Credential {
+  if (auth.mode === 'none') return { current: async () => undefined, rejected: () => undefined };
   if (auth.mode === 'bearer') {
     const token = auth.token;
-    return async () => token;
+    return { current: async () => token, rejected: () => undefined };
   }
   return identityTokens(auth.audience, deps);
 }
 
+/** An identity token as minted, with the wall-clock times that bound its life. */
+interface HeldToken {
+  readonly token: string;
+  /** Wall-clock time when the mint request was sent. The token was issued no earlier than this. */
+  readonly mintedAtMs: number;
+  /** The exp claim, in milliseconds since the epoch. */
+  readonly expiresAtMs: number;
+}
+
 /**
  * Mints a Google identity token and reuses it until 300 seconds before its exp claim. Concurrent callers share one
- * mint. No dependency is added: the token and its expiry come from the metadata response itself.
+ * mint. A token is reused only while its remaining life is above the refresh margin and no more than its own
+ * lifetime, so a wall clock that has gone back since the mint forces a new token. A token the registry refuses is
+ * dropped, and the next attempt mints a new one. No dependency is added: the token and its expiry come from the
+ * metadata response itself.
  */
-function identityTokens(audience: string, deps: CredentialDeps): () => Promise<string | undefined> {
-  let held: { readonly token: string; readonly refreshAt: number } | undefined;
+function identityTokens(audience: string, deps: CredentialDeps): Credential {
+  let held: HeldToken | undefined;
   let minting: Promise<string> | undefined;
 
   async function mint(): Promise<string> {
+    const mintedAtMs = deps.wallNow();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), deps.timeoutMs);
     try {
@@ -547,26 +665,41 @@ function identityTokens(audience: string, deps: CredentialDeps): () => Promise<s
         throw new Error(`identity token request answered ${response.status}`);
       }
       const token = (await readBounded(response, MAX_BODY_BYTES))?.trim();
-      const expiresAt = token === undefined ? undefined : tokenExpiryMs(token);
-      if (token === undefined || expiresAt === undefined || !VISIBLE_ASCII.test(token)) {
-        throw new Error('identity token response is not a token with an exp claim');
+      const expiresAtMs = token === undefined ? undefined : tokenExpiryMs(token);
+      if (token === undefined || expiresAtMs === undefined || !(expiresAtMs > mintedAtMs) || !VISIBLE_ASCII.test(token)) {
+        throw new Error('identity token response is not a token with an exp claim later than its mint');
       }
-      held = { token, refreshAt: expiresAt - TOKEN_REFRESH_MARGIN_MS };
+      held = { token, mintedAtMs, expiresAtMs };
       return token;
     } finally {
       clearTimeout(timer);
     }
   }
 
-  return () => {
-    if (held !== undefined && deps.clock() < held.refreshAt) return Promise.resolve(held.token);
-    if (minting === undefined) {
-      minting = mint().finally(() => {
-        minting = undefined;
-      });
-    }
-    return minting;
+  return {
+    current: () => {
+      if (held !== undefined && isReusable(held, deps.wallNow())) return Promise.resolve(held.token);
+      if (minting === undefined) {
+        minting = mint().finally(() => {
+          minting = undefined;
+        });
+      }
+      return minting;
+    },
+    rejected: (token: string) => {
+      if (held?.token === token) held = undefined;
+    },
   };
+}
+
+/**
+ * A held token is reused only while its remaining life is above the refresh margin and no more than its own lifetime.
+ * Remaining life above the lifetime means the wall clock went back after the mint, so the token is minted again.
+ */
+function isReusable(held: HeldToken, atMs: number): boolean {
+  const lifetimeMs = held.expiresAtMs - held.mintedAtMs;
+  const remainingMs = held.expiresAtMs - atMs;
+  return remainingMs > TOKEN_REFRESH_MARGIN_MS && remainingMs <= lifetimeMs;
 }
 
 /** The exp claim of a JWT in milliseconds, or undefined when there is none. The signature is not verified here. */
