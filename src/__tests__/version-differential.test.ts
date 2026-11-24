@@ -1,14 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { createHash } from 'node:crypto';
+import { signIn } from './support/http-session.js';
 import http, { type Server as HttpServer } from 'node:http';
 import { startFakeNetSapiens } from '../../scripts/fake-netsapiens/index.mjs';
 import { clearVersionCache, getCachedVersionInfo, getVersionInfo, setVersionCacheEntry } from '../netsapiens/version.js';
 import { buildAvailability, availability } from '../netsapiens/availability.js';
-
-function pkceChallenge(verifier: string): string {
-  return createHash('sha256').update(verifier).digest('base64url');
-}
 
 const openServers: HttpServer[] = [];
 const openFakes: Array<{ close: () => Promise<void> }> = [];
@@ -38,64 +34,6 @@ function parseJsonRpcResponse(res: any): any {
     }
   }
   return res.body;
-}
-
-async function signIn(app: any, platformUrl: string, nsToken: string): Promise<string> {
-  // 1. Register public client
-  const reg = await request(app)
-    .post('/register')
-    .send({
-      redirect_uris: ['http://localhost/cb'],
-      client_name: 'test-client',
-      token_endpoint_auth_method: 'none',
-    })
-    .expect(201);
-
-  // 2. Authorize
-  const verifier = 'my-token-verifier-123456789012345678901234';
-  const auth = await request(app)
-    .get('/authorize')
-    .query({
-      response_type: 'code',
-      client_id: reg.body.client_id,
-      redirect_uri: 'http://localhost/cb',
-      code_challenge: pkceChallenge(verifier),
-      code_challenge_method: 'S256',
-    })
-    .expect(200);
-
-  const authState = auth.text.match(/name="auth_state" value="([^"]+)"/)?.[1];
-  if (!authState) throw new Error('Missing auth_state in login page HTML');
-
-  // 3. Login
-  const login = await request(app)
-    .post('/login')
-    .type('form')
-    .send({
-      platform: platformUrl,
-      token: nsToken,
-      auth_state: authState,
-    })
-    .expect(302);
-
-  const redirectUrl = new URL(login.headers.location as string);
-  const code = redirectUrl.searchParams.get('code');
-  if (!code) throw new Error('Missing code in login redirect');
-
-  // 4. Token exchange
-  const tokenResp = await request(app)
-    .post('/token')
-    .type('form')
-    .send({
-      grant_type: 'authorization_code',
-      code,
-      code_verifier: verifier,
-      client_id: reg.body.client_id,
-      redirect_uri: 'http://localhost/cb',
-    })
-    .expect(200);
-
-  return tokenResp.body.access_token;
 }
 
 describe('Version Differential & Runtime Availability', () => {
