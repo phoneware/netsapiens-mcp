@@ -905,7 +905,7 @@ async function createAuthenticatedMcpServer(
  nsApiUrl?: string,
  authProvider?: NetSapiensAuthProvider,
  recovery: RecoveryCredential = {},
-/** Carried to the tool wiring; registerTools receives it once the tool-level enforcement lands. */
+/** The access enforcer, handed to the tool layer so every listing, call, operation and result is judged per person. */
  access?: CausedAccessEnforcer,
 ) {
  const server = new Server(
@@ -936,7 +936,7 @@ async function createAuthenticatedMcpServer(
 
  const client = new NetSapiensClient(clientConfig);
  const guardedClient = createGuardedClient(client, availabilityContext);
- registerTools(server, guardedClient, userRole, userIdentity, availabilityContext);
+ registerTools(server, guardedClient, userRole, userIdentity, availabilityContext, access);
 
  server.onerror = (error) => {
   logger.error('[MCP Error]', { error: String(error) });
