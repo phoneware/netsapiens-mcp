@@ -355,3 +355,22 @@ describe('ALLOW_ALL', () => {
     expect(ALLOW_ALL.allowsRedirect('http://localhost:1/x')).toBe(true);
   });
 });
+
+describe('decisions are frozen', () => {
+  it('freezes allowed and refused decisions', () => {
+    const allowed = ALLOW_ALL.toolDecision('get_domains');
+    const refused = compilePolicy(policy({ allow: ['@curated'] }), catalog(TOOLS), 'r1').toolDecision('delete_domain');
+    expect(Object.isFrozen(allowed)).toBe(true);
+    expect(Object.isFrozen(refused)).toBe(true);
+  });
+
+  it('refuses a change to a decision a caller holds', () => {
+    const decision = ALLOW_ALL.toolDecision('get_domains');
+    expect(Reflect.set(decision, 'allowed', false)).toBe(false);
+    expect(decision).toEqual({ allowed: true });
+  });
+
+  it('keeps later decisions allowed after an attempted change', () => {
+    expect(ALLOW_ALL.toolDecision('get_domains')).toEqual({ allowed: true });
+  });
+});

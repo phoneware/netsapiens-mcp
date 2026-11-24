@@ -64,10 +64,10 @@ export class AccessPolicyError extends Error {
   }
 }
 
-const ALLOWED: PolicyDecision = { allowed: true };
+const ALLOWED: PolicyDecision = Object.freeze({ allowed: true as const });
 
 function refuse(reason: DenyReason): PolicyDecision {
-  return { allowed: false, reason };
+  return Object.freeze({ allowed: false as const, reason });
 }
 
 const READ_ACTION = /^(read|count|list|search|get)/;
