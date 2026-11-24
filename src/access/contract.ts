@@ -61,6 +61,7 @@ export type AccessDecisionV1 =
   | {
       readonly version: 1;
       readonly decision: 'deny';
+      /** Sanitized: the first 64 characters, each printable ASCII or "?", or "unspecified". Never the raw registry text. */
       readonly reason: string;
       readonly revision: string;
       readonly ttlSeconds: number;
