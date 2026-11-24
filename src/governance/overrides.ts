@@ -26,6 +26,8 @@ const CDR_PLUMBING: Record<string, FieldClass> = {
   'call-term-ip-address': { class: 'internal' },
   'call-term-match-uri': { class: 'internal' },
   'call-term-pre-routing-uri': { class: 'internal' },
+  // The 44.x and 45.0 releases spell this column with a typo. It is SIP plumbing, as call-term-pre-routing-uri is.
+  'call-term-pre-reouting-uri': { class: 'internal' },
   'call-term-to-uri': { class: 'internal' },
   'call-through-uri': { class: 'internal' },
   'call-video-relay-side-a-local-port': { class: 'internal' },
@@ -33,6 +35,27 @@ const CDR_PLUMBING: Record<string, FieldClass> = {
   'call-video-relay-side-b-remote-ip': { class: 'internal' },
   'core-server': { class: 'internal' },
   'prefilled-transcription-api': { class: 'internal' },
+};
+
+/**
+ * Sentiment-derived call intelligence: the share and the length of positive, negative and neutral speech, and the
+ * sentiment scale at the end of a call. Each is analysis of the call's words, so it is ai_summary.
+ */
+const AI_SUMMARY_TEXT: FieldClass = { class: 'content', kind: 'ai_summary', media: 'text' };
+const CALL_SENTIMENT: Record<string, FieldClass> = {
+  'call-intelligence-percent-negative': AI_SUMMARY_TEXT,
+  'call-intelligence-percent-neutral': AI_SUMMARY_TEXT,
+  'call-intelligence-percent-positive': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-percent-negative': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-percent-neutral': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-percent-positive': AI_SUMMARY_TEXT,
+  'call-intelligence-duration-seconds-negative': AI_SUMMARY_TEXT,
+  'call-intelligence-duration-seconds-neutral': AI_SUMMARY_TEXT,
+  'call-intelligence-duration-seconds-positive': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-duration-seconds-negative': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-duration-seconds-neutral': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-duration-seconds-positive': AI_SUMMARY_TEXT,
+  'call-intelligence-ending-sentiment-scale': AI_SUMMARY_TEXT,
 };
 
 /**
@@ -46,6 +69,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
  // CDRs and Call Intelligence
  CdrD: {
   ...CDR_PLUMBING,
+  ...CALL_SENTIMENT,
   id: { class: 'record_id', recordType: 'cdr' },
   'call-orig-call-id': { class: 'record_id', recordType: 'call' },
   'call-term-call-id': { class: 'record_id', recordType: 'call' },
@@ -67,6 +91,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
 
 // CDR variants with the same call-intelligence fields as CdrD. The user-scope call history is CdrU.
 CdrDBase: {
+  ...CALL_SENTIMENT,
   'call-orig-from-uri': { class: 'internal' },
   'call-orig-match-uri': { class: 'internal' },
   'call-orig-request-uri': { class: 'internal' },
@@ -77,6 +102,7 @@ CdrDBase: {
   'prefilled-transcription-api': { class: 'internal' },
 },
 CdrGBase: {
+  ...CALL_SENTIMENT,
   'call-orig-from-uri': { class: 'internal' },
   'call-orig-request-uri': { class: 'internal' },
   'call-term-to-uri': { class: 'internal' },
@@ -87,11 +113,13 @@ CdrGBase: {
 },
 CdrG: {
   ...CDR_PLUMBING,
+  ...CALL_SENTIMENT,
   'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
   ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
 },
 CdrUBase: {
+  ...CALL_SENTIMENT,
   'call-orig-to-uri': { class: 'internal' },
   'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
@@ -100,6 +128,7 @@ CdrUBase: {
 },
 CdrU: {
   ...CDR_PLUMBING,
+  ...CALL_SENTIMENT,
   'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
   ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
@@ -133,6 +162,7 @@ CdrExport: {
 
  // Call Intelligence Transcriptions
  Transcription: {
+  ...CALL_SENTIMENT,
   'call-id': { class: 'record_id', recordType: 'call' },
   'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-segments': { class: 'content', kind: 'transcript', media: 'text' },
@@ -184,7 +214,16 @@ CdrExport: {
  // The voicemail message read: its signed link plays the recording
  VoicemailMessage: {
   'file-access-url': { class: 'content', kind: 'voicemail', media: 'audio_url' },
+  'file-transcript-text': { class: 'content', kind: 'transcript', media: 'text' },
  },
+// vCon documents (46.0): the recording dialog, the call analysis and the CDR attachments are the content. The subject is
+// the first sentence of the AI summary.
+Vcon: {
+  analysis: { class: 'content', kind: 'transcript', media: 'text', alsoKinds: ['ai_summary'] },
+  attachments: { class: 'content', kind: 'ai_summary', media: 'text', alsoKinds: ['transcript'] },
+  dialog: { class: 'content', kind: 'call_recording', media: 'audio_url' },
+  subject: AI_SUMMARY_TEXT,
+},
 
  // Credentials and Secrets (Scrubbed on every deployment)
  Device: {
@@ -399,6 +438,7 @@ export const CUSTOM_RESOURCES: Record<string, Record<string, FieldClass>> = {
   'voicemail-from-caller-id-number': { class: 'metadata' },
   'file-script-text': { class: 'content', kind: 'voicemail', media: 'text' },
   'transcription-text': { class: 'content', kind: 'transcript', media: 'text' },
+  'file-transcript-text': { class: 'content', kind: 'transcript', media: 'text' },
   transcription: { class: 'content', kind: 'transcript', media: 'text' },
   transcript: { class: 'content', kind: 'transcript', media: 'text' },
   'voicemail-transcription': { class: 'content', kind: 'transcript', media: 'text' },
@@ -443,4 +483,16 @@ export const CUSTOM_RESOURCES: Record<string, Record<string, FieldClass>> = {
   'device-provisioning-line-1-extensions': { class: 'metadata' },
   'device-provisioning-username': { class: 'metadata' },
  },
+};
+
+/**
+ * Mapped resources whose schema declares no fields, with the reason. Any other mapped resource with no fields fails
+ * the build, so an operation cannot be classified against an empty table by accident.
+ */
+export const EMPTY_BY_DESIGN: Readonly<Record<string, string>> = {
+  IotumVideoContact:
+    'a video-service contact: the spec declares only additionalProperties, so the service names its fields and none are classified',
+  TranslationsByNamespace:
+    'interface translations: a map from namespace and key to the product copy of the UI, not one of the six kinds',
+  TranslationsFlat: 'interface translations: a map from key to the product copy of the UI, not one of the six kinds',
 };

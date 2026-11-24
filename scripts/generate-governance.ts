@@ -1,321 +1,96 @@
 #!/usr/bin/env tsx
 
 /**
- * NetSapiens Governance Field Table Generator
- *
- * Generates per-resource field classification tables from OpenAPI specification
- * (`spec/v2/45.0.json` components.schemas) and hand-reviewed overrides
- * (`src/governance/overrides.ts`).
- * It also writes src/governance/operation-outputs.generated.ts, which maps v2 operation keys to response resources.
- *
- * Every field defaults to `{ class: 'metadata' }` unless overridden.
- * Output is deterministic: keys are sorted alphabetically at every level.
+ * Generates src/governance/ns-fields.generated.ts and src/governance/operation-outputs.generated.ts from the spec
+ * branches (spec 3.6). The tables and the operation map are built by src/governance/build.ts. This script reads the
+ * documents and writes the two files, deterministically.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FIELD_OVERRIDES, CUSTOM_RESOURCES } from '../src/governance/overrides.js';
+import { buildGovernanceTables, type BuildBranch } from '../src/governance/build.js';
+import { CUSTOM_RESOURCES, EMPTY_BY_DESIGN, FIELD_OVERRIDES } from '../src/governance/overrides.js';
+import { forEachOperation, type SpecDocument, type SpecOperation } from '../src/governance/spec-walk.js';
 import type { FieldClass } from '../src/governance/types.js';
 import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, '..');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-interface SchemaObject {
- type?: string;
- properties?: Record<string, unknown>;
- items?: {
-  type?: string;
-  properties?: Record<string, unknown>;
- };
-}
-
-interface OpenApiSpec {
- components?: {
-  schemas?: Record<string, SchemaObject>;
- };
-}
-
-function generate(): { fields: string; operationOutputs: string } {
- const branchesPath = resolve(REPO_ROOT, 'spec/v2/BRANCHES.json');
- const branches: string[] = JSON.parse(readFileSync(branchesPath, 'utf8'));
-
- const schemas: Record<string, SchemaObject> = {};
- for (const branch of branches) {
-  const specPath = resolve(REPO_ROOT, `spec/v2/${branch}.json`);
-  const spec: OpenApiSpec = JSON.parse(readFileSync(specPath, 'utf8'));
-  for (const [name, schema] of Object.entries(spec.components?.schemas ?? {})) {
-   schemas[name] = schema;
-  }
- }
- const resourceTables: Record<string, Record<string, FieldClass>> = {};
-
- // 1. Process spec schemas
- const schemaNames = Object.keys(schemas).sort();
- for (const schemaName of schemaNames) {
-  const schema = schemas[schemaName];
-  const props = schema.properties ?? schema.items?.properties ?? {};
-  const fieldTable: Record<string, FieldClass> = {};
-
-  // Collect all field names from spec and overrides
-  const propNames = new Set<string>([
-   ...Object.keys(props),
-   ...Object.keys(FIELD_OVERRIDES[schemaName] ?? {}),
-  ]);
-
-  function isCredentialKeyName(name: string): boolean {
-   if (/key-id|can-create-keys|no-key-press|unassigned-key-press|language-token|token-endpoint|token_type|dtmf-mapping|-enabled/i.test(name)) {
-    return false;
-   }
-   return /(?:^|[-_])(?:password|pin|secret|token|passcode)(?:$|[-_])/i.test(name);
-  }
-
-  for (const propName of Array.from(propNames).sort()) {
-   const override = FIELD_OVERRIDES[schemaName]?.[propName];
-   if (override) {
-    fieldTable[propName] = override;
-   } else if (isCredentialKeyName(propName)) {
-    fieldTable[propName] = { class: 'secret' };
-   } else {
-    fieldTable[propName] = { class: 'metadata' };
-   }
-  }
-
-  resourceTables[schemaName] = fieldTable;
- }
-
- // 2. Process custom resources (e.g. Voicemail, CallTrace)
- const customNames = Object.keys(CUSTOM_RESOURCES).sort();
- for (const customName of customNames) {
-  const fields = CUSTOM_RESOURCES[customName];
-  const fieldTable: Record<string, FieldClass> = {};
-  for (const propName of Object.keys(fields).sort()) {
-   fieldTable[propName] = fields[propName];
-  }
-  resourceTables[customName] = fieldTable;
- }
-
- // 3. Assert every override's resource and field still exists in generated schemas
- for (const [resourceName, fields] of Object.entries(FIELD_OVERRIDES)) {
-  if (!resourceTables[resourceName]) {
-   throw new Error(`Override resource "${resourceName}" does not exist in generated schemas`);
-  }
-  for (const fieldName of Object.keys(fields)) {
-   if (!resourceTables[resourceName][fieldName]) {
-    throw new Error(`Override field "${resourceName}.${fieldName}" does not exist in generated schemas`);
-   }
-  }
- }
- for (const [resourceName, fields] of Object.entries(CUSTOM_RESOURCES)) {
-  if (!resourceTables[resourceName]) {
-   throw new Error(`Custom resource "${resourceName}" does not exist in generated schemas`);
-  }
-  for (const fieldName of Object.keys(fields)) {
-   if (!resourceTables[resourceName][fieldName]) {
-    throw new Error(`Custom field "${resourceName}.${fieldName}" does not exist in generated schemas`);
-   }
-  }
- }
-
- // 3b. Map each operation to the resource that classifies its response. Composite tables join the tables first.
- const outputs = resolveOperationOutputs(branches, resourceTables);
-
- // 4. Serialize deterministically
- const lines: string[] = [
+/** The opening lines of each generated file's comment. Each file closes its own comment. */
+const HEADER = [
   '/**',
   ' * AUTO-GENERATED by scripts/generate-governance.ts: DO NOT EDIT MANUALLY.',
   ' * Run `npm run generate:governance` to regenerate.',
-  ' */',
-  '',
-  "import type { FieldClass } from './types.js';",
-  '',
-  'export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {',
- ];
+];
 
- const sortedResourceNames = Object.keys(resourceTables).sort();
- for (const resourceName of sortedResourceNames) {
-  const fields = resourceTables[resourceName];
-  const fieldNames = Object.keys(fields).sort();
-  if (fieldNames.length === 0) {
-   lines.push(`  ${JSON.stringify(resourceName)}: {},`);
-   continue;
+/** Every spec branch, in the order BRANCHES.json lists them, with each operation under its normalized key. */
+function readBranches(): BuildBranch[] {
+  const branches = JSON.parse(readFileSync(resolve(REPO_ROOT, 'spec/v2/BRANCHES.json'), 'utf8')) as string[];
+  return branches.map((branch) => {
+    const doc = JSON.parse(readFileSync(resolve(REPO_ROOT, `spec/v2/${branch}.json`), 'utf8')) as SpecDocument;
+    const operations: { key: string; operation: SpecOperation }[] = [];
+    forEachOperation(doc, (method, path, operation) => {
+      operations.push({ key: normalizeOperationKey(method, path), operation });
+    });
+    return { components: doc.components?.schemas ?? {}, operations };
+  });
+}
+
+function serializeFields(fields: Readonly<Record<string, Readonly<Record<string, FieldClass>>>>): string {
+  const lines: string[] = [
+    ...HEADER,
+    ' */',
+    '',
+    "import type { FieldClass } from './types.js';",
+    '',
+    'export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {',
+  ];
+  for (const resourceName of Object.keys(fields).sort()) {
+    const table = fields[resourceName];
+    const fieldNames = Object.keys(table).sort();
+    if (fieldNames.length === 0) {
+      lines.push(`  ${JSON.stringify(resourceName)}: {},`);
+      continue;
+    }
+    lines.push(`  ${JSON.stringify(resourceName)}: {`);
+    for (const fieldName of fieldNames) lines.push(`    ${JSON.stringify(fieldName)}: ${JSON.stringify(table[fieldName])},`);
+    lines.push('  },');
   }
-  lines.push(`  ${JSON.stringify(resourceName)}: {`);
-  for (const fieldName of fieldNames) {
-   const fieldClass = fields[fieldName];
-   lines.push(`    ${JSON.stringify(fieldName)}: ${JSON.stringify(fieldClass)},`);
-  }
-  lines.push('  },');
- }
-
- lines.push('};');
- lines.push('');
-
- return {
-  fields: lines.join('\n'),
-  operationOutputs: serializeOperationOutputs(outputs),
- };
+  lines.push('};', '');
+  return lines.join('\n');
 }
 
-const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
-
-/** A schema as this file reads it: a component, an array of components, or a oneOf or anyOf of such shapes. */
-interface SchemaReference {
- $ref?: string;
- items?: SchemaReference;
- oneOf?: SchemaReference[];
- anyOf?: SchemaReference[];
-}
-
-interface OperationObject {
- responses?: Record<string, { content?: Record<string, { schema?: SchemaReference }> }>;
-}
-
-/**
- * The components a response schema can be: one component, an array of components, or any alternative of a oneOf or
- * anyOf whose alternatives all have such shapes. Sorted, without duplicates. Undefined for any other shape, which
- * leaves the operation unmapped.
- */
-function componentsOf(schema: SchemaReference | undefined): string[] | undefined {
- if (schema === undefined) return undefined;
- if (schema.$ref !== undefined) return [schema.$ref.split('/').pop() ?? ''];
- if (schema.items !== undefined) return componentsOf(schema.items);
- const alternatives = [...(schema.oneOf ?? []), ...(schema.anyOf ?? [])];
- if (alternatives.length === 0) return undefined;
- const parts = alternatives.map((alternative) => componentsOf(alternative));
- if (parts.some((part) => part === undefined)) return undefined;
- return [...new Set(parts.flatMap((part) => part ?? []))].sort();
-}
-
-/** The components of an operation's lowest 2xx JSON response. */
-function componentsOfOperation(operation: OperationObject): string[] | undefined {
- const codes = Object.keys(operation.responses ?? {}).filter((code) => /^2\d\d$/.test(code)).sort();
- const first = codes[0];
- if (first === undefined) return undefined;
- return componentsOf(operation.responses?.[first]?.content?.['application/json']?.schema);
-}
-
-/** How much a projection removes for each field class: a higher rank removes more. */
-const CLASS_RANK: Record<FieldClass['class'], number> = { secret: 5, internal: 4, content: 3, record_id: 2, metadata: 1 };
-
-/**
- * The class a composite gives a field that two members declare: the stronger one. Two classes the order cannot settle
- * make the generator fail, so the members are reconciled in overrides.ts instead of guessed: content of two kinds,
- * content beside internal, and record IDs of two types.
- */
-function strongerClass(composite: string, field: string, a: FieldClass, b: FieldClass): FieldClass {
- if (JSON.stringify(a) === JSON.stringify(b)) return a;
- const unordered =
-  (a.class === 'content' && b.class === 'content' && a.kind !== b.kind) ||
-  (a.class === 'record_id' && b.class === 'record_id' && a.recordType !== b.recordType) ||
-  (a.class === 'content' && b.class === 'internal') ||
-  (a.class === 'internal' && b.class === 'content');
- if (unordered) {
-  throw new Error(
-   `${composite}: ${field} is ${JSON.stringify(a)} in one member and ${JSON.stringify(b)} in another; reconcile them in overrides.ts`,
-  );
- }
- return CLASS_RANK[b.class] > CLASS_RANK[a.class] ? b : a;
-}
-
-/** The table of a composite resource: every field a member declares, with the strongest class any member gives it. */
-function compositeTable(
- composite: string,
- members: readonly string[],
- tables: Record<string, Record<string, FieldClass>>,
-): Record<string, FieldClass> {
- const merged: Record<string, FieldClass> = {};
- for (const member of members) {
-  for (const [field, incoming] of Object.entries(tables[member] ?? {})) {
-   const current = merged[field];
-   merged[field] = current === undefined ? incoming : strongerClass(composite, field, current, incoming);
-  }
- }
- return merged;
-}
-
-/**
- * Maps each v2 operation key to the resource that classifies its response. The tool generator keeps the last spec
- * branch that defines an operation, so a key takes its mapping from that branch. Within one branch, specs that disagree
- * leave the operation unmapped. A response that is one component maps to it. A response that is several, through a
- * oneOf or anyOf, maps to the composite Union(A,B), whose table is added before the tables are written, so every row
- * the response can carry is declared.
- */
-function resolveOperationOutputs(
- branches: readonly string[],
- resourceTables: Record<string, Record<string, FieldClass>>,
-): Map<string, string> {
- const componentsByKey = new Map<string, readonly string[] | undefined>();
- for (const branch of branches) {
-  const spec = JSON.parse(readFileSync(resolve(REPO_ROOT, `spec/v2/${branch}.json`), 'utf8')) as {
-   paths?: Record<string, Record<string, unknown>>;
-  };
-  const inBranch = new Map<string, Set<string>>();
-  for (const [path, methods] of Object.entries(spec.paths ?? {})) {
-   for (const [method, operation] of Object.entries(methods)) {
-    if (!HTTP_METHODS.has(method)) continue;
-    const key = normalizeOperationKey(method, path);
-    const components = componentsOfOperation(operation as OperationObject);
-    const usable = components?.every((name) => Object.hasOwn(resourceTables, name)) ? components : undefined;
-    const shapes = inBranch.get(key) ?? new Set<string>();
-    shapes.add(usable === undefined ? '' : usable.join(','));
-    inBranch.set(key, shapes);
-   }
-  }
-  for (const [key, shapes] of inBranch) {
-   const [only] = shapes;
-   componentsByKey.set(key, shapes.size === 1 && only !== '' ? only.split(',') : undefined);
-  }
- }
-
- const outputs = new Map<string, string>();
- for (const key of [...componentsByKey.keys()].sort()) {
-  const components = componentsByKey.get(key);
-  if (components === undefined) continue;
-  if (components.length === 1) {
-   outputs.set(key, components[0]);
-   continue;
-  }
-  const composite = `Union(${components.join(',')})`;
-  if (!Object.hasOwn(resourceTables, composite)) {
-   resourceTables[composite] = compositeTable(composite, components, resourceTables);
-  }
-  outputs.set(key, composite);
- }
- return outputs;
-}
-
-/** Serializes the operation outputs deterministically. */
-function serializeOperationOutputs(outputs: ReadonlyMap<string, string>): string {
- const lines: string[] = [
-  '/**',
-  ' * AUTO-GENERATED by scripts/generate-governance.ts: DO NOT EDIT MANUALLY.',
-  ' * Run `npm run generate:governance` to regenerate.',
-  ' *',
-  ' * Maps each v2 operation key (normalizeOperationKey) to the resource that classifies its response: the component',
-  ' * it returns, or a Union(...) composite when the response is one of several. Operations without such a response,',
-  ' * or whose specs disagree, are not listed.',
-  ' */',
-  '',
-  'export const OPERATION_OUTPUTS: Readonly<Record<string, string>> = {',
- ];
- for (const key of [...outputs.keys()].sort()) {
-  lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(outputs.get(key))},`);
- }
- lines.push('};', '');
- return lines.join('\n');
+function serializeOutputs(outputs: Readonly<Record<string, string>>): string {
+  const lines: string[] = [
+    ...HEADER,
+    ' *',
+    ' * Maps each v2 operation key (normalizeOperationKey) to the resource that classifies its response: the component',
+    ' * it returns, the InlineResponse resource for fields no component names, or a Union(...) composite when the',
+    ' * response is one of several, or when the branches differ. Operations with no JSON response, or with a response',
+    ' * that is not JSON, are not listed.',
+    ' */',
+    '',
+    'export const OPERATION_OUTPUTS: Readonly<Record<string, string>> = {',
+  ];
+  for (const key of Object.keys(outputs).sort()) lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(outputs[key])},`);
+  lines.push('};', '');
+  return lines.join('\n');
 }
 
 function main(): void {
- const { fields, operationOutputs } = generate();
- const fieldsPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
- const outputsPath = resolve(REPO_ROOT, 'src/governance/operation-outputs.generated.ts');
- writeFileSync(fieldsPath, fields, 'utf8');
- writeFileSync(outputsPath, operationOutputs, 'utf8');
- console.log(`Generated ${fieldsPath}`);
- console.log(`Generated ${outputsPath}`);
+  const { fields, outputs } = buildGovernanceTables({
+    branches: readBranches(),
+    overrides: FIELD_OVERRIDES,
+    customs: CUSTOM_RESOURCES,
+    emptyByDesign: EMPTY_BY_DESIGN,
+  });
+  const fieldsPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
+  const outputsPath = resolve(REPO_ROOT, 'src/governance/operation-outputs.generated.ts');
+  writeFileSync(fieldsPath, serializeFields(fields), 'utf8');
+  writeFileSync(outputsPath, serializeOutputs(outputs), 'utf8');
+  console.log(`Generated ${fieldsPath}`);
+  console.log(`Generated ${outputsPath}`);
 }
 
 main();

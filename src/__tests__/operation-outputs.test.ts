@@ -14,7 +14,10 @@ describe('operation outputs (spec 3.3, output projection)', () => {
     expect(OPERATION_OUTPUTS['GET /domains/{}/users/{}/faxes']).toBe('Fax');
     expect(OPERATION_OUTPUTS['POST /domains/{}/users/{}/faxes']).toBe('Fax');
     expect(OPERATION_OUTPUTS['GET /domains/{}/transcriptions']).toBe('Transcription');
-    expect(OPERATION_OUTPUTS['GET /domains/{}/users/{}/voicemails/{}/{}']).toBe('VoicemailMessage');
+    // 46.0 returns VoicemailMessage for this operation; 44.3 to 45.0 return Audiofile records. The map is the union (spec 3.6).
+    const voicemailRead = OPERATION_OUTPUTS['GET /domains/{}/users/{}/voicemails/{}/{}'];
+    expect(voicemailRead).toContain('VoicemailMessage');
+    expect(voicemailRead).toContain('Audiofile');
   });
 
   it('leaves unmapped an operation whose response is not a named JSON resource', () => {
