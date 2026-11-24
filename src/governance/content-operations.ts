@@ -45,8 +45,8 @@ const VCON_OPERATIONS = ['GET /domains/{}/cdrs/{}/vcon', 'GET /domains/{}/users/
 const TRANSCRIPTION_OPERATIONS = ['GET /domains/{}/transcriptions'] as const;
 
 /**
- * CDR schedule exports at all three scopes: list, read (which hands out a fresh signed link) and download. The v1
- * schedule create and update send CDR rows to an address or server, so they transmit the same kinds.
+ * CDR schedule exports at all three scopes: list, read (which hands out a fresh signed link) and download. The writes that
+ * set where these exports go are CDR_SCHEDULE_WRITE_OPERATIONS below.
  */
 const CDR_EXPORT_OPERATIONS = [
   'GET /domains/{}/schedule/{}/exports',
@@ -58,6 +58,21 @@ const CDR_EXPORT_OPERATIONS = [
   'GET /schedule/{}/exports',
   'GET /schedule/{}/exports/{}',
   'GET /schedule/{}/exports/{}/download',
+] as const;
+
+/**
+ * CDR schedule writes: each sets where scheduled CDR exports are sent, to an e-mail address or to an SCP, FTP or SFTP
+ * server. The export carries the call records and their call intelligence, so the write transmits what the export returns.
+ */
+const CDR_SCHEDULE_WRITE_OPERATIONS = [
+  'POST /domains/{}/schedule',
+  'PUT /domains/{}/schedule/{}',
+  'POST /resellers/{}/schedule',
+  'PUT /resellers/{}/schedule/{}',
+  'POST /schedule',
+  'PUT /schedule/{}',
+  'v1:cdrschedule:create',
+  'v1:cdrschedule:update',
 ] as const;
 
 /** Event subscriptions: each posts the events of its model to a URL, so they transmit the kinds those events carry. */
@@ -172,6 +187,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
     ...TRANSCRIPTION_OPERATIONS,
     ...VCON_OPERATIONS,
     ...CDR_EXPORT_OPERATIONS,
+    ...CDR_SCHEDULE_WRITE_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
     ...VOICEMAIL_TRANSCRIPT_OPERATIONS,
     'v1:cdrexport:create',
@@ -208,6 +224,7 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
     ...TRANSCRIPTION_OPERATIONS,
     ...VCON_OPERATIONS,
     ...CDR_EXPORT_OPERATIONS,
+    ...CDR_SCHEDULE_WRITE_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
     'v1:cdrexport:create',
     'v1:cdrexport:download',
