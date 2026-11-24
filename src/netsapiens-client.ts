@@ -121,6 +121,21 @@ function failureText(err: unknown, fallback: string): string {
   return (typeof message === 'string' && message) || fallback;
 }
 
+/** Whether an HTTP status is a redirect. A request that refuses redirects reports one, and never follows it. */
+function isRedirect(status: number | undefined): status is number {
+  return status !== undefined && status >= 300 && status < 400;
+}
+
+/** The error text for a redirect that a registry request was not allowed to follow. The target is never requested. */
+function redirectNotFollowed(status: number): string {
+  return `${status} NetSapiens answered with a redirect, and the redirect was not followed.`;
+}
+
+/** Axios options for a request: a registry request refuses redirects (maxRedirects 0); unset requests keep the default. */
+function redirectPolicy(followRedirects: boolean | undefined): { maxRedirects?: number } {
+  return followRedirects === false ? { maxRedirects: 0 } : {};
+}
+
 export class NetSapiensClient {
   private client: AxiosInstance;
   private config: NetSapiensConfig;
@@ -254,6 +269,7 @@ export class NetSapiensClient {
     object: string,
     action: string,
     params: Record<string, unknown> | undefined,
+    options: { readonly followRedirects?: boolean } = {},
   ): Promise<NetSapiensApiResponse<T>> {
     try {
       const body = new URLSearchParams();
@@ -277,10 +293,12 @@ export class NetSapiensClient {
           'Content-Type': 'application/x-www-form-urlencoded',
           Accept: 'application/json',
         },
+        ...redirectPolicy(options.followRedirects),
       } as any);
       return { success: true, data: response.data as T };
     } catch (error: any) {
       const status = error.response?.status;
+      if (options.followRedirects === false && isRedirect(status)) return { success: false, error: redirectNotFollowed(status) };
       const data = error.response?.data;
       const msg = (typeof data === 'object' && data && (data.error_description || data.error || data.message))
         || error.message
@@ -317,6 +335,11 @@ export class NetSapiensClient {
      * `body` still carries the ordinary fields; they become form fields.
      */
     multipart?: { field: string; filename: string; base64: string; contentType?: string };
+    /**
+     * Follow a redirect the server answers with. A registry request sets this to false: the gate judged the operation the
+     * request names, and a redirect would reach another one. A 3xx answer is then reported as an error and never followed.
+     */
+    followRedirects?: boolean;
   }): Promise<NetSapiensApiResponse<T>> {
     try {
       const refusal = pathParameterRefusal(opts.pathParams, false);
@@ -338,7 +361,7 @@ export class NetSapiensClient {
       }
 
       const method = opts.method.toUpperCase();
-      const config: any = { params, pathTemplate: opts.pathTemplate };
+      const config: any = { params, pathTemplate: opts.pathTemplate, ...redirectPolicy(opts.followRedirects) };
       let response: AxiosResponse;
       if (method === 'GET' || method === 'DELETE') {
         response = await this.client.request({ method, url, ...config });
@@ -364,6 +387,7 @@ export class NetSapiensClient {
       return { success: true, data: response.data as T };
     } catch (error: any) {
       const status = error.response?.status;
+      if (opts.followRedirects === false && isRedirect(status)) return { success: false, error: redirectNotFollowed(status) };
       const data = error.response?.data;
       const msg = (typeof data === 'object' && data && (data.error_description || data.error || data.message))
         || error.message

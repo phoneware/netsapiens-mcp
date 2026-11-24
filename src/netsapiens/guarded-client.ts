@@ -238,6 +238,7 @@ function gatedClient(
               throw new Error(`Operation '${key}' is not available on this NetSapiens host (reported release: ${version}).`);
             }
           }
+          // Redirects are refused: the gate judged the operation this request names, and only that operation may be reached.
           return proxied.request<T>(opts);
         };
       }
@@ -248,6 +249,7 @@ function gatedClient(
           params: Record<string, unknown> | undefined,
         ): Promise<NetSapiensApiResponse<T>> {
           await gate.admit({ kind: 'v1', object, action, params });
+          // Redirects are refused, as for request: the gate judged the operation named, and only that operation may be reached.
           return proxied.v1Call<T>(object, action, params);
         };
       }

@@ -9,6 +9,7 @@ import { messagesRoute } from '../../../scripts/fake-netsapiens/routes/messages.
 import { recordingsRoute } from '../../../scripts/fake-netsapiens/routes/recordings.mjs';
 import { transcriptionsRoute } from '../../../scripts/fake-netsapiens/routes/transcriptions.mjs';
 import { v1Route } from '../../../scripts/fake-netsapiens/routes/v1.mjs';
+import { redirectsRoute } from '../../../scripts/fake-netsapiens/routes/redirects.mjs';
 import { voicemailsRoute } from '../../../scripts/fake-netsapiens/routes/voicemails.mjs';
 import type { AccessPolicyV1, ContentKind } from '../../access/contract.js';
 
@@ -28,7 +29,7 @@ export interface FakeNetSapiens {
   close(): Promise<void>;
 }
 
-export const ROUTE_MODULES = [cdrsRoute, recordingsRoute, transcriptionsRoute, messagesRoute, voicemailsRoute, v1Route];
+export const ROUTE_MODULES = [cdrsRoute, recordingsRoute, transcriptionsRoute, messagesRoute, voicemailsRoute, v1Route, redirectsRoute];
 
 export async function startFake(): Promise<FakeNetSapiens> {
   return startFakeNetSapiens({ apiVersion: '44.4.10', routeModules: ROUTE_MODULES });
