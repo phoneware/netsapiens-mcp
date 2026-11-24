@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Optional access registry. Set `MCP_ACCESS_REGISTRY_URL` and a registry decides, for each signed-in person, which accounts may sign in, from which AI apps, which tools they may use, whether they may write, and which content kinds the connector refuses: call recordings, transcripts, voicemail, message text, AI call summaries and fax pages. The registry can only narrow what the environment allows, and it fails closed. Related variables: `MCP_ACCESS_REGISTRY_AUTH`, `MCP_ACCESS_REGISTRY_TOKEN`, `MCP_ACCESS_REGISTRY_AUDIENCE`, `MCP_ACCESS_REGISTRY_CONNECTOR`, `MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS` and `MCP_ACCESS_REGISTRY_TIMEOUT_MS`. It needs the HTTP transport, and `/health` reports `accessRegistry: enforced` while it is on. See `docs/access-registry.md`.
 - `scripts/fake-access-registry.mjs`, a programmable registry for tests, and a `registry` leg in `scripts/consumer-e2e.mjs` that runs the packed package against it.
+- `docs/connecting-clients.md`, with the steps, OAuth redirect URI and troubleshooting for connecting Claude, ChatGPT and Codex, Gemini, and GitHub Copilot to the hosted server. The README now links to it in place of its older client steps.
 
 ### Changed
 

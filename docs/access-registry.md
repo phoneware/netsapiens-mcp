@@ -178,6 +178,8 @@ The fixtures in `src/__tests__/fixtures/access/` show each class. A valid decisi
 
 ## Platforms and redirect URIs
 
+The redirect URI that each AI client sends, and the entry to approve for it, is listed in [connecting-clients.md](connecting-clients.md).
+
 A redirect URI is permitted when it matches one platform entry under these rules. The rules apply to every entry:
 
 - The URI has no userinfo, no fragment, and no whitespace, control character or backslash.
