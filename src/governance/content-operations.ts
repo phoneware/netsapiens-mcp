@@ -95,6 +95,49 @@ const RECORDING_DESTINATION_OPERATIONS = [
   'v1:recording:update',
 ] as const;
 
+/**
+ * Writes that send domain e-mail through an SMTP relay. Voicemail, transcripts and fax pages are mailed through the
+ * relay the domain or reseller names, so changing the relay changes where they go.
+ */
+const SMTP_RELAY_OPERATIONS = [
+  'POST /domains',
+  'PUT /domains/{}',
+  'PUT /resellers/{}',
+  'v1:domain:update',
+] as const;
+
+/**
+ * Writes that set a user's e-mail address, where fax PDFs and voicemail transcripts are mailed. The voicemail alerts that
+ * name the same address are in VOICEMAIL_REDIRECT_OPERATIONS.
+ */
+const USER_ADDRESS_OPERATIONS = [
+  'POST /domains/{}/users',
+  'PUT /domains/{}/users/{}',
+  'v1:subscriber:create',
+  'v1:subscriber:update',
+] as const;
+
+/** Writes that set where a fax number's inbound e-mail goes, including the fax PDF it attaches. */
+const FAX_NUMBER_WRITE_OPERATIONS = [
+  'POST /domains/{}/faxnumbers',
+  'PUT /domains/{}/faxnumbers/{}',
+  'PUT /domains/{}/users/{}/faxnumbers/{}',
+] as const;
+
+/**
+ * Writes that redirect SMS: a session's members, a number's destination, a number assigned to an inbox, and an inbox
+ * member. Whoever is added receives the text.
+ */
+const SMS_REDIRECT_OPERATIONS = [
+  'PUT /domains/{}/users/{}/messagesessions/{}',
+  'PUT /domains/{}/users/{}/messagesessions/{}/accept',
+  'PUT /domains/{}/smsnumbers/{}',
+  'POST /domains/{}/inboxes/{}/smsnumbers',
+  'POST /domains/{}/inboxes/{}/members',
+  'v1:messagesession:accept',
+  'v1:messagesession:update',
+] as const;
+
 /** Event subscriptions: each posts the events of its model to a URL, so they transmit the kinds those events carry. */
 const SUBSCRIPTION_TRANSMIT_OPERATIONS = [
   'POST /subscriptions',
@@ -204,6 +247,8 @@ function isListed(table: Readonly<Record<string, unknown>>, key: string): boolea
 export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<string, true>>>> = {
   call_recording: lookup([...RECORDING_OPERATIONS, ...RECORDING_DESTINATION_OPERATIONS, ...VCON_OPERATIONS]),
   transcript: lookup([
+    ...SMTP_RELAY_OPERATIONS,
+    ...USER_ADDRESS_OPERATIONS,
     ...TRANSCRIPTION_OPERATIONS,
     ...VCON_OPERATIONS,
     ...CDR_EXPORT_OPERATIONS,
@@ -222,12 +267,14 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
   voicemail: lookup([
     ...VOICEMAIL_OPERATIONS,
     ...VOICEMAIL_REDIRECT_OPERATIONS,
+    ...SMTP_RELAY_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
     'v1:audio:play',
     'v1:audio:read',
     'v1:conversation:read',
   ]),
   sms_text: lookup([
+    ...SMS_REDIRECT_OPERATIONS,
     ...MESSAGE_BODY_OPERATIONS,
     ...SIP_TRACE_OPERATIONS,
     ...SUBSCRIPTION_TRANSMIT_OPERATIONS,
@@ -254,6 +301,9 @@ export const CONTENT_OPERATIONS: Readonly<Record<ContentKind, Readonly<Record<st
     'v1:recording:read',
   ]),
   fax_page: lookup([
+    ...SMTP_RELAY_OPERATIONS,
+    ...USER_ADDRESS_OPERATIONS,
+    ...FAX_NUMBER_WRITE_OPERATIONS,
     ...FAX_OPERATIONS,
     // Plays a voicemail-folder item, which may be a fax image; the folder list may hold faxes too.
     'GET /domains/{}/users/{}/voicemails/{}',
@@ -309,39 +359,6 @@ export const RECORD_LIST_OPERATIONS: Readonly<Record<string, RecordListEntry>> =
       'GET /domains/{}/messagesessions',
       'GET /domains/{}/users/{}/messagesessions',
       'GET /domains/{}/users/{}/messagesessions/{}',
-    ]),
-    ...recordsOf(
-      ['transcript', 'voicemail'],
-      'greeting, music and message records carry an audio file record, whose link and transcription are stripped by field',
-      [
-        'GET /domains/{}/moh',
-        'GET /domains/{}/moh/{}',
-        'GET /domains/{}/msg',
-        'GET /domains/{}/msg/{}',
-        'GET /domains/{}/users/{}/greetings',
-        'GET /domains/{}/users/{}/greetings/{}',
-        'GET /domains/{}/users/{}/moh',
-        'GET /domains/{}/users/{}/moh/{}',
-        'GET /domains/{}/users/{}/msg',
-        'GET /domains/{}/users/{}/msg/{}',
-        'POST /domains/{}/moh',
-        'POST /domains/{}/msg',
-        'POST /domains/{}/users/{}/greetings',
-        'POST /domains/{}/users/{}/moh',
-        'POST /domains/{}/users/{}/msg',
-        'PUT /domains/{}/moh/{}',
-        'PUT /domains/{}/msg/{}',
-        'PUT /domains/{}/users/{}/greetings/{}',
-        'PUT /domains/{}/users/{}/moh/{}',
-        'PUT /domains/{}/users/{}/msg/{}',
-      ],
-    ),
-    ...recordsOf(['voicemail'], 'auto-attendant records carry a greeting audio record, whose link is stripped by field', [
-      'DELETE /domains/{}/users/{}/autoattendants/{}',
-      'GET /domains/{}/autoattendants',
-      'GET /domains/{}/users/{}/autoattendants/{}',
-      'POST /domains/{}/autoattendants',
-      'PUT /domains/{}/users/{}/autoattendants/{}',
     ]),
   ]),
 );
@@ -455,18 +472,15 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /resellers/{}/fax/cover-page',
       'GET /resellers/{}/fax/cover-page/file',
       'POST /domains/{}/fax/cover-page',
-      'POST /domains/{}/faxnumbers',
       'POST /domains/{}/users/{}/fax/cover-page',
       'POST /fax/cover-page',
       'POST /resellers/{}/fax/cover-page',
       'PUT /domains/{}/fax/cover-page',
-      'PUT /domains/{}/faxnumbers/{}',
       'PUT /domains/{}/users/{}/fax/cover-page',
-      'PUT /domains/{}/users/{}/faxnumbers/{}',
       'PUT /fax/cover-page',
       'PUT /resellers/{}/fax/cover-page',
     ]),
-    ...freeOf('SMS setup: numbers, carriers, blocks and deletes, plus message-session counts and changes that return no message', [
+    ...freeOf('SMS setup: numbers, carriers, blocks and deletes, plus message-session counts and leaves; the redirects are sms_text above', [
       'DELETE /domains/{}/inboxes/{}/smsnumbers/{}',
       'DELETE /domains/{}/smsblocks/{}',
       'DELETE /domains/{}/smsnumbers/{}',
@@ -484,15 +498,11 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'GET /smscarriers',
       'GET /smscarriers/{}',
       'GET /smsnumbers',
-      'POST /domains/{}/inboxes/{}/smsnumbers',
       'POST /domains/{}/smsblocks',
       'POST /domains/{}/smsnumbers',
       'POST /domains/{}/users/{}/smsblocks',
       'POST /smscarriers',
       'PUT /domains/{}/smsblocks/{}',
-      'PUT /domains/{}/smsnumbers/{}',
-      'PUT /domains/{}/users/{}/messagesessions/{}',
-      'PUT /domains/{}/users/{}/messagesessions/{}/accept',
       'PUT /domains/{}/users/{}/messagesessions/{}/leave',
       'PUT /smscarriers/{}',
     ]),
@@ -545,13 +555,11 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'v1:meeting:readEvents',
       'v1:meeting:update',
     ]),
-    ...freeOf('v1 message deletion and message-session changes: no message text is returned, and a session read is sms_text above', [
+    ...freeOf('v1 message deletes, session deletes, dispatches and leaves: no message text is returned; session accepts and updates are sms_text above', [
       'v1:message:delete',
-      'v1:messagesession:accept',
       'v1:messagesession:delete',
       'v1:messagesession:dispatch',
       'v1:messagesession:leave',
-      'v1:messagesession:update',
     ]),
     ...freeOf('v1 recording delete: removes a recording record and returns no content; reads are call_recording above', [
       'v1:recording:delete',
@@ -684,13 +692,39 @@ export const REVIEWED_CONTENT_FREE: Readonly<Record<string, string>> = Object.fr
       'POST /apt/update',
       'POST /apt/update/{}',
     ]),
+    ...freeOf('audio files an administrator or owner uploads (music on hold, greetings, prompts, auto-attendant greetings): not caller content, so none of the six kinds', [
+      'DELETE /domains/{}/users/{}/autoattendants/{}',
+      'GET /domains/{}/autoattendants',
+      'GET /domains/{}/moh',
+      'GET /domains/{}/moh/{}',
+      'GET /domains/{}/msg',
+      'GET /domains/{}/msg/{}',
+      'GET /domains/{}/users/{}/autoattendants/{}',
+      'GET /domains/{}/users/{}/greetings',
+      'GET /domains/{}/users/{}/greetings/{}',
+      'GET /domains/{}/users/{}/moh',
+      'GET /domains/{}/users/{}/moh/{}',
+      'GET /domains/{}/users/{}/msg',
+      'GET /domains/{}/users/{}/msg/{}',
+      'POST /domains/{}/autoattendants',
+      'POST /domains/{}/moh',
+      'POST /domains/{}/msg',
+      'POST /domains/{}/users/{}/greetings',
+      'POST /domains/{}/users/{}/moh',
+      'POST /domains/{}/users/{}/msg',
+      'PUT /domains/{}/moh/{}',
+      'PUT /domains/{}/msg/{}',
+      'PUT /domains/{}/users/{}/autoattendants/{}',
+      'PUT /domains/{}/users/{}/greetings/{}',
+      'PUT /domains/{}/users/{}/moh/{}',
+      'PUT /domains/{}/users/{}/msg/{}',
+    ]),
     ...freeOf('deletes and writes that return text or a status: no content is returned', [
       'DELETE /domains/{}',
       'DELETE /domains/{}/users/{}/calls/{}/reject',
       'DELETE /resellers/{}',
       'POST /domains/{}/callqueues',
       'POST /resellers',
-      'PUT /resellers/{}',
     ]),
     ...freeOf('interface translations: the product copy of the UI, not one of the six kinds', [
       'DELETE /translations',
