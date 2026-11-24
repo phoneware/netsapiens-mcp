@@ -21,7 +21,9 @@ import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { isStatelessMode } from '../server-info.js';
 import type { AvailabilityContext, AvailabilityMeta } from '../netsapiens/availability.js';
-import { createGuardedClient } from '../netsapiens/guarded-client.js';
+import { createGuardedClient, createOperationGate, OperationRefusedError, type ForeignTargets } from '../netsapiens/guarded-client.js';
+import { ALLOW_ALL, type CompiledPolicy } from '../access/policy.js';
+import type { ContentKind } from '../governance/types.js';
 
 function multipartAlternative(toolName: string): string {
  if (/greeting/.test(toolName)) {
@@ -468,10 +470,21 @@ export function isToolReadOnly(name: string): boolean {
  return hints.readOnlyHint && !hints.destructiveHint;
 }
 
+/** A tool the access policy refuses. The client sees a generic message; the reason is for the audit log. */
+export class PolicyRefusedError extends McpError {
+ readonly reason: string;
+
+ constructor(toolName: string, reason: string) {
+  super(ErrorCode.InvalidParams, `Tool '${toolName}' is not permitted for this account.`);
+  this.reason = reason;
+ }
+}
+
 function isGeneratedToolVisible(
  toolName: string,
  userRole?: UserRole,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): boolean {
  if (isToolDisabled(toolName)) return false;
  const mapping = buildNameMapping();
@@ -485,6 +498,7 @@ function isGeneratedToolVisible(
  if (availabilityContext && def?.operation) {
   if (!availabilityContext.isAvailable(def.operation.key)) return false;
  }
+ if (policy !== undefined && !policy.toolDecision(toolName).allowed) return false;
  return true;
 }
 
@@ -500,19 +514,20 @@ async function curatedExposedTools(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): Promise<ExposedTool[]> {
  const meta = buildMetaTools(
   toolRegistry,
   async (name, args, client) => {
    // Reuse handleToolCall so every filter (disable, action, role, name
    // mapping, destructive) applies to call_api invocations too.
-   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity, availabilityContext);
+    return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity, availabilityContext, policy);
   },
   // search_api visibility: hide anything the operator has disabled, anything
   // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
   // destructive tools don't leak into search results that call_api would
   // just reject anyway.
-  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext, policy),
   availabilityContext,
  );
  const all = [...CURATED_CATALOG, ...meta];
@@ -521,6 +536,7 @@ async function curatedExposedTools(
  for (const t of all) {
   if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
   if (isToolDisabled(t.schema.name)) continue;
+  if (policy !== undefined && !policy.toolDecision(t.schema.name).allowed) continue;
   if (availabilityContext && t.operations && t.operations.length > 0) {
    const allAvail = t.operations.every((op) => availabilityContext.isAvailable(op));
    if (!allAvail) continue;
@@ -551,7 +567,7 @@ async function curatedExposedTools(
   const promoted = await getPromotedToolNames(userIdentity, availabilityContext);
   const mapping = buildNameMapping();
   for (const registryKey of promoted) {
-   if (!isGeneratedToolVisible(registryKey, userRole, availabilityContext)) continue;
+   if (!isGeneratedToolVisible(registryKey, userRole, availabilityContext, policy)) continue;
    const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
    if (seen.has(exposed)) continue;
    const def = toolRegistry.get(registryKey);
@@ -619,15 +635,17 @@ function findCuratedTool(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
+ targets?: ForeignTargets,
 ) {
  const meta = buildMetaTools(
   toolRegistry,
   async (innerName, innerArgs, client) =>
-   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity, availabilityContext),
+   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity, availabilityContext, policy, targets),
   // Same predicate the ListTools path uses. This was a second, hand-copied
   // version of the rule, and it had already drifted: search_api kept
   // offering tools the dispatcher would reject.
-  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext, policy),
   availabilityContext,
  );
  return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
@@ -647,16 +665,17 @@ export async function getAllToolDefinitions(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): Promise<ExposedTool[]> {
  if (getToolMode() === 'curated') {
-  return curatedExposedTools(userRole, userIdentity, availabilityContext);
+  return curatedExposedTools(userRole, userIdentity, availabilityContext, policy);
  }
 
  const mapping = buildNameMapping();
  const tools: ExposedTool[] = [];
  for (const [registryKey, def] of toolRegistry) {
   const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
-  if (!isGeneratedToolVisible(exposed, userRole, availabilityContext)) continue;
+  if (!isGeneratedToolVisible(exposed, userRole, availabilityContext, policy)) continue;
   const annotations = classifyTool(registryKey, def);
   const metaAvail = availabilityContext ? availabilityContext.getToolAvailability(def) : undefined;
   tools.push({
@@ -770,12 +789,25 @@ export async function handleToolCall(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
+ targets?: ForeignTargets,
 ): Promise<unknown> {
- const guardedClient = availabilityContext ? createGuardedClient(client, availabilityContext) : client;
+ // ALLOW_ALL is what an unconfigured deployment behaves as: it enforces nothing beyond the tool filter.
+ const foreignStrip = new Set<ContentKind>();
+ const gate = policy !== undefined && policy !== ALLOW_ALL
+  ? createOperationGate({ policy, targets, foreignStrip })
+  : undefined;
+ const guardedClient = gate !== undefined
+  ? createGuardedClient(client, availabilityContext, { gate })
+  : availabilityContext ? createGuardedClient(client, availabilityContext) : client;
  const startTime = Date.now();
  const argNames = Object.keys(args ?? {});
 
  try {
+  if (policy !== undefined) {
+   const decision = policy.toolDecision(toolName);
+   if (!decision.allowed) throw new PolicyRefusedError(toolName, decision.reason);
+  }
   if (isReadOnlyMode()) {
    if (toolName === 'call_api') {
     const innerName = String(args?.tool_name ?? '');
@@ -819,7 +851,7 @@ export async function handleToolCall(
   // generated registry without infinite recursion through the curated layer.
   let curated: CuratedTool | undefined;
   if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
-   curated = findCuratedTool(toolName, userRole, userIdentity, availabilityContext);
+   curated = findCuratedTool(toolName, userRole, userIdentity, availabilityContext, policy, targets);
   }
 
   const mapping = buildNameMapping();
@@ -953,6 +985,12 @@ export async function handleToolCall(
    error: errorMessage,
    durationMs,
   };
+  if (policy !== undefined) logContext.policyRevision = policy.revision;
+  if (err instanceof PolicyRefusedError) logContext.policyDenied = err.reason;
+  if (err instanceof OperationRefusedError) {
+   logContext.policyDenied = err.reason;
+   logContext.opBlocked = err.operationKey;
+  }
   if (resolvedScope !== undefined) {
    logContext.scope = resolvedScope;
   }
