@@ -606,6 +606,25 @@ describe('registry client: logging', () => {
 });
 
 describe('registry client: construction', () => {
+  it('times out a decision source that never answers and ignores the abort signal', async () => {
+    vi.useFakeTimers();
+    try {
+      const config: EnabledAccessRegistryConfig = {
+        enabled: true,
+        baseUrl: BASE,
+        auth: { mode: 'bearer', token: TOKEN },
+        connector: CONNECTOR,
+        maxStaleSeconds: 600,
+        timeoutMs: 25,
+      };
+      const stalled = createAccessRegistryClient(config, { fetchDecision: () => new Promise(() => undefined) });
+      const pending = stalled.decide(QUERY);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await pending).toEqual({ source: 'unavailable', errorClass: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 2_000);
   it('refuses options it cannot run with', () => {
     const fetchDecision = async () => ({ kind: 'not_modified' as const });
     expect(() => new RegistryClient({ connector: CONNECTOR, fetchDecision, timeoutMs: 0 })).toThrow(RangeError);
