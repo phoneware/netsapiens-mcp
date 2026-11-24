@@ -77,6 +77,16 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 - **Permanent Refresh Credentials:** Refresh tokens belong to permanent refresh families that persist until explicit revocation, detection of token replay outside the 30-second retry grace window, or definitive upstream rejection. Access tokens carry a 30-day retention window after expiry for audit records before being purged, while refresh families have no calendar expiration.
 - **Plaintext Token Non-Migration:** Plaintext 2.x `http-tokens*.json` files are not migrated and must be re-authenticated.
 
+### Access registry (optional)
+
+Set `MCP_ACCESS_REGISTRY_URL` and a registry decides, for each signed-in person, which accounts may sign in, from which AI apps, which tools they may use, whether they may write, and which content kinds the connector refuses. The registry can only narrow the settings above, and it fails closed. Unset, none of this applies. The contract, the policy grammar and the failure rules are in [access-registry.md](access-registry.md).
+
+- **Content denial covers reads.** A profile that denies a content kind refuses the tools and NetSapiens operations that read or transmit it, and removes classified content fields from other results.
+- **Writes can route content elsewhere.** With write access, an administrator can create destinations that carry content outside the connector, such as forwarding, schedules, storage, push registrations, SMTP relays, queue agents and carrier URLs. The connector refuses the destinations it knows under a denied kind. No list of destinations can be complete.
+- **Recommended for regulated data: deny content and set `access: read`.** A profile that denies any content kind should also be read-only. That is the recommended configuration for regulated data, and `access: read` is the control that closes this whole class.
+- **Routing and capture are not content.** Live-audio routing (transfers, answering a live call to another party, forwarding rules, dialing a number into a conference, call and queue routing) and capture enablement (switching recording, transcription or sentiment on) are not content operations. Only `access: read` or tool selection controls them.
+- **What it does not do.** It is not HIPAA compliance, de-identification, or PHI or PII redaction. Numbers, names, times, durations, queue and contact data still reach the AI. Fields the connector has not classified are not guaranteed removed; `unclassifiedOutput: deny` is the control for those. Other paths, such as the NetSapiens portal, direct API use and other hosts, are not covered. A request that names no domain follows the caller's own profile.
+
 ## Configuration Reference
 
 <!-- facts:env-table -->
@@ -130,6 +140,13 @@ Node 22.13 or later. On Node 22, Node marks `node:sqlite` experimental and print
 | `MCP_PROMOTE_THRESHOLD` | http, stdio | No | None | Tool promotion threshold. |
 | `MCP_PROMOTE_WINDOW_DAYS` | http, stdio | No | None | Tool promotion window. |
 | `MCP_SYNCHRONOUS_WRITES` | http, stdio | No | None | Control synchronous upstream writes. |
+| `MCP_ACCESS_REGISTRY_URL` | http | No | None | Access registry base URL. Unset disables the registry. Must be https unless it is loopback. Stdio exits 1 with a ConfigError when it is set. |
+| `MCP_ACCESS_REGISTRY_AUTH` | http | No | None | Required when the URL is set: bearer, google-id-token or none. none is for loopback URLs only. Any other value is a ConfigError. |
+| `MCP_ACCESS_REGISTRY_TOKEN` | http | No | None | Bearer secret for the registry. Required when MCP_ACCESS_REGISTRY_AUTH is bearer. |
+| `MCP_ACCESS_REGISTRY_AUDIENCE` | http | No | None | Identity token audience. Required when MCP_ACCESS_REGISTRY_AUTH is google-id-token. |
+| `MCP_ACCESS_REGISTRY_CONNECTOR` | http | No | `netsapiens-mcp` | Connector ID sent to the registry. |
+| `MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS` | http | No | `600` | Last-known-good window in seconds, 0 to 3600. The registry cannot extend it. |
+| `MCP_ACCESS_REGISTRY_TIMEOUT_MS` | http | No | `3000` | Registry request timeout in milliseconds, 500 to 30000. |
 <!-- /facts:env-table -->
 
 ## Library Usage

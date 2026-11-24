@@ -16,6 +16,9 @@
  *   - firestore: installs @google-cloud/firestore, proves multi-instance bearer sharing, runs exported store conformance against emulator.
  *   - mfa: exercises password challenge, single-use retries and MCP connection against a fake NetSapiens.
  *   - library: tsc --noEmit on consumer TS file importing from 'netsapiens-mcp/lib'.
+ *   - registry: main() with the access registry configured, against the fake NetSapiens and the fake registry. Every refusal is asserted with zero NetSapiens requests; the leg needs the 'registry' name and no other leg.
+ *       REGISTRY_E2E_COLLECT=1 keeps the registry leg going past a failed row and lists every row that failed (revert-proof runs). The default stops at the first failure.
+ *       REGISTRY_E2E_ALLOW_ALL=1 makes the fake registry allow everything (the positive control: refusal rows must then fail).
  */
 
 import { spawn, execSync } from 'node:child_process';
@@ -25,7 +28,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,12 +91,68 @@ function parseArgs() {
   };
 }
 
-function pass(leg, assertion) {
-  console.log(`PASS ${leg} ${assertion}`);
+/** Every credential the leg minted or was handed. Failure text and log output replace each with [redacted]. */
+const knownSecrets = new Set();
+function scrub(text) {
+  let out = String(text);
+  for (const secret of [...knownSecrets].sort((a, b) => b.length - a.length)) out = out.split(secret).join('[redacted]');
+  return out;
 }
 
+/** Records the credentials a token response carries, so no later failure text can name them. */
+function captureTokens(json) {
+  for (const key of ['access_token', 'refresh_token']) {
+    if (typeof json?.[key] === 'string') knownSecrets.add(json[key]);
+  }
+  return json;
+}
+
+function parseJsonOrUndefined(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function truncate(value, max = 120) {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+/** What a failure text may say about a response: its status, its error fields and its size. Never the body. */
+function describeResponse(res) {
+  const raw = typeof res?.rawText === 'string' ? res.rawText : undefined;
+  const json = res?.json ?? (raw === undefined ? undefined : parseJsonOrUndefined(raw));
+  const bytes = Buffer.byteLength(raw ?? JSON.stringify(json ?? null));
+  const error = json?.error;
+  let errorText = 'none';
+  if (typeof error === 'string') errorText = truncate(error);
+  else if (error !== null && typeof error === 'object') errorText = `code ${error.code ?? 'none'}: ${truncate(error.message)}`;
+  const description = typeof json?.error_description === 'string' ? truncate(json.error_description) : 'none';
+  return `status ${res?.status ?? 'none'}, error ${errorText}, error_description ${description}, body ${bytes} bytes`;
+}
+
+function formatFailure(leg, assertion, reason) {
+  return scrub(`FAIL ${leg} ${assertion}: ${reason}`);
+}
+
+function pass(leg, assertion) {
+  if (leg === 'registry' && collectedRegistryFailures.includes(assertion)) return;
+  console.log(scrub(`PASS ${leg} ${assertion}`));
+}
+
+// REGISTRY_E2E_COLLECT=1 keeps the registry leg going after a failed row, so one run lists every row a change breaks.
+// The default stops at the first failure.
+const collectedRegistryFailures = [];
 function fail(leg, assertion, reason) {
-  throw new Error(`FAIL ${leg} ${assertion}: ${reason}`);
+  const message = formatFailure(leg, assertion, reason);
+  if (leg === 'registry' && process.env.REGISTRY_E2E_COLLECT === '1') {
+    console.log(message);
+    collectedRegistryFailures.push(assertion);
+    return;
+  }
+  throw new Error(message);
 }
 
 async function getAvailablePort() {
@@ -316,6 +375,923 @@ async function sendMcpRequest(serverPort, bearer, method, params, sessionId) {
   return { status, sessionId: returnedSessionId, json, rawText, headers: resp.headers };
 }
 
+// -----------------------------------------------------------------------------
+// Access registry leg. The packed package's main() runs with the registry configured, against the fake NetSapiens and
+// the fake registry. Each refusal is asserted with zero NetSapiens requests, and each has a positive control. The field
+// table is read from the packed build and the content groups from the reviewed snapshot, so the expectations move with
+// the tables rather than with numbers written here.
+// -----------------------------------------------------------------------------
+
+const REGISTRY_SESSION_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const REGISTRY_APP_REDIRECT = 'https://ai.example.test/oauth/callback';
+const REGISTRY_BEARER = 'registry-bearer-e2e-7f3a91';
+const REGISTRY_BAD_BEARER = 'registry-bearer-wrong-e2e-c208';
+const REGISTRY_TTL_SECONDS = 5;
+const REGISTRY_TTL_MS = REGISTRY_TTL_SECONDS * 1000;
+// The leg's own registry and session credentials. Registered once here, so no failure text or log line can name them.
+for (const secret of [REGISTRY_SESSION_SECRET, REGISTRY_BEARER, REGISTRY_BAD_BEARER]) knownSecrets.add(secret);
+const REGISTRY_KINDS = ['call_recording', 'transcript', 'voicemail', 'sms_text', 'ai_summary', 'fax_page'];
+const REGISTRY_REFUSAL_CODES = new Set([-32602, -32600]);
+const AUTO_ATTENDANT_PROMPT_TOOL = 'get_domains_by_domain_users_by_user_autoattendants_by_prompt';
+const RECORDING_TOOL = 'get_domains_by_domain_recordings_by_callid';
+const CDR_SCHEDULE_ARGS = {
+  domain: 'example.com',
+  'schedule-name': 'slice-f-archive',
+  'schedule-preset': 'Daily',
+  'export-method': 'email',
+  email: 'archive@external.example',
+};
+const ANSWER_RULE_ARGS = { timeframe: 'Default', update: { enabled: 'yes' } };
+const IDENTITY_REQUEST = 'GET /ns-api/v2/domains/~/users/~';
+const COPY_NOT_ENABLED = 'Your organization has not enabled this AI connector for your account.';
+const COPY_APP_NOT_APPROVED = 'This AI app is not approved for your organization.';
+const COPY_UNAVAILABLE = 'Sign-in is temporarily unavailable. Try again in a few minutes.';
+
+/** A distinct client address for every request, so no harness request shares a per-address limit with another. */
+let registryClientCount = 0;
+function registryClientAddress() {
+  registryClientCount += 1;
+  return `10.77.${Math.floor(registryClientCount / 250)}.${(registryClientCount % 250) + 1}`;
+}
+
+function registryFetch(url, init = {}) {
+  return fetch(url, { ...init, headers: { ...(init.headers ?? {}), 'X-Forwarded-For': registryClientAddress() } });
+}
+
+/** One MCP request from its own client address. The body and the result shape are those of sendMcpRequest. */
+async function registryMcpRequest(port, bearer, method, params, sessionId) {
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+    Authorization: `Bearer ${bearer}`,
+    'X-Forwarded-For': registryClientAddress(),
+  };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+  const resp = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params: params ?? {} }),
+  });
+  const status = resp.status;
+  const returnedSessionId = resp.headers.get('mcp-session-id') || sessionId;
+  const rawText = await resp.text();
+  const dataLine = rawText.split('\n').find((l) => l.startsWith('data: '))?.slice(6) ?? rawText;
+  let json = null;
+  try {
+    json = JSON.parse(dataLine);
+  } catch {
+    json = null;
+  }
+  return { status, sessionId: returnedSessionId, json, rawText, headers: resp.headers };
+}
+
+/** The environment a registry child inherits: nothing that configures the server, so each child states its own. */
+function registryInheritedEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith('MCP_') && !name.startsWith('NETSAPIENS_')),
+  );
+}
+
+function registryChildEnv({ port, nsOrigin, storePath, toolMode, registry, confirm = false }) {
+  return {
+    ...registryInheritedEnv(),
+    MCP_TRANSPORT: 'http',
+    MCP_PORT: String(port),
+    MCP_HOST: '127.0.0.1',
+    MCP_BASE_URL: `http://127.0.0.1:${port}`,
+    NETSAPIENS_API_URL: nsOrigin,
+    NETSAPIENS_AUTH_MODE: 'token',
+    MCP_SESSION_SECRET: REGISTRY_SESSION_SECRET,
+    MCP_PERSISTENCE: 'sqlite',
+    MCP_STORE_PATH: storePath,
+    MCP_STATELESS: 'false',
+    MCP_MFA_REPLAY_AUDIENCE: 'consumer-registry-e2e',
+    MCP_TRUST_PROXY_HOPS: '1',
+    MCP_TOOL_MODE: toolMode,
+    ...(confirm ? { MCP_CONFIRM_DESTRUCTIVE: 'true' } : {}),
+    ...(registry === undefined
+      ? {}
+      : {
+          MCP_ACCESS_REGISTRY_URL: registry.url,
+          MCP_ACCESS_REGISTRY_AUTH: 'bearer',
+          MCP_ACCESS_REGISTRY_TOKEN: registry.token,
+          MCP_ACCESS_REGISTRY_MAX_STALE_SECONDS: String(registry.maxStaleSeconds),
+        }),
+  };
+}
+
+async function startRegistryChild(tempDir, nsOrigin, name, { storePath, toolMode = 'curated', registry, confirm = false } = {}) {
+  const port = await getAvailablePort();
+  const srv = await startMcpServerProcess(
+    tempDir,
+    registryChildEnv({
+      port,
+      nsOrigin,
+      storePath: storePath ?? path.join(tempDir, `registry-${name}.sqlite`),
+      toolMode,
+      registry,
+      confirm,
+    }),
+  );
+  try {
+    await waitForHealth(port);
+  } catch (err) {
+    console.error(scrub(`Registry child ${name} did not start. Logs:\n${srv.getLogs()}`));
+    await srv.stop();
+    throw err;
+  }
+  return { name, port, base: `http://127.0.0.1:${port}`, nsOrigin, srv, logs: () => srv.getLogs() };
+}
+
+/** Runs the consent page for one NetSapiens token. Returns the raw result, so a refusal can be asserted by its page. */
+async function registrySignIn(child, nsToken, redirectUri = REGISTRY_APP_REDIRECT) {
+  const registered = await registryFetch(`${child.base}/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirect_uris: [redirectUri], client_name: 'registry-e2e', token_endpoint_auth_method: 'none' }),
+  });
+  if (registered.status !== 201) fail('registry', 'dcr', `registration returned ${registered.status}`);
+  const clientId = (await registered.json()).client_id;
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const authorize = await registryFetch(
+    `${child.base}/authorize?${new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    })}`,
+  );
+  const authState = (await authorize.text()).match(/name="auth_state"\s+value="([^"]+)"/)?.[1];
+  if (authorize.status !== 200 || authState === undefined) fail('registry', 'authorize', `status ${authorize.status}`);
+  const login = await registryFetch(`${child.base}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ platform: child.nsOrigin, token: nsToken, auth_state: authState }),
+    redirect: 'manual',
+  });
+  const html = await login.text();
+  const location = login.headers.get('location');
+  const code = location === null ? undefined : (new URL(location).searchParams.get('code') ?? undefined);
+  return { status: login.status, html, code, clientId, verifier, redirectUri };
+}
+
+async function registryTokens(child, granted) {
+  const res = await registryFetch(`${child.base}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: granted.code,
+      client_id: granted.clientId,
+      redirect_uri: granted.redirectUri,
+      code_verifier: granted.verifier,
+    }),
+  });
+  const json = captureTokens(await res.json());
+  if (res.status !== 200 || typeof json.access_token !== 'string') fail('registry', 'token-exchange', `status ${res.status}`);
+  return { accessToken: json.access_token, refreshToken: json.refresh_token, clientId: granted.clientId };
+}
+
+async function registryRefresh(child, tokens) {
+  const res = await registryFetch(`${child.base}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refreshToken,
+      client_id: tokens.clientId,
+    }),
+  });
+  const json = captureTokens(await res.json().catch(() => ({})));
+  return { status: res.status, json };
+}
+
+/** The failure a refresh must not produce. A refresh is refused as invalid_grant; anything else is named by describeResponse. */
+function refreshRefusalFailure(res) {
+  if (res.status === 400 && res.json?.error === 'invalid_grant') return undefined;
+  return `expected status 400 with error invalid_grant, got ${describeResponse(res)}`;
+}
+
+async function registrySession(child, accessToken) {
+  const init = await registryMcpRequest(child.port, accessToken, 'initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'registry-e2e', version: '1.0.0' },
+  });
+  if (init.status !== 200 || init.json?.result === undefined) {
+    fail('registry', 'initialize', describeResponse(init));
+  }
+  return { child, accessToken, sessionId: init.sessionId };
+}
+
+/** Signs one account in and opens an MCP session. The sign-in must succeed. */
+async function openSessionAs(child, nsToken, redirectUri = REGISTRY_APP_REDIRECT) {
+  const signedAt = Date.now();
+  const signed = await registrySignIn(child, nsToken, redirectUri);
+  if (signed.status !== 302 || signed.code === undefined) {
+    fail('registry', 'sign-in', `${nsToken} at ${redirectUri} returned ${signed.status}`);
+  }
+  const tokens = await registryTokens(child, signed);
+  const session = await registrySession(child, tokens.accessToken);
+  return { session, tokens, signedAt };
+}
+
+const sentSince = (fake, mark) => fake.requests.slice(mark).map((request) => `${request.method} ${request.path}`);
+
+/** The error a call rejected with, or undefined when it resolved. */
+async function rejectionOf(call) {
+  try {
+    await call;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** A JSON-RPC refusal by policy: the code and wording refusalOf reads from a raw response, read here from an SDK error. */
+function isRefusal(error) {
+  return error !== undefined && error !== null && REGISTRY_REFUSAL_CODES.has(error.code) && /not permitted/.test(error.message);
+}
+
+/**
+ * An MCP client that declares elicitation and records every prompt the server sends it. It answers each prompt with a
+ * decline, so a destructive call that is prompted does not run.
+ */
+async function connectEliciting(child, accessToken) {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const { ElicitRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const prompts = [];
+  const client = new Client({ name: 'registry-e2e-confirm', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    prompts.push(request.params);
+    return { action: 'decline' };
+  });
+  const transport = new StreamableHTTPClientTransport(new URL(`${child.base}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+    fetch: (url, init = {}) => {
+      const headers = new Headers(init.headers);
+      headers.set('X-Forwarded-For', registryClientAddress());
+      return fetch(url, { ...init, headers });
+    },
+  });
+  await client.connect(transport);
+  return { client, prompts, close: () => client.close() };
+}
+
+/** A sign-in that must be refused. The only NetSapiens request it may make is the identity read that precedes the decision. */
+async function signInRefusedWithNsCheck(fake, assertion, child, nsToken, redirectUri, status, copy) {
+  const mark = fake.requests.length;
+  const signed = await registrySignIn(child, nsToken, redirectUri);
+  const sent = sentSince(fake, mark);
+  if (sent.some((line) => line !== IDENTITY_REQUEST)) {
+    fail('registry', assertion, `NetSapiens received ${sent.join(', ')} during the sign-in`);
+  }
+  if (signed.status !== status || signed.code !== undefined || !signed.html.includes(copy)) {
+    fail('registry', assertion, `expected status ${status} with no code, got status ${signed.status}, code ${signed.code === undefined ? 'none' : 'issued'}`);
+  }
+  pass('registry', assertion);
+}
+
+const registryNames = (tools) => tools.map((tool) => tool.name);
+
+function registryRpc(session, method, params) {
+  return registryMcpRequest(session.child.port, session.accessToken, method, params, session.sessionId);
+}
+
+/** Every tools/list page, through the cursor. */
+async function registryTools(session) {
+  const tools = [];
+  let cursor;
+  for (let page = 0; page < 50; page++) {
+    const res = await registryRpc(session, 'tools/list', cursor === undefined ? {} : { cursor });
+    if (res.status !== 200 || !Array.isArray(res.json?.result?.tools)) {
+      fail('registry', 'tools-list', describeResponse(res));
+    }
+    tools.push(...res.json.result.tools);
+    cursor = res.json.result.nextCursor;
+    if (cursor === undefined) return tools;
+  }
+  fail('registry', 'tools-list', 'more than 50 pages');
+}
+
+function registryCall(session, name, args = {}) {
+  return registryRpc(session, 'tools/call', { name, arguments: args });
+}
+
+function registryCallApi(session, toolName, args = {}) {
+  return registryCall(session, 'call_api', { tool_name: toolName, args });
+}
+
+/** The JSON-RPC error when the connector refused a call by policy or by the operation guard, or undefined. */
+function refusalOf(res) {
+  const error = res.json?.error;
+  return error !== undefined && REGISTRY_REFUSAL_CODES.has(error.code) && /not permitted/.test(error.message) ? error : undefined;
+}
+
+/** A tool's JSON payload, parsed from its first text block, or undefined when there is none. */
+function toolPayload(res) {
+  const text = res.json?.result?.content?.[0]?.text;
+  if (typeof text !== 'string') return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A call the connector must refuse, which must not reach NetSapiens. */
+async function refusedWithoutSend(fake, assertion, call) {
+  const mark = fake.requests.length;
+  const res = await call();
+  if (refusalOf(res) === undefined) fail('registry', assertion, `expected a refusal, got ${describeResponse(res)}`);
+  const sent = sentSince(fake, mark);
+  if (sent.length > 0) fail('registry', assertion, `refused, yet NetSapiens received ${sent.join(', ')}`);
+  pass('registry', assertion);
+  return res;
+}
+
+/** A call the connector must allow, which must reach NetSapiens on the expected request. */
+async function allowedAndSent(fake, assertion, call, expectedLine) {
+  const mark = fake.requests.length;
+  const res = await call();
+  if (refusalOf(res) !== undefined) fail('registry', assertion, `refused: ${describeResponse(res)}`);
+  const sent = sentSince(fake, mark);
+  if (!sent.some(expectedLine)) fail('registry', assertion, `NetSapiens received ${sent.join(', ') || 'nothing'}`);
+  pass('registry', assertion);
+  return res;
+}
+
+/** One CDR record: every content field the table names, every metadata field it declares, and two more to probe fallbacks. */
+function buildCdrRow(fieldClasses) {
+  const row = { id: 'slice-f-call-1', 'call-id': 'slice-f-call-1' };
+  for (const [name, field] of Object.entries(fieldClasses)) {
+    if (field.class === 'metadata' && !(name in row)) row[name] = `meta-${name}`;
+    if (field.class === 'content') row[name] = `SECRET-${name}`;
+  }
+  // Undeclared in the table and classified by name in the projection's fallback. Its kind is transcript.
+  row['call-intelligence-segments'] = 'SECRET-call-intelligence-segments';
+  row['prefilled-transcription-api'] = 'SECRET-prefilled-transcription';
+  row['zz-undeclared-field'] = 'undeclared-value';
+  return row;
+}
+
+/** The _withheld counts a fully denied profile must report for one row: one per content field, by kind. */
+function expectedWithheld(row, fieldClasses) {
+  const counts = {};
+  for (const name of Object.keys(row)) {
+    const field = fieldClasses[name];
+    if (field?.class === 'content') counts[field.kind] = (counts[field.kind] ?? 0) + 1;
+    else if (field === undefined && name === 'call-intelligence-segments') counts.transcript = (counts.transcript ?? 0) + 1;
+  }
+  return counts;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) if (value[key] !== undefined) out[key] = canonicalJson(value[key]);
+    return out;
+  }
+  return value;
+}
+
+const digest16 = (value) => createHash('sha256').update(JSON.stringify(canonicalJson(value))).digest('hex').slice(0, 16);
+
+/** Each tool as [name, digest of its body, digest of its _meta or null], the form the committed baseline stores. */
+function surfaceEntries(tools) {
+  return tools.map((tool) => {
+    const { name, _meta: meta, ...body } = tool;
+    return [name, digest16(body), meta === undefined ? null : digest16(meta)];
+  });
+}
+
+/** tools/list must match the committed baseline for the role and mode, entry by entry. */
+function assertBaselineSurface(assertion, tools, mode, baseline) {
+  const expected = baseline.combos[`${mode}|44.4.10|domain_admin`];
+  if (!Array.isArray(expected)) fail('registry', assertion, `the baseline has no ${mode}|44.4.10|domain_admin combination`);
+  const actual = surfaceEntries(tools);
+  if (actual.length !== expected.length) fail('registry', assertion, `${actual.length} tools, the baseline lists ${expected.length}`);
+  actual.forEach((entry, index) => {
+    if (JSON.stringify(entry) !== JSON.stringify(expected[index])) {
+      fail('registry', assertion, `tool ${index} (${entry[0]}) differs from the baseline`);
+    }
+  });
+  pass('registry', assertion);
+}
+
+function nsRecord(user, domain) {
+  return { user, login: `${user}@${domain}`, domain, name: user, 'user-scope': 'Office Manager' };
+}
+
+async function registryLeg(tempDir) {
+  const { startFakeNetSapiens } = await import(path.join(repoRoot, 'scripts/fake-netsapiens/index.mjs'));
+  const { startFakeAccessRegistry, allowDecision, denyDecision, fault, policy } = await import(
+    path.join(repoRoot, 'scripts/fake-access-registry.mjs')
+  );
+  const { NS_RESOURCE_FIELDS } = await import(
+    pathToFileURL(path.join(tempDir, 'node_modules/netsapiens-mcp/build/governance/ns-fields.generated.js')).href
+  );
+  const cdrFields = NS_RESOURCE_FIELDS.CdrD;
+  if (cdrFields === undefined) fail('registry', 'tables', 'the packed build has no CdrD field table');
+
+  // The reviewed content groups, by tool name, from the snapshot the test suite keeps equal to the code.
+  const contentNames = new Set();
+  const contentByKind = new Map(REGISTRY_KINDS.map((kind) => [kind, new Set()]));
+  for (const line of fs.readFileSync(path.join(repoRoot, 'src/__tests__/fixtures/content-groups.snapshot.txt'), 'utf8').split('\n')) {
+    if (!line.startsWith('@content:')) continue;
+    const [group, , canonical, exposed] = line.split('\t');
+    const kind = group.slice('@content:'.length);
+    if (!contentByKind.has(kind)) fail('registry', 'snapshot', `unknown content group ${group}`);
+    contentByKind.get(kind).add(exposed);
+    contentNames.add(exposed);
+    contentNames.add(canonical);
+  }
+  if (contentNames.size === 0) fail('registry', 'snapshot', 'the content-groups snapshot lists no tools');
+
+  const baseline = JSON.parse(fs.readFileSync(path.join(repoRoot, 'src/__tests__/fixtures/tools-baseline.json'), 'utf8'));
+  const cdrRow = buildCdrRow(cdrFields);
+  const fake = await startFakeNetSapiens({
+    apiVersion: '44.4.10',
+    tokens: {
+      'ns-alice': nsRecord('alice', 'example.com'),
+      'ns-bob': nsRecord('bob', 'example.com'),
+      'ns-carol': nsRecord('carol', 'example.com'),
+      'ns-dave': nsRecord('dave', 'example.com'),
+      'ns-dest': nsRecord('dest', 'example.com'),
+      'ns-erin': nsRecord('erin', 'example.com'),
+      'ns-frank': nsRecord('frank', 'example.com'),
+      'ns-gina': nsRecord('gina', 'example.com'),
+      'ns-henry': nsRecord('henry', 'example.com'),
+      'ns-ivan': nsRecord('ivan', 'example.com'),
+      'ns-lukas': nsRecord('lukas', 'example.com'),
+      'ns-mallory': nsRecord('mallory', 'example.com'),
+      'ns-zed': nsRecord('zed', 'unenrolled.example'),
+      'ns-confirmdeny': nsRecord('confirmdeny', 'example.com'),
+      'ns-confirmallow': nsRecord('confirmallow', 'example.com'),
+    },
+    routeModules: [
+      {
+        method: 'GET',
+        path: '/domains/{domain}/cdrs',
+        handler: ({ token }) =>
+          token === 'ns-ivan'
+            ? { status: 302, headers: { Location: '/ns-api/v2/domains/example.com/recordings/redirected-call' }, body: '' }
+            : { status: 200, body: [cdrRow] },
+      },
+      {
+        method: 'GET',
+        path: '/domains/{domain}/recordings/{callid}',
+        handler: () => ({ status: 200, body: { recording: 'REDIRECTED-RECORDING-BODY' } }),
+      },
+      {
+        method: 'PUT',
+        path: '/domains/{domain}/users/{user}/answerrules/{timeframe}',
+        handler: () => ({ status: 200, body: { success: true } }),
+      },
+    ],
+  });
+
+  // Every decision carries a short cache lifetime, so a change lands within the test. A subject with no decision is
+  // refused as not enrolled, which is the registry's own answer for a domain it does not serve.
+  const reg = await startFakeAccessRegistry({ bearer: REGISTRY_BEARER, allowAll: process.env.REGISTRY_E2E_ALLOW_ALL === '1' });
+  const decide = (revision, overrides) => allowDecision({ ttlSeconds: REGISTRY_TTL_SECONDS, revision, policy: policy(overrides) });
+  const allContentDenied = Object.fromEntries(REGISTRY_KINDS.map((kind) => [kind, 'deny']));
+  reg.setDecision('example.com', 'alice@example.com', decide('alice-1', {
+    tools: { deny: ['find_user', AUTO_ATTENDANT_PROMPT_TOOL] },
+    platforms: [REGISTRY_APP_REDIRECT],
+  }));
+  reg.setDecision('example.com', 'bob@example.com', decide('bob-1', { access: 'read', platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'carol@example.com', decide('carol-1', { content: allContentDenied, platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'dave@example.com', decide('dave-1', { unclassifiedOutput: 'deny', platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'dest@example.com', decide('dest-1', { content: { ai_summary: 'deny' }, platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'erin@example.com', decide('erin-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'frank@example.com', decide('frank-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'gina@example.com', decide('gina-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'henry@example.com', decide('henry-1', { platforms: ['*'] }));
+  reg.setDecision('example.com', 'ivan@example.com', decide('ivan-1', { content: { call_recording: 'deny' }, platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'lukas@example.com', decide('lukas-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+  reg.setDecision('example.com', 'mallory@example.com', denyDecision({ reason: 'subject_not_enabled', revision: 'mallory-1', ttlSeconds: REGISTRY_TTL_SECONDS }));
+  reg.setDecision('partner-deny.example', 'alice@example.com', denyDecision({ reason: 'foreign_access_denied', revision: 'partner-deny-1', ttlSeconds: REGISTRY_TTL_SECONDS }));
+  reg.setDecision('partner-content.example', 'alice@example.com', decide('partner-content-1', { content: { call_recording: 'deny' } }));
+  reg.setDecision('partner-read.example', 'alice@example.com', decide('partner-read-1', { access: 'read' }));
+
+  const registry = { url: reg.url, token: REGISTRY_BEARER, maxStaleSeconds: 2 };
+  const children = [];
+  const startChild = async (name, options = {}) => {
+    const child = await startRegistryChild(tempDir, fake.origin, name, options);
+    children.push(child);
+    return child;
+  };
+  try {
+    // ----- primary: curated tools, registry on, a two-second last-known-good window -----
+    const primary = await startChild('main', { registry });
+    const primaryHealth = await (await fetch(`${primary.base}/health`)).json();
+    if (primaryHealth.accessRegistry !== 'enforced') fail('registry', 'health', `accessRegistry is ${String(primaryHealth.accessRegistry)}; ${describeResponse({ status: 200, json: primaryHealth })}`);
+    pass('registry', 'health reports accessRegistry enforced');
+
+    // Rows 1 to 3: who may sign in, and from which AI app. A refused sign-in makes one identity read and issues no code.
+    await signInRefusedWithNsCheck(fake, 'domain not enrolled: 403 with no code', primary, 'ns-zed', REGISTRY_APP_REDIRECT, 403, COPY_NOT_ENABLED);
+    await signInRefusedWithNsCheck(fake, 'user not on the list: 403 with no code', primary, 'ns-mallory', REGISTRY_APP_REDIRECT, 403, COPY_NOT_ENABLED);
+    await signInRefusedWithNsCheck(fake, 'redirect that differs in path case: 403, app not approved', primary, 'ns-alice', 'https://ai.example.test/OAuth/Callback', 403, COPY_APP_NOT_APPROVED);
+    const slash = await registrySignIn(primary, 'ns-alice', 'https://ai.example.test/oauth/callback/');
+    if (slash.status !== 302 || slash.code === undefined) fail('registry', 'redirect with a trailing slash', `status ${slash.status}`);
+    pass('registry', 'redirect that differs by a trailing slash is approved, because the path is normalized');
+
+    const alice = await openSessionAs(primary, 'ns-alice');
+    pass('registry', 'listed user on an enrolled domain at the approved app signs in');
+
+    // Row 4: tool selection, as the signed-in person sees it.
+    const aliceNames = registryNames(await registryTools(alice.session));
+    if (aliceNames.includes('find_user') || aliceNames.includes(AUTO_ATTENDANT_PROMPT_TOOL)) {
+      fail('registry', 'tool selection', 'a denied tool is listed');
+    }
+    if (!['search_api', 'call_api', 'recent_calls'].every((name) => aliceNames.includes(name))) {
+      fail('registry', 'tool selection', 'an allowed meta or read tool is missing from tools/list');
+    }
+    pass('registry', 'tool selection: denied tools are absent from tools/list, allowed tools are listed');
+    await refusedWithoutSend(fake, 'tool selection: a denied tool is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(alice.session, 'find_user', { query: 'alice' }));
+    await refusedWithoutSend(fake, 'tool selection: a denied tool is refused through call_api with zero NetSapiens requests', () =>
+      registryCallApi(alice.session, 'find_user', { query: 'alice' }));
+    await refusedWithoutSend(fake, 'tool selection: a denied generated tool is refused through call_api with zero NetSapiens requests', () =>
+      registryCallApi(alice.session, AUTO_ATTENDANT_PROMPT_TOOL, {}));
+    const aliceSearch = toolPayload(await registryCall(alice.session, 'search_api', { query: 'autoattendants prompt', limit: 50 }));
+    if (!Array.isArray(aliceSearch?.matches) || aliceSearch.matches.some((match) => match.name === AUTO_ATTENDANT_PROMPT_TOOL)) {
+      fail('registry', 'tool selection: search_api hides a denied tool', 'the denied tool is in the matches');
+    }
+    pass('registry', 'tool selection: search_api hides the denied generated tool');
+    await allowedAndSent(fake, 'tool selection: an allowed tool works and reaches NetSapiens',
+      () => registryCall(alice.session, 'recent_calls', { limit: 2 }),
+      (line) => line.startsWith('GET ') && line.includes('/cdrs'));
+
+    // Row 5: read-only access, bob. The same tool and arguments are allowed under write and refused under read.
+    const bob = await openSessionAs(primary, 'ns-bob');
+    const bobNames = registryNames(await registryTools(bob.session));
+    if (bobNames.includes('set_hold_message')) fail('registry', 'read-only: a write tool is absent from tools/list', 'set_hold_message is listed');
+    pass('registry', 'read-only: a write tool is absent from tools/list');
+    await refusedWithoutSend(fake, 'read-only: a write tool is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(bob.session, 'set_hold_message', {}));
+    await refusedWithoutSend(fake, 'read-only: a v2 POST through call_api is refused with zero NetSapiens requests', () =>
+      registryCallApi(bob.session, 'post_domains_by_domain_users_by_user_answerrules', { domain: 'example.com', user: 'bob' }));
+    const bobSearch = toolPayload(await registryCall(bob.session, 'search_api', { query: 'autoattendants prompt', limit: 50 }));
+    if (!bobSearch?.matches?.some((match) => match.name === AUTO_ATTENDANT_PROMPT_TOOL)) {
+      fail('registry', 'tool selection: a session without the denial finds the tool search hides', 'it is missing');
+    }
+    pass('registry', 'tool selection: a session without the denial finds the same tool in search_api');
+    await allowedAndSent(fake, 'read-only: a read tool works and reaches NetSapiens',
+      () => registryCall(bob.session, 'recent_calls', { limit: 2 }),
+      (line) => line.startsWith('GET ') && line.includes('/cdrs'));
+
+    // Row 6: content deny, carol. No content tool is listed, and the call history loses its content fields.
+    const carol = await openSessionAs(primary, 'ns-carol');
+    const carolNames = registryNames(await registryTools(carol.session));
+    const carolContent = carolNames.filter((name) => contentNames.has(name));
+    if (carolContent.length > 0) fail('registry', 'content deny: no content tool is listed', carolContent.join(', '));
+    pass('registry', 'content deny: no tool in a denied content group is listed');
+    await refusedWithoutSend(fake, 'content deny: a voicemail read is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(carol.session, 'read_voicemail', { domain: 'example.com', user: 'carol', voicemail: 'x' }));
+    await refusedWithoutSend(fake, 'content deny: a v1 audio play through call_api is refused with zero NetSapiens requests', () =>
+      registryCallApi(carol.session, 'v1_audio_play', { object: 'audio', action: 'play' }));
+    await refusedWithoutSend(fake, 'content deny: a recording read through call_api is refused with zero NetSapiens requests', () =>
+      registryCallApi(carol.session, RECORDING_TOOL, { domain: 'example.com', callid: 'slice-f-call-1' }));
+    const carolRaw = await registryCall(carol.session, 'recent_calls', { limit: 2 });
+    const carolCalls = toolPayload(carolRaw);
+    if (carolCalls?.data?.length !== 1) fail('registry', 'content deny: recent_calls keeps its rows', describeResponse(carolRaw));
+    if (carolRaw.rawText.includes('SECRET-')) fail('registry', 'content deny: recent_calls strips every content field', 'a content value survived');
+    const expected = expectedWithheld(cdrRow, cdrFields);
+    if (JSON.stringify(Object.entries(carolCalls._withheld ?? {}).sort()) !== JSON.stringify(Object.entries(expected).sort())) {
+      fail('registry', 'content deny: _withheld counts each stripped field by kind', `${JSON.stringify(carolCalls._withheld)} != ${JSON.stringify(expected)}`);
+    }
+    pass('registry', 'content deny: recent_calls strips every content field and reports _withheld by kind');
+    const carolRow = carolCalls.data[0];
+    for (const [name, field] of Object.entries(cdrFields)) {
+      if (field.class === 'metadata' && carolRow[name] !== cdrRow[name]) fail('registry', 'content deny: metadata is intact', name);
+    }
+    if (carolRow['call-id'] !== cdrRow['call-id'] || carolRow.id !== cdrRow.id) fail('registry', 'content deny: metadata is intact', 'id');
+    if (carolRow['zz-undeclared-field'] !== cdrRow['zz-undeclared-field']) fail('registry', 'content deny: unclassified output allowed', 'an undeclared field was dropped');
+    if (carolRow['prefilled-transcription-api'] !== undefined) fail('registry', 'content deny: internal fields are dropped', 'prefilled-transcription-api survived');
+    pass('registry', 'content deny: metadata is intact, undeclared fields follow the profile, and internal fields are dropped');
+
+    // Destination writes. Slice B classifies a write that changes where content is sent as content. A write that only
+    // routes calls is not content. Under read access the same requests are refused as read-only.
+    const dest = await openSessionAs(primary, 'ns-dest');
+    await refusedWithoutSend(fake, 'destination write: a CDR schedule that emails an external address is refused under a denied content kind, with zero NetSapiens requests', () =>
+      registryCallApi(dest.session, 'create_cdrschedule', CDR_SCHEDULE_ARGS));
+    await allowedAndSent(fake, 'destination write: a call-routing write, which is not content, is allowed under the same profile',
+      () => registryCallApi(dest.session, 'update_my_answer_rule', ANSWER_RULE_ARGS),
+      (line) => line.startsWith('PUT ') && line.includes('/answerrules/Default'));
+    await refusedWithoutSend(fake, 'destination write: the same CDR schedule request under read access is refused as read-only, with zero NetSapiens requests', () =>
+      registryCallApi(bob.session, 'create_cdrschedule', CDR_SCHEDULE_ARGS));
+    await refusedWithoutSend(fake, 'destination write: the same call-routing write under read access is refused as read-only, with zero NetSapiens requests', () =>
+      registryCallApi(bob.session, 'update_my_answer_rule', ANSWER_RULE_ARGS));
+
+    // Row 13: foreign targets. An explicit target is judged by its own enrolment; an un-enrolled target by the caller.
+    await refusedWithoutSend(fake, 'foreign target: a domain that denies foreign access is refused with zero NetSapiens requests', () =>
+      registryCallApi(alice.session, 'get_domains_by_domain_cdrs_1', { domain: 'partner-deny.example' }));
+    await refusedWithoutSend(fake, 'foreign target: a recording read on a domain that denies recordings is refused with zero NetSapiens requests', () =>
+      registryCallApi(alice.session, RECORDING_TOOL, { domain: 'partner-content.example', callid: 'slice-f-call-1' }));
+    await refusedWithoutSend(fake, 'foreign target: a write on a read-only domain is refused with zero NetSapiens requests', () =>
+      registryCallApi(alice.session, 'create_cdrschedule', { ...CDR_SCHEDULE_ARGS, domain: 'partner-read.example' }));
+    await allowedAndSent(fake, 'foreign target: an un-enrolled domain is judged by the caller and reaches NetSapiens',
+      () => registryCallApi(alice.session, 'get_domains_by_domain_cdrs_1', { domain: 'unenrolled.example' }),
+      (line) => line.includes('/domains/unenrolled.example/cdrs'));
+
+    // Row 14: a redirect from NetSapiens. The connector does not follow it, so the denied path is never requested.
+    const ivan = await openSessionAs(primary, 'ns-ivan');
+    const ivanMark = fake.requests.length;
+    const ivanRes = await registryCall(ivan.session, 'recent_calls', { limit: 2 });
+    if (sentSince(fake, ivanMark).some((line) => line.includes('/recordings/redirected-call'))) {
+      fail('registry', 'redirect: the denied path is never requested', 'NetSapiens received the redirect target');
+    }
+    if (ivanRes.rawText.includes('REDIRECTED-RECORDING-BODY')) fail('registry', 'redirect: no body from the denied path is returned', 'the body leaked');
+    if (ivanRes.json?.error === undefined && ivanRes.json?.result?.isError !== true && toolPayload(ivanRes)?.success !== false) {
+      fail('registry', 'redirect: a 3xx is an error', describeResponse(ivanRes));
+    }
+    pass('registry', 'redirect: the denied path is never requested, and no body from it is returned');
+
+    // Row 8: revocation. A stale unchanged decision is revalidated with If-None-Match and a 304 keeps it. A flipped
+    // decision refuses the next bearer request, and the refresh then answers invalid_grant.
+    const frank = await openSessionAs(primary, 'ns-frank');
+    await delay(Math.max(0, frank.signedAt + REGISTRY_TTL_MS + 500 - Date.now()));
+    const frankStill = await registryRpc(frank.session, 'tools/list', {});
+    if (frankStill.status !== 200) fail('registry', 'revocation: a stale unchanged decision keeps the session', `status ${frankStill.status}`);
+    if (!reg.requests.some((entry) => entry.subject === 'frank@example.com' && entry.outcome === 'not_modified' && entry.ifNoneMatch)) {
+      fail('registry', 'revocation: revalidation sends If-None-Match and takes a 304', 'no not_modified answer for frank');
+    }
+    pass('registry', 'revocation: a stale unchanged decision is revalidated with If-None-Match, and a 304 keeps the session');
+    reg.setDecision('example.com', 'frank@example.com', denyDecision({ reason: 'subject_not_enabled', revision: 'frank-2', ttlSeconds: REGISTRY_TTL_SECONDS }));
+    let revoked;
+    for (let deadline = Date.now() + 3 * REGISTRY_TTL_MS; Date.now() < deadline; ) {
+      revoked = await registryRpc(frank.session, 'tools/list', {});
+      if (revoked.status === 401) break;
+      await delay(250);
+    }
+    if (revoked?.status !== 401) fail('registry', 'revocation: the next bearer request is refused', `still ${revoked?.status} after the cache lifetime`);
+    pass('registry', 'revocation: a flipped decision refuses the next bearer request with 401');
+    const frankRefresh = await registryRefresh(primary, frank.tokens);
+    const refreshWrong = refreshRefusalFailure(frankRefresh);
+    if (refreshWrong !== undefined) fail('registry', 'revocation: the refresh is invalid_grant', refreshWrong);
+    pass('registry', 'revocation: the refresh answers invalid_grant');
+
+    // Self-test: the text of a failing refresh assertion carries neither the access token, the refresh token nor the bearer,
+    // even when the response it describes holds them. It is built by the functions the row uses. Dropping the scrub makes
+    // an echoed reason carry the secrets, and this row fails.
+    {
+      const { accessToken, refreshToken } = frank.tokens;
+      const echoed = { status: 200, json: { access_token: accessToken, refresh_token: refreshToken, token_type: 'Bearer' } };
+      const refreshText = formatFailure('registry', 'revocation: the refresh is invalid_grant', refreshRefusalFailure(echoed));
+      const echoText = formatFailure('registry', 'self-test', `a reason that echoes ${accessToken}, ${refreshToken} and ${REGISTRY_BEARER}`);
+      const leaked = [accessToken, refreshToken, REGISTRY_BEARER].filter((secret) => refreshText.includes(secret) || echoText.includes(secret));
+      if (leaked.length > 0) fail('registry', 'self-test: a failing refresh message carries no token or bearer', `${leaked.length} secret(s) reached the text`);
+      pass('registry', 'self-test: a failing refresh message carries no token or bearer, and an echoed secret is scrubbed');
+    }
+
+    // Row 7: registry down, with a two-second window. Inside the cache lifetime the decision still serves with no request
+    // to the registry. Past it, tools are empty, calls are refused, an existing session refreshes, and a new sign-in is 503.
+    const erin = await openSessionAs(primary, 'ns-erin');
+    reg.setFault('example.com', 'erin@example.com', fault('status', { status: 500 }));
+    const erinMark = reg.requests.length;
+    if ((await registryTools(erin.session)).length === 0) fail('registry', 'registry down: inside the window the decision serves', 'tools/list was empty');
+    if (reg.requests.slice(erinMark).some((entry) => entry.subject === 'erin@example.com')) {
+      fail('registry', 'registry down: inside the window the decision serves', 'the fresh decision asked the registry');
+    }
+    pass('registry', 'registry down: inside the cache lifetime the decision serves, with no registry request');
+    await delay(Math.max(0, erin.signedAt + REGISTRY_TTL_MS + 500 - Date.now()));
+    if ((await registryTools(erin.session)).length !== 0) fail('registry', 'registry down: past the window tools/list is empty', 'tools were listed');
+    pass('registry', 'registry down: past the window, tools/list is empty');
+    await refusedWithoutSend(fake, 'registry down: a tool call past the window is refused with zero NetSapiens requests', () =>
+      registryCall(erin.session, 'recent_calls', { limit: 2 }));
+    const erinRefresh = await registryRefresh(primary, erin.tokens);
+    if (erinRefresh.status !== 200 || typeof erinRefresh.json.access_token !== 'string') {
+      fail('registry', 'registry down: an existing session refreshes', `status ${erinRefresh.status}`);
+    }
+    pass('registry', 'registry down: an existing session refreshes and stays signed in');
+    const erinAfter = await registrySession(primary, erinRefresh.json.access_token);
+    if ((await registryRpc(erinAfter, 'tools/list', {})).status !== 200) fail('registry', 'registry down: the refreshed session is accepted', 'refused');
+    const erinNew = await registrySignIn(primary, 'ns-erin');
+    if (erinNew.status !== 503 || erinNew.code !== undefined || !erinNew.html.includes(COPY_UNAVAILABLE)) {
+      fail('registry', 'registry down: a new sign-in is 503', `expected status 503 with no code, got status ${erinNew.status}, code ${erinNew.code === undefined ? 'none' : 'issued'}`);
+    }
+    pass('registry', 'registry down: a new sign-in gets 503 with no code');
+    reg.setFault('example.com', 'erin@example.com', null);
+
+    // ----- lkg: the same outage with a ten-second last-known-good window -----
+    const lkg = await startChild('lkg', { registry: { ...registry, maxStaleSeconds: 10 } });
+    const lukas = await openSessionAs(lkg, 'ns-lukas');
+    reg.setFault('example.com', 'lukas@example.com', fault('status', { status: 500 }));
+    await delay(Math.max(0, lukas.signedAt + REGISTRY_TTL_MS + 500 - Date.now()));
+    if ((await registryTools(lukas.session)).length === 0) fail('registry', 'last known good: a stale decision serves inside the window', 'tools/list was empty');
+    if (!reg.requests.some((entry) => entry.subject === 'lukas@example.com' && entry.outcome === 'fault:status')) {
+      fail('registry', 'last known good: the registry was asked and failed', 'no failed request for lukas');
+    }
+    pass('registry', 'last known good: a stale decision serves inside the window after the registry fails');
+    const lkgSignIn = await registrySignIn(lkg, 'ns-lukas');
+    if (lkgSignIn.status !== 302 || lkgSignIn.code === undefined) fail('registry', 'last known good: a new sign-in is served', `status ${lkgSignIn.status}`);
+    pass('registry', 'last known good: a new sign-in inside the window is served from the last decision');
+    await delay(Math.max(0, lukas.signedAt + 10_000 + 500 - Date.now()));
+    if ((await registryTools(lukas.session)).length !== 0) fail('registry', 'last known good: past the window tools/list is empty', 'tools were listed');
+    const lkgExpired = await registrySignIn(lkg, 'ns-lukas');
+    if (lkgExpired.status !== 503 || lkgExpired.code !== undefined || !lkgExpired.html.includes(COPY_UNAVAILABLE)) {
+      fail('registry', 'last known good: past the window a new sign-in is 503', `expected status 503 with no code, got status ${lkgExpired.status}, code ${lkgExpired.code === undefined ? 'none' : 'issued'}`);
+    }
+    pass('registry', 'last known good: past the window, tools are empty and a new sign-in is 503');
+    reg.setFault('example.com', 'lukas@example.com', null);
+
+    // ----- full: the generated tools, from the same registry -----
+    const full = await startChild('full', { toolMode: 'full', registry });
+    const fullAlice = await openSessionAs(full, 'ns-alice');
+    const fullCarol = await openSessionAs(full, 'ns-carol');
+    const fullDave = await openSessionAs(full, 'ns-dave');
+    const fullBob = await openSessionAs(full, 'ns-bob');
+    const aliceFull = registryNames(await registryTools(fullAlice.session));
+    const carolFull = registryNames(await registryTools(fullCarol.session));
+    const daveFull = registryNames(await registryTools(fullDave.session));
+    const bobFull = registryNames(await registryTools(fullBob.session));
+    if (aliceFull.includes(AUTO_ATTENDANT_PROMPT_TOOL)) fail('registry', 'full mode: a denied generated tool is absent from tools/list', 'it is listed');
+    pass('registry', 'full mode: a denied generated tool is absent from tools/list');
+    await refusedWithoutSend(fake, 'full mode: a denied generated tool is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(fullAlice.session, AUTO_ATTENDANT_PROMPT_TOOL, {}));
+    if (carolFull.some((name) => contentNames.has(name))) fail('registry', 'full mode: the all-denied profile lists no content tool', 'a content tool is listed');
+    const removedContent = aliceFull.filter((name) => !carolFull.includes(name) && contentNames.has(name));
+    if (removedContent.length === 0) fail('registry', 'full mode: the all-denied profile removes content tools', 'none were removed');
+    pass('registry', `full mode: the all-denied profile lists no content tool, and removes ${removedContent.length} that the reviewed groups classify`);
+    await refusedWithoutSend(fake, 'full mode: a content tool is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(fullCarol.session, RECORDING_TOOL, { domain: 'example.com', callid: 'slice-f-call-1' }));
+    // unclassifiedOutput deny: a generated tool with no output mapping is absent and refused.
+    const unmapped = aliceFull.filter((name) => !daveFull.includes(name));
+    // The tools alice sees and dave, who denies unclassified output, does not. Only generated tools with no classification
+    // carry the unclassified group, and this build has some. Under M-UNCLASS-TOOL dave sees them too, so the set empties and
+    // this check fails. The mutant is caught here, and the direct-call row below then runs on no tool. This row derives the
+    // set from alice and dave rather than from the governance names, so it cannot assert absence on a set a mutant leaves
+    // intact. Deriving the names from the governance build would close that; this leg does not read them yet.
+    if (unmapped.length === 0) fail('registry', 'unclassified output: an unmapped generated tool is absent', 'the set is empty: dave sees every generated tool alice sees, so the unclassified deny did not apply');
+    await refusedWithoutSend(fake, 'unclassified output deny: an unmapped generated tool is refused on a direct call with zero NetSapiens requests', () =>
+      registryCall(fullDave.session, unmapped[0], {}));
+    const daveCdrs = await registryCall(fullDave.session, 'get_domains_by_domain_cdrs_1', { domain: 'example.com' });
+    if (daveCdrs.rawText.includes('zz-undeclared-field')) fail('registry', 'unclassified output deny: an undeclared field is dropped', 'it survived');
+    if (!daveCdrs.rawText.includes('meta-call-direction')) fail('registry', 'unclassified output deny: a declared field is kept', 'call-direction is missing');
+    pass('registry', 'unclassified output deny: an undeclared field is dropped, and a declared field is kept');
+    // read access, full mode: a generated write is absent from the list and refused on a direct call.
+    if (bobFull.includes('post_domains_by_domain_users_by_user_answerrules')) fail('registry', 'read-only: a generated write is absent in full mode', 'it is listed');
+    await refusedWithoutSend(fake, 'read-only: a generated write is refused on a direct call in full mode, with zero NetSapiens requests', () =>
+      registryCall(fullBob.session, 'post_domains_by_domain_users_by_user_answerrules', { domain: 'example.com', user: 'bob' }));
+
+    // ----- row 10: env unset. The surface is the committed baseline, and an allow-all registry changes nothing. -----
+    const unsetCurated = await startChild('unset-curated', {});
+    const unsetHealth = await (await fetch(`${unsetCurated.base}/health`)).json();
+    if ('accessRegistry' in unsetHealth) fail('registry', 'env unset: /health has no accessRegistry field', describeResponse({ status: 200, json: unsetHealth }));
+    pass('registry', 'env unset: /health has no accessRegistry field');
+    const unsetAlice = await openSessionAs(unsetCurated, 'ns-alice');
+    const unsetTools = await registryTools(unsetAlice.session);
+    assertBaselineSurface('env unset: curated tools/list matches the committed baseline for domain_admin', unsetTools, 'curated', baseline);
+    const unsetFull = await startChild('unset-full', { toolMode: 'full' });
+    const unsetFullAlice = await openSessionAs(unsetFull, 'ns-alice');
+    assertBaselineSurface('env unset: full tools/list matches the committed baseline for domain_admin', await registryTools(unsetFullAlice.session), 'full', baseline);
+    const allowAll = await startChild('allow-all', { registry });
+    const allowAllHealth = await (await fetch(`${allowAll.base}/health`)).json();
+    if (allowAllHealth.accessRegistry !== 'enforced') fail('registry', 'health', 'an allow-all registry does not report enforced');
+    const henry = await openSessionAs(allowAll, 'ns-henry');
+    const henryTools = await registryTools(henry.session);
+    if (JSON.stringify(henryTools) !== JSON.stringify(unsetTools)) fail('registry', 'allow-all equals unset', 'the tools/list JSON differs');
+    const unsetRecent = await registryCall(unsetAlice.session, 'recent_calls', { limit: 2 });
+    const henryRecent = await registryCall(henry.session, 'recent_calls', { limit: 2 });
+    const unsetPayload = toolPayload(unsetRecent);
+    const henryPayload = toolPayload(henryRecent);
+    const unsetFirst = unsetPayload?.data?.[0];
+    if (unsetFirst === undefined || henryPayload?.data?.[0] === undefined) fail('registry', 'allow-all equals unset', 'a recent_calls row is missing');
+    // Section 3.3 (E9) has registry mode drop the fields the table classifies as internal, and unset mode keeps them.
+    // Nothing else may differ between the two results.
+    const internalFields = new Set([
+      ...Object.entries(cdrFields).filter(([, field]) => field.class === 'internal').map(([name]) => name),
+      'prefilled-transcription-api',
+    ]);
+    const droppedByRegistry = Object.keys(unsetFirst).filter((name) => !(name in henryPayload.data[0]));
+    if (droppedByRegistry.some((name) => !internalFields.has(name))) {
+      fail('registry', 'allow-all equals unset', `results differ in fields that are not internal: ${droppedByRegistry.join(', ')}`);
+    }
+    const expectedPayload = structuredClone(unsetPayload);
+    for (const name of droppedByRegistry) delete expectedPayload.data[0][name];
+    if (JSON.stringify(expectedPayload) !== JSON.stringify(henryPayload)) {
+      fail('registry', 'allow-all equals unset', 'the results differ beyond the dropped internal fields');
+    }
+    pass('registry', `an allow-all decision lists the same tools, and its results equal unset except the internal fields the projection drops (${droppedByRegistry.join(', ') || 'none'})`);
+
+    // Row 12: registry authentication. A wrong token fails closed, and the token never reaches a log.
+    const beforeWrong = reg.requests.length;
+    const wrong = await startChild('wrong-token', { registry: { ...registry, token: REGISTRY_BAD_BEARER } });
+    const wrongSignIn = await registrySignIn(wrong, 'ns-alice');
+    if (wrongSignIn.status !== 503 || wrongSignIn.code !== undefined) fail('registry', 'registry authentication: a wrong token fails closed', `expected status 503 with no code, got status ${wrongSignIn.status}, code ${wrongSignIn.code === undefined ? 'none' : 'issued'}`);
+    if (!reg.requests.slice(beforeWrong).some((entry) => entry.authorized === false && entry.outcome === 'unauthorized')) {
+      fail('registry', 'registry authentication: the registry refused the wrong token', 'no unauthorized answer');
+    }
+    pass('registry', 'registry authentication: a wrong token fails closed with 503, and the registry refuses it');
+
+    // Row E6: a refused destructive tool never reaches the confirmation prompt. This child turns the gate on. Its client
+    // declares elicitation, records every prompt the server sends, and declines each one, so no destructive call runs.
+    // (a) A tool the policy denies is refused with zero prompts and zero NetSapiens requests. (b) An allowed destructive
+    // tool prompts exactly once. (c) call_api with a denied destructive inner tool is refused with zero prompts. Row (c)
+    // asserts only the refusal and its prompt count: an allowed destructive inner tool through call_api is not prompted,
+    // a pre-existing gap tracked separately, and this row does not depend on it.
+    reg.setDecision('example.com', 'confirmdeny@example.com', decide('confirmdeny-1', { tools: { deny: ['end_call'] }, platforms: [REGISTRY_APP_REDIRECT] }));
+    reg.setDecision('example.com', 'confirmallow@example.com', decide('confirmallow-1', { platforms: [REGISTRY_APP_REDIRECT] }));
+    const confirm = await startRegistryChild(tempDir, fake.origin, 'confirm', { registry, confirm: true });
+    try {
+      const denied = await openSessionAs(confirm, 'ns-confirmdeny');
+      const allowed = await openSessionAs(confirm, 'ns-confirmallow');
+      const denyClient = await connectEliciting(confirm, denied.tokens.accessToken);
+      const allowClient = await connectEliciting(confirm, allowed.tokens.accessToken);
+      try {
+        const denyMark = fake.requests.length;
+        const denyError = await rejectionOf(denyClient.client.callTool({ name: 'end_call', arguments: {} }));
+        const denySent = sentSince(fake, denyMark);
+        if (denyClient.prompts.length !== 0) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `${denyClient.prompts.length} prompt(s)`);
+        if (!isRefusal(denyError)) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `not refused by policy: ${truncate(denyError?.message ?? 'it ran')}`);
+        if (denySent.length !== 0) fail('registry', 'E6 (a): a denied destructive tool is refused with zero prompts', `NetSapiens received ${denySent.join(', ')}`);
+        pass('registry', 'E6 (a): a denied destructive tool is refused with zero prompts and zero NetSapiens requests');
+
+        const allowMark = fake.requests.length;
+        const allowError = await rejectionOf(allowClient.client.callTool({ name: 'end_call', arguments: {} }));
+        const allowSent = sentSince(fake, allowMark);
+        if (allowClient.prompts.length !== 1) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', `${allowClient.prompts.length} prompt(s)`);
+        if (allowError === undefined) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', 'the declined prompt did not stop the call');
+        if (allowSent.length !== 0) fail('registry', 'E6 (b): an allowed destructive tool prompts exactly once', `NetSapiens received ${allowSent.join(', ')} after the decline`);
+        pass('registry', 'E6 (b): an allowed destructive tool prompts exactly once, and a declined prompt runs nothing');
+
+        const innerPromptsBefore = denyClient.prompts.length;
+        const innerMark = fake.requests.length;
+        const innerError = await rejectionOf(denyClient.client.callTool({ name: 'call_api', arguments: { tool_name: 'end_call', args: {} } }));
+        const innerSent = sentSince(fake, innerMark);
+        const innerPrompts = denyClient.prompts.length - innerPromptsBefore;
+        if (innerPrompts !== 0) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `${innerPrompts} prompt(s)`);
+        if (!isRefusal(innerError)) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `not refused by policy: ${truncate(innerError?.message ?? 'it ran')}`);
+        if (innerSent.length !== 0) fail('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts', `NetSapiens received ${innerSent.join(', ')}`);
+        pass('registry', 'E6 (c): call_api with a denied destructive inner tool is refused with zero prompts and zero NetSapiens requests');
+      } finally {
+        await denyClient.close();
+        await allowClient.close();
+      }
+    } finally {
+      await confirm.srv.stop();
+    }
+
+    // Row 11: stdio cannot enforce the registry, so the server refuses to start with it.
+    const runner = getPackageBinaryRunner(tempDir);
+    const stdio = await runCommand(runner.cmd, runner.args, {
+      cwd: tempDir,
+      env: {
+        PATH: process.env.PATH,
+        MCP_TRANSPORT: 'stdio',
+        NETSAPIENS_API_URL: fake.origin,
+        MCP_ACCESS_REGISTRY_URL: reg.url,
+        MCP_ACCESS_REGISTRY_AUTH: 'bearer',
+        MCP_ACCESS_REGISTRY_TOKEN: REGISTRY_BEARER,
+      },
+    });
+    const stdioOut = `${stdio.stdout}\n${stdio.stderr}`;
+    if (stdio.status !== 1 || !stdioOut.includes('ConfigError: MCP_ACCESS_REGISTRY_URL requires MCP_TRANSPORT=http')) {
+      fail('registry', 'stdio misuse: exits 1 with the ConfigError', `expected exit 1 with the ConfigError, got exit ${stdio.status} and output ${JSON.stringify(stdioOut.slice(0, 300))}`);
+    }
+    pass('registry', 'stdio misuse: exits 1 with the ConfigError before serving anything');
+
+    // Row 9: legacy session. A session made while the registry was unset is refused under it, and a fresh sign-in works.
+    const legacyStore = path.join(tempDir, 'registry-legacy.sqlite');
+    const legacyBefore = await startChild('legacy-before', { storePath: legacyStore });
+    const gina = await openSessionAs(legacyBefore, 'ns-gina');
+    await legacyBefore.srv.stop();
+    const legacyAfter = await startChild('legacy-after', { storePath: legacyStore, registry });
+    const legacyRes = await registryMcpRequest(legacyAfter.port, gina.tokens.accessToken, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'registry-e2e', version: '1.0.0' },
+    });
+    if (legacyRes.status !== 401) fail('registry', 'legacy session: 401 under the registry', `status ${legacyRes.status}`);
+    pass('registry', 'legacy session: a session made while the registry was unset gets 401 under it');
+    const legacyRefresh = await registryRefresh(legacyAfter, gina.tokens);
+    if (legacyRefresh.status !== 400 || legacyRefresh.json.error !== 'invalid_grant') {
+      fail('registry', 'legacy session: refresh is invalid_grant', refreshRefusalFailure(legacyRefresh));
+    }
+    pass('registry', 'legacy session: its refresh answers invalid_grant');
+    await openSessionAs(legacyAfter, 'ns-gina');
+    pass('registry', 'legacy session: a fresh sign-in under the registry works');
+
+    // Registry tokens are never logged, by the server or by the stdio run.
+    const everyLog = children.map((child) => child.logs()).join('\n') + stdioOut;
+    if ([...knownSecrets].some((secret) => everyLog.includes(secret))) {
+      fail('registry', 'registry tokens never reach stdout or stderr', 'a registry token appears in a log');
+    }
+    pass('registry', 'registry tokens never appear in child stdout or stderr');
+  } finally {
+    for (const child of children) await child.srv.stop();
+    await fake.close();
+    await reg.close();
+  }
+}
+
+
 async function main() {
   const opts = parseArgs();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nsmcp-consumer-e2e-'));
@@ -444,6 +1420,15 @@ async function main() {
         await srv.stop();
         await fake.close();
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // Access registry: the packed package with the registry configured (see registryLeg)
+    // -------------------------------------------------------------------------
+    if (opts.legs.includes('registry')) {
+      console.log('Running leg: registry');
+      await registryLeg(tempDir);
+      if (collectedRegistryFailures.length > 0) throw new Error(`registry leg: ${collectedRegistryFailures.length} row(s) failed`);
     }
 
     // -------------------------------------------------------------------------
@@ -1488,6 +2473,6 @@ void [withLegacyOperation, checkMutationGuardInTransaction, startMonotonicTimer,
 }
 
 main().catch((err) => {
-  console.error('FAIL consumer-e2e unexpected-error:', err);
+  console.error(scrub(`FAIL consumer-e2e unexpected-error: ${err?.stack ?? err}`));
   process.exit(1);
 });

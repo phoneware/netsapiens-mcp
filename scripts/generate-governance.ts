@@ -1,161 +1,96 @@
 #!/usr/bin/env tsx
 
 /**
- * NetSapiens Governance Field Table Generator
- *
- * Generates per-resource field classification tables from OpenAPI specification
- * (`spec/v2/45.0.json` components.schemas) and hand-reviewed overrides
- * (`src/governance/overrides.ts`).
- *
- * Every field defaults to `{ class: 'metadata' }` unless overridden.
- * Output is deterministic: keys are sorted alphabetically at every level.
+ * Generates src/governance/ns-fields.generated.ts and src/governance/operation-outputs.generated.ts from the spec
+ * branches (spec 3.6). The tables and the operation map are built by src/governance/build.ts. This script reads the
+ * documents and writes the two files, deterministically.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FIELD_OVERRIDES, CUSTOM_RESOURCES } from '../src/governance/overrides.js';
+import { buildGovernanceTables, type BuildBranch } from '../src/governance/build.js';
+import { CUSTOM_RESOURCES, EMPTY_BY_DESIGN, FIELD_OVERRIDES } from '../src/governance/overrides.js';
+import { forEachOperation, type SpecDocument, type SpecOperation } from '../src/governance/spec-walk.js';
 import type { FieldClass } from '../src/governance/types.js';
+import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, '..');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-interface SchemaObject {
- type?: string;
- properties?: Record<string, unknown>;
- items?: {
-  type?: string;
-  properties?: Record<string, unknown>;
- };
-}
-
-interface OpenApiSpec {
- components?: {
-  schemas?: Record<string, SchemaObject>;
- };
-}
-
-function generate(): string {
- const branchesPath = resolve(REPO_ROOT, 'spec/v2/BRANCHES.json');
- const branches: string[] = JSON.parse(readFileSync(branchesPath, 'utf8'));
-
- const schemas: Record<string, SchemaObject> = {};
- for (const branch of branches) {
-  const specPath = resolve(REPO_ROOT, `spec/v2/${branch}.json`);
-  const spec: OpenApiSpec = JSON.parse(readFileSync(specPath, 'utf8'));
-  for (const [name, schema] of Object.entries(spec.components?.schemas ?? {})) {
-   schemas[name] = schema;
-  }
- }
- const resourceTables: Record<string, Record<string, FieldClass>> = {};
-
- // 1. Process spec schemas
- const schemaNames = Object.keys(schemas).sort();
- for (const schemaName of schemaNames) {
-  const schema = schemas[schemaName];
-  const props = schema.properties ?? schema.items?.properties ?? {};
-  const fieldTable: Record<string, FieldClass> = {};
-
-  // Collect all field names from spec and overrides
-  const propNames = new Set<string>([
-   ...Object.keys(props),
-   ...Object.keys(FIELD_OVERRIDES[schemaName] ?? {}),
-  ]);
-
-  function isCredentialKeyName(name: string): boolean {
-   if (/key-id|can-create-keys|no-key-press|unassigned-key-press|language-token|token-endpoint|token_type|dtmf-mapping|-enabled/i.test(name)) {
-    return false;
-   }
-   return /(?:^|[-_])(?:password|pin|secret|token|passcode)(?:$|[-_])/i.test(name);
-  }
-
-  for (const propName of Array.from(propNames).sort()) {
-   const override = FIELD_OVERRIDES[schemaName]?.[propName];
-   if (override) {
-    fieldTable[propName] = override;
-   } else if (isCredentialKeyName(propName)) {
-    fieldTable[propName] = { class: 'secret' };
-   } else {
-    fieldTable[propName] = { class: 'metadata' };
-   }
-  }
-
-  resourceTables[schemaName] = fieldTable;
- }
-
- // 2. Process custom resources (e.g. Voicemail, CallTrace)
- const customNames = Object.keys(CUSTOM_RESOURCES).sort();
- for (const customName of customNames) {
-  const fields = CUSTOM_RESOURCES[customName];
-  const fieldTable: Record<string, FieldClass> = {};
-  for (const propName of Object.keys(fields).sort()) {
-   fieldTable[propName] = fields[propName];
-  }
-  resourceTables[customName] = fieldTable;
- }
-
- // 3. Assert every override's resource and field still exists in generated schemas
- for (const [resourceName, fields] of Object.entries(FIELD_OVERRIDES)) {
-  if (!resourceTables[resourceName]) {
-   throw new Error(`Override resource "${resourceName}" does not exist in generated schemas`);
-  }
-  for (const fieldName of Object.keys(fields)) {
-   if (!resourceTables[resourceName][fieldName]) {
-    throw new Error(`Override field "${resourceName}.${fieldName}" does not exist in generated schemas`);
-   }
-  }
- }
- for (const [resourceName, fields] of Object.entries(CUSTOM_RESOURCES)) {
-  if (!resourceTables[resourceName]) {
-   throw new Error(`Custom resource "${resourceName}" does not exist in generated schemas`);
-  }
-  for (const fieldName of Object.keys(fields)) {
-   if (!resourceTables[resourceName][fieldName]) {
-    throw new Error(`Custom field "${resourceName}.${fieldName}" does not exist in generated schemas`);
-   }
-  }
- }
-
- // 4. Serialize deterministically
- const lines: string[] = [
+/** The opening lines of each generated file's comment. Each file closes its own comment. */
+const HEADER = [
   '/**',
   ' * AUTO-GENERATED by scripts/generate-governance.ts: DO NOT EDIT MANUALLY.',
   ' * Run `npm run generate:governance` to regenerate.',
-  ' */',
-  '',
-  "import type { FieldClass } from './types.js';",
-  '',
-  'export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {',
- ];
+];
 
- const sortedResourceNames = Object.keys(resourceTables).sort();
- for (const resourceName of sortedResourceNames) {
-  const fields = resourceTables[resourceName];
-  const fieldNames = Object.keys(fields).sort();
-  if (fieldNames.length === 0) {
-   lines.push(`  ${JSON.stringify(resourceName)}: {},`);
-   continue;
+/** Every spec branch, in the order BRANCHES.json lists them, with each operation under its normalized key. */
+function readBranches(): BuildBranch[] {
+  const branches = JSON.parse(readFileSync(resolve(REPO_ROOT, 'spec/v2/BRANCHES.json'), 'utf8')) as string[];
+  return branches.map((branch) => {
+    const doc = JSON.parse(readFileSync(resolve(REPO_ROOT, `spec/v2/${branch}.json`), 'utf8')) as SpecDocument;
+    const operations: { key: string; operation: SpecOperation }[] = [];
+    forEachOperation(doc, (method, path, operation) => {
+      operations.push({ key: normalizeOperationKey(method, path), operation });
+    });
+    return { components: doc.components?.schemas ?? {}, operations };
+  });
+}
+
+function serializeFields(fields: Readonly<Record<string, Readonly<Record<string, FieldClass>>>>): string {
+  const lines: string[] = [
+    ...HEADER,
+    ' */',
+    '',
+    "import type { FieldClass } from './types.js';",
+    '',
+    'export const NS_RESOURCE_FIELDS: Record<string, Record<string, FieldClass>> = {',
+  ];
+  for (const resourceName of Object.keys(fields).sort()) {
+    const table = fields[resourceName];
+    const fieldNames = Object.keys(table).sort();
+    if (fieldNames.length === 0) {
+      lines.push(`  ${JSON.stringify(resourceName)}: {},`);
+      continue;
+    }
+    lines.push(`  ${JSON.stringify(resourceName)}: {`);
+    for (const fieldName of fieldNames) lines.push(`    ${JSON.stringify(fieldName)}: ${JSON.stringify(table[fieldName])},`);
+    lines.push('  },');
   }
-  lines.push(`  ${JSON.stringify(resourceName)}: {`);
-  for (const fieldName of fieldNames) {
-   const fieldClass = fields[fieldName];
-   lines.push(`    ${JSON.stringify(fieldName)}: ${JSON.stringify(fieldClass)},`);
-  }
-  lines.push('  },');
- }
+  lines.push('};', '');
+  return lines.join('\n');
+}
 
- lines.push('};');
- lines.push('');
-
- return lines.join('\n');
+function serializeOutputs(outputs: Readonly<Record<string, string>>): string {
+  const lines: string[] = [
+    ...HEADER,
+    ' *',
+    ' * Maps each v2 operation key (normalizeOperationKey) to the resource that classifies its response: the component',
+    ' * it returns, the InlineResponse resource for fields no component names, or a Union(...) composite when the',
+    ' * response is one of several, or when the branches differ. Operations with no JSON response, or with a response',
+    ' * that is not JSON, are not listed.',
+    ' */',
+    '',
+    'export const OPERATION_OUTPUTS: Readonly<Record<string, string>> = {',
+  ];
+  for (const key of Object.keys(outputs).sort()) lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(outputs[key])},`);
+  lines.push('};', '');
+  return lines.join('\n');
 }
 
 function main(): void {
- const outputPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
- const code = generate();
- writeFileSync(outputPath, code, 'utf8');
- console.log(`Generated ${outputPath}`);
+  const { fields, outputs } = buildGovernanceTables({
+    branches: readBranches(),
+    overrides: FIELD_OVERRIDES,
+    customs: CUSTOM_RESOURCES,
+    emptyByDesign: EMPTY_BY_DESIGN,
+  });
+  const fieldsPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
+  const outputsPath = resolve(REPO_ROOT, 'src/governance/operation-outputs.generated.ts');
+  writeFileSync(fieldsPath, serializeFields(fields), 'utf8');
+  writeFileSync(outputsPath, serializeOutputs(outputs), 'utf8');
+  console.log(`Generated ${fieldsPath}`);
+  console.log(`Generated ${outputsPath}`);
 }
 
 main();

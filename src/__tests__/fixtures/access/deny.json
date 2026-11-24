@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "tenant_not_enrolled",
+  "revision": "0",
+  "ttlSeconds": 60
+}

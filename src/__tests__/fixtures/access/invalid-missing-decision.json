@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "revision": "9f2c1e7a40b3d6e1",
+  "ttlSeconds": 60,
+  "policy": {
+    "tools": { "allow": ["@curated"], "deny": ["@destructive"] },
+    "access": "read",
+    "content": {
+      "call_recording": "deny",
+      "transcript": "deny",
+      "voicemail": "deny",
+      "sms_text": "deny",
+      "ai_summary": "deny",
+      "fax_page": "deny"
+    },
+    "unclassifiedOutput": "deny",
+    "platforms": ["https://ai.example.com/oauth/callback"]
+  }
+}

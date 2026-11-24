@@ -116,54 +116,28 @@ Selected accounts must complete an explicitly identified NetSapiens authenticato
 
 This option rejects malformed configuration and cannot be combined with a custom HTTP auth provider. Rotating `MCP_SESSION_SECRET` invalidates stored assurance signatures, so affected privileged users must sign in again.
 
+## Guardrails
+
+Guardrails are optional. Set `MCP_ACCESS_REGISTRY_URL` to have an access registry decide, for each person who signs in, which accounts may sign in, from which AI apps, which tools they may use, and which kinds of content the connector refuses: call recordings, transcripts, voicemail, message text, AI call summaries and fax pages. Read-only profiles and refusal of unclassified output are available. The registry can only narrow the settings you already have, and an unreachable registry fails closed. A content denial covers reads. With write access, a profile can still create destinations that carry content elsewhere, so regulated deployments should also deny write access. The registry is not HIPAA compliance and does not redact data. See [docs/access-registry.md](docs/access-registry.md) for what it enforces and what it does not.
+
 ## 🔌 Connecting MCP Clients
 
-### Claude Desktop
+[Connecting AI clients](docs/connecting-clients.md) has the steps for each client, the OAuth redirect URI to approve for it in an [access registry](docs/access-registry.md), and the troubleshooting. It covers Claude, ChatGPT and Codex, Gemini, GitHub Copilot, and Microsoft Copilot.
 
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "netsapiens": {
-      "command": "npx",
-      "args": ["--yes", "netsapiens-mcp@3"],
-      "env": {
-        "NETSAPIENS_API_URL": "https://netsapiens.example.com",
-        "NETSAPIENS_API_TOKEN": "your-api-token"
-      }
-    }
-  }
-}
-```
-
-### Claude Code
-
-Connect to a hosted HTTP server deployment:
+For a hosted deployment, the examples use `https://mcp.example.com/mcp` as a placeholder for your host. With Claude Code:
 
 ```sh
 claude mcp add --transport http netsapiens https://mcp.example.com/mcp
 ```
 
-Or run locally via stdio:
-
-```sh
-claude mcp add netsapiens -- npx --yes netsapiens-mcp@3
-```
-
-### Claude.ai Custom Connector
-
-For web and team workspaces:
-1. In Claude.ai Settings > Integrations, select "Add custom MCP connector".
-2. Enter your server's endpoint: `https://mcp.example.com/mcp`.
-3. Claude will register dynamically via OAuth 2.1 Dynamic Client Registration.
-4. Users complete login on the NetSapiens MCP login page.
+To run the server on one computer over stdio, see [Claude Desktop](docs/connecting-clients.md#claude-desktop) and [Claude Code](docs/connecting-clients.md#claude-code).
 
 ## 📚 Documentation
 
 | Guide | What's in it |
 |---|---|
 | [Reference](https://github.com/phoneware/netsapiens-mcp/blob/main/docs/reference.md) | Role tiers, supported versions, storage, security limits, every environment variable, library usage |
+| [Connecting AI clients](docs/connecting-clients.md) | Steps, OAuth redirect URIs and troubleshooting for Claude, ChatGPT and Codex, Gemini, and GitHub or Microsoft Copilot |
 | [Contributing](CONTRIBUTING.md) | Development setup and how to submit version observations |
 | [Security](SECURITY.md) | Reporting a vulnerability |
 

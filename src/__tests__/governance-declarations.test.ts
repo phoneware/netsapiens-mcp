@@ -8,174 +8,11 @@ import { WORKFLOW_TOOLS } from '../tools/curated/workflows.js';
 import { buildMetaTools } from '../tools/curated/meta.js';
 import { handleToolCall } from '../tools/index.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
-import { scrubSecrets } from '../governance/scrub.js';
+import { findUndeclaredPaths, scrubSecrets } from '../governance/scrub.js';
 import { logger } from '../utils/logger.js';
 import type { CuratedTool } from '../tools/curated/types.js';
-import type { FieldClass, FieldRule, OutputDeclaration } from '../governance/types.js';
+import type { OutputDeclaration } from '../governance/types.js';
 
-const UNAMBIGUOUS_SECRET_NAMES: Record<string, true> = {
-  'device-sip-registration-password': true,
-  'device-provisioning-password': true,
-  'voicemail-login-pin': true,
-  'email-send-smtp-password': true,
-  smtp_pwd: true,
-  client_secret: true,
-  'client-secret': true,
-  password: true,
-  passcode: true,
-  pin: true,
-  secret: true,
-  mfa: true,
-  subscriber_pin: true,
-  pwd_hash: true,
-  pwd: true,
-  auth_pass: true,
-  authentication_key: true,
-  'connection-sip-registration-password': true,
-  'global-one-time-pass': true,
-  'meeting-passcode': true,
-  leader_pin: true,
-  speaker_pin: true,
-  participants_pin: true,
-  SipSipAuthKey: true,
-  access_token: true,
-  refresh_token: true,
-  data_token: true,
-  idtoken: true,
-  api_key: true,
-  'api-key': true,
-  auth_token: true,
-  'auth-token': true,
-};
-
-function pathMatches(rulePath: string, currentPath: string): boolean {
-  if (rulePath === currentPath) return true;
-  if (!rulePath || !currentPath) return false;
-
-  const ruleSegments = rulePath.split('.');
-  const currentSegments = currentPath.split('.');
-
-  if (ruleSegments.length !== currentSegments.length) return false;
-  if (ruleSegments[0] === '*' || ruleSegments[0] === '**') return false;
-
-  for (let i = 0; i < ruleSegments.length; i++) {
-    const r = ruleSegments[i];
-    const c = currentSegments[i];
-    if (r === '*' || r === c) continue;
-    return false;
-  }
-  return true;
-}
-
-function pathMatchesRule(rulePath: string, currentPath: string): boolean {
-  if (pathMatches(rulePath, currentPath)) return true;
-  if (!currentPath && (rulePath === 'data' || rulePath === '')) return true;
-  if (rulePath === 'data[]' && (currentPath === '[]' || currentPath === 'data[]')) return true;
-  if (rulePath.startsWith('data.') && pathMatches(rulePath, `data.${currentPath}`)) return true;
-  if (rulePath.startsWith('data[]') && pathMatches(rulePath, `data${currentPath}`)) return true;
-  return false;
-}
-
-function isContainerPath(rules: readonly FieldRule[], path: string): boolean {
-  const prefixDot = `${path}.`;
-  const prefixArray = `${path}[]`;
-  const dataPrefixDot = `data.${path}.`;
-  const dataPrefixArray = `data.${path}[]`;
-
-  for (const rule of rules) {
-    if (rule.path === path) return true;
-    if (rule.path.startsWith(prefixDot) || rule.path.startsWith(prefixArray)) return true;
-    if (rule.path.startsWith(dataPrefixDot) || rule.path.startsWith(dataPrefixArray)) return true;
-    if (path === 'data' && (rule.path.startsWith('data.') || rule.path.startsWith('data[]'))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function findResourceForPath(
-  rules: readonly FieldRule[] | undefined,
-  path: string,
-): string | undefined {
-  if (!rules) return undefined;
-  for (const rule of rules) {
-    if ('resource' in rule && pathMatchesRule(rule.path, path)) {
-      return rule.resource;
-    }
-  }
-  return undefined;
-}
-
-export function findUndeclaredPaths(
-  payload: unknown,
-  output?: OutputDeclaration,
-  nsResourceFields: Record<string, Record<string, FieldClass>> = NS_RESOURCE_FIELDS,
-): string[] {
-  const rules = output?.rules ?? [];
-  for (const rule of rules) {
-    const firstSegment = rule.path.split('.')[0];
-    if (
-      firstSegment === '*' ||
-      firstSegment === '**' ||
-      rule.path === '' ||
-      rule.path === '*' ||
-      rule.path === '**' ||
-      rule.path.startsWith('*.') ||
-      rule.path.startsWith('**')
-    ) {
-      throw new Error(`Wildcard root declarations are not permitted: '${rule.path}'`);
-    }
-  }
-  const undeclared: string[] = [];
-
-  function walk(val: unknown, currentPath: string, activeResource?: string): void {
-    if (val === null || val === undefined || typeof val !== 'object') return;
-
-    if (Array.isArray(val)) {
-      const itemPath = currentPath ? `${currentPath}[]` : '[]';
-      const itemResource =
-        findResourceForPath(rules, itemPath) ??
-        (currentPath ? findResourceForPath(rules, currentPath) : undefined) ??
-        activeResource;
-
-      for (const item of val) {
-        walk(item, itemPath, itemResource);
-      }
-      return;
-    }
-
-    const obj = val as Record<string, unknown>;
-    const objResource =
-      (currentPath ? findResourceForPath(rules, currentPath) : undefined) ?? activeResource;
-
-    for (const [key, propVal] of Object.entries(obj)) {
-      const propPath = currentPath ? `${currentPath}.${key}` : key;
-      if (UNAMBIGUOUS_SECRET_NAMES[key]) continue;
-
-      let ruleMatched = false;
-      for (const rule of rules) {
-        if ('field' in rule && pathMatchesRule(rule.path, propPath)) {
-          ruleMatched = true;
-          break;
-        }
-      }
-      if (ruleMatched) continue;
-
-      if (objResource && nsResourceFields[objResource]?.[key]) continue;
-
-      if (findResourceForPath(rules, propPath) || isContainerPath(rules, propPath)) {
-        const childResource = findResourceForPath(rules, propPath) ?? objResource;
-        walk(propVal, propPath, childResource);
-        continue;
-      }
-
-      undeclared.push(propPath);
-    }
-  }
-
-  walk(payload, '');
-  return undeclared;
-}
 
 describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
   it('every curated tool declares output and targets', () => {
@@ -1203,11 +1040,13 @@ describe('Governance Declarations & Secret Scrubbing (L1b)', () => {
   it('generate:governance output is deterministic', () => {
     const testDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testDir, '../..');
-    const generatedPath = resolve(testDir, '../governance/ns-fields.generated.ts');
-    const before = readFileSync(generatedPath, 'utf8');
+    const generated = ['ns-fields.generated.ts', 'operation-outputs.generated.ts'].map((name) =>
+      resolve(testDir, '../governance', name),
+    );
+    const before = generated.map((path) => readFileSync(path, 'utf8'));
 
     execSync('npm run generate:governance', { cwd: repoRoot, stdio: 'pipe' });
-    const after = readFileSync(generatedPath, 'utf8');
-    expect(after).toBe(before);
+    const after = generated.map((path) => readFileSync(path, 'utf8'));
+    expect(after).toEqual(before);
   });
 });

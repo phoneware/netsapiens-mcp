@@ -82,6 +82,9 @@ export interface NsTokenResponse {
   nsUserRole?: string;
   scope?: string;
   nsApiUrl?: string;
+  /** The user and domain from the user record that validateNsToken read. Absent when the record names neither, as for an API key. */
+  user?: string;
+  domain?: string;
 }
 
 export type { StoredToken, AuthCodeData } from '../store/types.js';
