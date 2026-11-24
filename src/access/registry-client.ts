@@ -324,16 +324,13 @@ export class RegistryClient {
    * source resolves with is checked by asRegistryResponse, which maps a value of the wrong shape to a contract error.
    */
   private async attempt(key: RegistryKey, ifNoneMatch: string | undefined): Promise<RegistryResponse> {
-    const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<RegistryResponse>((resolve) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        resolve({ kind: 'failure', errorClass: 'timeout' });
-      }, this.timeoutMs);
+      timer = setTimeout(() => resolve({ kind: 'failure', errorClass: 'timeout' }), this.timeoutMs);
     });
+    const signal = AbortSignal.timeout(this.timeoutMs);
     const answered = Promise.resolve()
-      .then(() => this.fetchDecision({ key, ifNoneMatch, signal: controller.signal }))
+      .then(() => this.fetchDecision({ key, ifNoneMatch, signal }))
       .then(asRegistryResponse, (): RegistryResponse => ({ kind: 'failure', errorClass: 'network' }));
     try {
       return await Promise.race([answered, timedOut]);
@@ -682,30 +679,25 @@ function identityTokens(audience: string, deps: CredentialDeps): Credential {
 
   async function mint(): Promise<string> {
     const mintedAtMs = deps.wallNow();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), deps.timeoutMs);
-    try {
-      const url = `${deps.metadataUrl}?audience=${encodeURIComponent(audience)}&format=full`;
-      const response = await deps.fetch(url, {
-        method: 'GET',
-        headers: { 'Metadata-Flavor': 'Google' },
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-      if (response.status !== 200) {
-        await discard(response);
-        throw new Error(`identity token request answered ${response.status}`);
-      }
-      const token = (await readBounded(response, MAX_BODY_BYTES))?.trim();
-      const expiresAtMs = token === undefined ? undefined : tokenExpiryMs(token);
-      if (token === undefined || expiresAtMs === undefined || !(expiresAtMs > mintedAtMs) || !VISIBLE_ASCII.test(token)) {
-        throw new Error('identity token response is not a token with an exp claim later than its mint');
-      }
-      held = { token, mintedAtMs, expiresAtMs };
-      return token;
-    } finally {
-      clearTimeout(timer);
+    const signal = AbortSignal.timeout(deps.timeoutMs);
+    const url = `${deps.metadataUrl}?audience=${encodeURIComponent(audience)}&format=full`;
+    const response = await deps.fetch(url, {
+      method: 'GET',
+      headers: { 'Metadata-Flavor': 'Google' },
+      redirect: 'manual',
+      signal,
+    });
+    if (response.status !== 200) {
+      await discard(response);
+      throw new Error(`identity token request answered ${response.status}`);
     }
+    const token = (await readBounded(response, MAX_BODY_BYTES))?.trim();
+    const expiresAtMs = token === undefined ? undefined : tokenExpiryMs(token);
+    if (token === undefined || expiresAtMs === undefined || !(expiresAtMs > mintedAtMs) || !VISIBLE_ASCII.test(token)) {
+      throw new Error('identity token response is not a token with an exp claim later than its mint');
+    }
+    held = { token, mintedAtMs, expiresAtMs };
+    return token;
   }
 
   return {

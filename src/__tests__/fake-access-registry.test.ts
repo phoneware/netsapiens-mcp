@@ -196,11 +196,9 @@ describe('fake access registry', () => {
 
   it('answers a hang fault with no response, so only the client gives up', async () => {
     registry.setFault(alice.tenant, alice.subject, fault('hang'));
-    const controller = new AbortController();
-    const pendingRequest = fetch(decisionUrl(registry, alice), { signal: controller.signal });
-    // Wait for the server to record the hang, then abort the client: the condition is awaited, not guessed.
+    // The client gives up by its own deadline; the condition that the server saw the hang is awaited, not guessed.
+    const pendingRequest = fetch(decisionUrl(registry, alice), { signal: AbortSignal.timeout(1500) });
     await vi.waitFor(() => expect(registry.requests.some((entry) => entry.outcome === 'fault:hang')).toBe(true));
-    controller.abort();
     await expect(pendingRequest).rejects.toThrow();
   });
 
