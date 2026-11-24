@@ -21,7 +21,10 @@ import type { GenericApiClient, ToolDefinition } from '../generated/types.js';
 import { ROLE_HIERARCHY, type UserRole } from '../auth/roles.js';
 import { isStatelessMode } from '../server-info.js';
 import type { AvailabilityContext, AvailabilityMeta } from '../netsapiens/availability.js';
-import { createGuardedClient } from '../netsapiens/guarded-client.js';
+import { createGuardedClient, createOperationGate, OperationRefusedError, type ForeignTargets, type ForeignVerdict } from '../netsapiens/guarded-client.js';
+import type { AccessEnforcer, AccessIdentity } from '../access/types.js';
+import { ALLOW_ALL, type CompiledPolicy } from '../access/policy.js';
+import type { ContentKind } from '../governance/types.js';
 
 function multipartAlternative(toolName: string): string {
  if (/greeting/.test(toolName)) {
@@ -45,7 +48,10 @@ import { logger } from '../utils/logger.js';
 import { confirmDestructiveEnabled, elicitConfirmation } from './elicitation.js';
 import { getPromotedToolNames, recordCallApiInvocation } from './promotion/index.js';
 
-import { scrubSecrets } from '../governance/scrub.js';
+import { projectOutput, resourceDeclaration, scrubSecrets, withheldMarker } from '../governance/scrub.js';
+import { OPERATION_OUTPUTS } from '../governance/operation-outputs.generated.js';
+import { v1OperationKeyOf } from '../governance/content-operations.js';
+import { isRecord } from '../utils/records.js';
 import { NS_RESOURCE_FIELDS } from '../governance/ns-fields.generated.js';
 import type { OutputDeclaration } from '../governance/types.js';
 /** Set-equality helper used to detect promotion / demotion changes. */
@@ -468,10 +474,111 @@ export function isToolReadOnly(name: string): boolean {
  return hints.readOnlyHint && !hints.destructiveHint;
 }
 
+/** A tool the access policy refuses. The client sees a generic message; the reason is for the audit log. */
+export class PolicyRefusedError extends McpError {
+ readonly reason: string;
+
+ constructor(toolName: string, reason: string) {
+  super(ErrorCode.InvalidParams, `Tool '${toolName}' is not permitted for this account.`);
+  this.reason = reason;
+ }
+}
+
+/** What one registry-mode projection removed, for the audit log. */
+interface Projection {
+ readonly withheld?: Readonly<Record<string, number>>;
+ readonly undeclaredDropped: number;
+ readonly internalDropped: number;
+ readonly secrets: number;
+}
+
+const NO_PROJECTION: Projection = { undeclaredDropped: 0, internalDropped: 0, secrets: 0 };
+
+interface ProjectionOptions {
+ readonly stripKinds: readonly ContentKind[];
+ readonly allowlist: boolean;
+}
+
+/** A result the projection cannot read safely. The client gets an error and no content. */
+function unprojectable(): McpError {
+ return new McpError(ErrorCode.InternalError, 'The tool returned a result this connector cannot project safely.');
+}
+
+/** The declaration a dispatch projects by: the curated tool's own output, else the reviewed operation map. */
+function projectionDeclaration(curated: CuratedTool | undefined, def: ToolDefinition | undefined): OutputDeclaration | undefined {
+ if (curated !== undefined) return curated.output;
+ const operation = def?.operation;
+ if (operation === undefined) return undefined;
+ const key = operation.family === 'v1' ? v1OperationKeyOf(operation.key) : operation.key;
+ if (key === undefined || !Object.hasOwn(OPERATION_OUTPUTS, key)) return undefined;
+ return resourceDeclaration(OPERATION_OUTPUTS[key]);
+}
+
+/** Projects one payload. It is re-serialized only when something was removed, so an unchanged result keeps its bytes. */
+function projectPayload(
+ payload: unknown,
+ declaration: OutputDeclaration | undefined,
+ options: ProjectionOptions,
+): { readonly payload: unknown; readonly projection: Projection; readonly changed: boolean } {
+ // An allowlist names the paths the declaration allows. Without a declaration it would empty the payload, so refuse.
+ if (options.allowlist && declaration === undefined) throw unprojectable();
+ const projected = projectOutput(payload, declaration, {
+  stripKinds: options.stripKinds,
+  dropInternal: true,
+  allowlist: options.allowlist,
+ });
+ const stripped = Object.values(projected.stripped).reduce((sum, count) => sum + (count ?? 0), 0);
+ const changed = stripped + projected.undeclaredDropped + projected.internalDropped > 0 || projected.secrets > 0;
+ const withheld = changed ? withheldMarker(projected) : undefined;
+ const out = withheld !== undefined && isRecord(projected.projected) ? { ...projected.projected, _withheld: withheld } : projected.projected;
+ return {
+  payload: changed ? out : payload,
+  projection: {
+   withheld,
+   undeclaredDropped: projected.undeclaredDropped,
+   internalDropped: projected.internalDropped,
+   secrets: projected.secrets,
+  },
+  changed,
+ };
+}
+
+/**
+ * Projects a registry-mode result once: content of every kind the policy denies or strips, and internal fields, are
+ * removed; with `unclassifiedOutput: deny` every path the declaration does not name is removed as well. A result with
+ * more than one content block, or a block that is not text, is refused.
+ */
+function projectRegistryResult(
+ result: unknown,
+ declaration: OutputDeclaration | undefined,
+ options: ProjectionOptions,
+): { readonly result: unknown; readonly projection: Projection } {
+ if (!isRecord(result)) return { result, projection: NO_PROJECTION };
+ if (!('content' in result)) {
+  const projected = projectPayload(result, declaration, options);
+  return { result: projected.payload, projection: projected.projection };
+ }
+ const blocks = result.content;
+ if (!Array.isArray(blocks) || blocks.length > 1) throw unprojectable();
+ const block: unknown = blocks[0];
+ if (block === undefined) return { result, projection: NO_PROJECTION };
+ if (!isRecord(block) || block.type !== 'text' || typeof block.text !== 'string') throw unprojectable();
+ let payload: unknown;
+ try {
+  payload = JSON.parse(block.text);
+ } catch {
+  return { result, projection: NO_PROJECTION }; // Plain text: nothing structured to project.
+ }
+ const projected = projectPayload(payload, declaration, options);
+ if (projected.changed) block.text = JSON.stringify(projected.payload, null, 2);
+ return { result, projection: projected.projection };
+}
+
 function isGeneratedToolVisible(
  toolName: string,
  userRole?: UserRole,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): boolean {
  if (isToolDisabled(toolName)) return false;
  const mapping = buildNameMapping();
@@ -485,6 +592,7 @@ function isGeneratedToolVisible(
  if (availabilityContext && def?.operation) {
   if (!availabilityContext.isAvailable(def.operation.key)) return false;
  }
+ if (policy !== undefined && !policy.toolDecision(toolName).allowed) return false;
  return true;
 }
 
@@ -500,19 +608,20 @@ async function curatedExposedTools(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): Promise<ExposedTool[]> {
  const meta = buildMetaTools(
   toolRegistry,
   async (name, args, client) => {
    // Reuse handleToolCall so every filter (disable, action, role, name
    // mapping, destructive) applies to call_api invocations too.
-   return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity, availabilityContext);
+    return handleToolCall(client as unknown as NetSapiensClient, name, args, userRole, userIdentity, availabilityContext, policy);
   },
   // search_api visibility: hide anything the operator has disabled, anything
   // above the user's role tier, and (when MCP_DISABLE_DESTRUCTIVE=true)
   // destructive tools don't leak into search results that call_api would
   // just reject anyway.
-  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext, policy),
   availabilityContext,
  );
  const all = [...CURATED_CATALOG, ...meta];
@@ -521,6 +630,7 @@ async function curatedExposedTools(
  for (const t of all) {
   if (userRole && ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[t.minRole] && roleFilterEnabled()) continue;
   if (isToolDisabled(t.schema.name)) continue;
+  if (policy !== undefined && !policy.toolDecision(t.schema.name).allowed) continue;
   if (availabilityContext && t.operations && t.operations.length > 0) {
    const allAvail = t.operations.every((op) => availabilityContext.isAvailable(op));
    if (!allAvail) continue;
@@ -551,7 +661,7 @@ async function curatedExposedTools(
   const promoted = await getPromotedToolNames(userIdentity, availabilityContext);
   const mapping = buildNameMapping();
   for (const registryKey of promoted) {
-   if (!isGeneratedToolVisible(registryKey, userRole, availabilityContext)) continue;
+   if (!isGeneratedToolVisible(registryKey, userRole, availabilityContext, policy)) continue;
    const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
    if (seen.has(exposed)) continue;
    const def = toolRegistry.get(registryKey);
@@ -619,15 +729,17 @@ function findCuratedTool(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
+ targets?: ForeignTargets,
 ) {
  const meta = buildMetaTools(
   toolRegistry,
   async (innerName, innerArgs, client) =>
-   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity, availabilityContext),
+   handleToolCall(client as unknown as NetSapiensClient, innerName, innerArgs, userRole, userIdentity, availabilityContext, policy, targets),
   // Same predicate the ListTools path uses. This was a second, hand-copied
   // version of the rule, and it had already drifted: search_api kept
   // offering tools the dispatcher would reject.
-  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext),
+  (toolName) => isGeneratedToolVisible(toolName, userRole, availabilityContext, policy),
   availabilityContext,
  );
  return [...CURATED_CATALOG, ...meta].find((t) => t.schema.name === name);
@@ -647,16 +759,17 @@ export async function getAllToolDefinitions(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
 ): Promise<ExposedTool[]> {
  if (getToolMode() === 'curated') {
-  return curatedExposedTools(userRole, userIdentity, availabilityContext);
+  return curatedExposedTools(userRole, userIdentity, availabilityContext, policy);
  }
 
  const mapping = buildNameMapping();
  const tools: ExposedTool[] = [];
  for (const [registryKey, def] of toolRegistry) {
   const exposed = mapping.registryToExposed.get(registryKey) ?? registryKey;
-  if (!isGeneratedToolVisible(exposed, userRole, availabilityContext)) continue;
+  if (!isGeneratedToolVisible(exposed, userRole, availabilityContext, policy)) continue;
   const annotations = classifyTool(registryKey, def);
   const metaAvail = availabilityContext ? availabilityContext.getToolAvailability(def) : undefined;
   tools.push({
@@ -770,12 +883,23 @@ export async function handleToolCall(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ policy?: CompiledPolicy,
+ targets?: ForeignTargets,
 ): Promise<unknown> {
- const guardedClient = availabilityContext ? createGuardedClient(client, availabilityContext) : client;
+ const enforced = policy !== undefined && policy !== ALLOW_ALL;
+ const foreignStrip = new Set<ContentKind>();
+ const gate = enforced ? createOperationGate({ policy, targets, foreignStrip }) : undefined;
+ const guardedClient = gate !== undefined
+  ? createGuardedClient(client, availabilityContext, { gate })
+  : availabilityContext ? createGuardedClient(client, availabilityContext) : client;
  const startTime = Date.now();
  const argNames = Object.keys(args ?? {});
 
  try {
+  if (policy !== undefined) {
+   const decision = policy.toolDecision(toolName);
+   if (!decision.allowed) throw new PolicyRefusedError(toolName, decision.reason);
+  }
   if (isReadOnlyMode()) {
    if (toolName === 'call_api') {
     const innerName = String(args?.tool_name ?? '');
@@ -819,7 +943,7 @@ export async function handleToolCall(
   // generated registry without infinite recursion through the curated layer.
   let curated: CuratedTool | undefined;
   if (getToolMode() === 'curated' || toolName === 'search_api' || toolName === 'call_api') {
-   curated = findCuratedTool(toolName, userRole, userIdentity, availabilityContext);
+   curated = findCuratedTool(toolName, userRole, userIdentity, availabilityContext, policy, targets);
   }
 
   const mapping = buildNameMapping();
@@ -898,6 +1022,20 @@ export async function handleToolCall(
     result = scrubbed.scrubbed;
    }
   }
+  // Registry mode: project the result once, on the innermost dispatched tool. A call_api result is the inner result,
+  // already projected, so it is checked for shape only.
+  let projection: Projection = NO_PROJECTION;
+  if (enforced && policy !== undefined) {
+   const innermost = toolName !== 'call_api';
+   const stripKinds = innermost ? [...new Set<ContentKind>([...policy.deniedKinds, ...policy.strippedKinds, ...foreignStrip])] : [];
+   const outcome = projectRegistryResult(result, innermost ? projectionDeclaration(curated, def) : undefined, {
+    stripKinds,
+    allowlist: innermost && policy.unclassifiedOutput === 'deny',
+   });
+   result = outcome.result;
+   projection = outcome.projection;
+   secretsScrubbed += projection.secrets;
+  }
 
   let ok = true;
   let errorMessage: string | undefined;
@@ -938,6 +1076,12 @@ export async function handleToolCall(
   if (secretsScrubbed > 0) {
    logContext.secretsScrubbed = secretsScrubbed;
   }
+  if (policy !== undefined) logContext.policyRevision = policy.revision;
+  if (enforced) {
+   logContext.undeclaredDropped = projection.undeclaredDropped;
+   logContext.internalDropped = projection.internalDropped;
+   if (projection.withheld !== undefined) logContext.withheld = projection.withheld;
+  }
   logger.info('Tool call', logContext);
   return result;
  } catch (err: unknown) {
@@ -953,6 +1097,12 @@ export async function handleToolCall(
    error: errorMessage,
    durationMs,
   };
+  if (policy !== undefined) logContext.policyRevision = policy.revision;
+  if (err instanceof PolicyRefusedError) logContext.policyDenied = err.reason;
+  if (err instanceof OperationRefusedError) {
+   logContext.policyDenied = err.reason;
+   logContext.opBlocked = err.operationKey;
+  }
   if (resolvedScope !== undefined) {
    logContext.scope = resolvedScope;
   }
@@ -1030,6 +1180,26 @@ export function withStructuredContent(result: ToolResult): ToolResult {
  return { ...result, structuredContent: structured };
 }
 
+/** The access scope of one request: open with no enforcer, the policy the registry gave, or closed. */
+type AccessScope =
+ | { readonly kind: 'open' }
+ | { readonly kind: 'allow'; readonly policy: CompiledPolicy; readonly targets: ForeignTargets; readonly signature: string }
+ | { readonly kind: 'closed'; readonly reason: string; readonly signature: string };
+
+/** The foreign-target judge of one signed-in person (spec D3 (b)): each explicit target's own registry decision. */
+function foreignTargets(access: AccessEnforcer, identity: AccessIdentity): ForeignTargets {
+ return {
+  home: identity.tenant,
+  judge: async (domain): Promise<ForeignVerdict> => {
+   const view = await access.evaluate(identity, { foreignTenant: domain });
+   if (view.kind === 'allow') return { kind: 'allow', policy: view.policy };
+   // A target that is not enrolled adds nothing. Every other refusal, and any reason not yet known, refuses it.
+   if (view.kind === 'deny' && view.reason === 'tenant_not_enrolled') return { kind: 'allow' };
+   return { kind: 'refuse', reason: view.kind === 'deny' ? view.reason : 'unavailable' };
+  },
+ };
+}
+
 /**
  * Wires ListTools and CallTool handlers onto an MCP Server.
  *
@@ -1037,6 +1207,7 @@ export function withStructuredContent(result: ToolResult): ToolResult {
  * @param client          NetSapiensClient bound to the authenticated user's bearer.
  * @param userRole        Scope tier from the NS user record; enables role filtering.
  * @param userIdentity    NS username (used to scope per-user tool promotion).
+ * @param access          Access enforcer. Absent when the registry is off, and every request is then open.
  */
 export function registerAllTools(
  server: Server,
@@ -1044,8 +1215,54 @@ export function registerAllTools(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ access?: AccessEnforcer,
 ): void {
  const guardedClient = availabilityContext ? createGuardedClient(client, availabilityContext) : client;
+ // Registry mode (E4 to E10). Without an enforcer every request is open, and none of this runs.
+ let lastSignature: string | undefined;
+
+ async function resolveAccess(
+  extra: { readonly authInfo?: { readonly extra?: Readonly<Record<string, unknown>> } } | undefined,
+ ): Promise<AccessScope> {
+  if (access === undefined) return { kind: 'open' };
+  const identity = access.identityFromAuthInfo(extra?.authInfo?.extra);
+  if (identity === undefined) {
+   return { kind: 'closed', reason: 'identity_unresolved', signature: 'closed:identity_unresolved' };
+  }
+  try {
+   const view = await access.evaluate(identity);
+   if (view.kind === 'allow') {
+    return { kind: 'allow', policy: view.policy, targets: foreignTargets(access, identity), signature: `allow:${view.policy.revision}` };
+   }
+   const reason = view.kind === 'deny' ? view.reason : 'unavailable';
+   return { kind: 'closed', reason, signature: `closed:${reason}` };
+  } catch {
+   return { kind: 'closed', reason: 'unavailable', signature: 'closed:unavailable' };
+  }
+ }
+
+/**
+ * Session mode (E10): the first view is recorded; a later view that differs tells the client its tool list changed.
+ * The view is read on each request and nothing polls: a change that no request observes sends nothing until the next one.
+ */
+ async function observeScope(scope: AccessScope): Promise<void> {
+  if (scope.kind === 'open' || isStatelessMode()) return;
+  const previous = lastSignature;
+  lastSignature = scope.signature;
+  if (previous === undefined || previous === scope.signature) return;
+  try {
+   await server.sendToolListChanged();
+  } catch {
+   // Best-effort: a transport that has closed must not fail the request that noticed the change.
+  }
+ }
+
+ /** The refusal for a tool the access view does not allow. The reason is for the audit log; the client gets a generic message. */
+ function refusalFor(name: string, reason: string, revision?: string): PolicyRefusedError {
+  logger.info('Tool call', { tool: name, role: userRole, username: userIdentity, ok: false, error: 'not permitted', policyDenied: reason, policyRevision: revision });
+  return new PolicyRefusedError(name, reason);
+ }
+
  /**
   * Per-session snapshot of the user's promoted-tool set, captured the first
   * time we look at it and re-snapped whenever something changes. Lets us
@@ -1085,8 +1302,11 @@ export function registerAllTools(
   }
  }
 
- server.setRequestHandler(ListToolsRequestSchema, async (request) => {
-  const all = await getAllToolDefinitions(userRole, userIdentity, availabilityContext);
+server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+  const scope = await resolveAccess(extra);
+  await observeScope(scope);
+  if (scope.kind === 'closed') return { tools: [] };
+  const all = await getAllToolDefinitions(userRole, userIdentity, availabilityContext, scope.kind === 'allow' ? scope.policy : undefined);
   // Seed the snapshot from whatever the AI client just observed so that
   // subsequent CallTool reconciliations diff against the right baseline.
   if (userIdentity) {
@@ -1095,11 +1315,19 @@ export function registerAllTools(
   return paginateTools(all, request.params?.cursor);
  });
 
- server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: args } = request.params;
   const callArgs = (args ?? {}) as Record<string, unknown>;
 
   try {
+   // Registry mode: the policy is checked before the confirmation prompt, so a refused tool never prompts (E6).
+   const scope = await resolveAccess(extra);
+   await observeScope(scope);
+   if (scope.kind === 'closed') throw refusalFor(name, scope.reason);
+   if (scope.kind === 'allow') {
+    const decision = scope.policy.toolDecision(name);
+    if (!decision.allowed) throw refusalFor(name, decision.reason, scope.policy.revision);
+   }
    // Optional confirmation gate. Skip elicitation entirely if
    // MCP_DISABLE_DESTRUCTIVE will block the call anyway — that policy
    // wins; we don't want to prompt the user for a call we'll reject.
@@ -1113,7 +1341,16 @@ export function registerAllTools(
     // user accepted, so dispatch normally.
    }
 
-   const result = await handleToolCall(guardedClient, name, callArgs, userRole, userIdentity, availabilityContext);
+   const result = await handleToolCall(
+    guardedClient,
+    name,
+    callArgs,
+    userRole,
+    userIdentity,
+    availabilityContext,
+    scope.kind === 'allow' ? scope.policy : undefined,
+    scope.kind === 'allow' ? scope.targets : undefined,
+   );
 
    // Per-user tool promotion: record call_api invocations, then
    // reconcile the promoted set so EITHER a new promotion OR a decay

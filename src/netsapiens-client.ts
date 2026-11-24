@@ -14,6 +14,7 @@ import type {
 } from 'axios';
 import { logger } from './utils/logger.js';
 import { OAuthManager } from './oauth-manager.js';
+import { expandPathTemplate, pathParameterRefusal, pathRefusalMessage, V2_BASE_PATH } from './netsapiens/request-path.js';
 import type {
   NetSapiensActiveCall,
   NetSapiensAddress,
@@ -89,7 +90,6 @@ import type {
   NetSapiensVoicemailReminder,
 } from './types/config.js';
 
-const V2_BASE_PATH = '/ns-api/v2';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const USER_AGENT = 'NetSapiens-MCP/1.1.1';
 
@@ -319,13 +319,16 @@ export class NetSapiensClient {
     multipart?: { field: string; filename: string; base64: string; contentType?: string };
   }): Promise<NetSapiensApiResponse<T>> {
     try {
-      let url = opts.pathTemplate;
-      if (opts.pathParams) {
-        for (const [key, value] of Object.entries(opts.pathParams)) {
-          if (value === undefined || value === null) continue;
-          url = url.replace(new RegExp(`\\{${key}\\}`, 'g'), encodeURIComponent(String(value)));
-        }
+      const refusal = pathParameterRefusal(opts.pathParams, false);
+      if (refusal) {
+        logger.warn('NetSapiens request not sent: path parameter refused', {
+          pathTemplate: opts.pathTemplate,
+          parameter: refusal.name,
+          reason: refusal.reason,
+        });
+        return { success: false, error: pathRefusalMessage(refusal.name, refusal.reason) };
       }
+      const url = expandPathTemplate(opts.pathTemplate, opts.pathParams);
 
       const params: Record<string, unknown> = {};
       if (opts.queryParams) {

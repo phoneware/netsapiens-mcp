@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { assertAccessRegistryTransport } from './access/config.js';
+import type { AccessEnforcer } from './access/types.js';
 import { normalizePlatformUrl } from './auth/platforms.js';
 import type { UserRole } from './auth/roles.js';
 import { createAvailabilityContext } from './netsapiens/availability.js';
@@ -119,8 +120,9 @@ export function registerTools(
  userRole?: UserRole,
  userIdentity?: string,
  availabilityContext?: AvailabilityContext,
+ access?: AccessEnforcer,
 ): void {
- registerAllTools(server, client, userRole, userIdentity, availabilityContext);
+ registerAllTools(server, client, userRole, userIdentity, availabilityContext, access);
 }
 
 /**
