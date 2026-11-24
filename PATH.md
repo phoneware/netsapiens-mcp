@@ -21,6 +21,12 @@ Run the Firestore leg separately against a disposable Firestore emulator:
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP_REQUIRE_FIRESTORE_EMULATOR=1 node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.1.0.tgz> --legs firestore --firestore-major 8
 ```
 
+The access registry leg runs the packed package with a registry configured, against a fake NetSapiens and a fake registry. It is not part of the default legs:
+
+```bash
+node scripts/consumer-e2e.mjs --tarball <netsapiens-mcp-3.1.0.tgz> --legs registry
+```
+
 ## Transport & Verification
 
 - Installs package in an isolated consumer directory.
@@ -32,3 +38,4 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=firestore-test NSMCP
 - Proves Firestore multi-instance bearer sharing and exported store conformance.
 - Proves the sign-in attempt budget across Firestore instances. Configure the trusted proxy and Firestore TTL policy before production use.
 - Proves TypeScript consumer compilation against `netsapiens-mcp/lib` exports.
+- Proves the access registry end to end on the packed package: sign-in refusals, tool and operation refusals that send no NetSapiens request, content denial and its `_withheld` counts, foreign targets, redirect refusal, revocation, registry outage, and the unset baseline.
