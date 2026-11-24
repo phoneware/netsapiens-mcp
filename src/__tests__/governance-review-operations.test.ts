@@ -163,11 +163,12 @@ describe('review finding 6: vCon fields carry their real kinds', () => {
     parties: [{ name: 'A' }],
   };
 
-  it('removes the analysis under a transcript strip and keeps the subject', () => {
+  it('removes the analysis and the attachments under a transcript strip, and keeps the subject', () => {
     const result = projectOutput(payload, resourceDeclaration('Vcon'), { stripKinds: ['transcript'] });
     expect(result.projected).not.toHaveProperty('analysis');
+    expect(result.projected).not.toHaveProperty('attachments');
     expect(result.projected).toHaveProperty('subject');
-    expect(result.stripped.transcript).toBe(1);
+    expect(result.stripped.transcript).toBe(2);
   });
 
   it('removes the subject, the analysis and the attachments under an ai_summary strip', () => {

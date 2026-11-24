@@ -3,9 +3,10 @@
  * review each operation must have. Pure: the caller supplies the facts and the classes, so a test can feed a
  * synthetic operation to each gate and see it fail.
  *
- * An operation is flagged when its response carries a classified content field, a field the response pattern
- * names, or non-JSON media; when its request names a sink and a model that carries content; or when its request
- * names a voicemail destination. A flagged operation must be listed, under every kind it carries.
+ * An operation is flagged when its response carries a classified content field, a field the response pattern names
+ * and is not reviewed as a setting, or non-JSON media; when its request names a sink and a model that carries
+ * content; or when its request names a voicemail destination. A flagged operation must be listed, under every kind it
+ * carries.
  */
 import { CONTENT_KIND_ORDER } from './content-operations.js';
 import { UNAMBIGUOUS_CONTENT_NAMES } from './scrub.js';
@@ -14,6 +15,28 @@ import type { ContentKind, FieldClass } from './types.js';
 
 /** Response field names that name content by their shape. A name matching it must be reviewed. */
 export const RESPONSE_NAME_PATTERN = /transcri|summary|sentiment|topics|segments|recording|vcon|file-access-url|thumbnail-url|analysis|dialog/;
+
+/**
+ * Response field names the pattern matches that are settings, counts, identifiers or plumbing, reviewed by name. They
+ * carry no content, so the pattern does not flag them. Any other name the pattern matches must be reviewed by listing
+ * the operation that returns it. A name here never changes a field's class: a classified field still carries its kind.
+ */
+export const REVIEWED_SETTING_NAMES: Readonly<Record<string, string>> = {
+  'analysis-denylist': 'a user-interface setting for call analysis: a list of rules, not analysis output',
+  'analysis-rule-policy': 'a user-interface setting for call analysis: a policy, not analysis output',
+  'analysis-ruleset-fingerprint': 'a user-interface setting for call analysis: a version identifier, not analysis output',
+  'analysis-settings': 'a user-interface setting for call analysis: switches, not analysis output',
+  'call-recordings-hide-from-others-enabled': 'a user switch that hides call recordings from others; no recording content',
+  'connection-sip-get-new-dialog-destination-from': 'a SIP connection setting about the dialog destination; no content',
+  'count-users-configured-voicemail-transcription-google': 'a billing count of users with a transcription provider; no transcript',
+  'count-users-configured-voicemail-transcription-mutare': 'a billing count of users with a transcription provider; no transcript',
+  'count-users-configured-voicemail-transcription-nuance': 'a billing count of users with a transcription provider; no transcript',
+  'count-users-configured-voicemail-transcription-voicebase': 'a billing count of users with a transcription provider; no transcript',
+  'device-level-call-recording-enabled': 'a device switch that enables call recording; no recording content',
+  'meeting-recording-enabled': 'a meeting switch that enables recording; no recording content',
+  'recording-configuration': 'a domain switch that enables call recording; no recording content',
+  'voicemail-transcription-enabled': 'a user or domain switch that enables voicemail transcription; no transcript',
+};
 
 /** Request fields that send data out: a URL to post to, an address, a copy list, a forward, or an owner. */
 export const SINK_NAMES: ReadonlySet<string> = new Set(['post-url', 'url', 'email', 'cclist', 'forward', 'owner']);
@@ -54,10 +77,7 @@ function unambiguousKind(name: string): ContentKind | undefined {
 }
 
 /** Gate (b): the response's content, judged by the resource table its operation maps to. */
-export function responseRequirement(
-  facts: OperationFacts,
-  table: Readonly<Record<string, FieldClass>> | undefined,
-): GateRequirement {
+export function responseRequirement(facts: OperationFacts, table: Readonly<Record<string, FieldClass>> | undefined): GateRequirement {
   const kinds = new Set<ContentKind>();
   let named = false;
   for (const name of facts.responseNames) {
@@ -68,7 +88,7 @@ export function responseRequirement(
     }
     const unambiguous = unambiguousKind(name);
     if (unambiguous !== undefined) kinds.add(unambiguous);
-    if (RESPONSE_NAME_PATTERN.test(name)) named = true;
+    if (RESPONSE_NAME_PATTERN.test(name) && !Object.hasOwn(REVIEWED_SETTING_NAMES, name)) named = true;
   }
   const ordered = orderedKinds(kinds);
   const media = facts.responseMedia.size > 0;

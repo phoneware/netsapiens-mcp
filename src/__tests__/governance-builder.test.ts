@@ -34,7 +34,7 @@ describe('builder: list components and allOf merges declare their item fields', 
     });
     expect(Object.keys(out.fields.ItemList).sort()).toEqual(['file-transcript-text', 'id']);
     expect(out.fields.ItemList['file-transcript-text']).toEqual(TRANSCRIPT);
-    expect(out.outputs['GET /items']).toBe('ItemList');
+    expect(out.outputs['GET /items']).toBe('Union(Item,ItemList)');
   });
 
   it('flattens an allOf into the union of the fields of every part', () => {

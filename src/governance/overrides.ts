@@ -26,6 +26,8 @@ const CDR_PLUMBING: Record<string, FieldClass> = {
   'call-term-ip-address': { class: 'internal' },
   'call-term-match-uri': { class: 'internal' },
   'call-term-pre-routing-uri': { class: 'internal' },
+  // The 44.x and 45.0 releases spell this column with a typo. It is SIP plumbing, as call-term-pre-routing-uri is.
+  'call-term-pre-reouting-uri': { class: 'internal' },
   'call-term-to-uri': { class: 'internal' },
   'call-through-uri': { class: 'internal' },
   'call-video-relay-side-a-local-port': { class: 'internal' },
