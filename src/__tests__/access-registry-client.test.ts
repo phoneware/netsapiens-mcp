@@ -9,6 +9,9 @@ import {
   RegistryClient,
   type FetchLike,
   type RegistryQuery,
+  type Clock,
+  type FetchDecision,
+  type RegistryResponse,
 } from '../access/registry-client.js';
 import { logger } from '../utils/logger.js';
 
@@ -20,6 +23,7 @@ const TOKEN = 'static-token-7f3a9c';
 const CONNECTOR = 'netsapiens-mcp';
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
 const START = 1_700_000_000_000;
 const GOOGLE: AccessRegistryAuthConfig = { mode: 'google-id-token', audience: `${BASE}/` };
 
@@ -109,6 +113,8 @@ interface SetupOptions {
   readonly timeoutMs?: number;
   readonly maxStaleMs?: number;
   readonly maxEntries?: number;
+  /** The wall clock for identity token expiry. Defaults to the age clock, so the two move together. */
+  readonly wallNow?: Clock;
 }
 
 function setup(options: SetupOptions = {}) {
@@ -120,7 +126,7 @@ function setup(options: SetupOptions = {}) {
     auth: options.auth ?? { mode: 'bearer', token: TOKEN },
     fetch: network.fetch,
     metadataUrl: METADATA,
-    now,
+    now: options.wallNow ?? now,
     timeoutMs: options.timeoutMs,
   });
   const client = new RegistryClient({
@@ -776,5 +782,221 @@ describe('registry client: construction', () => {
     await client.decide(QUERY);
     expect(network.decisions()[0].url.searchParams.get('connector')).toBe('lab-connector');
     expect(network.decisions()[0].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+});
+
+describe('registry client: a clock that steps backwards', () => {
+  it('makes a fresh allow stale at once, so an errored revalidation is unavailable and not last known good', async () => {
+    const { client, network, clock } = setup();
+    network.respond = () => json(200, allowBody());
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+
+    clock.now = START - HOUR;
+    network.respond = () => json(500, 'boom');
+    expect(await client.decide(QUERY)).toEqual({ source: 'unavailable', errorClass: 'http_status' });
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('revalidates an entry the clock has moved behind, and validates it from the new time', async () => {
+    const { client, network, clock } = setup();
+    network.respond = () => json(200, allowBody());
+    await client.decide(QUERY);
+
+    clock.now = START - HOUR;
+    network.respond = () => json(200, allowBody({ revision: 'rev-after-step' }));
+    expect((await client.decide(QUERY)).source).toBe('revalidated');
+
+    clock.now = START - HOUR + 30 * SECOND;
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+    expect(network.decisions()).toHaveLength(2);
+  });
+
+  it('logs every unavailable warning when the clock has stepped back, so a step cannot silence the limiter', async () => {
+    const warnings: string[] = [];
+    vi.spyOn(logger, 'warn').mockImplementation((message: string, context?: Record<string, unknown>) => {
+      if (context?.source === 'unavailable') warnings.push(message);
+    });
+    const { client, network, clock } = setup();
+    network.respond = () => json(500, 'boom');
+    await client.decide(QUERY);
+    clock.now = START - HOUR;
+    await client.decide(QUERY);
+    expect(warnings).toHaveLength(2);
+  });
+});
+
+describe('registry client: the default age clock is monotonic', () => {
+  it('measures ages on the monotonic default clock, so a wall clock stepped back an hour changes no age', async () => {
+    const monotonic = { ms: 10_000 };
+    const wall = { ms: START };
+    vi.spyOn(performance, 'now').mockImplementation(() => monotonic.ms);
+    vi.spyOn(Date, 'now').mockImplementation(() => wall.ms);
+    const network = new FakeNetwork();
+    network.respond = () => json(200, allowBody({ revision: 'rev-monotonic' }));
+    const client = createAccessRegistryClient(
+      {
+        enabled: true,
+        baseUrl: BASE,
+        auth: { mode: 'bearer', token: TOKEN },
+        connector: CONNECTOR,
+        maxStaleSeconds: 600,
+        timeoutMs: 3000,
+      },
+      { fetch: network.fetch },
+    );
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+
+    monotonic.ms += 30 * SECOND;
+    wall.ms -= HOUR;
+    expect((await client.decide(QUERY)).source).toBe('fresh');
+    expect(network.decisions()).toHaveLength(1);
+
+    monotonic.ms += 31 * SECOND;
+    network.respond = () => json(500, 'boom');
+    expect(await client.decide(QUERY)).toEqual({
+      source: 'lkg',
+      decision: allowBody({ revision: 'rev-monotonic' }),
+      errorClass: 'http_status',
+    });
+    expect(network.decisions()).toHaveLength(2);
+  });
+});
+
+describe('registry client: identity token lifetime and rejection', () => {
+  it('re-mints an identity token after the wall clock steps back, because it would otherwise claim more life than it had', async () => {
+    const wall = { ms: START };
+    const { client, network } = setup({ auth: GOOGLE, wallNow: () => wall.ms });
+    network.respond = (sent) =>
+      sent.raw.startsWith(METADATA)
+        ? new Response(identityToken(START / 1000 + 3600), { status: 200 })
+        : json(200, allowBody());
+    await client.decide({ ...QUERY, subject: 'a@example.com' });
+    expect(network.metadataRequests()).toHaveLength(1);
+
+    wall.ms = START - HOUR;
+    await client.decide({ ...QUERY, subject: 'b@example.com' });
+    expect(network.metadataRequests()).toHaveLength(2);
+  });
+
+  it.each([401, 403])(
+    'drops an identity token that the registry rejects with %i, so the next attempt mints a new one',
+    async (status) => {
+      const { client, network, clock } = setup({ auth: GOOGLE });
+      const tokens: string[] = [];
+      network.respond = (sent) => {
+        if (sent.raw.startsWith(METADATA)) {
+          const token = identityToken(clock.now / 1000 + 3600 + tokens.length);
+          tokens.push(token);
+          return new Response(token, { status: 200 });
+        }
+        return sent.headers.Authorization === `Bearer ${tokens[0]}` ? json(status, 'rejected') : json(200, allowBody());
+      };
+      expect(await client.decide({ ...QUERY, subject: 'a@example.com' })).toEqual({
+        source: 'unavailable',
+        errorClass: 'auth',
+      });
+      expect(await client.decide({ ...QUERY, subject: 'b@example.com' })).toMatchObject({
+        source: 'fresh',
+        decision: { decision: 'allow' },
+      });
+      expect(network.metadataRequests()).toHaveLength(2);
+      expect(network.decisions()[1].headers.Authorization).toBe(`Bearer ${tokens[1]}`);
+    },
+  );
+
+  it('refuses an identity token that is already expired when it arrives, and sends it nowhere', async () => {
+    const { client, network, clock } = setup({ auth: GOOGLE });
+    network.respond = (sent) =>
+      sent.raw.startsWith(METADATA)
+        ? new Response(identityToken(clock.now / 1000 - 1), { status: 200 })
+        : json(200, allowBody());
+    expect(await client.decide(QUERY)).toEqual({ source: 'unavailable', errorClass: 'auth' });
+    expect(network.decisions()).toHaveLength(0);
+  });
+});
+
+/** Results a decision source can resolve with that are not one of the four response shapes, or that throw when read. */
+const MALFORMED_RESULTS: ReadonlyArray<readonly [string, unknown]> = [
+  ['undefined', undefined],
+  ['null', null],
+  ['a number', 5],
+  ['a string', 'text'],
+  ['an array', []],
+  ['an object without a kind', {}],
+  ['an unknown kind', { kind: 'maybe' }],
+  ['a text body that is not a string', { kind: 'text', body: 5 }],
+  ['a text result without a body', { kind: 'text' }],
+  ['a value result without a value', { kind: 'value' }],
+  ['a value whose property getter throws', { kind: 'value', value: { get critical(): never { throw new Error('getter'); } } }],
+  ['a failure with an unknown error class', { kind: 'failure', errorClass: 'boom' }],
+  ['a failure without an error class', { kind: 'failure' }],
+  ['a result whose kind getter throws', { get kind(): never { throw new Error('getter'); } }],
+];
+
+describe('registry client: malformed decision sources never reject', () => {
+  it.each(MALFORMED_RESULTS)(
+    'answers %s as a contract error, and is unavailable with no cached answer',
+    async (_description, raw) => {
+      const client = new RegistryClient({
+        connector: CONNECTOR,
+        fetchDecision: async () => raw as RegistryResponse,
+        now: () => START,
+      });
+      await expect(client.decide(QUERY)).resolves.toEqual({ source: 'unavailable', errorClass: 'contract' });
+    },
+  );
+
+  it.each([
+    ['undefined', undefined],
+    ['an unknown kind', { kind: 'maybe' }],
+    ['a text body that is not a string', { kind: 'text', body: 5 }],
+  ])(
+    'answers %s as a contract error inside the window, and keeps the last known good answer',
+    async (_description, raw) => {
+      const clock = { now: START };
+      let calls = 0;
+      const client = new RegistryClient({
+        connector: CONNECTOR,
+        fetchDecision: async () => {
+          calls += 1;
+          return (calls === 1 ? { kind: 'value', value: allowBody() } : raw) as RegistryResponse;
+        },
+        now: () => clock.now,
+      });
+      expect((await client.decide(QUERY)).source).toBe('fresh');
+      clock.now += MINUTE + SECOND;
+      expect(await client.decide(QUERY)).toEqual({ source: 'lkg', decision: allowBody(), errorClass: 'contract' });
+    },
+  );
+});
+
+describe('registry client: decision sources that return without a promise', () => {
+  it('accepts a synchronous result that has a response shape', async () => {
+    const client = new RegistryClient({
+      connector: CONNECTOR,
+      fetchDecision: (() => ({ kind: 'value', value: allowBody() })) as unknown as FetchDecision,
+      now: () => START,
+    });
+    expect(await client.decide(QUERY)).toMatchObject({ source: 'fresh', decision: { decision: 'allow' } });
+  });
+
+  it('answers a synchronous result without a response shape as a contract error', async () => {
+    const client = new RegistryClient({
+      connector: CONNECTOR,
+      fetchDecision: (() => 'not a response') as unknown as FetchDecision,
+      now: () => START,
+    });
+    await expect(client.decide(QUERY)).resolves.toEqual({ source: 'unavailable', errorClass: 'contract' });
+  });
+
+  it('counts a synchronous throw as a network error, and never throws out of decide', async () => {
+    const client = new RegistryClient({
+      connector: CONNECTOR,
+      fetchDecision: () => {
+        throw new Error('synchronous failure');
+      },
+      now: () => START,
+    });
+    await expect(client.decide(QUERY)).resolves.toEqual({ source: 'unavailable', errorClass: 'network' });
   });
 });
