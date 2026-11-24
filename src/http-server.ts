@@ -48,8 +48,7 @@ import { getVersionInfo, getCachedVersionInfo, warmVersionCache, getVersionTtlSe
 import { createAvailabilityContext, type AvailabilityContext } from './netsapiens/availability.js';
 import { createGuardedClient } from './netsapiens/guarded-client.js';
 import { loadAccessRegistryConfig, readAccessRegistryEnv, type AccessRegistryConfig } from './access/config.js';
-import { createAccessEnforcer } from './access/enforcer.js';
-import type { AccessEnforcer } from './access/types.js';
+import { createAccessEnforcer, type CausedAccessEnforcer } from './access/enforcer.js';
 // ---------------------------------------------------------------------------
 // Authenticated request type
 // ---------------------------------------------------------------------------
@@ -93,7 +92,7 @@ function ownsSession(session: McpSession, req: AuthenticatedRequest): boolean {
  * In registry mode a stateful session answers only the subject it was opened for. A request whose identity is missing or
  * different finds no session. Unset, the check is not made.
  */
-function boundToSubject(session: McpSession, req: AuthenticatedRequest, access: AccessEnforcer | undefined): boolean {
+function boundToSubject(session: McpSession, req: AuthenticatedRequest, access: CausedAccessEnforcer | undefined): boolean {
  if (access === undefined) return true;
  const subject = access.identityFromAuthInfo(req.auth?.extra);
  return session.subject !== undefined && subject !== undefined && subject.subject === session.subject;
@@ -170,7 +169,7 @@ type HttpAppOptions = {
  store?: McpStore;
  authProvider?: NetSapiensAuthProvider;
  hooks?: import('./auth/types.js').AuthHooks;
- access?: AccessEnforcer;
+ access?: CausedAccessEnforcer;
 };
 interface PreparedHttpConfig {
  env: NodeJS.ProcessEnv;
@@ -406,7 +405,7 @@ function wireApp(
  store: McpStore,
  platforms: readonly NetSapiensPlatform[],
  proxyHops: number,
- access?: AccessEnforcer,
+ access?: CausedAccessEnforcer,
 ): { app: express.Express; sessions: Map<string, McpSession> } {
 
  // -----------------------------------------------------------------------
@@ -907,7 +906,7 @@ async function createAuthenticatedMcpServer(
  authProvider?: NetSapiensAuthProvider,
  recovery: RecoveryCredential = {},
 /** Carried to the tool wiring; registerTools receives it once the tool-level enforcement lands. */
-access?: AccessEnforcer,
+ access?: CausedAccessEnforcer,
 ) {
  const server = new Server(
   serverImplementation(config),
@@ -950,7 +949,7 @@ async function createAuthenticatedMcpServerForRequest(
  config: ReturnType<typeof loadConfig>,
  req: AuthenticatedRequest,
  authProvider?: NetSapiensAuthProvider,
-access?: AccessEnforcer,
+ access?: CausedAccessEnforcer,
 ) {
  const extra = req.auth?.extra as Record<string, unknown> | undefined;
  return createAuthenticatedMcpServer(

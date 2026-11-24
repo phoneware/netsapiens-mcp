@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createAccessEnforcer } from '../access/enforcer.js';
+import { createAccessEnforcer, type AccessUnavailableCause } from '../access/enforcer.js';
+import type { RegistryResponse, RegistryResult } from '../access/registry-client.js';
 import {
   FakeClock,
   FakeRegistry,
@@ -11,6 +12,7 @@ import {
   identity,
   policy,
   registryConfig,
+  wireDecision,
 } from './support/access-registry-fake.js';
 
 function enforcerFor(registry: FakeRegistry, clock: FakeClock, maxStaleSeconds = 600) {
@@ -75,13 +77,13 @@ describe('createAccessEnforcer: decisions', () => {
 });
 
 describe('createAccessEnforcer: fail closed', () => {
-  it('is unavailable when the registry fails and nothing is cached', async () => {
+  it('is unavailable with the network cause when the registry fails and nothing is cached', async () => {
     const registry = new FakeRegistry();
-    registry.down = true;
+    registry.response = { kind: 'failure', errorClass: 'network' };
 
     const view = await enforcerFor(registry, new FakeClock()).evaluate(identity());
 
-    expect(view).toEqual({ kind: 'unavailable' });
+    expect(view).toEqual({ kind: 'unavailable', cause: 'network' });
   });
 
   it('serves the last known good decision inside the window, and is unavailable after it', async () => {
@@ -91,25 +93,25 @@ describe('createAccessEnforcer: fail closed', () => {
     registry.set(SUBJECT, { decision: 'allow', revision: 'rev-1', policy: policy() });
     expect((await enforcer.evaluate(identity())).kind).toBe('allow');
 
-    registry.down = true;
+    registry.response = { kind: 'failure', errorClass: 'network' };
     clock.advance(599_000);
     expect((await enforcer.evaluate(identity())).kind).toBe('allow');
 
     clock.advance(2_000);
-    expect(await enforcer.evaluate(identity())).toEqual({ kind: 'unavailable' });
+    expect(await enforcer.evaluate(identity())).toEqual({ kind: 'unavailable', cause: 'network' });
   });
 
-  it('is unavailable, and does not throw, when the transport throws', async () => {
+  it('is unavailable with the network cause, and does not throw, when the transport throws', async () => {
     const enforcer = createAccessEnforcer(registryConfig(), {
       fetchDecision: async () => {
         throw new Error('socket exploded');
       },
     });
 
-    await expect(enforcer.evaluate(identity())).resolves.toEqual({ kind: 'unavailable' });
+    await expect(enforcer.evaluate(identity())).resolves.toEqual({ kind: 'unavailable', cause: 'network' });
   });
 
-  it('is unavailable when the policy cannot be enforced as written', async () => {
+  it('is unavailable with the policy_invalid cause when the policy cannot be enforced as written', async () => {
     const registry = new FakeRegistry();
     registry.set(SUBJECT, {
       decision: 'allow',
@@ -119,7 +121,78 @@ describe('createAccessEnforcer: fail closed', () => {
 
     const view = await enforcerFor(registry, new FakeClock()).evaluate(identity());
 
-    expect(view).toEqual({ kind: 'unavailable' });
+    expect(view).toEqual({ kind: 'unavailable', cause: 'policy_invalid' });
+  });
+});
+
+/** Each way the registry can answer something other than a usable decision, with the cause the view must carry. */
+const CAUSES: ReadonlyArray<{ readonly name: string; readonly response: RegistryResponse; readonly cause: AccessUnavailableCause }> = [
+  { name: 'a timeout', response: { kind: 'failure', errorClass: 'timeout' }, cause: 'timeout' },
+  { name: 'a network failure', response: { kind: 'failure', errorClass: 'network' }, cause: 'network' },
+  { name: 'an HTTP 404', response: { kind: 'failure', errorClass: 'http_status', httpStatus: 404 }, cause: 'http_status' },
+  { name: 'an HTTP 401', response: { kind: 'failure', errorClass: 'auth', httpStatus: 401 }, cause: 'auth' },
+  { name: 'a body that is not JSON', response: { kind: 'text', body: 'not json' }, cause: 'contract' },
+  {
+    name: 'a decision of another wire version',
+    response: { kind: 'text', body: JSON.stringify({ version: 2, decision: 'deny', reason: 'x', revision: '0', ttlSeconds: 60 }) },
+    cause: 'contract',
+  },
+  { name: 'a body over 64 KiB', response: { kind: 'text', body: 'x'.repeat(64 * 1024 + 1) }, cause: 'contract' },
+  {
+    name: 'a deny with a critical member',
+    response: {
+      kind: 'text',
+      body: JSON.stringify({ version: 1, decision: 'deny', reason: 'subject_not_enabled', revision: '0', ttlSeconds: 60, critical: ['new-rule'] }),
+    },
+    cause: 'critical',
+  },
+  {
+    name: 'an allow whose policy names an unknown group',
+    response: {
+      kind: 'text',
+      body: JSON.stringify(
+        wireDecision({ decision: 'allow', revision: 'rev-bad', policy: policy({ tools: { allow: ['@curated'], deny: ['@no-such-group'] } }) }),
+      ),
+    },
+    cause: 'policy_invalid',
+  },
+];
+
+describe('createAccessEnforcer: causes', () => {
+  it.each(CAUSES)('reports $cause for $name', async ({ response, cause }) => {
+    const registry = new FakeRegistry();
+    registry.response = response;
+
+    const view = await enforcerFor(registry, new FakeClock()).evaluate(identity());
+
+    expect(view).toEqual({ kind: 'unavailable', cause });
+  });
+
+  it('reports outage when the client reports unavailable without a class', async () => {
+    const client = { decide: async (): Promise<RegistryResult> => ({ source: 'unavailable' }) };
+    const enforcer = createAccessEnforcer(registryConfig(), { client });
+
+    expect(await enforcer.evaluate(identity())).toEqual({ kind: 'unavailable', cause: 'outage' });
+  });
+
+  it('reports outage, and does not throw, when the client call itself throws', async () => {
+    const client = {
+      decide: async (): Promise<RegistryResult> => {
+        throw new Error('client broke');
+      },
+    };
+    const enforcer = createAccessEnforcer(registryConfig(), { client });
+
+    await expect(enforcer.evaluate(identity())).resolves.toEqual({ kind: 'unavailable', cause: 'outage' });
+  });
+
+  it('reports no cause on an allow or a deny', async () => {
+    const registry = new FakeRegistry();
+    registry.set(SUBJECT, { decision: 'deny', reason: 'subject_not_enabled' });
+
+    const view = await enforcerFor(registry, new FakeClock()).evaluate(identity());
+
+    expect(view).not.toHaveProperty('cause');
   });
 });
 

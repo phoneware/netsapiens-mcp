@@ -280,7 +280,7 @@ With the registry configured, a person signs in only when the registry allows th
 - **Session.** The verified domain, user, role and redirect URI are stored with the session, and a hook cannot set them. A session without them, such as one created before the registry was configured, must sign in again.
 - **Each request and refresh.** A bearer token is checked against the current decision. A denied tenant, an unapproved redirect or a missing identity answers `401`. A refresh that finds the same answers `invalid_grant` and revokes the session family. An unavailable registry lets existing sessions continue.
 
-Each sign-in and refused session writes an `Access sign-in` or `Access session` log line with its outcome and reason. No log line carries a token, an argument value or a registry body.
+Each sign-in and refused session writes an `Access sign-in` or `Access session` log line with its outcome and reason. An unavailable decision also logs its `cause`: `timeout` or `network` when the registry could not be reached in time or at all, `outage` when no cause was reported, `http_status`, `auth`, `contract` or `critical` when its answer is refused, and `policy_invalid` when the policy cannot be applied. A plain outage logs the reason `registry_unavailable`. The other causes log `registry_error`, or `policy_invalid` for a policy. No log line carries a token, an argument value or a registry body.
 
 ## Versioning
 

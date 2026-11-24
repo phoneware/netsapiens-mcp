@@ -51,7 +51,8 @@ import { normalizePlatformUrl } from './platforms.js';
 import { hasServerAssurance, knownScope, parseSecondFactorPolicy, satisfiesSecondFactorPolicy, scopeRequiresSecondFactor, signServerAssurance, type SecondFactorPolicy } from './second-factor-policy.js';
 export type { PendingAuthorization, NsTokenResponse };
 import { logger } from '../utils/logger.js';
-import { ACCESS_EXTRA_KEYS, type AccessEnforcer, type AccessIdentity } from '../access/types.js';
+import { ACCESS_EXTRA_KEYS, type AccessIdentity } from '../access/types.js';
+import type { AccessUnavailableCause, CausedAccessEnforcer } from '../access/enforcer.js';
 import { normalizeIdentity } from '../access/identity.js';
 
 export class UpstreamTimeoutError extends Error {
@@ -461,6 +462,32 @@ function platformForLog(apiUrl: string): string {
  }
 }
 
+/** The log reason for each unavailable cause. A plain outage stays registry_unavailable; a broken answer or policy is named. */
+const UNAVAILABLE_REASON: Readonly<Record<AccessUnavailableCause, string>> = {
+ outage: 'registry_unavailable',
+ timeout: 'registry_unavailable',
+ network: 'registry_unavailable',
+ http_status: 'registry_error',
+ auth: 'registry_error',
+ contract: 'registry_error',
+ critical: 'registry_error',
+ policy_invalid: 'policy_invalid',
+};
+
+/** The cause and reason an unavailable view logs. A view from an enforcer that names no cause is a plain outage. */
+function unavailableFields(view: { readonly cause?: AccessUnavailableCause }): { readonly cause: AccessUnavailableCause; readonly reason: string } {
+ const cause = view.cause ?? 'outage';
+ return { cause, reason: UNAVAILABLE_REASON[cause] };
+}
+
+/** The registry's text reaches a log only as a plain identifier. Anything else is logged as unrecognised. */
+const SAFE_LOG_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+function logReason(reason: string): string {
+ if (SAFE_LOG_REASON.test(reason)) return reason;
+ return 'unrecognised';
+}
+
 function mfaPageHtml(
  mfaUrl: string,
  mfaVendor: string | undefined,
@@ -568,7 +595,7 @@ export interface NetSapiensAuthProviderOptions {
   */
  subjectForIssuance?: (input: SubjectIssuanceInput) => SubjectIssuance | undefined;
  /** Registry access for sign-in and sessions. Unset, sign-in and session checks are the same as before the registry. */
- access?: AccessEnforcer;
+ access?: CausedAccessEnforcer;
 }
 
 /** Authorized request facts a subject resolver may use. */
@@ -626,7 +653,7 @@ export class NetSapiensAuthProvider implements OAuthServerProvider {
  private serverBaseUrl?: string;
  private replayAudience?: string;
  private secondFactorPolicy?: SecondFactorPolicy;
-private readonly access?: AccessEnforcer;
+private readonly access?: CausedAccessEnforcer;
 
  private challengeAudience(): string {
   return JSON.stringify([this.store.backend, this.store.namespace, this.serverBaseUrl?.toLowerCase() ?? '', this.replayAudience]);
@@ -1123,7 +1150,7 @@ this.access = options.access;
  }
 
  /** The registry's decision for a sign-in (E1). A refusal sends its page and returns false. */
- private async admitRegistrySignIn(res: Response, pending: PendingAuthorization, identity: AccessIdentity, access: AccessEnforcer): Promise<boolean> {
+private async admitRegistrySignIn(res: Response, pending: PendingAuthorization, identity: AccessIdentity, access: CausedAccessEnforcer): Promise<boolean> {
   const view = await access.evaluate(identity);
   const logBase = {
    platform: identity.platform,
@@ -1133,12 +1160,12 @@ this.access = options.access;
    redirectUri: redirectForLog(pending.redirectUri),
   };
   if (view.kind === 'unavailable') {
-   logger.info('Access sign-in', { ...logBase, outcome: 'unavailable', reason: 'registry_unavailable' });
+   logger.info('Access sign-in', { ...logBase, outcome: 'unavailable', ...unavailableFields(view) });
    sendPage(res, 503, this.renderErrorPage(ACCESS_UNAVAILABLE_COPY, 503));
    return false;
   }
   if (view.kind === 'deny') {
-   logger.info('Access sign-in', { ...logBase, outcome: 'deny', reason: view.reason });
+   logger.info('Access sign-in', { ...logBase, outcome: 'deny', reason: logReason(view.reason) });
    sendPage(res, 403, this.renderErrorPage(ACCESS_NOT_ENABLED_COPY, 403));
    return false;
   }
@@ -1887,7 +1914,7 @@ this.access = options.access;
   * redirect signs in again, and a denied tenant or an unapproved redirect refuses. An unavailable registry lets the
   * session continue, so people stay signed in. Returns the message for a refusal, or undefined when the session may go on.
   */
- private async sessionAccessRefusal(session: StoredToken, access: AccessEnforcer): Promise<string | undefined> {
+private async sessionAccessRefusal(session: StoredToken, access: CausedAccessEnforcer): Promise<string | undefined> {
   const extra = session.extra ?? {};
   const identity = access.identityFromAuthInfo({ ...extra, nsApiUrl: session.nsApiUrl ?? this.nsApiUrl });
   const logBase = { tenant: identity?.tenant, subject: identity?.subject, clientId: session.clientId };
@@ -1897,11 +1924,11 @@ this.access = options.access;
   }
   const view = await access.evaluate(identity);
   if (view.kind === 'unavailable') {
-   logger.info('Access session', { ...logBase, outcome: 'unavailable_pass', reason: 'registry_unavailable' });
+   logger.info('Access session', { ...logBase, outcome: 'unavailable_pass', ...unavailableFields(view) });
    return undefined;
   }
   if (view.kind === 'deny') {
-   logger.info('Access session', { ...logBase, outcome: 'deny', reason: view.reason });
+   logger.info('Access session', { ...logBase, outcome: 'deny', reason: logReason(view.reason) });
    return 'Access to this connector is no longer approved. Sign in again.';
   }
   if (!view.policy.allowsRedirect(extra.authRedirectUri)) {

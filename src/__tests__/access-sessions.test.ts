@@ -120,7 +120,7 @@ describe('registry sessions (E2 and E3)', () => {
     const h = await startHarness({ maxStaleSeconds: 600 });
     h.registry.set(SUBJECT, allow());
     const tokens = await signInFull(h.app, h.fake.origin, 'tok-alice', REDIRECT);
-    h.registry.down = true;
+    h.registry.response = { kind: 'failure', errorClass: 'network' };
 
     h.clock.advance(PAST_TTL_MS);
     expect((await mcp(h.app, tokens.accessToken)).status).not.toBe(401);

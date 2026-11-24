@@ -9,7 +9,8 @@ import { vi, type MockInstance } from 'vitest';
 import type { Response } from 'express';
 import { startFakeNetSapiens } from '../../../scripts/fake-netsapiens/index.mjs';
 import { createAccessEnforcer } from '../../access/enforcer.js';
-import type { AccessEnforcer } from '../../access/types.js';
+import type { CausedAccessEnforcer } from '../../access/enforcer.js';
+import type { RegistryClient } from '../../access/registry-client.js';
 import type { NetSapiensAuthProvider } from '../../auth/netsapiens-auth-provider.js';
 import type { AuthHooks } from '../../auth/types.js';
 import { createApp, type CreatedHttpApp } from '../../http-server.js';
@@ -17,6 +18,7 @@ import { deriveStoreKey } from '../../store/codec.js';
 import { createMemoryStore } from '../../store/memory.js';
 import type { McpStore } from '../../store/types.js';
 import { FakeClock, FakeRegistry, registryConfig, wireDecision, type Answer } from './access-registry-fake.js';
+import { logger } from '../../utils/logger.js';
 
 export const NS_SECRET = '0123456789abcdef0123456789abcdef';
 /** A machine API key: NetSapiens refuses the user lookup for it and answers the key lookup instead. */
@@ -91,7 +93,9 @@ export interface HarnessOptions {
   /** Set false for an unset registry: the app is built without an enforcer. */
   readonly registry?: boolean;
   /** Wraps the enforcer, for a test that must change what it reports. */
-  readonly wrapAccess?: (access: AccessEnforcer) => AccessEnforcer;
+  readonly wrapAccess?: (access: CausedAccessEnforcer) => CausedAccessEnforcer;
+  /** Replaces the registry client, for a test that needs a failure the fake registry cannot produce. */
+  readonly client?: Pick<RegistryClient, 'decide'>;
   readonly stateless?: boolean;
   readonly maxStaleSeconds?: number;
   /** Reuse a store or a NetSapiens fake that another harness created. */
@@ -156,6 +160,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
 
   const real = createAccessEnforcer(registryConfig(options.maxStaleSeconds), {
     fetchDecision: registry.fetchDecision,
+    client: options.client,
     now: clock.monotonic,
     wallNow: clock.wall,
   });
@@ -242,5 +247,28 @@ export async function startLoopbackRegistry(answer: (query: URLSearchParams) => 
       server.close(() => closed.resolve());
       return closed.promise;
     },
+  };
+}
+
+/** Records every logger call from now until the test ends, so a test can assert what a log line never contains. */
+export interface LogCapture {
+  /** The context of each call with this message, in order. */
+  events(message: string): Array<Record<string, unknown>>;
+  /** Every call, serialized. */
+  everything(): string;
+}
+
+export function captureLogs(): LogCapture {
+  const calls: Array<{ readonly message: string; readonly context: Record<string, unknown> }> = [];
+  const record = (message: string, context?: Record<string, unknown>): void => {
+    calls.push({ message, context: context ?? {} });
+  };
+  vi.spyOn(logger, 'debug').mockImplementation(record);
+  vi.spyOn(logger, 'info').mockImplementation(record);
+  vi.spyOn(logger, 'warn').mockImplementation(record);
+  vi.spyOn(logger, 'error').mockImplementation(record);
+  return {
+    events: (message) => calls.filter((call) => call.message === message).map((call) => call.context),
+    everything: () => JSON.stringify(calls),
   };
 }

@@ -78,11 +78,12 @@ export function wireDecision(answer: Answer): Record<string, unknown> {
 
 /**
  * A programmable registry. A subject answer (user@domain) wins over the tenant's answer (domain). With no answer a
- * tenant is not enrolled, as the registry itself would say.
+ * tenant is not enrolled, as the registry itself would say. Setting `response` makes every request answer that way,
+ * which is how a test takes the registry down or makes it answer something malformed.
  */
 export class FakeRegistry {
-  /** When true, every request fails the way a network outage does. */
-  down = false;
+  /** When set, every request gets this response, and the programmed answers are not consulted. */
+  response: RegistryResponse | undefined = undefined;
   /** Every decision request the client sent, in order. */
   readonly seen: RegistryKey[] = [];
   private readonly answers = new Map<string, Answer>();
@@ -93,7 +94,7 @@ export class FakeRegistry {
 
   readonly fetchDecision: FetchDecision = async ({ key }: RegistryRequest): Promise<RegistryResponse> => {
     this.seen.push(key);
-    if (this.down) return { kind: 'failure', errorClass: 'network' };
+    if (this.response !== undefined) return this.response;
     const answer: Answer =
       this.answers.get(key.subject) ?? this.answers.get(key.tenant) ?? { decision: 'deny', reason: 'tenant_not_enrolled' };
     return { kind: 'text', body: JSON.stringify(wireDecision(answer)) };

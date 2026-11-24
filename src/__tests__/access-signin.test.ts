@@ -126,7 +126,7 @@ describe('registry sign-in (E1)', () => {
 
   it('answers 503 when the registry is down and nothing is cached', async () => {
     const h = await startHarness();
-    h.registry.down = true;
+    h.registry.response = { kind: 'failure', errorClass: 'network' };
 
     expectRefusal(h, await attemptLogin(h, 'tok-alice'), 503, UNAVAILABLE);
   });
