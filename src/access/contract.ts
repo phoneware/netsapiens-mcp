@@ -34,7 +34,8 @@ export type UnclassifiedOutput = 'deny' | 'allow';
 export const MAX_LIST_ENTRIES = 512;
 export const MAX_PATTERN_LENGTH = 200;
 export const MAX_PLATFORM_LENGTH = 2048;
-export const MAX_REASON_LENGTH = 200;
+/** A deny reason keeps this many characters. Anything beyond is dropped, not an error. */
+const MAX_REASON_CHARACTERS = 64;
 export const REVISION_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export interface AccessPolicyV1 {
@@ -127,8 +128,8 @@ const allowSchema = z.object({
 const denySchema = z.object({
   version: z.literal(1),
   decision: z.literal('deny'),
-  // Any non-empty reason is still a deny: unknown reasons fail closed.
-  reason: z.string().min(1).max(MAX_REASON_LENGTH),
+  // Any string is still a deny: an empty or unknown reason fails closed. The decision keeps a sanitized copy.
+  reason: z.string(),
   revision: revisionSchema,
   ttlSeconds: ttlSchema,
 });
@@ -138,6 +139,23 @@ const decisionSchema = z.discriminatedUnion('decision', [allowSchema, denySchema
 // Reads only the member that decides whether the body is rejected outright. z.object strips
 // everything else, so unknown members never reach decisionSchema.
 const criticalEnvelopeSchema = z.object({ critical: z.array(z.string()).optional() });
+
+/**
+ * The reason a deny keeps: its first 64 characters (code points), each printable ASCII or "?". An empty reason is
+ * reported as "unspecified". Reasons are free text from the registry, so nothing outside printable ASCII is kept.
+ */
+function sanitizeDenyReason(reason: string): string {
+  if (reason === '') return 'unspecified';
+  let kept = '';
+  let count = 0;
+  for (const character of reason) {
+    if (count === MAX_REASON_CHARACTERS) break;
+    const code = character.codePointAt(0) ?? 0;
+    kept += code >= 0x20 && code <= 0x7e ? character : '?';
+    count++;
+  }
+  return kept;
+}
 
 /** Checks a value already known to be a JSON object: the `critical` member first, then the decision schema. */
 function decodeDecision(value: unknown): ParseRegistryDecisionResult {
@@ -152,6 +170,9 @@ function decodeDecision(value: unknown): ParseRegistryDecisionResult {
 
   const parsed = decisionSchema.safeParse(value);
   if (!parsed.success) return failure('contract', describeIssues(parsed.error.issues));
+  if (parsed.data.decision === 'deny') {
+    return { ok: true, decision: { ...parsed.data, reason: sanitizeDenyReason(parsed.data.reason) } };
+  }
   return { ok: true, decision: parsed.data };
 }
 

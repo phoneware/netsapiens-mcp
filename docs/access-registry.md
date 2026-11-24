@@ -90,6 +90,28 @@ Deny reasons in use are `tenant_not_enrolled`, `tenant_disabled`, `subject_not_e
 }
 ```
 
+Any string is a valid reason, including the empty string and a string longer than 200 characters. The client keeps the first 64 characters of a reason, replaces each character outside printable ASCII with `?`, and reports the empty string as `unspecified`. Both of these deny decisions are valid:
+
+```json
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "",
+  "revision": "0",
+  "ttlSeconds": 60
+}
+```
+
+```json
+{
+  "version": 1,
+  "decision": "deny",
+  "reason": "An example reason that runs well past the 200 characters an earlier parser allowed, and past the 64 characters the client keeps. The decision is still a deny, and the client shortens the reason before any log or error message uses it.",
+  "revision": "0",
+  "ttlSeconds": 60
+}
+```
+
 ### Members
 
 | Member | Rule |
@@ -98,7 +120,7 @@ Deny reasons in use are `tenant_not_enrolled`, `tenant_disabled`, `subject_not_e
 | `decision` | `allow` or `deny`. |
 | `revision` | 1 to 128 characters from `A-Z a-z 0-9 . _ : -`. The client compares it with `If-None-Match`. |
 | `ttlSeconds` | An integer of at least 1. The client clamps it to 5 to 300 seconds. |
-| `reason` | Deny only. A non-empty string of at most 200 characters. |
+| `reason` | Deny only. Any string, including an empty one. The client keeps a sanitized copy, as described under Decision response. |
 | `policy` | Allow only. Required. See Policy below. |
 | `critical` | An array of member names. Any non-empty array makes the whole response a contract error. |
 | Any other member | Ignored. |

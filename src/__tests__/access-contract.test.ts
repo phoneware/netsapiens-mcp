@@ -137,8 +137,6 @@ const MALFORMED: Array<[string, unknown]> = [
     }),
   ],
   ['a deny without a reason', without(VALID_DENY, 'reason')],
-  ['a deny with an empty reason', denyWith({ reason: '' })],
-  ['a deny with a reason over 200 characters', denyWith({ reason: 'r'.repeat(201) })],
   ['critical that is not a list', allowWith({ critical: 'policy.v2' })],
   ['critical that holds a non-string', allowWith({ critical: [1] })],
   ['critical that is null', allowWith({ critical: null })],
@@ -341,5 +339,54 @@ describe('entry points', () => {
     expect(lib.parseRegistryDecision).toBe(parseRegistryDecision);
     expect(lib.parseRegistryDecisionText).toBe(parseRegistryDecisionText);
     expect(lib.parseRegistryDecisionValue).toBe(parseRegistryDecisionValue);
+  });
+});
+
+describe('deny reasons', () => {
+  it('accepts an empty reason and reports it as unspecified', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'unspecified' }),
+    });
+  });
+
+  it('accepts a reason over 200 characters and keeps its first 64', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'r'.repeat(201) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'r'.repeat(64) }),
+    });
+  });
+
+  it('replaces each character outside printable ASCII with a question mark', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'Bad\nReason\u0000\u00e9 ok' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'Bad?Reason?? ok' }),
+    });
+  });
+
+  it('counts a character outside the basic plane as one character', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '\u{1F600}'.repeat(3) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: '???' }),
+    });
+  });
+
+  it('keeps at most 64 characters after replacement', () => {
+    expect(parseRegistryDecision(denyWith({ reason: '\u00e9'.repeat(100) }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: '?'.repeat(64) }),
+    });
+  });
+
+  it('keeps a printable reason of up to 64 characters unchanged', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 'registry_maintenance' }))).toEqual({
+      ok: true,
+      decision: denyWith({ reason: 'registry_maintenance' }),
+    });
+  });
+
+  it('refuses a reason that is not a string', () => {
+    expect(parseRegistryDecision(denyWith({ reason: 5 }))).toMatchObject({ ok: false, errorClass: 'contract' });
+    expect(parseRegistryDecision(denyWith({ reason: null }))).toMatchObject({ ok: false, errorClass: 'contract' });
   });
 });
