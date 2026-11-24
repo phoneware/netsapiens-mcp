@@ -91,10 +91,12 @@ describe('pathValueRefusal', () => {
     const values = [...tokens];
     for (const first of tokens) for (const second of tokens) values.push(first + second);
     for (const first of tokens) for (const second of tokens) for (const third of tokens) values.push(first + second + third);
-    const removed = values.filter(whatwgRemovesSegment);
+    // A value with a slash is never one segment: encodeURIComponent encodes the slash before the URL is parsed.
+    const segments = values.filter((value) => !value.includes('/'));
+    const removed = segments.filter(whatwgRemovesSegment);
     expect(removed).toContain('%2e');
     expect(removed).toContain('%2e%2e');
-    for (const value of values) {
+    for (const value of segments) {
       if (!whatwgRemovesSegment(value)) continue;
       expect(pathValueRefusal(value, false), `value ${JSON.stringify(value)}`).toBeDefined();
     }
