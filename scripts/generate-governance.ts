@@ -6,6 +6,7 @@
  * Generates per-resource field classification tables from OpenAPI specification
  * (`spec/v2/45.0.json` components.schemas) and hand-reviewed overrides
  * (`src/governance/overrides.ts`).
+ * It also writes src/governance/operation-outputs.generated.ts, which maps v2 operation keys to response resources.
  *
  * Every field defaults to `{ class: 'metadata' }` unless overridden.
  * Output is deterministic: keys are sorted alphabetically at every level.
@@ -16,6 +17,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FIELD_OVERRIDES, CUSTOM_RESOURCES } from '../src/governance/overrides.js';
 import type { FieldClass } from '../src/governance/types.js';
+import { normalizeOperationKey } from '../src/netsapiens/operation-key.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,7 +38,7 @@ interface OpenApiSpec {
  };
 }
 
-function generate(): string {
+function generate(): { fields: string; operationOutputs: string } {
  const branchesPath = resolve(REPO_ROOT, 'spec/v2/BRANCHES.json');
  const branches: string[] = JSON.parse(readFileSync(branchesPath, 'utf8'));
 
@@ -117,6 +119,9 @@ function generate(): string {
   }
  }
 
+ // 3b. Map each operation to the resource that classifies its response. Composite tables join the tables first.
+ const outputs = resolveOperationOutputs(branches, resourceTables);
+
  // 4. Serialize deterministically
  const lines: string[] = [
   '/**',
@@ -148,14 +153,169 @@ function generate(): string {
  lines.push('};');
  lines.push('');
 
+ return {
+  fields: lines.join('\n'),
+  operationOutputs: serializeOperationOutputs(outputs),
+ };
+}
+
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
+
+/** A schema as this file reads it: a component, an array of components, or a oneOf or anyOf of such shapes. */
+interface SchemaReference {
+ $ref?: string;
+ items?: SchemaReference;
+ oneOf?: SchemaReference[];
+ anyOf?: SchemaReference[];
+}
+
+interface OperationObject {
+ responses?: Record<string, { content?: Record<string, { schema?: SchemaReference }> }>;
+}
+
+/**
+ * The components a response schema can be: one component, an array of components, or any alternative of a oneOf or
+ * anyOf whose alternatives all have such shapes. Sorted, without duplicates. Undefined for any other shape, which
+ * leaves the operation unmapped.
+ */
+function componentsOf(schema: SchemaReference | undefined): string[] | undefined {
+ if (schema === undefined) return undefined;
+ if (schema.$ref !== undefined) return [schema.$ref.split('/').pop() ?? ''];
+ if (schema.items !== undefined) return componentsOf(schema.items);
+ const alternatives = [...(schema.oneOf ?? []), ...(schema.anyOf ?? [])];
+ if (alternatives.length === 0) return undefined;
+ const parts = alternatives.map((alternative) => componentsOf(alternative));
+ if (parts.some((part) => part === undefined)) return undefined;
+ return [...new Set(parts.flatMap((part) => part ?? []))].sort();
+}
+
+/** The components of an operation's lowest 2xx JSON response. */
+function componentsOfOperation(operation: OperationObject): string[] | undefined {
+ const codes = Object.keys(operation.responses ?? {}).filter((code) => /^2\d\d$/.test(code)).sort();
+ const first = codes[0];
+ if (first === undefined) return undefined;
+ return componentsOf(operation.responses?.[first]?.content?.['application/json']?.schema);
+}
+
+/** How much a projection removes for each field class: a higher rank removes more. */
+const CLASS_RANK: Record<FieldClass['class'], number> = { secret: 5, internal: 4, content: 3, record_id: 2, metadata: 1 };
+
+/**
+ * The class a composite gives a field that two members declare: the stronger one. Two classes the order cannot settle
+ * make the generator fail, so the members are reconciled in overrides.ts instead of guessed: content of two kinds,
+ * content beside internal, and record IDs of two types.
+ */
+function strongerClass(composite: string, field: string, a: FieldClass, b: FieldClass): FieldClass {
+ if (JSON.stringify(a) === JSON.stringify(b)) return a;
+ const unordered =
+  (a.class === 'content' && b.class === 'content' && a.kind !== b.kind) ||
+  (a.class === 'record_id' && b.class === 'record_id' && a.recordType !== b.recordType) ||
+  (a.class === 'content' && b.class === 'internal') ||
+  (a.class === 'internal' && b.class === 'content');
+ if (unordered) {
+  throw new Error(
+   `${composite}: ${field} is ${JSON.stringify(a)} in one member and ${JSON.stringify(b)} in another; reconcile them in overrides.ts`,
+  );
+ }
+ return CLASS_RANK[b.class] > CLASS_RANK[a.class] ? b : a;
+}
+
+/** The table of a composite resource: every field a member declares, with the strongest class any member gives it. */
+function compositeTable(
+ composite: string,
+ members: readonly string[],
+ tables: Record<string, Record<string, FieldClass>>,
+): Record<string, FieldClass> {
+ const merged: Record<string, FieldClass> = {};
+ for (const member of members) {
+  for (const [field, incoming] of Object.entries(tables[member] ?? {})) {
+   const current = merged[field];
+   merged[field] = current === undefined ? incoming : strongerClass(composite, field, current, incoming);
+  }
+ }
+ return merged;
+}
+
+/**
+ * Maps each v2 operation key to the resource that classifies its response. The tool generator keeps the last spec
+ * branch that defines an operation, so a key takes its mapping from that branch. Within one branch, specs that disagree
+ * leave the operation unmapped. A response that is one component maps to it. A response that is several, through a
+ * oneOf or anyOf, maps to the composite Union(A,B), whose table is added before the tables are written, so every row
+ * the response can carry is declared.
+ */
+function resolveOperationOutputs(
+ branches: readonly string[],
+ resourceTables: Record<string, Record<string, FieldClass>>,
+): Map<string, string> {
+ const componentsByKey = new Map<string, readonly string[] | undefined>();
+ for (const branch of branches) {
+  const spec = JSON.parse(readFileSync(resolve(REPO_ROOT, `spec/v2/${branch}.json`), 'utf8')) as {
+   paths?: Record<string, Record<string, unknown>>;
+  };
+  const inBranch = new Map<string, Set<string>>();
+  for (const [path, methods] of Object.entries(spec.paths ?? {})) {
+   for (const [method, operation] of Object.entries(methods)) {
+    if (!HTTP_METHODS.has(method)) continue;
+    const key = normalizeOperationKey(method, path);
+    const components = componentsOfOperation(operation as OperationObject);
+    const usable = components?.every((name) => Object.hasOwn(resourceTables, name)) ? components : undefined;
+    const shapes = inBranch.get(key) ?? new Set<string>();
+    shapes.add(usable === undefined ? '' : usable.join(','));
+    inBranch.set(key, shapes);
+   }
+  }
+  for (const [key, shapes] of inBranch) {
+   const [only] = shapes;
+   componentsByKey.set(key, shapes.size === 1 && only !== '' ? only.split(',') : undefined);
+  }
+ }
+
+ const outputs = new Map<string, string>();
+ for (const key of [...componentsByKey.keys()].sort()) {
+  const components = componentsByKey.get(key);
+  if (components === undefined) continue;
+  if (components.length === 1) {
+   outputs.set(key, components[0]);
+   continue;
+  }
+  const composite = `Union(${components.join(',')})`;
+  if (!Object.hasOwn(resourceTables, composite)) {
+   resourceTables[composite] = compositeTable(composite, components, resourceTables);
+  }
+  outputs.set(key, composite);
+ }
+ return outputs;
+}
+
+/** Serializes the operation outputs deterministically. */
+function serializeOperationOutputs(outputs: ReadonlyMap<string, string>): string {
+ const lines: string[] = [
+  '/**',
+  ' * AUTO-GENERATED by scripts/generate-governance.ts: DO NOT EDIT MANUALLY.',
+  ' * Run `npm run generate:governance` to regenerate.',
+  ' *',
+  ' * Maps each v2 operation key (normalizeOperationKey) to the resource that classifies its response: the component',
+  ' * it returns, or a Union(...) composite when the response is one of several. Operations without such a response,',
+  ' * or whose specs disagree, are not listed.',
+  ' */',
+  '',
+  'export const OPERATION_OUTPUTS: Readonly<Record<string, string>> = {',
+ ];
+ for (const key of [...outputs.keys()].sort()) {
+  lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(outputs.get(key))},`);
+ }
+ lines.push('};', '');
  return lines.join('\n');
 }
 
 function main(): void {
- const outputPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
- const code = generate();
- writeFileSync(outputPath, code, 'utf8');
- console.log(`Generated ${outputPath}`);
+ const { fields, operationOutputs } = generate();
+ const fieldsPath = resolve(REPO_ROOT, 'src/governance/ns-fields.generated.ts');
+ const outputsPath = resolve(REPO_ROOT, 'src/governance/operation-outputs.generated.ts');
+ writeFileSync(fieldsPath, fields, 'utf8');
+ writeFileSync(outputsPath, operationOutputs, 'utf8');
+ console.log(`Generated ${fieldsPath}`);
+ console.log(`Generated ${outputsPath}`);
 }
 
 main();

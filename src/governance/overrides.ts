@@ -1,6 +1,41 @@
 import type { FieldClass } from './types.js';
 
 /**
+ * Call plumbing on the CDR resources: relay addresses and ports, SIP hosts and URIs, the core server and MAC address,
+ * and the handle of a prefilled transcription job. None of it is call content, and dropInternal removes it from results
+ * (spec 3.3). CdrD, CdrU and CdrG carry these fields, so the set is declared once and spread into each of them.
+ */
+const CDR_PLUMBING: Record<string, FieldClass> = {
+  'call-audio-relay-side-a-local-port': { class: 'internal' },
+  'call-audio-relay-side-a-remote-ip': { class: 'internal' },
+  'call-audio-relay-side-b-remote-ip': { class: 'internal' },
+  'call-fax-relay-side-a-local-port': { class: 'internal' },
+  'call-fax-relay-side-a-remote-ip': { class: 'internal' },
+  'call-fax-relay-side-b-remote-ip': { class: 'internal' },
+  'call-orig-from-host': { class: 'internal' },
+  'call-orig-from-uri': { class: 'internal' },
+  'call-orig-ip-address': { class: 'internal' },
+  'call-orig-match-uri': { class: 'internal' },
+  'call-orig-pre-routing-uri': { class: 'internal' },
+  'call-orig-request-host': { class: 'internal' },
+  'call-orig-request-uri': { class: 'internal' },
+  'call-orig-to-host': { class: 'internal' },
+  'call-orig-to-uri': { class: 'internal' },
+  'call-routing-match-uri': { class: 'internal' },
+  'call-server-mac-address': { class: 'internal' },
+  'call-term-ip-address': { class: 'internal' },
+  'call-term-match-uri': { class: 'internal' },
+  'call-term-pre-routing-uri': { class: 'internal' },
+  'call-term-to-uri': { class: 'internal' },
+  'call-through-uri': { class: 'internal' },
+  'call-video-relay-side-a-local-port': { class: 'internal' },
+  'call-video-relay-side-a-remote-ip': { class: 'internal' },
+  'call-video-relay-side-b-remote-ip': { class: 'internal' },
+  'core-server': { class: 'internal' },
+  'prefilled-transcription-api': { class: 'internal' },
+};
+
+/**
  * Hand-reviewed field classification overrides for NetSapiens schemas.
  *
  * Every schema property in `spec/v2/45.0.json` defaults to `{ class: 'metadata' }`.
@@ -10,50 +45,69 @@ import type { FieldClass } from './types.js';
 export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
  // CDRs and Call Intelligence
  CdrD: {
+  ...CDR_PLUMBING,
   id: { class: 'record_id', recordType: 'cdr' },
   'call-orig-call-id': { class: 'record_id', recordType: 'call' },
   'call-term-call-id': { class: 'record_id', recordType: 'call' },
   'call-parent-call-id': { class: 'record_id', recordType: 'call' },
   'call-through-call-id': { class: 'record_id', recordType: 'call' },
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
   'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
   ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
-  'prefilled-transcription-api': { class: 'internal' },
   'prefilled-trace-api': { class: 'internal' },
-  'call-audio-relay-side-a-remote-ip': { class: 'internal' },
-  'call-audio-relay-side-b-remote-ip': { class: 'internal' },
-  'call-audio-relay-side-a-local-port': { class: 'internal' },
   'call-audio-relay-side-b-local-port': { class: 'internal' },
-  'call-fax-relay-side-a-remote-ip': { class: 'internal' },
-  'call-fax-relay-side-b-remote-ip': { class: 'internal' },
-  'call-fax-relay-side-a-local-port': { class: 'internal' },
   'call-fax-relay-side-b-local-port': { class: 'internal' },
-  'call-video-relay-side-a-remote-ip': { class: 'internal' },
-  'call-video-relay-side-b-remote-ip': { class: 'internal' },
-  'call-video-relay-side-a-local-port': { class: 'internal' },
   'call-video-relay-side-b-local-port': { class: 'internal' },
-  'call-orig-ip-address': { class: 'internal' },
-  'call-term-ip-address': { class: 'internal' },
-  'call-orig-from-host': { class: 'internal' },
-  'call-orig-request-host': { class: 'internal' },
-  'call-orig-to-host': { class: 'internal' },
-  'call-orig-from-uri': { class: 'internal' },
-  'call-orig-match-uri': { class: 'internal' },
-  'call-orig-pre-routing-uri': { class: 'internal' },
-  'call-orig-request-uri': { class: 'internal' },
-  'call-orig-to-uri': { class: 'internal' },
-  'call-routing-match-uri': { class: 'internal' },
-  'call-term-match-uri': { class: 'internal' },
-  'call-term-pre-routing-uri': { class: 'internal' },
-  'call-term-to-uri': { class: 'internal' },
-  'call-through-uri': { class: 'internal' },
-  'call-server-mac-address': { class: 'internal' },
-  'core-server': { class: 'internal' },
   'call-disposition-direction': { class: 'metadata' },
   name: { class: 'metadata' },
   number: { class: 'metadata' },
   onnet: { class: 'metadata' },
   uid: { class: 'record_id', recordType: 'user' },
  },
+
+// CDR variants with the same call-intelligence fields as CdrD. The user-scope call history is CdrU.
+CdrDBase: {
+  'call-orig-from-uri': { class: 'internal' },
+  'call-orig-match-uri': { class: 'internal' },
+  'call-orig-request-uri': { class: 'internal' },
+  'call-term-to-uri': { class: 'internal' },
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrGBase: {
+  'call-orig-from-uri': { class: 'internal' },
+  'call-orig-request-uri': { class: 'internal' },
+  'call-term-to-uri': { class: 'internal' },
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrG: {
+  ...CDR_PLUMBING,
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+},
+CdrUBase: {
+  'call-orig-to-uri': { class: 'internal' },
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+  'prefilled-transcription-api': { class: 'internal' },
+},
+CdrU: {
+  ...CDR_PLUMBING,
+  'call-intelligence-summary': { class: 'content', kind: 'ai_summary', media: 'text' },
+  'call-intelligence-topics-top': { class: 'content', kind: 'ai_summary', media: 'text' },
+  ending_sentiment: { class: 'content', kind: 'ai_summary', media: 'text' },
+},
+// CDR schedule export: the file link is a signed download of transcripts.
+CdrExport: {
+  'file-access-url': { class: 'content', kind: 'transcript', media: 'document' },
+},
 
  // Active Calls
  ActiveCall: {
@@ -88,6 +142,7 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
 
  // SMS and Chat Messages
  Message: {
+  'file-access-url': { class: 'content', kind: 'sms_text', media: 'document' },
   id: { class: 'record_id', recordType: 'message' },
   text: { class: 'content', kind: 'sms_text', media: 'text' },
   'meeting-instance-id': { class: 'internal' },
@@ -114,9 +169,21 @@ export const FIELD_OVERRIDES: Record<string, Record<string, FieldClass>> = {
   url: { class: 'content', kind: 'call_recording', media: 'audio_url' },
  },
  Audiofile: {
+  'file-access-url': { class: 'content', kind: 'voicemail', media: 'audio_url' },
   transcription: { class: 'content', kind: 'transcript', media: 'text' },
   file: { class: 'content', kind: 'call_recording', media: 'audio_url' },
   url: { class: 'content', kind: 'call_recording', media: 'audio_url' },
+ },
+
+ // Fax documents and their first-page thumbnails: signed links to content of kind fax_page
+ Fax: {
+  'file-access-url': { class: 'content', kind: 'fax_page', media: 'document' },
+  'thumbnail-url': { class: 'content', kind: 'fax_page', media: 'document' },
+ },
+
+ // The voicemail message read: its signed link plays the recording
+ VoicemailMessage: {
+  'file-access-url': { class: 'content', kind: 'voicemail', media: 'audio_url' },
  },
 
  // Credentials and Secrets (Scrubbed on every deployment)
