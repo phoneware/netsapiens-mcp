@@ -270,6 +270,18 @@ The client authenticates to the registry in one of three ways:
 
 The registry authenticates each caller. It should also allowlist the service identities it accepts.
 
+## Sign-in and sessions
+
+With the registry configured, a person signs in only when the registry allows their subject on their domain and the AI app's redirect URI is approved. Every check fails closed.
+
+- **Identity.** The NetSapiens user and domain are verified before the registry is asked. Token sign-in carries the user record that NetSapiens returned for the token. Password sign-in reads that record strictly. An API key has no user record, so it is refused, and so is a record that names no user or no domain.
+- **Decision.** `allow` issues a code only when the policy approves the redirect URI. `deny` refuses. An unavailable registry answers `503`. A refused sign-in stores no authorization code.
+- **Resume.** A sign-in that pauses on an interstitial is decided again when its resume token is redeemed.
+- **Session.** The verified domain, user, role and redirect URI are stored with the session, and a hook cannot set them. A session without them, such as one created before the registry was configured, must sign in again.
+- **Each request and refresh.** A bearer token is checked against the current decision. A denied tenant, an unapproved redirect or a missing identity answers `401`. A refresh that finds the same answers `invalid_grant` and revokes the session family. An unavailable registry lets existing sessions continue.
+
+Each sign-in and refused session writes an `Access sign-in` or `Access session` log line with its outcome and reason. No log line carries a token, an argument value or a registry body.
+
 ## Versioning
 
 This is version 1. A change that adds a restriction must either ship as a new version or name the restriction in `critical`, so an older client fails closed on it. A change that adds a member which does not restrict access may ship within version 1.

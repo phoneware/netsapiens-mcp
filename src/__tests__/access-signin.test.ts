@@ -168,6 +168,7 @@ describe('registry sign-in (E1)', () => {
     const second = await attemptLogin(h, 'tok-alice');
     expect(second.status).toBe(200);
     h.registry.set(SUBJECT, { decision: 'deny', reason: 'subject_not_enabled' });
+    h.clock.advance(61_000);   // the allow from the interstitial is fresh for its 60 second TTL, so the registry is asked after it
     const refused = captureResponse();
     await h.authProvider.resumeLogin(refused.res, resumeTokenFrom(second.text));
     expect(refused.seen.status).toBe(403);
