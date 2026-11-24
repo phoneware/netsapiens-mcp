@@ -5,7 +5,7 @@ export type FieldClass =
   | { class: 'record_id'; recordType: string }
   | { class: 'secret' } // dropped at every level, every deployment
   | { class: 'internal' } // plumbing (e.g. prefilled-transcription-api); dropped from output
-  | { class: 'content'; kind: ContentKind; media: 'text' | 'audio_url' | 'document' };
+  | { class: 'content'; kind: ContentKind; media: 'text' | 'audio_url' | 'document'; alsoKinds?: readonly ContentKind[] }; // alsoKinds: further kinds the same field carries
 
 export type NsResourceName = string;
 

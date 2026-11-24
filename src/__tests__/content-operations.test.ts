@@ -48,7 +48,7 @@ describe('content operation review (spec 3.6)', () => {
   it('the gate fails on an operation listed in two sets', () => {
     const table = {
       ...CONTENT_OPERATION_TABLE,
-      free: { ...REVIEWED_CONTENT_FREE, 'GET /recordings/play': true as const },
+      free: { ...REVIEWED_CONTENT_FREE, 'GET /recordings/play': 'a test reason' },
     };
     expect(contentCoverage(liveOperationKeys(), table).conflicting).toEqual(['GET /recordings/play']);
   });
@@ -91,7 +91,7 @@ describe('content kinds of an operation', () => {
   it('reports the kinds an operation returns or transmits', () => {
     expect(contentKindsOf('GET /domains/{}/users/{}/faxes')).toEqual(['fax_page']);
     expect(contentKindsOf('GET /domains/{}/cdrs/{}/vcon')).toEqual(['call_recording', 'transcript', 'ai_summary']);
-    expect(contentKindsOf('v1:audio:play')).toEqual(['call_recording']);
+    expect(contentKindsOf('v1:audio:play')).toEqual(['call_recording', 'transcript', 'voicemail', 'fax_page']);
   });
 
   it('counts unreviewed operations as every kind', () => {

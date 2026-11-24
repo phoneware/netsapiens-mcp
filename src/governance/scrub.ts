@@ -232,6 +232,20 @@ export const UNAMBIGUOUS_CONTENT_NAMES: Readonly<Record<string, ContentKind>> = 
  'file-script-text': 'voicemail',
  'call-recording-remote-wav': 'call_recording',
  'messagesession-last-message': 'sms_text',
+ 'file-transcript-text': 'transcript',
+ 'call-intelligence-percent-negative': 'ai_summary',
+ 'call-intelligence-percent-neutral': 'ai_summary',
+ 'call-intelligence-percent-positive': 'ai_summary',
+ 'call-intelligence-ending-percent-negative': 'ai_summary',
+ 'call-intelligence-ending-percent-neutral': 'ai_summary',
+ 'call-intelligence-ending-percent-positive': 'ai_summary',
+ 'call-intelligence-duration-seconds-negative': 'ai_summary',
+ 'call-intelligence-duration-seconds-neutral': 'ai_summary',
+ 'call-intelligence-duration-seconds-positive': 'ai_summary',
+ 'call-intelligence-ending-duration-seconds-negative': 'ai_summary',
+ 'call-intelligence-ending-duration-seconds-neutral': 'ai_summary',
+ 'call-intelligence-ending-duration-seconds-positive': 'ai_summary',
+ 'call-intelligence-ending-sentiment-scale': 'ai_summary',
 };
 
 /** What projectOutput removes. With every option off, it only scrubs secrets, as scrubSecrets does. */
@@ -453,8 +467,10 @@ function projectObject(
    countRemoval(walk.removals, 'internal');
    continue;
   }
-  if (fieldClass?.class === 'content' && walk.projection.strip.has(fieldClass.kind)) {
-   countRemoval(walk.removals, fieldClass.kind);
+  const contentKinds = fieldClass?.class === 'content' ? [fieldClass.kind, ...(fieldClass.alsoKinds ?? [])] : [];
+  const stripKind = contentKinds.find((kind) => walk.projection.strip.has(kind));
+  if (stripKind !== undefined) {
+   countRemoval(walk.removals, stripKind);
    continue;
   }
   const nameKind = Object.hasOwn(UNAMBIGUOUS_CONTENT_NAMES, key) ? UNAMBIGUOUS_CONTENT_NAMES[key] : undefined;

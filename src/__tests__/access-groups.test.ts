@@ -164,7 +164,7 @@ describe('tool catalog view: groups', () => {
 describe('tool catalog view: operations', () => {
   it('classifies operation keys through the review sets', () => {
     const view = getToolCatalogView();
-    expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording']);
+    expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording', 'transcript', 'voicemail', 'fax_page']);
     expect(view.lookupOperation('GET /insight/{}')).toBe('unreviewed');
     expect(view.lookupOperation('GET /fax/vendors')).toBeUndefined();
   });
@@ -172,7 +172,7 @@ describe('tool catalog view: operations', () => {
   it('resolves a v1 key built from the object and action, the key E builds for a v1Call', () => {
     // Slice E builds "v1:<object>:<action>" itself from the v1Call arguments, so this format is the contract.
     const view = getToolCatalogView();
-    expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording']);
+    expect(view.lookupOperation('v1:audio:play')).toEqual(['call_recording', 'transcript', 'voicemail', 'fax_page']);
     expect(view.lookupOperation('v1:audio:count')).toBeUndefined();
     const registryKey = v1ToolRegistry.get('v1_audio_play')?.operation?.key ?? '';
     expect(v1OperationKeyOf(registryKey)).toBe('v1:audio:play');
