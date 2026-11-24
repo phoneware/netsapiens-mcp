@@ -91,21 +91,68 @@ function parseArgs() {
   };
 }
 
+/** Every credential the leg minted or was handed. Failure text and log output replace each with [redacted]. */
+const knownSecrets = new Set();
+function scrub(text) {
+  let out = String(text);
+  for (const secret of [...knownSecrets].sort((a, b) => b.length - a.length)) out = out.split(secret).join('[redacted]');
+  return out;
+}
+
+/** Records the credentials a token response carries, so no later failure text can name them. */
+function captureTokens(json) {
+  for (const key of ['access_token', 'refresh_token']) {
+    if (typeof json?.[key] === 'string') knownSecrets.add(json[key]);
+  }
+  return json;
+}
+
+function parseJsonOrUndefined(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function truncate(value, max = 120) {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+/** What a failure text may say about a response: its status, its error fields and its size. Never the body. */
+function describeResponse(res) {
+  const raw = typeof res?.rawText === 'string' ? res.rawText : undefined;
+  const json = res?.json ?? (raw === undefined ? undefined : parseJsonOrUndefined(raw));
+  const bytes = Buffer.byteLength(raw ?? JSON.stringify(json ?? null));
+  const error = json?.error;
+  let errorText = 'none';
+  if (typeof error === 'string') errorText = truncate(error);
+  else if (error !== null && typeof error === 'object') errorText = `code ${error.code ?? 'none'}: ${truncate(error.message)}`;
+  const description = typeof json?.error_description === 'string' ? truncate(json.error_description) : 'none';
+  return `status ${res?.status ?? 'none'}, error ${errorText}, error_description ${description}, body ${bytes} bytes`;
+}
+
+function formatFailure(leg, assertion, reason) {
+  return scrub(`FAIL ${leg} ${assertion}: ${reason}`);
+}
+
 function pass(leg, assertion) {
   if (leg === 'registry' && collectedRegistryFailures.includes(assertion)) return;
-  console.log(`PASS ${leg} ${assertion}`);
+  console.log(scrub(`PASS ${leg} ${assertion}`));
 }
 
 // REGISTRY_E2E_COLLECT=1 keeps the registry leg going after a failed row, so one run lists every row a change breaks.
 // The default stops at the first failure.
 const collectedRegistryFailures = [];
 function fail(leg, assertion, reason) {
+  const message = formatFailure(leg, assertion, reason);
   if (leg === 'registry' && process.env.REGISTRY_E2E_COLLECT === '1') {
-    console.log(`FAIL ${leg} ${assertion}: ${reason}`);
+    console.log(message);
     collectedRegistryFailures.push(assertion);
     return;
   }
-  throw new Error(`FAIL ${leg} ${assertion}: ${reason}`);
+  throw new Error(message);
 }
 
 async function getAvailablePort() {
@@ -341,6 +388,8 @@ const REGISTRY_BEARER = 'registry-bearer-e2e-7f3a91';
 const REGISTRY_BAD_BEARER = 'registry-bearer-wrong-e2e-c208';
 const REGISTRY_TTL_SECONDS = 5;
 const REGISTRY_TTL_MS = REGISTRY_TTL_SECONDS * 1000;
+// The leg's own registry and session credentials. Registered once here, so no failure text or log line can name them.
+for (const secret of [REGISTRY_SESSION_SECRET, REGISTRY_BEARER, REGISTRY_BAD_BEARER]) knownSecrets.add(secret);
 const REGISTRY_KINDS = ['call_recording', 'transcript', 'voicemail', 'sms_text', 'ai_summary', 'fax_page'];
 const REGISTRY_REFUSAL_CODES = new Set([-32602, -32600]);
 const AUTO_ATTENDANT_PROMPT_TOOL = 'get_domains_by_domain_users_by_user_autoattendants_by_prompt';
@@ -445,7 +494,7 @@ async function startRegistryChild(tempDir, nsOrigin, name, { storePath, toolMode
   try {
     await waitForHealth(port);
   } catch (err) {
-    console.error(`Registry child ${name} did not start. Logs:\n${srv.getLogs()}`);
+    console.error(scrub(`Registry child ${name} did not start. Logs:\n${srv.getLogs()}`));
     await srv.stop();
     throw err;
   }
@@ -498,7 +547,7 @@ async function registryTokens(child, granted) {
       code_verifier: granted.verifier,
     }),
   });
-  const json = await res.json();
+  const json = captureTokens(await res.json());
   if (res.status !== 200 || typeof json.access_token !== 'string') fail('registry', 'token-exchange', `status ${res.status}`);
   return { accessToken: json.access_token, refreshToken: json.refresh_token, clientId: granted.clientId };
 }
@@ -513,7 +562,14 @@ async function registryRefresh(child, tokens) {
       client_id: tokens.clientId,
     }),
   });
-  return { status: res.status, json: await res.json().catch(() => ({})) };
+  const json = captureTokens(await res.json().catch(() => ({})));
+  return { status: res.status, json };
+}
+
+/** The failure a refresh must not produce. A refresh is refused as invalid_grant; anything else is named by describeResponse. */
+function refreshRefusalFailure(res) {
+  if (res.status === 400 && res.json?.error === 'invalid_grant') return undefined;
+  return `expected status 400 with error invalid_grant, got ${describeResponse(res)}`;
 }
 
 async function registrySession(child, accessToken) {
@@ -523,7 +579,7 @@ async function registrySession(child, accessToken) {
     clientInfo: { name: 'registry-e2e', version: '1.0.0' },
   });
   if (init.status !== 200 || init.json?.result === undefined) {
-    fail('registry', 'initialize', `status ${init.status}: ${init.rawText.slice(0, 300)}`);
+    fail('registry', 'initialize', describeResponse(init));
   }
   return { child, accessToken, sessionId: init.sessionId };
 }
@@ -569,7 +625,7 @@ async function registryTools(session) {
   for (let page = 0; page < 50; page++) {
     const res = await registryRpc(session, 'tools/list', cursor === undefined ? {} : { cursor });
     if (res.status !== 200 || !Array.isArray(res.json?.result?.tools)) {
-      fail('registry', 'tools-list', `status ${res.status}: ${res.rawText.slice(0, 300)}`);
+      fail('registry', 'tools-list', describeResponse(res));
     }
     tools.push(...res.json.result.tools);
     cursor = res.json.result.nextCursor;
@@ -789,7 +845,7 @@ async function registryLeg(tempDir) {
     // ----- primary: curated tools, registry on, a two-second last-known-good window -----
     const primary = await startChild('main', { registry });
     const primaryHealth = await (await fetch(`${primary.base}/health`)).json();
-    if (primaryHealth.accessRegistry !== 'enforced') fail('registry', 'health', `accessRegistry is ${JSON.stringify(primaryHealth.accessRegistry)}`);
+    if (primaryHealth.accessRegistry !== 'enforced') fail('registry', 'health', `accessRegistry is ${String(primaryHealth.accessRegistry)}; ${describeResponse({ status: 200, json: primaryHealth })}`);
     pass('registry', 'health reports accessRegistry enforced');
 
     // Rows 1 to 3: who may sign in, and from which AI app. A refused sign-in makes one identity read and issues no code.
@@ -908,7 +964,7 @@ async function registryLeg(tempDir) {
     }
     if (ivanRes.rawText.includes('REDIRECTED-RECORDING-BODY')) fail('registry', 'redirect: no body from the denied path is returned', 'the body leaked');
     if (ivanRes.json?.error === undefined && ivanRes.json?.result?.isError !== true && toolPayload(ivanRes)?.success !== false) {
-      fail('registry', 'redirect: a 3xx is an error', ivanRes.rawText.slice(0, 300));
+      fail('registry', 'redirect: a 3xx is an error', describeResponse(ivanRes));
     }
     pass('registry', 'redirect: the denied path is never requested, and no body from it is returned');
 
@@ -932,10 +988,22 @@ async function registryLeg(tempDir) {
     if (revoked?.status !== 401) fail('registry', 'revocation: the next bearer request is refused', `still ${revoked?.status} after the cache lifetime`);
     pass('registry', 'revocation: a flipped decision refuses the next bearer request with 401');
     const frankRefresh = await registryRefresh(primary, frank.tokens);
-    if (frankRefresh.status !== 400 || frankRefresh.json.error !== 'invalid_grant') {
-      fail('registry', 'revocation: the refresh is invalid_grant', `status ${frankRefresh.status}: ${JSON.stringify(frankRefresh.json)}`);
-    }
+    const refreshWrong = refreshRefusalFailure(frankRefresh);
+    if (refreshWrong !== undefined) fail('registry', 'revocation: the refresh is invalid_grant', refreshWrong);
     pass('registry', 'revocation: the refresh answers invalid_grant');
+
+    // Self-test: the text of a failing refresh assertion carries neither the access token, the refresh token nor the bearer,
+    // even when the response it describes holds them. It is built by the functions the row uses. Dropping the scrub makes
+    // an echoed reason carry the secrets, and this row fails.
+    {
+      const { accessToken, refreshToken } = frank.tokens;
+      const echoed = { status: 200, json: { access_token: accessToken, refresh_token: refreshToken, token_type: 'Bearer' } };
+      const refreshText = formatFailure('registry', 'revocation: the refresh is invalid_grant', refreshRefusalFailure(echoed));
+      const echoText = formatFailure('registry', 'self-test', `a reason that echoes ${accessToken}, ${refreshToken} and ${REGISTRY_BEARER}`);
+      const leaked = [accessToken, refreshToken, REGISTRY_BEARER].filter((secret) => refreshText.includes(secret) || echoText.includes(secret));
+      if (leaked.length > 0) fail('registry', 'self-test: a failing refresh message carries no token or bearer', `${leaked.length} secret(s) reached the text`);
+      pass('registry', 'self-test: a failing refresh message carries no token or bearer, and an echoed secret is scrubbed');
+    }
 
     // Row 7: registry down, with a two-second window. Inside the cache lifetime the decision still serves with no request
     // to the registry. Past it, tools are empty, calls are refused, an existing session refreshes, and a new sign-in is 503.
@@ -1025,7 +1093,7 @@ async function registryLeg(tempDir) {
     // ----- row 10: env unset. The surface is the committed baseline, and an allow-all registry changes nothing. -----
     const unsetCurated = await startChild('unset-curated', {});
     const unsetHealth = await (await fetch(`${unsetCurated.base}/health`)).json();
-    if ('accessRegistry' in unsetHealth) fail('registry', 'env unset: /health has no accessRegistry field', JSON.stringify(unsetHealth.accessRegistry));
+    if ('accessRegistry' in unsetHealth) fail('registry', 'env unset: /health has no accessRegistry field', describeResponse({ status: 200, json: unsetHealth }));
     pass('registry', 'env unset: /health has no accessRegistry field');
     const unsetAlice = await openSessionAs(unsetCurated, 'ns-alice');
     const unsetTools = await registryTools(unsetAlice.session);
@@ -1114,7 +1182,7 @@ async function registryLeg(tempDir) {
 
     // Registry tokens are never logged, by the server or by the stdio run.
     const everyLog = children.map((child) => child.logs()).join('\n') + stdioOut;
-    if (everyLog.includes(REGISTRY_BEARER) || everyLog.includes(REGISTRY_BAD_BEARER)) {
+    if ([...knownSecrets].some((secret) => everyLog.includes(secret))) {
       fail('registry', 'registry tokens never reach stdout or stderr', 'a registry token appears in a log');
     }
     pass('registry', 'registry tokens never appear in child stdout or stderr');
@@ -2307,6 +2375,6 @@ void [withLegacyOperation, checkMutationGuardInTransaction, startMonotonicTimer,
 }
 
 main().catch((err) => {
-  console.error('FAIL consumer-e2e unexpected-error:', err);
+  console.error(scrub(`FAIL consumer-e2e unexpected-error: ${err?.stack ?? err}`));
   process.exit(1);
 });
