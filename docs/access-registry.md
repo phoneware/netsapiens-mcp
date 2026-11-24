@@ -191,12 +191,14 @@ A platform entry that is not one of the three forms makes the response a contrac
 
 The client builds the identity the registry keys on from the sign-in:
 
-- **Tenant.** The home domain, trimmed and lowercased. It must not be empty and must not contain whitespace, `@` or a control character.
-- **User.** The NetSapiens user name, trimmed and lowercased, without the domain. The same rules apply.
+- **Tenant.** The home domain. Leading and trailing ASCII space (0x20) and tab are trimmed, and nothing else is. What remains must be printable ASCII (0x21 to 0x7E) with no `@` and no blank inside it. Uppercase ASCII letters are then lowercased.
+- **User.** The NetSapiens user name, with the same rules and no domain.
 - **Subject.** `user@tenant`.
 - **Platform.** The origin of the NetSapiens API URL: scheme, host and port, with the host lowercased and default ports removed.
 
-Mixed-case input and lowercase input produce the same identity, so a sign-in string and a portal URL that differ only in case address the same registry entry.
+A name that breaks these rules is refused, never normalized. Non-ASCII letters, no break and ideographic spaces, the byte order mark, zero width characters, line and paragraph separators and control characters all fail. Two raw names therefore never share a registry key. A name that is empty after trimming is refused too. A conforming registry applies the same rule to the names it stores and compares.
+
+Mixed-case ASCII input and lowercase input produce the same identity, so a sign-in string and a portal URL that differ only in ASCII case address the same registry entry.
 
 ## Effective policy
 
