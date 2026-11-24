@@ -47,11 +47,15 @@ export interface ResponseShape {
 
 /** What an operation's request and responses carry, at any depth, merged across the branches that define it. */
 export interface OperationFacts {
-  /** Every property name a 2xx JSON response reaches, through references too. */
+  /** Every property name a 2xx JSON response reaches, through references too, except the fields of an envelope component. */
   readonly responseNames: Set<string>;
   /** Non-JSON media types a 2xx response declares. */
   readonly responseMedia: Set<string>;
-  /** Every property and parameter name a request reaches. */
+  /** Whether the method can set a destination: POST, PUT or PATCH. A DELETE removes and sets nothing. */
+  readonly writes: boolean;
+  /** Every property name a request body reaches, at any depth. */
+  readonly bodyNames: Set<string>;
+  /** Every body property and parameter name a request reaches. */
   readonly requestNames: Set<string>;
   /** Every string enum value a request property or parameter declares. */
   readonly requestEnumValues: Set<string>;
@@ -60,6 +64,39 @@ export interface OperationFacts {
 const PRIMITIVE_TYPES: ReadonlySet<string> = new Set(['string', 'number', 'integer', 'boolean']);
 const HTTP_METHODS: ReadonlySet<string> = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const JSON_MEDIA = 'application/json';
+
+/**
+ * Components whose fields are the API's status envelope, not record content. A response that names one contributes
+ * none of its fields to the response gate. Each entry gives the reason, as every review in the gates does.
+ */
+export const ENVELOPE_COMPONENTS: Readonly<Record<string, string>> = {
+  SuccessResponse: 'the status envelope of a write: success and a status message, never record content',
+  ErrorResponse: 'the error envelope of a failed request: an error code and a message, never record content',
+  Error: 'the error envelope of a failed request: a code and a message, never record content',
+  FaxError: 'the error envelope of a failed fax request: a code and a message, never fax content',
+  EmailTestResponse: 'the result of an e-mail test: a status and a message, not message content',
+  EmailValidateResult: 'the result of an e-mail address check: a status and a message, not message content',
+  LicfErrorResponse: 'the error envelope of a licence request: a code and a message',
+  LicfSuccessResponse: 'the status envelope of a licence request: success and a message',
+  MasqueradeErrorResponse: 'the error envelope of a support session request: a code and a message',
+  MasqueradeStartResponse: 'the status envelope of a support session start: success and a message',
+  MasqueradeV2EndResponse: 'the status envelope of a support session end: success and a message',
+  MfaVerifyResponse: 'the status envelope of an MFA check: success and a message',
+  NdpErrorResponse: 'the error envelope of a device provisioning request: a code and a message',
+  NdpSuccessResponse: 'the status envelope of a device provisioning request: success and a message',
+  NmsErrorResponse: 'the error envelope of a network management request: a code and a message',
+  NmsSuccessResponse: 'the status envelope of a network management request: success and a message',
+  RecordingentrySyncAccepted: 'the status of a recording entry sync that was accepted: a state and a message, never recording content',
+  RecordingentrySyncFailure: 'the status of a recording entry sync that failed: a reason and a message, never recording content',
+  RecordingentrySyncJob: 'the status of a recording entry sync job: a state and counts, never recording content',
+  RecordingentrySyncResult: 'the result of a recording entry sync: counts and a message, never recording content',
+  ServiceActionDeferred: 'the status of a deferred service action: a state and a message',
+  ServiceNotInstalledError: 'the error of a service that is not installed: a code and a message',
+  ServiceTimeoutError: 'the error of a service that timed out: a code and a message',
+  SpeechWordBulkResult: 'the result of a speech-word bulk action: counts and a message, not call content',
+  SpeechWordRenderResult: 'the result of a speech-word render: a status and a message, not call content',
+  TranslationDeleteResponse: 'the status envelope of a translation delete: success and a message',
+};
 
 /** The component a $ref names. */
 export function componentOf(ref: string): string {
@@ -80,27 +117,28 @@ export function partsOf(node: SchemaNode): readonly SchemaNode[] {
 
 /**
  * Visits every property a schema declares at any depth, following references and combinators. A component is
- * entered once per walk, so a cycle ends.
+ * entered once per walk, so a cycle ends. A component named in skip contributes no properties.
  */
 export function forEachProperty(
   node: SchemaNode | undefined,
   components: Components,
   visit: (name: string, schema: SchemaNode) => void,
   seen: Set<string> = new Set(),
+  skip: ReadonlySet<string> = new Set(),
 ): void {
   if (node === undefined) return;
   if (node.$ref !== undefined) {
     const name = componentOf(node.$ref);
-    if (seen.has(name)) return;
+    if (seen.has(name) || skip.has(name)) return;
     seen.add(name);
-    forEachProperty(components[name], components, visit, seen);
+    forEachProperty(components[name], components, visit, seen, skip);
     return;
   }
   for (const [key, child] of Object.entries(node.properties ?? {})) {
     visit(key, child);
-    forEachProperty(child, components, visit, seen);
+    forEachProperty(child, components, visit, seen, skip);
   }
-  for (const part of partsOf(node)) forEachProperty(part, components, visit, seen);
+  for (const part of partsOf(node)) forEachProperty(part, components, visit, seen, skip);
 }
 
 /** Every component a schema reaches, directly or through other components, at any depth. */
@@ -195,24 +233,26 @@ export function successMedia(operation: SpecOperation): { readonly nonJson: bool
 }
 
 /** What one operation's request and 2xx responses carry. */
-export function operationFactsOf(operation: SpecOperation, components: Components): OperationFacts {
+export function operationFactsOf(method: string, operation: SpecOperation, components: Components): OperationFacts {
+  const skip: ReadonlySet<string> = new Set(Object.keys(ENVELOPE_COMPONENTS));
   const responseNames = new Set<string>();
   const responseMedia = new Set<string>();
   for (const [code, response] of Object.entries(operation.responses ?? {})) {
     if (!/^2\d\d$/.test(code)) continue;
     for (const type of Object.keys(response.content ?? {})) if (type !== JSON_MEDIA) responseMedia.add(type);
-    forEachProperty(response.content?.[JSON_MEDIA]?.schema, components, (name) => responseNames.add(name));
+    forEachProperty(response.content?.[JSON_MEDIA]?.schema, components, (name) => responseNames.add(name), new Set(), skip);
   }
+  const bodyNames = new Set<string>();
   const requestNames = new Set<string>();
   const requestEnumValues = new Set<string>();
   const readEnum = (schema: SchemaNode): void => {
     for (const value of enumValuesOf(schema)) if (typeof value === 'string') requestEnumValues.add(value);
   };
-  const bodies: SchemaNode[] = [];
-  for (const media of Object.values(operation.requestBody?.content ?? {})) if (media.schema) bodies.push(media.schema);
-  for (const body of bodies) {
-    readEnum(body);
-    forEachProperty(body, components, (name, schema) => {
+  for (const media of Object.values(operation.requestBody?.content ?? {})) {
+    if (media.schema === undefined) continue;
+    readEnum(media.schema);
+    forEachProperty(media.schema, components, (name, schema) => {
+      bodyNames.add(name);
       requestNames.add(name);
       readEnum(schema);
     });
@@ -221,7 +261,7 @@ export function operationFactsOf(operation: SpecOperation, components: Component
     if (parameter.name !== undefined) requestNames.add(parameter.name);
     if (parameter.schema) readEnum(parameter.schema);
   }
-  return { responseNames, responseMedia, requestNames, requestEnumValues };
+  return { responseNames, responseMedia, writes: ['post', 'put', 'patch'].includes(method.toLowerCase()), bodyNames, requestNames, requestEnumValues };
 }
 
 /** The union of two operations' facts, for an operation that more than one branch defines. */
@@ -231,6 +271,8 @@ export function mergeFacts(a: OperationFacts | undefined, b: OperationFacts): Op
   return {
     responseNames: union(a.responseNames, b.responseNames),
     responseMedia: union(a.responseMedia, b.responseMedia),
+    writes: a.writes || b.writes,
+    bodyNames: union(a.bodyNames, b.bodyNames),
     requestNames: union(a.requestNames, b.requestNames),
     requestEnumValues: union(a.requestEnumValues, b.requestEnumValues),
   };

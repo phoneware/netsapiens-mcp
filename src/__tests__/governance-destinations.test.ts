@@ -131,7 +131,30 @@ describe('round 2 finding 3: redirect writes deliver the content they redirect',
 
 describe('round 2 over-claimed record lists', () => {
   it('every record-list entry is backed by the classified fields of its output resource', () => {
+    // Voicemail here comes from the script-text name file-script-text, which the projection strips by name and the resource
+    // table does not declare. Only these keys skip the table check, and each must be voicemail only.
+    const SCRIPT_TEXT_BACKED = [
+      'DELETE /domains/{}/users/{}/autoattendants/{}',
+      'GET /domains/{}/autoattendants',
+      'GET /domains/{}/moh/{}',
+      'GET /domains/{}/msg/{}',
+      'GET /domains/{}/users/{}/autoattendants/{}',
+      'GET /domains/{}/users/{}/moh/{}',
+      'GET /domains/{}/users/{}/msg/{}',
+      'POST /domains/{}/autoattendants',
+      'POST /domains/{}/msg',
+      'POST /domains/{}/users/{}/greetings',
+      'POST /domains/{}/users/{}/msg',
+      'PUT /domains/{}/msg/{}',
+      'PUT /domains/{}/users/{}/autoattendants/{}',
+      'PUT /domains/{}/users/{}/greetings/{}',
+      'PUT /domains/{}/users/{}/msg/{}',
+    ];
     for (const [key, entry] of Object.entries(RECORD_LIST_OPERATIONS)) {
+      if (SCRIPT_TEXT_BACKED.includes(key)) {
+        expect(entry.kinds, key).toEqual(['voicemail']);
+        continue;
+      }
       expect(Object.hasOwn(OPERATION_OUTPUTS, key), `${key} has an output resource`).toBe(true);
       const resource = OPERATION_OUTPUTS[key];
       const backed = new Set<ContentKind>();
